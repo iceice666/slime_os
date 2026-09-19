@@ -19,12 +19,12 @@ pub struct CapacityProfile {
 pub const CAPACITY_PROFILES: [CapacityProfile; CAPACITY_PROFILE_COUNT] = [
     CapacityProfile {
         target: "aarch64-sel4-qemu-virt",
-        region_pages: 16384,
-        total_pages: 32768,
+        region_pages: 65536,
+        total_pages: 262144,
     },
     CapacityProfile {
         target: "riscv64-sel4-qemu-virt",
-        region_pages: 16384,
-        total_pages: 32768,
+        region_pages: 65536,
+        total_pages: 262144,
     },
 ];

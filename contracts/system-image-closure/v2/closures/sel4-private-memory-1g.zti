@@ -1,0 +1,261 @@
+{
+  formatVersion = 2;
+  name = "sel4-private-memory-1g";
+  systemSpec = {
+    path = "contracts/system-spec/v1/systems/sel4-private-memory-1g.zti";
+    kind = "file";
+    identity = "b4364f365f0ff1f65e6da262852fc6d436112532757d87601488e48938151bea";
+  };
+  systemIdentity = "75d0fb480959ccca83e7cd66b268653490bab53b7125971591c50158d29dc830";
+  implementations = [
+    {
+      component = "init";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/init";
+        kind = "tree";
+        identity = "26df6c1c6c67c96f49b979a0453073285320dfcf6e28810ea7532a5a9b74aa6d";
+      };
+      identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "private-memory-1g-holder-a";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-memory-1g-holder-a";
+        kind = "tree";
+        identity = "4da6d6185de124d6392461a2cb6fdb2ee85e5512a2f4a05c606730b0377449f9";
+      };
+      identity = "c549aae6c743fd98da3a308f1b291d30a3d58eeb67ae540b1222bca6e3b642b5";
+      buildProfile = "default";
+    };
+    {
+      component = "private-memory-1g-holder-b";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-memory-1g-holder-b";
+        kind = "tree";
+        identity = "0481b3e29276c433b64d4c0462ac834ec2a6b5b2aebd7cf1cda4266c50a44d56";
+      };
+      identity = "46d5b7d24e1f0837a736df93f7fdbe49e5b86d1ce73b722bea12794c8a268b23";
+      buildProfile = "default";
+    };
+    {
+      component = "private-memory-1g-holder-c";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-memory-1g-holder-c";
+        kind = "tree";
+        identity = "11ea4aa2171576552c3073e09366921837f312f36584ba610056c7bc6d7f6d01";
+      };
+      identity = "6f3095d46c9e4c962966c68efa806df50eafe88324079884b58e63d043fe7e4a";
+      buildProfile = "default";
+    };
+    {
+      component = "private-memory-1g-holder-d";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-memory-1g-holder-d";
+        kind = "tree";
+        identity = "90465956027a4ad9d5b7173ac27e08ace89f2397b46818eee446ae0b0720f7de";
+      };
+      identity = "fe8a756e51b61f1f901c7c981503db9b7043c947cbc7e7dc953b8c3f56027ae1";
+      buildProfile = "default";
+    };
+    {
+      component = "private-memory-1g-probe";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-memory-1g-probe";
+        kind = "tree";
+        identity = "eab95ef55edc9b5abc3ac53075a375163f592b739e7f7585403c29da8ab797a6";
+      };
+      identity = "f674f52615b29d816f89043b0738f475525653ba2a03908c21a841588cab60ac";
+      buildProfile = "default";
+    };
+  ];
+  target = {
+    profile = "aarch64-sel4-qemu-virt";
+    platform = "qemu-arm-virt";
+    prefix = {
+      path = "contracts/system-image-closure/v2/inputs/sel4-prefix";
+      kind = "tree";
+      identity = "4ea959e857a157116b94153c45b5916baaa13ba7aa6cd50a8b6ec13ed4a2bad2";
+    };
+    toolchain = "nightly-2026-04-04";
+    rustSel4Commit = "14d98403c1dd95fd97109919e13466f0ecb37c01";
+  };
+  root = {
+    role = "embedded-generation";
+    implementation = {
+      path = "slime-root";
+      kind = "tree";
+      identity = "9605b46f837bc02bfae23e617d5304c1ee6a3a2399c4a464800192345f288542";
+    };
+    parameters = [];
+  };
+  loader = {
+    role = "kernel-loader";
+    implementation = {
+      path = "deps/rust-sel4";
+      kind = "tree";
+      identity = "e0afd3db4fbd868e4361a38f0612fe0e8b889897a0d0ad51c4db9ee98cf81a57";
+    };
+    parameters = [];
+  };
+  releaseInputs = [
+    {
+      name = "boot-contracts";
+      artifact = {
+        path = "boot-contracts";
+        kind = "tree";
+        identity = "33d22dd5963494a01dd3b335fdbf922ad58fa84e7c5ac1d19cf2cd1556faf1ad";
+      };
+    };
+    {
+      name = "cargo-lock";
+      artifact = {
+        path = "Cargo.lock";
+        kind = "file";
+        identity = "4c6eaa03f87d78aa00bd2abbbaf74f63398e57cdfa9cbb18762b176355cece6e";
+      };
+    };
+    {
+      name = "component-build-support";
+      artifact = {
+        path = "components/build-support";
+        kind = "tree";
+        identity = "ade1add7f95734e26ea9e7250c31c795f940e9876b587e023c23a76f11ba75fb";
+      };
+    };
+    {
+      name = "component-cargo-config";
+      artifact = {
+        path = "components/.cargo/config.toml";
+        kind = "file";
+        identity = "72d96fb55bcebb410801048015a47bbbc5993267819b9d6ebc9eccfdfd1dd34e";
+      };
+    };
+    {
+      name = "component-library";
+      artifact = {
+        path = "components/lib";
+        kind = "tree";
+        identity = "6a490be600126a38bb1b28b066e4b150d5969eca02c6ede5723cb4d2b3968610";
+      };
+    };
+    {
+      name = "component-proto";
+      artifact = {
+        path = "components/proto";
+        kind = "tree";
+        identity = "e870937f7a1603d31c92a007c0166d8f1b5a0fdc722984e06c63621f12ad8eee";
+      };
+    };
+    {
+      name = "component-runtime";
+      artifact = {
+        path = "components/runtime";
+        kind = "tree";
+        identity = "5b4b50cf61cac0dd293a57e21e7ed1012530b1a0cf24aa1e0f731010460945c6";
+      };
+    };
+    {
+      name = "component-spec-contract";
+      artifact = {
+        path = "contracts/component-spec/v1";
+        kind = "tree";
+        identity = "0313d97bda919821c9a052556f9573aa8aa061054a1c12d6ac9a7f0a8b4c1dda";
+      };
+    };
+    {
+      name = "elf-delivery";
+      artifact = {
+        path = "scripts/lib/elf_delivery.py";
+        kind = "file";
+        identity = "643f701cea23c2b2e38e6b7edade7363d715d60f31268de46fca79da46e50d11";
+      };
+    };
+    {
+      name = "generation-builder";
+      artifact = {
+        path = "scripts/build/build-generation.py";
+        kind = "file";
+        identity = "89190e5b74d78662118408f0adb90e4b1049e947bce17bd9e1e4f886f032c287";
+      };
+    };
+    {
+      name = "image-builder";
+      artifact = {
+        path = "scripts/build/build-sel4.py";
+        kind = "file";
+        identity = "acbe7ab4393f19a75fd6bd6ffccc5c72b21af693c1e692839cec3fc1bd70dfaf";
+      };
+    };
+    {
+      name = "interface-schema-contract";
+      artifact = {
+        path = "contracts/interface-schema/v1";
+        kind = "tree";
+        identity = "d46bc39a3520c42be851354de67cc7e8551a15ac140bd4ee27632d72fad48324";
+      };
+    };
+    {
+      name = "just-recipes";
+      artifact = {
+        path = "just";
+        kind = "tree";
+        identity = "3a9e01839241ac47e1151dddf7c45845014fabf117702d9ffeafb7f4290fb6c4";
+      };
+    };
+    {
+      name = "justfile";
+      artifact = {
+        path = "Justfile";
+        kind = "file";
+        identity = "901c66d9e205a1a61eeb2fccdd36ef3fa50f0c9e2ebc9b6e3f7d10e6049f20e2";
+      };
+    };
+    {
+      name = "root-child";
+      artifact = {
+        path = "slime-root/child";
+        kind = "tree";
+        identity = "09275336c6927a14cfd0d423340109373dc6685e0998367c2415a3595ba0a421";
+      };
+    };
+    {
+      name = "root-target";
+      artifact = {
+        path = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json";
+        kind = "file";
+        identity = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e";
+      };
+    };
+    {
+      name = "target-spec";
+      artifact = {
+        path = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json";
+        kind = "file";
+        identity = "0762fbeca23afb9f148f622f3f40f3a01b093630b905cab760592141f72d7015";
+      };
+    };
+    {
+      name = "workspace-manifest";
+      artifact = {
+        path = "Cargo.toml";
+        kind = "file";
+        identity = "97d51162cb6cf65d49ff8d0349a06fb1f542060c7f8b240a9062119c7775f8b9";
+      };
+    };
+  ];
+  buildParameters = [];
+  expectedOutputs = [
+    "generation";
+    "root";
+    "loader";
+    "image";
+    "identity-manifest";
+  ];
+}

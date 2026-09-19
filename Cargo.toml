@@ -280,6 +280,31 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-private-memory-1g-holder-a]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-memory-1g-holder-b]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-memory-1g-holder-c]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-memory-1g-holder-d]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-memory-1g-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-private-cycle-probe]
 opt-level = "s"
 codegen-units = 1

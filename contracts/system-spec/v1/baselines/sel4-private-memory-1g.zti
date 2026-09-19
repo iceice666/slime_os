@@ -1,0 +1,373 @@
+{
+  bootAction = "private-memory";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-memory-1g-holder-a";
+      object = "sha256:private-memory-1g-holder-a";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-memory-1g-holder-b";
+      object = "sha256:private-memory-1g-holder-b";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-memory-1g-holder-c";
+      object = "sha256:private-memory-1g-holder-c";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-memory-1g-holder-d";
+      object = "sha256:private-memory-1g-holder-d";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "private-memory-1g-probe";
+      object = "sha256:private-memory-1g-probe";
+      role = "application";
+      spawnBudget = 4;
+    };
+  ];
+  formatVersion = 1;
+  generation = 56;
+  grants = [
+    {
+      name = "capacity-shared-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "private-memory-1g-holder-a";
+      target = "private-memory-1g-holder-a";
+      transferable = false;
+    };
+    {
+      name = "holder-a-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-a";
+      transferable = false;
+    };
+    {
+      name = "holder-a-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-a";
+      transferable = false;
+    };
+    {
+      name = "holder-b-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-b";
+      transferable = false;
+    };
+    {
+      name = "holder-b-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-b";
+      transferable = false;
+    };
+    {
+      name = "holder-c-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-c";
+      transferable = false;
+    };
+    {
+      name = "holder-c-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-c";
+      transferable = false;
+    };
+    {
+      name = "holder-d-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-d";
+      transferable = false;
+    };
+    {
+      name = "holder-d-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-d";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "private-memory-1g-probe";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "capacity-shared-factory";
+        };
+        {
+          grant = "holder-a-control";
+        };
+      ];
+      dependencies = [
+        "private-memory-1g-probe";
+      ];
+      executable = "private-memory-1g-holder-a";
+      health = "optional";
+      name = "private-memory-1g-holder-a";
+      owner = "private-memory-1g-probe";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "holder-b-control";
+        };
+      ];
+      dependencies = [
+        "private-memory-1g-probe";
+      ];
+      executable = "private-memory-1g-holder-b";
+      health = "optional";
+      name = "private-memory-1g-holder-b";
+      owner = "private-memory-1g-probe";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "holder-c-control";
+        };
+      ];
+      dependencies = [
+        "private-memory-1g-probe";
+      ];
+      executable = "private-memory-1g-holder-c";
+      health = "optional";
+      name = "private-memory-1g-holder-c";
+      owner = "private-memory-1g-probe";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "holder-d-control";
+        };
+      ];
+      dependencies = [
+        "private-memory-1g-probe";
+      ];
+      executable = "private-memory-1g-holder-d";
+      health = "optional";
+      name = "private-memory-1g-holder-d";
+      owner = "private-memory-1g-probe";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "holder-a-control";
+        };
+        {
+          grant = "holder-a-executable";
+        };
+        {
+          grant = "holder-b-control";
+        };
+        {
+          grant = "holder-b-executable";
+        };
+        {
+          grant = "holder-c-control";
+        };
+        {
+          grant = "holder-c-executable";
+        };
+        {
+          grant = "holder-d-control";
+        };
+        {
+          grant = "holder-d-executable";
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "private-memory-1g-probe";
+      health = "required";
+      name = "private-memory-1g-probe";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "lifecycle-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "private-memory-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-1g-holder-a";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-1g-holder-b";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-1g-holder-c";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-1g-holder-d";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-memory-1g-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [
+    {
+      holder = "private-memory-1g-holder-a";
+      pageQuota = 65536;
+    };
+    {
+      holder = "private-memory-1g-holder-b";
+      pageQuota = 65536;
+    };
+    {
+      holder = "private-memory-1g-holder-c";
+      pageQuota = 65536;
+    };
+    {
+      holder = "private-memory-1g-holder-d";
+      pageQuota = 65536;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 1;
+      holder = "private-memory-1g-holder-a";
+      loanCount = 0;
+      mappingCount = 1;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [];
+    restarts = [
+      {
+        attempts = 20;
+        backoffFactor = 256;
+        backoffNs = 0;
+        causes = [
+          "fault";
+        ];
+        instance = "private-memory-1g-holder-d";
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Error";
+      };
+    ];
+  };
+}

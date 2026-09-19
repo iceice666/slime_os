@@ -284,6 +284,13 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(ROOT / "contracts/private-memory-probe/v1/schema.zt"))
+run("check", str(ROOT / "contracts/private-memory-probe/v1/gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(ROOT / "scripts/generate/generate-private-memory-probe-bindings.py"), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(FABRIC_TIME_CONTRACT / "schema.zt"))
 run("check", str(FABRIC_TIME_CONTRACT / "gen_rust.zt"))
 subprocess.run(

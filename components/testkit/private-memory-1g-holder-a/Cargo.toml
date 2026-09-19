@@ -1,0 +1,22 @@
+[package]
+name = "slime-component-private-memory-1g-holder-a"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.96"
+build = "build.rs"
+
+[[bin]]
+name = "private-memory-1g-holder-a"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+slime-rt = { path = "../../runtime" }
+slime-components = { path = "../../lib" }
+
+[build-dependencies]
+slime-build-support = { path = "../../build-support" }
+
+[lints]
+workspace = true

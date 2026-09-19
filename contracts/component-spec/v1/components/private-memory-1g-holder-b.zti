@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-memory-1g-probe";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-memory-1g-holder-b";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-memory-1g-holder-b";
+  owner = "private-memory-1g-probe";
+  provides = [];
+  purpose = "Retains and verifies a zero-initialized 256 MiB private region under declared coordination.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 65536;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "A peer holding only its own single private page cannot reach another component's working set at the same virtual address.";
+    passFailCriteria = "[private-memory-isolation] complete read=1 write=1 execute=1 buffer_window_denied=4 loan_window_denied=2 unowned_denied=6 seal_denied=2 loan_transfer=1";
+    requiredTestEnvironment = "private_memory_isolation_check";
+    testCondition = "Each peer proves its own page, is refused a second, and faults inside the victim's extent on both QEMU architectures.";
+  };
+  version = "1.0.0";
+}

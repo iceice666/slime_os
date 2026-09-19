@@ -1,0 +1,42 @@
+-- Bounded private-memory qualification coordination over declared endpoints.
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+Message :: type { version : Int; operation : Int; holder : Int; incarnation : Int; address : Int; reserved : Int; };
+messageSchema ::= schema Message;
+messageLayout :: List WireField = {
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "operation"; width = 4; signed = false; byteArray = false; };
+  { name = "holder"; width = 4; signed = false; byteArray = false; };
+  { name = "incarnation"; width = 4; signed = false; byteArray = false; };
+  { name = "address"; width = 8; signed = false; byteArray = false; };
+  { name = "reserved"; width = 40; signed = false; byteArray = true; };
+};
+format ::= {
+  formatVersion = 1;
+  messageLen = 64;
+  grow = 1;
+  verify = 2;
+  fault = 3;
+  finish = 4;
+  acknowledge = 5;
+  readForeign = 6;
+  writeForeign = 7;
+  executePrivate = 8;
+  loanReady = 9;
+  loanOffer = 10;
+  loanSettled = 11;
+  messageFields = messageSchema.fields ?? {;};
+  messageLayout =;
+};
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_PRIVATE_MEMORY_PROBE_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/private_memory_probe.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+main

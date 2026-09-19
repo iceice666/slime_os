@@ -41,8 +41,9 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    # 24 ceiling markers plus MEM-64M's 11 reuse-cycle markers.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 35),
+    # 24 ceiling markers, MEM-64M's 11 reuse-cycle markers, and MEM-1G's 8
+    # simultaneous-capacity plus 7 isolation markers.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 50),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -787,6 +788,175 @@ memory_mib = 64
     return 4
 
 
+def capacity_workload_transcript() -> str:
+    """One synthetic run of the 1 GiB workload, in the plane's exact grammar."""
+    bases = {0: 0x10000000, 1: 0x20000000, 2: 0x30000000, 3: 0x40000000}
+    guard = bases[3] + 65536 * 4096
+    census = "slots=96 bytes=268435456 live_objects=12 mapped_pages=196608 extent_reuses=4"
+    lines: list[str] = []
+
+    def spawn(task: int, holder: int, incarnation: int) -> None:
+        name = "abcd"[holder]
+        lines.extend([
+            f"SLIME_MEM quota task={task} instance=private-memory-1g-holder-{name} "
+            f"declared=65536 installed=65536 base=0x{bases[holder]:x}",
+            f"SLIME_GRAPH spawned task=1 child={task} component=private-memory-1g-holder-{name} slots=8",
+            f"SLIME_MEM grown task={task} delta=65536 previous=0 pages=65536 "
+            f"base=0x{bases[holder]:x} quota=65536 total={min(holder + 1, 4) * 65536} "
+            "large_frames=128 base_frames=0 leaf_tables=0",
+            f"[private-memory-1g] zeroed holder={holder} incarnation={incarnation} pages=65536",
+        ])
+
+    def verify(task: int, holder: int, incarnation: int, round_index: int) -> None:
+        lines.append(
+            f"SLIME_MEM refused task={task} delta=1 cause=reservation "
+            "detail=ReservationExceeded { pages: 65536, delta: 1, reservation: 65536 }"
+        )
+        lines.append(
+            f"SLIME_MEM grown task={task} delta=0 previous=65536 pages=65536 "
+            f"base=0x{bases[holder]:x} quota=65536 total=262144 large_frames=128 "
+            "base_frames=0 leaf_tables=0"
+        )
+        if holder == 0:
+            lines.extend([
+                f"SLIME_GRAPH buffer created task={task} slot=9 id=3 pages=1 writable=1",
+                f"SLIME_GRAPH buffer create refused task={task} pages=1 class=quota",
+                f"SLIME_MEM mapping refused task={task} base=0x{bases[0]:x} "
+                f"end=0x{bases[0] + 4096:x} window=0x{bases[0]:x}..0x{guard:x}",
+            ])
+        lines.append(
+            f"[private-memory-1g] verified holder={holder} incarnation={incarnation} "
+            f"round={round_index} pages=65536 refused=1 shared={int(holder == 0)}"
+        )
+
+    current = [2, 3, 4, 5]
+    rounds = [0, 0, 0, 0]
+    for holder in range(4):
+        spawn(current[holder], holder, 0)
+    lines.append("[private-memory-1g] resident holders=4 pages=262144")
+    for cycle in range(20):
+        for holder in range(4):
+            verify(current[holder], holder, cycle if holder == 3 else 0, rounds[holder])
+            rounds[holder] += 1
+        lines.extend([
+            f"SLIME_GRAPH component fault task={current[3]} kind=VirtualMemory "
+            f"{{ access: Write, status: 15 }} address=Some({guard})",
+            f"SLIME_MEM census retired={current[3]} {census}",
+            f"SLIME_LIFECYCLE restart admitted task=1 subject={current[3]} attempt={cycle} "
+            f"remaining={19 - cycle} ready_at=1000",
+        ])
+        current[3] = 6 + cycle
+        rounds[3] = 0
+        spawn(current[3], 3, cycle + 1)
+        for holder in range(4):
+            verify(current[holder], holder, cycle + 1 if holder == 3 else 0, rounds[holder])
+            rounds[holder] += 1
+        lines.append(f"[private-memory-1g] retained cycle={cycle + 1} holders=4 pages=262144")
+    for task in current:
+        lines.extend([
+            f"SLIME_GRAPH component exit task={task} status=0",
+            f"SLIME_MEM census retired={task} {census}",
+        ])
+    lines.extend([
+        "[private-memory-1g] complete faults=20 replacements=20 exits=4",
+        "SLIME_GRAPH loans served=40 loans=0 mappings=0 regions=0 orphans=0 quota=0",
+        "SLIME_GRAPH HEALTHY generation=56 required=2 live=0 completed=2 failed=0",
+    ])
+    return "\n".join(lines)
+
+
+def check_private_capacity_controls(gate) -> int:
+    """The 1 GiB claim must fail closed: a peer that was not resident during a
+    reclamation, a replacement that reused a dead incarnation's identity, a
+    fault charged to a surviving holder, and a skipped restart admission are
+    each rejected rather than absorbed as an equivalent run."""
+    transcript = capacity_workload_transcript()
+    gate.check_capacity_workload(transcript)
+    mutations = (
+        ("capacity peers not resident during reclamation", transcript.replace("mapped_pages=196608", "mapped_pages=131072", 1)),
+        ("capacity census missing for a dead incarnation", transcript.replace("SLIME_MEM census retired=5 slots=96 bytes=268435456 live_objects=12 mapped_pages=196608 extent_reuses=4\n", "", 1)),
+        ("capacity replacement reuses a dead task identity", transcript.replace("child=6 component=private-memory-1g-holder-d", "child=5 component=private-memory-1g-holder-d", 1)),
+        ("capacity aggregate below the declared total", transcript.replace("quota=65536 total=262144", "quota=65536 total=196608", 1)),
+        ("capacity fault charged to a surviving peer", transcript.replace("SLIME_GRAPH component fault task=5 ", "SLIME_GRAPH component fault task=2 ", 1)),
+        ("capacity fault away from the guard page", transcript.replace(f"address=Some({0x40000000 + 65536 * 4096})", "address=Some(1074790400)", 1)),
+        ("capacity restart admission skipped", transcript.replace("SLIME_LIFECYCLE restart admitted task=1 subject=5 attempt=0 remaining=19 ready_at=1000\n", "", 1)),
+        ("capacity restart ordinal repeated", transcript.replace("subject=6 attempt=1 remaining=18", "subject=6 attempt=0 remaining=19", 1)),
+        ("capacity replacement served stale pages", transcript.replace("[private-memory-1g] zeroed holder=3 incarnation=1 pages=65536\n", "", 1)),
+        ("capacity peer verification dropped after a replacement", transcript.replace("[private-memory-1g] verified holder=1 incarnation=0 round=1 pages=65536 refused=1 shared=0\n", "", 1)),
+        ("capacity holder admitted beyond its quota", transcript.replace("SLIME_MEM refused task=2 delta=1 cause=reservation detail=ReservationExceeded { pages: 65536, delta: 1, reservation: 65536 }\n", "", 1)),
+        ("capacity completion claimed twice", transcript + "\n[private-memory-1g] complete faults=20 replacements=20 exits=4"),
+        ("capacity holder left running at teardown", transcript.replace("SLIME_GRAPH component exit task=2 status=0\n", "", 1)),
+    )
+    for description, mutated in mutations:
+        require_rejection(description, "capacity workload:",
+            lambda mutated=mutated: gate.check_capacity_workload(mutated))
+    return len(mutations)
+
+
+def check_private_isolation_controls(gate) -> int:
+    """MEM-1G's denial evidence must be unforgeable: a survived foreign access,
+    a fault charged to the wrong task, an attacker without its own window, and
+    a denial claimed before the fault that proves it each differ from isolation
+    only in the transcript, never in the plane's outcome."""
+    address = 0x10000000
+    probe = address + 65536 * 4096 // 2
+    lines = [
+        f"[private-memory-isolation] victim base={address} pages=65536",
+        f"SLIME_MEM quota task=1 instance=private-memory-1g-holder-a declared=65536 installed=65536 base=0x{address:x}",
+        f"SLIME_MEM quota task=2 instance=private-memory-1g-holder-b declared=1 installed=1 base=0x{address:x}",
+        f"SLIME_MEM quota task=3 instance=private-memory-1g-holder-c declared=1 installed=1 base=0x{address:x}",
+        f"SLIME_MEM grown task=1 delta=65536 previous=0 pages=65536 base=0x{address:x} quota=65536 total=65536 large_frames=128 base_frames=0 leaf_tables=0",
+        f"SLIME_MEM grown task=2 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65537 large_frames=0 base_frames=1 leaf_tables=1",
+        f"SLIME_MEM grown task=3 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65537 large_frames=0 base_frames=1 leaf_tables=1",
+    ]
+    for holder, task, operation, access in ((1, 2, 6, "Read"), (2, 3, 7, "Write")):
+        lines.extend([
+            f"[private-memory-isolation] attacker holder={holder} operation={operation} address={probe} own_base={address} own_pages=1 kind_denied=2",
+            f"SLIME_GRAPH component fault task={task} kind=VirtualMemory {{ access: {access}, status: 15 }} address=Some({probe})",
+            f"[private-memory-1g] verified holder=0 incarnation=0 round={holder - 1} pages=65536 refused=1 shared=1",
+            f"[private-memory-isolation] denied holder={holder} operation={operation} address={probe} victim_preserved=1",
+        ])
+    lines.extend([
+        f"[private-memory-isolation] execute address={address} pages=65536",
+        f"SLIME_GRAPH component fault task=1 kind=VirtualMemory {{ access: Execute, status: 15 }} address=Some({address})",
+        "[private-memory-isolation] complete read=1 write=1 execute=1 kind_denied=4",
+        "SLIME_GRAPH loans served=2 loans=0 mappings=0 regions=0 orphans=0 quota=0",
+        "SLIME_GRAPH HEALTHY generation=57 required=2 live=0 completed=2 failed=0",
+    ])
+    transcript = "\n".join(lines)
+    gate.check_private_isolation(transcript)
+    mutations = (
+        ("isolation read survived", transcript.replace("SLIME_GRAPH component fault task=2 kind=VirtualMemory { access: Read, status: 15 } " f"address=Some({probe})\n", "")),
+        ("isolation fault charged to victim", transcript.replace("fault task=2 ", "fault task=1 ", 1)),
+        ("isolation write reported as read", transcript.replace("access: Write", "access: Read", 1)),
+        ("isolation fault outside the victim's extent", transcript.replace(f"access: Read, status: 15 }} address=Some({probe})", f"access: Read, status: 15 }} address=Some({address + 65536 * 4096})", 1)),
+        ("isolation probe inside the attacker's own window", transcript.replace(f"address={probe} own_base", f"address={address} own_base", 1)),
+        ("isolation stale fault status", transcript.replace("status: 15", "status: 0", 1)),
+        ("isolation attacker quota differs from its declaration", transcript.replace("instance=private-memory-1g-holder-b declared=1 installed=1", "instance=private-memory-1g-holder-b declared=1 installed=4")),
+        ("isolation attacker has no window of its own", transcript.replace(f"SLIME_MEM grown task=2 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65537 large_frames=0 base_frames=1 leaf_tables=1\n", "", 1)),
+        ("isolation attacker page outlived its incarnation", transcript.replace("quota=1 total=65537", "quota=1 total=65538", 1)),
+        ("isolation attacker window origin differs", transcript.replace(f"instance=private-memory-1g-holder-b declared=1 installed=1 base=0x{address:x}", "instance=private-memory-1g-holder-b declared=1 installed=1 base=0x99000000")),
+        ("isolation victim pattern lost after the denial", transcript.replace("[private-memory-1g] verified holder=0 incarnation=0 round=1 pages=65536 refused=1 shared=1", "[private-memory-1g] FAIL pattern mismatch")),
+        ("isolation victim unverified", transcript.replace("[private-memory-1g] verified holder=0 incarnation=0 round=0 pages=65536 refused=1 shared=1\n", "")),
+        ("isolation denial claimed before the fault that proves it", transcript.replace(
+            f"SLIME_GRAPH component fault task=2 kind=VirtualMemory {{ access: Read, status: 15 }} address=Some({probe})\n"
+            f"[private-memory-1g] verified holder=0 incarnation=0 round=0 pages=65536 refused=1 shared=1\n"
+            f"[private-memory-isolation] denied holder=1 operation=6 address={probe} victim_preserved=1\n",
+            f"[private-memory-isolation] denied holder=1 operation=6 address={probe} victim_preserved=1\n"
+            f"SLIME_GRAPH component fault task=2 kind=VirtualMemory {{ access: Read, status: 15 }} address=Some({probe})\n"
+            f"[private-memory-1g] verified holder=0 incarnation=0 round=0 pages=65536 refused=1 shared=1\n")),
+        ("isolation NX never attempted", transcript.replace(f"[private-memory-isolation] execute address={address} pages=65536\n", "")),
+        ("isolation execute fault away from the victim's own base", transcript.replace(f"access: Execute, status: 15 }} address=Some({address})", f"access: Execute, status: 15 }} address=Some({probe})")),
+        ("isolation victim not one large-frame set", transcript.replace("large_frames=128 base_frames=0", "large_frames=0 base_frames=65536")),
+        ("isolation explicit component failure", transcript.replace("[private-memory-isolation] complete", "[private-memory-1g] FAIL pattern mismatch\n[private-memory-isolation] complete")),
+        ("isolation leaked authority at exit", transcript.replace("loans=0 mappings=0 regions=0 orphans=0 quota=0", "loans=0 mappings=1 regions=1 orphans=0 quota=0")),
+    )
+    for description, mutated in mutations:
+        require_rejection(description, "private isolation:",
+            lambda mutated=mutated: gate.check_private_isolation(mutated))
+    return len(mutations)
+
+
 def check_private_memory_capacity_controls() -> int:
     gate = load_script(
         "sel4_private_memory_semantic_controls", "check/check-sel4-private-memory-plane.py"
@@ -794,37 +964,46 @@ def check_private_memory_capacity_controls() -> int:
     gate.fail = reject_control
     profile = {"memory_mib": 2048}
     section = "control"
+    target = "aarch64-sel4-qemu-virt"
     qualification = (
-        "SLIME_MEM qualification scope=staged-graph-plus-admitted-holder-clones holders=2 "
-        "pages=16384 private_allocations=32896 private_extents=130 private_cslots=33026 "
-        "private_reserved=134479872 payload=134217728 tables=262144 alignment=0 "
-        "static_allocations=8 static_reserved=16384 required_allocations=32912 "
-        "required_extents=130 required_cslots=33042 required_reserved=134512640 "
-        "allocation_capacity=288416 allocations_available=280000 extent_capacity=1072 "
-        "extents_available=1050 cslots_available=500000 ordinary_available=2013265920 "
+        "SLIME_MEM qualification scope=contract-aggregate-headroom holders=4 "
+        "pages=65536 private_allocations=263168 private_extents=1028 private_cslots=264196 "
+        "private_reserved=1075838976 payload=1073741824 tables=2097152 alignment=0 "
+        "static_allocations=8 static_reserved=16384 required_allocations=263200 "
+        "required_extents=1028 required_cslots=264228 required_reserved=1075904512 "
+        "allocation_capacity=400000 allocations_available=380000 extent_capacity=2048 "
+        "extents_available=1500 cslots_available=500000 ordinary_available=2013265920 "
         "ordinary_layout=1 root_image=8388608 root_metadata=1048576 root_stack=1048576 "
         "root_heap=524288 fit=1"
     )
-    gate.check_segmented_capacity_report(qualification, profile, section)
+    gate.check_segmented_capacity_report(qualification, profile, section, target, 0)
+    # The headroom the report claims must follow the quotas the generation
+    # already declares, not the whole aggregate a fresh image would admit.
+    require_rejection(
+        "capacity headroom ignores already-declared quotas",
+        "capacity qualification:",
+        lambda: gate.check_segmented_capacity_report(qualification, profile, section, target, 65536),
+    )
     capacity_mutations = (
         ("capacity false refusal", qualification[:-1] + "0"),
         (
             "capacity missing static descriptors",
-            qualification.replace("required_allocations=32912", "required_allocations=32896"),
+            qualification.replace("required_allocations=263200", "required_allocations=263168"),
         ),
         (
             "capacity missing static RAM",
-            qualification.replace("required_reserved=134512640", "required_reserved=134479872"),
+            qualification.replace("required_reserved=1075904512", "required_reserved=1075838976"),
         ),
         (
             "capacity ignores impossible ordinary layout",
             qualification.replace("ordinary_layout=1", "ordinary_layout=0")[:-1] + "1",
         ),
-        ("capacity allocation exhaustion", qualification.replace("allocations_available=280000", "allocations_available=32911")),
-        ("capacity extent exhaustion", qualification.replace("extents_available=1050", "extents_available=129")),
-        ("capacity slot exhaustion", qualification.replace("cslots_available=500000", "cslots_available=33041")),
-        ("capacity ordinary exhaustion", qualification.replace("ordinary_available=2013265920", "ordinary_available=134512639")),
-        ("capacity small tables", qualification.replace("allocation_capacity=288416 allocations_available=280000", "allocation_capacity=4096 allocations_available=3000")),
+        ("capacity allocation exhaustion", qualification.replace("allocations_available=380000", "allocations_available=263199")),
+        ("capacity extent exhaustion", qualification.replace("extents_available=1500", "extents_available=1027")),
+        ("capacity slot exhaustion", qualification.replace("cslots_available=500000", "cslots_available=264227")),
+        ("capacity ordinary exhaustion", qualification.replace("ordinary_available=2013265920", "ordinary_available=1075904511")),
+        ("capacity small tables", qualification.replace("allocation_capacity=400000 allocations_available=380000", "allocation_capacity=4096 allocations_available=3000")),
+        ("capacity envelope below the declared row", qualification.replace("holders=4 pages=65536", "holders=2 pages=65536")),
         ("capacity duplicate report", qualification + "\n" + qualification),
         (
             "capacity missing static field",
@@ -836,7 +1015,7 @@ def check_private_memory_capacity_controls() -> int:
             description,
             "capacity qualification:",
             lambda transcript=transcript: gate.check_segmented_capacity_report(
-                transcript, profile, section
+                transcript, profile, section, target, 0
             ),
         )
     conversion_lines = [
@@ -898,8 +1077,8 @@ def check_private_memory_capacity_controls() -> int:
         "installed=15872 base=0x4000000",
         "[private-heap-probe:granted] capacity payload=62914560 overhead=16 "
         "backed=63008768 pages=15383 touched=1",
-        "SLIME_MEM refused task=3 delta=1001 cause=quota "
-        "detail=QuotaExceeded { pages: 15383, delta: 1001, quota: 15872 }",
+        "SLIME_MEM refused task=3 delta=50153 cause=quota "
+        "detail=QuotaExceeded { pages: 15383, delta: 50153, quota: 15872 }",
     ]
     quota_refusal = "\n".join(quota_lines)
     declared = {"private-heap-granted": 15872}
@@ -920,7 +1099,7 @@ def check_private_memory_capacity_controls() -> int:
         ),
         (
             "heap quota refusal request stops short of the reservation",
-            quota_refusal.replace("delta=1001", "delta=1000"),
+            quota_refusal.replace("delta=50153", "delta=50152"),
         ),
         (
             "heap quota installation differs from the declaration",
@@ -1024,8 +1203,12 @@ def check_private_memory_capacity_controls() -> int:
     for description, transcript in fault_mutations:
         require_rejection(description, "cycle fault attribution:",
             lambda transcript=transcript: gate.check_cycle_fault_attribution(transcript, 16384))
+    isolation_mutations = check_private_isolation_controls(gate)
+    workload_mutations = check_private_capacity_controls(gate)
     return (
-        len(fault_mutations)
+        workload_mutations
+        + isolation_mutations
+        + len(fault_mutations)
         + len(ledger_mutations)
         + len(conservation_mutations)
         + len(capacity_mutations)

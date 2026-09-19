@@ -74,6 +74,10 @@ powerbox_gen:
     python3 scripts/generate/generate-powerbox-bindings.py
 
 [group('generate')]
+private_memory_probe_gen:
+    python3 scripts/generate/generate-private-memory-probe-bindings.py
+
+[group('generate')]
 component_sdk_release_gen:
     python3 scripts/generate/generate-component-sdk-release-bindings.py
 

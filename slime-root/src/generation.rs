@@ -2408,6 +2408,15 @@ mod tests {
             private_memory_budget_is_satisfiable(&budget, crate::private_memory::IMAGE_TARGET_NAME),
             Ok(())
         );
+        let mut one_extra = holders.clone();
+        one_extra.push((fits as u8 + 1, 1));
+        let bytes = budget_with(&one_extra);
+        let budget =
+            PrivateMemoryBudget::decode(&bytes).expect("well-formed exact-boundary budget");
+        assert_eq!(
+            private_memory_budget_is_satisfiable(&budget, crate::private_memory::IMAGE_TARGET_NAME),
+            Err(GenerationError::UnsatisfiablePrivateMemoryBudget)
+        );
         // One more holder at the same ceiling passes every per-holder bound and
         // still cannot be honoured in full.
         let holders: alloc::vec::Vec<(u8, u32)> = (1..=fits as u8 + 1)

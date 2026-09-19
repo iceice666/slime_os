@@ -46,14 +46,14 @@ totalPages :: Int = 2048;
 
 CapacityProfile :: type { target : Text; regionPages : Int; totalPages : Int; };
 
--- 16384 pages is 64 MiB per holder and 32768 is 128 MiB across every live
--- region, qualified on both QEMU profiles by `just private_memory_check`.
+-- The QEMU qualification workload admits four 65536-page (256 MiB) holders.
+-- Publication requires both target-specific private-memory capacity runs.
 -- The physical targets keep the conservative default above: their root CSpace
 -- is the kernel's 12-bit default, which cannot hold the descriptor tables a
 -- 64 MiB holder needs, and no board has run this workload.
 capacityProfiles :: List CapacityProfile = {
-  { target = "aarch64-sel4-qemu-virt"; regionPages = 16384; totalPages = 32768; };
-  { target = "riscv64-sel4-qemu-virt"; regionPages = 16384; totalPages = 32768; };
+  { target = "aarch64-sel4-qemu-virt"; regionPages = 65536; totalPages = 262144; };
+  { target = "riscv64-sel4-qemu-virt"; regionPages = 65536; totalPages = 262144; };
 };
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };

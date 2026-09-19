@@ -275,8 +275,8 @@ mod tests {
 
     #[test]
     fn target_capacity_hits_exact_names_and_defaults_unknown_targets() {
-        assert_eq!(capacity_for("aarch64-sel4-qemu-virt"), (16_384, 32_768));
-        assert_eq!(capacity_for("riscv64-sel4-qemu-virt"), (16_384, 32_768));
+        assert_eq!(capacity_for("aarch64-sel4-qemu-virt"), (65_536, 262_144));
+        assert_eq!(capacity_for("riscv64-sel4-qemu-virt"), (65_536, 262_144));
         assert_eq!(capacity_for("aarch64-rpi5"), (512, 2_048));
         assert_eq!(capacity_for("aarch64-sel4-qemu-virt-extra"), (512, 2_048));
     }

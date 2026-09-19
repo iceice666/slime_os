@@ -67,6 +67,31 @@ parents, remain owned for the root lifetime, so this is not unlimited allocator
 metadata or adaptive memory support. Actual target image/CSlot fit still requires
 its own admission and boot evidence.
 
+## Qualified simultaneous capacity
+
+The QEMU budget admits four 65536-page (256 MiB) holders, 262144 pages in total,
+on `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`. A budget that declares
+one page beyond either bound is refused at admission rather than at first
+growth, so an image that cannot be honoured in full never boots.
+
+Two compositions qualify that envelope, both owned by
+`scripts/check/check-sel4-private-memory-plane.py`:
+
+- `sel4-private-memory-1g` keeps four holders resident while one of them dies
+  and is readmitted twenty times. The surviving three re-verify their whole
+  patterns after every replacement, and each replacement observes a zeroed
+  region, so retention and non-disclosure are separate observations.
+- `sel4-private-memory-isolation` gives one holder the full 256 MiB and two
+  peers a single page. Every task's window starts at the same virtual address,
+  so each peer first proves its own page works, is refused a second, and then
+  reads or writes 128 MiB into that same address range — inside the victim's
+  extent, outside its own page. Each access faults with its own task, access
+  kind, and exact address, and the victim then faults on executing its own
+  backed private memory.
+
+These are QEMU envelopes on two architectures. They qualify no physical machine
+and no larger target.
+
 ## Userspace allocation
 
 Components built with the private-heap feature install the first-fit, address-
@@ -99,10 +124,11 @@ memory plane checker.
 
 ## Current capacity
 
-The contract publishes 16,384 pages (64 MiB) per holder and 32,768 pages total
-only for `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`. Targets without an
-explicit row retain the conservative 512-page per-holder and 2,048-page total
-bounds. A QEMU capacity result proves no physical board's memory map.
+The contract publishes 65,536 pages (256 MiB) per holder and 262,144 pages
+(1 GiB) total only for `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`.
+Targets without an explicit row retain the conservative 512-page per-holder and
+2,048-page total bounds. A QEMU capacity result proves no physical board's
+memory map.
 
 Further capacity work is specified in
 [`../plans/memory-capacity.md`](../plans/memory-capacity.md). It does not reopen
@@ -110,8 +136,10 @@ the private-memory mechanism.
 
 ## Verification
 
-- `just private_memory_check` exercises declared quotas and isolation on both
-  QEMU reference architectures.
+- `just private_memory_check` exercises declared quotas and the published
+  capacity envelope on both QEMU reference architectures.
+- `just private_memory_isolation_check` exercises the fault and authority
+  boundary between holders on both of them.
 - `just private_memory_cycles_check` exercises repeated zeroing and reclamation
   across exit and fault.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.

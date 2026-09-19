@@ -343,6 +343,8 @@ SEL4_MANIFESTS = {
     # MEM-64M's reuse clause: one declared 64 MiB holder init relaunches until
     # the root has reclaimed and re-served that quota twenty times.
     "sel4-private-memory-cycles": GENERATION_COMPOSITIONS / "sel4-private-memory-cycles.zti",
+    "sel4-private-memory-1g": GENERATION_COMPOSITIONS / "sel4-private-memory-1g.zti",
+    "sel4-private-memory-isolation": GENERATION_COMPOSITIONS / "sel4-private-memory-isolation.zti",
     # C9.3: a declared scheduling class, its band mapping, and promotion
     # authority over another component's class.
     "sel4-scheduling-class": GENERATION_COMPOSITIONS / "sel4-scheduling-class.zti",

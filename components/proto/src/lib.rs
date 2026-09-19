@@ -27,6 +27,7 @@ mod io_queue_proofs;
 pub mod link_device;
 pub mod network_service;
 pub mod powerbox;
+pub mod private_memory_probe;
 pub mod recording_stream;
 pub mod ring;
 pub mod sample_descriptor;
