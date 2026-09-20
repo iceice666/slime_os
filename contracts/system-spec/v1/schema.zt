@@ -18,6 +18,8 @@
 -- manifest it produces is what the builder encodes, and
 -- `contracts/generation-manifest/v1` still owns that boundary.
 
+privatePolicy ::= import private_policy.declarations;
+
 -- One authority edge. Identical in shape to `contracts/generation-manifest/v1`'s
 -- `CapabilityGrant`, because it *is* that record: the generator copies it
 -- through rather than translating, so there is no second grant vocabulary to
@@ -569,6 +571,8 @@ SystemSpec :: type {
   notificationBindings : List SystemNotificationBinding;
   bootProfiles : List SystemBootProfile;
   fabricGraph? : SystemFabricGraph;
+  -- Explicit v2 policy conflicts with every effective fixed privatePageQuota.
+  privateMemoryPolicy? : privatePolicy.Policy;
   -- The eight remaining generation-manifest sections that name concrete
   -- authority or policy independent of any component spec, on the same terms
   -- `notifications`/`fabricGraph` are: no component in isolation can state who

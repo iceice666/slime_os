@@ -18,6 +18,7 @@ use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
 use boot_contracts::network_destination::{self, NetworkDestinations};
 use boot_contracts::network_interface::{self, NetworkInterfaces};
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
+use boot_contracts::private_memory_policy::{self, Policy as PrivateMemoryPolicy};
 use boot_contracts::recording_policy::{self, RecordingPolicy};
 use boot_contracts::scheduling_class::{self, SchedulingClass};
 use boot_contracts::target_profile::TargetProfile;
@@ -89,6 +90,10 @@ pub enum GenerationError {
     /// before any component launches — a quota the root cannot honour must not
     /// become a runtime refusal against a ceiling the generation promised.
     UnsatisfiablePrivateMemoryBudget,
+    ConflictingPrivateMemoryPolicies,
+    MalformedPrivateMemoryPolicy,
+    UnsupportedPrivateMemoryPolicy,
+    UnsupportedAdaptivePrivateMemoryPolicy,
     /// The generation carries an IO-resource budget that is malformed or asks
     /// for aggregate/per-driver ceilings this root cannot honour (IO1).
     UnsatisfiableIoResourceBudget,
@@ -528,33 +533,47 @@ pub(crate) fn fabric_graph_object<'a>(
     None
 }
 
-/// Locate the private-memory budget resource object, if the generation
-/// declares one (C10.2).
-///
-/// The same shape as [`fabric_graph_object`] and the shared-buffer budget's
-/// locator: a `KIND_RESOURCE` object whose payload carries the budget magic,
-/// first match wins. A malformed first match is `Some(Err(..))` rather than a
-/// reason to keep looking — a generation carrying one bad budget and one good
-/// one must not resolve the good one, because "the generation declares a
-/// budget" then means whichever the scan happened to reach.
-///
-/// Public so the launch paths resolve every quota from the object admission
-/// validated, rather than locating the resource a second way. A second lookup
-/// is how the boot-layout resource drifted from the bindings it described
-/// (B71).
-pub fn private_memory_budget_object<'a>(
+/// Resolve the entire resource family before choosing a version. An earlier
+/// valid object must not conceal a later conflicting declaration.
+fn private_memory_object<'a>(
     generation: &Generation<'a>,
-) -> Option<Result<PrivateMemoryBudget<'a>, private_memory_budget::DecodeError>> {
-    for index in 0..generation.object_count() {
-        let object = generation.object(index).ok()?;
-        if object.kind == KIND_RESOURCE
-            && object.bytes.len() >= private_memory_budget::MAGIC.len()
-            && object.bytes[..private_memory_budget::MAGIC.len()] == private_memory_budget::MAGIC
-        {
-            return Some(PrivateMemoryBudget::decode(object.bytes));
+) -> Result<Option<&'a [u8]>, GenerationError> {
+    select_private_memory_object((0..generation.object_count()).map(|index| {
+        generation
+            .object(index)
+            .map(|object| (object.kind, object.bytes))
+            .map_err(GenerationError::from)
+    }))
+}
+
+fn select_private_memory_object<'a>(
+    objects: impl Iterator<Item = Result<(u32, &'a [u8]), GenerationError>>,
+) -> Result<Option<&'a [u8]>, GenerationError> {
+    let mut found = None;
+    for object in objects {
+        let (kind, bytes) = object?;
+        if kind == KIND_RESOURCE && bytes.starts_with(&private_memory_policy::MAGIC) {
+            if found.is_some() {
+                return Err(GenerationError::ConflictingPrivateMemoryPolicies);
+            }
+            found = Some(bytes);
         }
     }
-    None
+    Ok(found)
+}
+
+/// Fixed-budget lookup for launch paths; adaptive generations never pass admission.
+pub fn private_memory_budget_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<PrivateMemoryBudget<'a>, GenerationError>> {
+    match private_memory_object(generation) {
+        Ok(Some(bytes)) => Some(
+            PrivateMemoryBudget::decode(bytes)
+                .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget),
+        ),
+        Ok(None) => None,
+        Err(error) => Some(Err(error)),
+    }
 }
 pub fn io_resource_budget_object<'a>(
     generation: &Generation<'a>,
@@ -1271,12 +1290,64 @@ pub fn private_memory_budget_is_satisfiable(
 fn private_memory_budget_admission(
     generation: &Generation<'_>,
 ) -> Result<Option<usize>, GenerationError> {
-    let Some(budget) = private_memory_budget_object(generation) else {
+    let Some(bytes) = private_memory_object(generation)? else {
         return Ok(None);
     };
-    let budget = budget.map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
+    let version = bytes
+        .get(
+            private_memory_policy::OFF_HEADER_FORMAT_VERSION
+                ..private_memory_policy::OFF_HEADER_FORMAT_VERSION_END,
+        )
+        .ok_or(GenerationError::MalformedPrivateMemoryPolicy)?;
+    let version = u32::from_le_bytes(version.try_into().unwrap());
+    if version == private_memory_policy::FORMAT_VERSION {
+        let mut instances = [private_memory_policy::Instance {
+            identity: [0; 32],
+            owner: None,
+        }; MAX_ADMITTED_INSTANCES];
+        if generation.instance_count() > instances.len() {
+            return Err(GenerationError::MalformedPrivateMemoryPolicy);
+        }
+        for (index, slot) in instances
+            .iter_mut()
+            .enumerate()
+            .take(generation.instance_count())
+        {
+            let instance = generation.instance(index)?;
+            *slot = private_memory_policy::Instance {
+                identity: private_memory_policy::subject_identity(instance.name),
+                owner: match instance.owner {
+                    boot_contracts::generation::InstanceOwner::Root => None,
+                    boot_contracts::generation::InstanceOwner::Instance(owner) => Some(
+                        private_memory_policy::subject_identity(generation.instance(owner)?.name),
+                    ),
+                },
+            };
+        }
+        return adaptive_private_memory_activation(
+            bytes,
+            &instances[..generation.instance_count()],
+        );
+    }
+    if version != private_memory_budget::FORMAT_VERSION {
+        return Err(GenerationError::UnsupportedPrivateMemoryPolicy);
+    }
+    let budget = PrivateMemoryBudget::decode(bytes)
+        .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget)?;
     private_memory_budget_is_satisfiable(&budget, generation.target)?;
     Ok(Some(budget.holder_count()))
+}
+
+fn adaptive_private_memory_activation(
+    bytes: &[u8],
+    instances: &[private_memory_policy::Instance],
+) -> Result<Option<usize>, GenerationError> {
+    let policy = PrivateMemoryPolicy::decode(bytes)
+        .map_err(|_| GenerationError::MalformedPrivateMemoryPolicy)?;
+    policy
+        .validate_instances(instances)
+        .map_err(|_| GenerationError::MalformedPrivateMemoryPolicy)?;
+    Err(GenerationError::UnsupportedAdaptivePrivateMemoryPolicy)
 }
 
 /// The result of admitting a v5 generation graph.
@@ -2696,6 +2767,82 @@ mod tests {
         assert_eq!(
             transferable.endpoint_rights(),
             sel4::CapRights::new(true, true, true, true)
+        );
+    }
+}
+
+#[cfg(test)]
+mod adaptive_policy_tests {
+    use super::*;
+
+    fn deny_all_policy() -> alloc::vec::Vec<u8> {
+        private_memory_policy::Header {
+            magic: private_memory_policy::MAGIC,
+            format_version: private_memory_policy::FORMAT_VERSION,
+            header_size: private_memory_policy::HEADER_BYTES as u32,
+            required_flags: 0,
+            entitlement_count: 0,
+            subject_count: 0,
+            total_len: private_memory_policy::HEADER_BYTES as u32,
+            reserved: 0,
+            reserve_bytes: 0,
+            reserve_slots: 0,
+            reserve_descriptors: 0,
+            reserve_extents: 0,
+            reserve_tables: 0,
+        }
+        .encode()
+        .to_vec()
+    }
+
+    #[test]
+    fn private_policy_family_duplicates_refuse_before_version_selection() {
+        let adaptive = deny_all_policy();
+        let fixed = private_memory_budget::MAGIC;
+        for objects in [
+            alloc::vec![
+                (KIND_RESOURCE, fixed.as_slice()),
+                (KIND_RESOURCE, adaptive.as_slice())
+            ],
+            alloc::vec![
+                (KIND_RESOURCE, adaptive.as_slice()),
+                (KIND_RESOURCE, fixed.as_slice())
+            ],
+            alloc::vec![
+                (KIND_RESOURCE, adaptive.as_slice()),
+                (KIND_RESOURCE, adaptive.as_slice())
+            ],
+        ] {
+            assert_eq!(
+                select_private_memory_object(objects.into_iter().map(Ok)),
+                Err(GenerationError::ConflictingPrivateMemoryPolicies)
+            );
+        }
+        assert_eq!(
+            select_private_memory_object(
+                [
+                    (KIND_COMPONENT, adaptive.as_slice()),
+                    (KIND_RESOURCE, fixed.as_slice())
+                ]
+                .into_iter()
+                .map(Ok)
+            ),
+            Ok(Some(fixed.as_slice()))
+        );
+    }
+
+    #[test]
+    fn adaptive_policy_is_structurally_checked_but_never_activated() {
+        let valid = deny_all_policy();
+        assert_eq!(
+            adaptive_private_memory_activation(&valid, &[]),
+            Err(GenerationError::UnsupportedAdaptivePrivateMemoryPolicy)
+        );
+        let mut invalid = valid;
+        invalid[private_memory_policy::OFF_HEADER_REQUIRED_FLAGS] = 1;
+        assert_eq!(
+            adaptive_private_memory_activation(&invalid, &[]),
+            Err(GenerationError::MalformedPrivateMemoryPolicy)
         );
     }
 }

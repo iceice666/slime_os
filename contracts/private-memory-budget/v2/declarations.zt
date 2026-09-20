@@ -1,0 +1,34 @@
+-- Composition policy is shared by system and generation declarations.
+-- Empty subtreeRoot means an explicitly listed membership group. A nonempty
+-- root restricts listed members to that ownership subtree; it grants no implicit members.
+ResourceReserve :: type {
+  bytes : Int;
+  slots : Int;
+  descriptors : Int;
+  extents : Int;
+  tables : Int;
+};
+Entitlement :: type {
+  name : Text;
+  subtreeRoot : Text;
+  guaranteePages : Int;
+  maximumMode : Text;
+  maximumPages : Int;
+};
+Subject :: type {
+  instance : Text;
+  entitlement : Text;
+  maximumMode : Text;
+  maximumPages : Int;
+};
+Policy :: type {
+  formatVersion : Int;
+  reserve : ResourceReserve;
+  entitlements : List Entitlement;
+  subjects : List Subject;
+};
+FromData @ResourceReserve :: derive
+FromData @Entitlement :: derive
+FromData @Subject :: derive
+FromData @Policy :: derive
+{ ResourceReserve =; Entitlement =; Subject =; Policy =; }

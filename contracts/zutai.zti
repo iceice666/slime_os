@@ -6,5 +6,6 @@
   dependencies = [
     { alias = "wire"; path = "_shared"; };
     { alias = "genv5_rights"; path = "generation/v5/vocab"; };
+    { alias = "private_policy"; path = "private-memory-budget/v2"; };
   ];
 }

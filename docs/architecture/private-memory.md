@@ -148,6 +148,46 @@ Further capacity work is specified in
 [`../plans/memory-capacity.md`](../plans/memory-capacity.md). It does not reopen
 the private-memory mechanism.
 
+## Adaptive policy admission boundary
+
+`contracts/private-memory-budget/v2/` defines explicit entitlements and instance
+membership, separate guaranteed pages, fixed or pool-relative request maxima,
+and an operational/restart reserve of bytes, CSlots, descriptors, extents and
+tables. A subtree root restricts explicitly listed members; it never implicitly
+authorizes every descendant. System and generation declarations share these
+types. Component `privatePageQuota` remains a fixed-v1 default; a system opting
+into `privateMemoryPolicy` must explicitly clear every effective fixed quota.
+Fixed and adaptive declarations/resource objects cannot coexist.
+
+The v2 resource retains the `SLIMEPM` magic family and changes the version, so
+old v1 readers refuse it rather than treating authority as absent. The current
+root scans the whole resource family, rejects duplicates, validates v2 structure
+and instance ownership, then refuses adaptive activation before task publication.
+Existing fixed v1 bytes, target bounds and full-affordability semantics remain
+unchanged. This is a policy/host-accounting boundary, not an adaptive allocator.
+
+The allocation-free model in `boot-contracts/src/private_memory_policy/ledger.rs`
+charges guarantees once per entitlement, keeps incarnation tokens distinct from
+entitlement identity, and serializes transactions in caller receipt order.
+Committed bytes cannot be stolen. Failed cleanup retains quarantined charges;
+successful revocation returns ownership, and a restarted instance cannot spend
+the prior incarnation's token within that ledger. Callers must supply only ordinary
+inventory, never device ranges; the pure partition check proves disjoint coverage,
+not the provenance of its inputs. Boot exclusions appear only as absent ranges.
+Exact placement plans check alignment and fragmentation separately from affordability.
+
+The allocator supplying this model must certify simultaneous guarantee backing
+and a conservative per-page envelope of table/metadata/slot costs, reserve real
+resources before publication, and settle transactions only after kernel success.
+Partial redemptions cannot draw another page's share. Successful rollback retains
+only elastic-funded table resources; otherwise it remains pending or quarantined
+until cleanup. Quarantined payload remains charged against authorization maxima.
+Payload quotas do not count metadata or unused extent backing as mapped pages;
+all such overhead remains charged to the resource pool, not hidden as free RAM.
+The pure model does not prove
+kernel placement or discover RAM. Expandable CSpace, demand-backed allocation,
+dynamic windows and multi-inventory runtime qualification remain separate work.
+
 ## Verification
 
 - `just private_memory_check` exercises declared quotas and the published
