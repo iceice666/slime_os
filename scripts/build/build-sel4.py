@@ -1055,6 +1055,11 @@ def build_application(
             root_environment["RUSTFLAGS"] = (
                 f"{rustflags} --cfg slime_private_fail_second_allocation".strip()
             )
+        if closure_root_role == "private-memory-stress":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_stress".strip()
+            )
         if closure_root_role == "private-memory-fail-large-map":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (

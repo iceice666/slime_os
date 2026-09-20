@@ -110,6 +110,14 @@ POST_BASELINE_GRANTS = {
     "sel4-private-memory": frozenset({"private-memory-worker-rpc"}),
 }
 
+# Lift only the reciprocal borrower's loan ceiling; every other budget field
+# and holder remains frozen-baseline-visible. The live instance must declare it.
+POST_BASELINE_SHARED_BUFFER_FIELDS = {
+    "sel4-private-memory-isolation": {
+        "private-memory-1g-holder-c": frozenset({"loanCount"}),
+    },
+}
+
 # `InstanceBinding.slotReason` postdates the frozen baseline too, on the same
 # terms (B91): the baseline's pinned bindings carry a number and no reason, so it
 # has nothing to compare a label against. Lifted out of the comparison and
@@ -188,6 +196,16 @@ def _decode(path: Path, label: str) -> dict:
     if process.returncode != 0:
         fail(f"cannot read {label}: {process.stderr.strip()}")
     return json.loads(process.stdout)
+
+
+# These compositions were authored as system specs, not migrated from a
+# hand-authored manifest. Their contracts and derived-byte drift remain checked.
+SPEC_NATIVE_SYSTEMS = frozenset({
+    "sel4-private-memory-stress",
+    "sel4-private-memory-stress-rv64",
+    "sel4-private-memory-heap-stress",
+    "sel4-private-memory-heap-stress-rv64",
+})
 
 
 def load_baseline(name: str) -> dict:
@@ -353,6 +371,19 @@ def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
                 else:
                     kept.append(binding)
             instance["bindings"] = kept
+    post_budget_fields = POST_BASELINE_SHARED_BUFFER_FIELDS.get(name, {})
+    added_budget = []
+    for entry in value.get("sharedBufferBudget", []):
+        fields = post_budget_fields.get(entry["holder"], frozenset())
+        if fields:
+            added_budget.append(
+                {
+                    "holder": entry["holder"],
+                    **{field: entry.pop(field) for field in fields if field in entry},
+                }
+            )
+    if added_budget:
+        added["sharedBufferBudget"] = added_budget
     for instance in value.get("instances", []):
         for field in POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset()):
             instance.pop(field, None)
@@ -475,6 +506,25 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
                 "system declarations: "
                 f"{first_difference(derived_instances, declared_instances, 'instances')}"
             )
+    for holder, fields in POST_BASELINE_SHARED_BUFFER_FIELDS.get(name, {}).items():
+        declarations = [
+            instance for instance in resolved_instances(system.spec) if instance["name"] == holder
+        ]
+        budgets = [
+            entry for entry in derived.get("sharedBufferBudget", []) if entry["holder"] == holder
+        ]
+        if len(declarations) != 1 or len(budgets) != 1:
+            fail(f"{name}: post-baseline sharedBufferBudget requires exactly one live holder {holder}")
+        for field in fields:
+            if (
+                field not in declarations[0]
+                or field not in budgets[0]
+                or budgets[0][field] != declarations[0][field]
+            ):
+                fail(
+                    f"{name}: post-baseline sharedBufferBudget {holder}.{field} "
+                    "does not match the live instance declaration"
+                )
     # B91: every pin the derivation emits carries the reason its system spec
     # declared, and that reason is what the derived manifest itself implies. The
     # builder's own predicate is reused rather than restated, so this gate cannot
@@ -529,6 +579,7 @@ if len(identities) != len(systems):
 RETIRED_KINDS_COVERED = {
     grant["capabilityKind"]
     for name in sorted(systems)
+    if name not in SPEC_NATIVE_SYSTEMS
     for grant in strip_retired_kinds(load_baseline(DERIVED_FIXTURES[name]))[1]
 }
 if RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED:
@@ -539,7 +590,15 @@ if RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED:
     )
 
 # 1. Each system derives the fixture it replaces.
+if not SPEC_NATIVE_SYSTEMS <= systems.keys():
+    fail("spec-native system allowlist names a missing system")
 for name, system in sorted(systems.items()):
+    if name in SPEC_NATIVE_SYSTEMS:
+        if (BASELINE_FIXTURES / DERIVED_FIXTURES[name]).exists():
+            fail(f"{name}: spec-native system unexpectedly has a historical baseline")
+        source_manifest = derive_manifest(system)
+        check_post_baseline(name, normalized(source_manifest), system, source_manifest)
+        continue
     # The pre-CP1 hand-authored fixture, frozen under
     # `contracts/system-spec/v1/baselines/`. Comparing against the *committed*
     # fixture would be circular now that the fixture is this generator's own
@@ -886,6 +945,84 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
     ):
         rejected(label, mutate)
         refusals += 1
+
+    # Exercise target-bound memory admission at the exact published edges.
+    # Derivation owns these checks; structural compilation alone is insufficient.
+    for target, region, total in (
+        ("aarch64-sel4-qemu-virt", 65536, 262144),
+        ("riscv64-sel4-qemu-virt", 65536, 262144),
+        ("aarch64-rpi5", 512, 2048),
+    ):
+        memory_spec = copy.deepcopy(systems["sel4-private-memory-1g"].spec)
+        memory_spec["targetRequirement"] = target
+        for instance in memory_spec["instances"]:
+            instance["privatePageQuota"] = (
+                region if instance["name"].startswith("private-memory-1g-holder-") else 0
+            )
+
+        def memory_manifest(spec: dict) -> dict:
+            return derive_manifest(compile_system(write_system(arms, spec), components=COMPONENTS))
+
+        admitted = memory_manifest(memory_spec)
+        quotas = [entry["pageQuota"] for entry in admitted["privateMemoryBudget"]]
+        if quotas != [region] * 4 or sum(quotas) != total:
+            fail(f"{target}: exact private-memory boundary was not admitted")
+
+        for label, holder, pages, reason in (
+            ("holder", "private-memory-1g-holder-a", region + 1, "cannot admit holders"),
+            ("aggregate", "private-memory-1g-probe", 1, "aggregate exceeds capacity"),
+        ):
+            altered = copy.deepcopy(memory_spec)
+            next(entry for entry in altered["instances"] if entry["name"] == holder)[
+                "privatePageQuota"
+            ] = pages
+            try:
+                memory_manifest(altered)
+            except SystemSpecError as error:
+                expected = f"private memory: target {target!r} {reason}"
+                if expected not in str(error):
+                    fail(f"{target}: {label} private-memory boundary refused for wrong reason: {error}")
+            else:
+                fail(f"{target}: {label} private-memory boundary overflow was accepted")
+            refusals += 1
+
+# The loan-field exception must refuse drift independently of the frozen
+# comparison, and must not conceal changes outside its exact scope.
+loan_system_name = "sel4-private-memory-isolation"
+loan_system = systems[loan_system_name]
+loan_source = derive_manifest(loan_system)
+loan_manifest = normalized(loan_source)
+check_post_baseline(loan_system_name, loan_manifest, loan_system, loan_source)
+loan_holder = "private-memory-1g-holder-c"
+for mutation in ("changed", "missing", "duplicate"):
+    altered = copy.deepcopy(loan_manifest)
+    budget = next(entry for entry in altered["sharedBufferBudget"] if entry["holder"] == loan_holder)
+    if mutation == "changed":
+        budget["loanCount"] += 1
+    elif mutation == "missing":
+        del budget["loanCount"]
+    else:
+        altered["sharedBufferBudget"].append(copy.deepcopy(budget))
+    try:
+        check_post_baseline(loan_system_name, altered, loan_system, loan_source)
+    except SystemExit as error:
+        if "post-baseline sharedBufferBudget" not in str(error):
+            raise
+    else:
+        fail(f"{mutation} post-baseline loan budget was accepted")
+    refusals += 1
+
+for name, holder, field in (
+    (loan_system_name, loan_holder, "bufferCount"),
+    (loan_system_name, "private-memory-1g-holder-b", "loanCount"),
+    ("sel4-private-memory", loan_holder, "loanCount"),
+):
+    altered = copy.deepcopy(loan_manifest)
+    budget = next(entry for entry in altered["sharedBufferBudget"] if entry["holder"] == holder)
+    budget[field] += 1
+    if split_post_baseline(altered, name)[0] == split_post_baseline(loan_manifest, name)[0]:
+        fail(f"post-baseline exception concealed unrelated {name}/{holder}.{field} drift")
+    refusals += 1
 
 print(
     f"system spec derivation: {len(systems)} systems compiled and "

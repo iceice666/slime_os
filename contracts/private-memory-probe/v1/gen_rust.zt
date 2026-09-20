@@ -9,6 +9,7 @@ Protocol :: type {
   grow : Int; verify : Int; fault : Int; finish : Int; acknowledge : Int;
   readForeign : Int; writeForeign : Int; executePrivate : Int;
   loanReady : Int; loanOffer : Int; loanSettled : Int;
+  stressGrow : Int; stressRefuse : Int; stressVerify : Int;
   messageFields : List refl.SchemaField;
   messageLayout : List WireField;
 };
@@ -28,6 +29,9 @@ rustBindings :: Protocol -> Text
     "pub const LOAN_READY: u32 = "; n.toText p.loanReady; ";\n";
     "pub const LOAN_OFFER: u32 = "; n.toText p.loanOffer; ";\n";
     "pub const LOAN_SETTLED: u32 = "; n.toText p.loanSettled; ";\n";
+    "pub const STRESS_GROW: u32 = "; n.toText p.stressGrow; ";\n";
+    "pub const STRESS_REFUSE: u32 = "; n.toText p.stressRefuse; ";\n";
+    "pub const STRESS_VERIFY: u32 = "; n.toText p.stressVerify; ";\n";
     c.offsetConsts "MESSAGE" 0 p.messageLayout;
     c.wireStruct "private-memory-probe" "WireMessage" "MESSAGE" "MESSAGE_LEN" p.messageLayout;
   };

@@ -33,7 +33,7 @@
   name = "private-memory-1g-holder-c";
   owner = "private-memory-1g-probe";
   provides = [];
-  purpose = "Retains and verifies a zero-initialized 256 MiB private region under declared coordination.";
+  purpose = "Retains 256 MiB private memory, or tests buffer and reciprocal-loan isolation with explicit one-page composition budgets.";
   requires = [];
   runtime = {
     devices = [];
@@ -51,9 +51,9 @@
   };
   test = {
     expectedResult = "A peer holding only its own single private page cannot reach another component's working set at the same virtual address.";
-    passFailCriteria = "[private-memory-isolation] complete read=1 write=1 execute=1 buffer_window_denied=4 loan_window_denied=2 unowned_denied=6 seal_denied=2 loan_transfer=1";
+    passFailCriteria = "[private-memory-isolation] complete read=1 write=1 execute=1 buffer_window_denied=4 loan_window_denied=4 unowned_denied=6 seal_denied=2 loan_transfer=2";
     requiredTestEnvironment = "private_memory_isolation_check";
-    testCondition = "Each peer proves its own page, is refused a second, and faults inside the victim's extent on both QEMU architectures.";
+    testCondition = "Both peers lend and receive a real sealed buffer, refuse backed/reserved private-window mappings, explicitly unmap and return loans, then fault inside the victim's extent on both QEMU architectures.";
   };
   version = "1.0.0";
 }

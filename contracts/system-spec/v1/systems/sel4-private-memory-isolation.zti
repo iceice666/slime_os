@@ -170,6 +170,7 @@
       bufferBytePages = 1;
       bufferCount = 1;
       mappingCount = 1;
+      loanCount = 1;
     };
     {
       executable = "private-memory-1g-probe";

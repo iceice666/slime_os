@@ -4,8 +4,9 @@
 
 ## Goal
 
-Extend the completed private-memory mechanism beyond its current target-qualified
-64 MiB holder envelope without turning emulator RAM size into a capability claim.
+Extend the completed private-memory mechanism from the earlier target-qualified
+64 MiB holder envelope to four simultaneous 256 MiB holders without turning
+emulator RAM size into a capability claim.
 This is a bounded qualification workload, not a general promise of large-memory
 or physical-board support.
 

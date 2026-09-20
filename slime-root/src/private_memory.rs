@@ -336,7 +336,78 @@ pub(crate) trait PrivateMemoryKernel {
     fn unmap_frame(&mut self, frame: sel4::cap::UnspecifiedPage) -> Result<(), sel4::Error>;
 }
 
-struct NativePrivateMemoryKernel;
+struct NativePrivateMemoryKernel {
+    #[cfg(slime_private_stress)]
+    failure: Option<StressFailure>,
+}
+
+#[cfg(slime_private_stress)]
+struct StressFailure {
+    allocation: bool,
+    remaining: usize,
+}
+
+#[cfg(slime_private_stress)]
+static STRESS_MAP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+#[cfg(slime_private_stress)]
+static STRESS_ALLOCATION: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(true);
+
+impl NativePrivateMemoryKernel {
+    fn for_growth(_region: &Region, _delta: usize) -> Self {
+        Self {
+            #[cfg(slime_private_stress)]
+            failure: {
+                use core::sync::atomic::Ordering;
+                if _region.quota == 65_536
+                    && _region.pages == 512
+                    && _delta == 1024
+                    && STRESS_MAP.swap(false, Ordering::Relaxed)
+                {
+                    Some(StressFailure {
+                        allocation: false,
+                        remaining: 2,
+                    })
+                } else if _region.quota == 65_536
+                    && _region.pages == 65_534
+                    && _delta == 2
+                    && STRESS_ALLOCATION.swap(false, Ordering::Relaxed)
+                {
+                    Some(StressFailure {
+                        allocation: true,
+                        remaining: 2,
+                    })
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    #[cfg(slime_private_stress)]
+    fn refuse(&mut self, allocation: bool) -> bool {
+        let Some(failure) = self.failure.as_mut() else {
+            return false;
+        };
+        if failure.allocation != allocation {
+            return false;
+        }
+        failure.remaining -= 1;
+        if failure.remaining != 0 {
+            return false;
+        }
+        let (case, previous, delta, backed) = if allocation {
+            ("allocation", 65_534, 2, 1)
+        } else {
+            ("map", 512, 1024, 512)
+        };
+        sel4::debug_println!(
+            "SLIME_MEM stress growth case={case} previous={previous} delta={delta} backed={backed}"
+        );
+        self.failure = None;
+        true
+    }
+}
 
 impl PrivateMemoryKernel for NativePrivateMemoryKernel {
     fn revoke(&mut self, parent: sel4::cap::Untyped) -> Result<(), sel4::Error> {
@@ -352,6 +423,10 @@ impl PrivateMemoryKernel for NativePrivateMemoryKernel {
         blueprint: &sel4::ObjectBlueprint,
         slot: usize,
     ) -> Result<(), sel4::Error> {
+        #[cfg(slime_private_stress)]
+        if self.refuse(true) {
+            return Err(sel4::Error::NotEnoughMemory);
+        }
         parent.untyped_retype(
             blueprint,
             &sel4::init_thread::slot::CNODE
@@ -370,6 +445,10 @@ impl PrivateMemoryKernel for NativePrivateMemoryKernel {
         rights: sel4::CapRights,
         attrs: sel4::VmAttributes,
     ) -> Result<(), sel4::Error> {
+        #[cfg(slime_private_stress)]
+        if self.refuse(false) {
+            return Err(sel4::Error::NotEnoughMemory);
+        }
         frame.frame_map(vspace, vaddr, rights, attrs)
     }
 
@@ -447,14 +526,8 @@ impl Table {
         region: &mut Region,
         delta: usize,
     ) -> Result<usize, GrowError> {
-        self.grow_with_kernel(
-            allocator,
-            arena,
-            vspace,
-            region,
-            delta,
-            &mut NativePrivateMemoryKernel,
-        )
+        let mut kernel = NativePrivateMemoryKernel::for_growth(region, delta);
+        self.grow_with_kernel(allocator, arena, vspace, region, delta, &mut kernel)
     }
 
     pub(crate) fn grow_with_kernel<K: PrivateMemoryKernel>(

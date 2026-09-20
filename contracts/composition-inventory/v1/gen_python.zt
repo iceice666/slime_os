@@ -25,8 +25,9 @@ render :: Text = t.join "" {
   line "MAX_NAME_BYTES" schema.maxNameBytes;
   line "MAX_PATH_BYTES" schema.maxPathBytes;
   text "STATE_DERIVED" schema.stateDerived;
+  text "STATE_SPEC_NATIVE" schema.stateSpecNative;
   text "STATE_HAND_AUTHORED" schema.stateHandAuthored;
-  "STATES = (STATE_DERIVED, STATE_HAND_AUTHORED)\n";
+  "STATES = (STATE_DERIVED, STATE_SPEC_NATIVE, STATE_HAND_AUTHORED)\n";
   text "DEFERRAL_MULTI_INSTANCE_EXECUTABLE" schema.deferralMultiInstanceExecutable;
   text "DEFERRAL_EXECUTABLE_NAME_COLLISION" schema.deferralExecutableNameCollision;
   text "DEFERRAL_ROUTE_NAME_VARIANCE" schema.deferralRouteNameVariance;

@@ -250,6 +250,7 @@ rootRoleFixture :: Text = "root-fixture";
 rootRoleReclamationUnwind :: Text = "reclamation-unwind";
 rootRolePrivateMemoryFailSecondAllocation :: Text = "private-memory-fail-second-allocation";
 rootRolePrivateMemoryFailLargeMap :: Text = "private-memory-fail-large-map";
+rootRolePrivateMemoryStress :: Text = "private-memory-stress";
 loaderRoleKernelLoader :: Text = "kernel-loader";
 
 -- One closed root-role parameter. `BuildRole.parameters` was declared by CP11
@@ -331,6 +332,7 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   rootRoleReclamationUnwind =;
   rootRolePrivateMemoryFailSecondAllocation =;
   rootRolePrivateMemoryFailLargeMap =;
+  rootRolePrivateMemoryStress =;
   loaderRoleKernelLoader =;
   rootParameterQemuKeyboard =;
   rootParameterDuoTestTerminator =;

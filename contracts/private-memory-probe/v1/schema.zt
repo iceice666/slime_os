@@ -29,6 +29,9 @@ format ::= {
   loanReady = 9;
   loanOffer = 10;
   loanSettled = 11;
+  stressGrow = 12;
+  stressRefuse = 13;
+  stressVerify = 14;
   messageFields = messageSchema.fields ?? {;};
   messageLayout =;
 };

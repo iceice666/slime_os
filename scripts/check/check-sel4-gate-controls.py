@@ -42,8 +42,8 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
     # 24 ceiling markers, MEM-64M's 11 reuse-cycle markers, and MEM-1G's 8
-    # simultaneous-capacity plus 7 isolation markers.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 50),
+    # simultaneous-capacity plus 11 isolation markers.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 54),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -907,11 +907,33 @@ def check_private_isolation_controls(gate) -> int:
         f"SLIME_MEM quota task=3 instance=private-memory-1g-holder-c declared=1 installed=1 base=0x{address:x}",
         f"SLIME_MEM grown task=1 delta=65536 previous=0 pages=65536 base=0x{address:x} quota=65536 total=65536 large_frames=128 base_frames=0 leaf_tables=0",
         f"SLIME_MEM grown task=2 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65537 large_frames=0 base_frames=1 leaf_tables=1",
-        f"SLIME_MEM grown task=3 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65537 large_frames=0 base_frames=1 leaf_tables=1",
+        f"SLIME_MEM grown task=3 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65538 large_frames=0 base_frames=1 leaf_tables=1",
+        "SLIME_GRAPH buffer created task=1 slot=20 id=1 pages=1 writable=1",
     ]
+    for source, receiver, lender, recipient, loan, exported in ((1, 2, 2, 3, 10, 30), (2, 1, 3, 2, 11, 31)):
+        lines.extend([
+            f"SLIME_GRAPH buffer created task={lender} slot=20 id={source + 1} pages=1 writable=1",
+            f"SLIME_GRAPH loan created task={lender} slot=21 id={loan} to={recipient} offset=0 length=4096",
+            f"SLIME_GRAPH capability exported task={lender} id={exported} kind=loan rights=0x200 retain=0",
+            f"SLIME_GRAPH capability imported task={recipient} id={exported} kind=loan rights=0x200 retain=0",
+            *[
+                f"SLIME_MEM mapping refused task={recipient} base=0x{target:x} end=0x{target + 4096:x} window=0x{address:x}..0x{address + 65536 * 4096:x}"
+                for target in (address, probe)
+            ],
+            f"SLIME_GRAPH loan mapped task={recipient} slot=22 id={loan}",
+            f"SLIME_GRAPH loan returned task={recipient} slot=22 id={loan}",
+            f"[private-memory-isolation] loan receiver source={source} holder={receiver} positive=1 window_denied=2 unmapped=1 returned=1 return_denied=1 pages=0 buffers=0 mappings=0 loans=0",
+            f"[private-memory-isolation] loan lender holder={source} receiver={receiver} transferred=1 released=1 pages=0 buffers=0 mappings=0 loans=0",
+        ])
     for holder, task, operation, access in ((1, 2, 6, "Read"), (2, 3, 7, "Write")):
         lines.extend([
-            f"[private-memory-isolation] attacker holder={holder} operation={operation} address={probe} own_base={address} own_pages=1 kind_denied=2",
+            f"SLIME_GRAPH buffer created task={task} slot=20 id={holder + 3} pages=1 writable=1",
+            *[
+                f"SLIME_MEM mapping refused task={task} base=0x{target:x} end=0x{target + 4096:x} window=0x{address:x}..0x{address + 65536 * 4096:x}"
+                for target in (address, probe)
+            ],
+            f"SLIME_GRAPH buffer map refused task={task} slot=20 class=write",
+            f"[private-memory-isolation] attacker holder={holder} operation={operation} address={probe} own_base={address} own_pages=1 own_buffer=1 buffer_window_denied=2 unowned_denied=3 seal_denied=1 pages=0 buffers=0 mappings=0 loans=0",
             f"SLIME_GRAPH component fault task={task} kind=VirtualMemory {{ access: {access}, status: 15 }} address=Some({probe})",
             f"[private-memory-1g] verified holder=0 incarnation=0 round={holder - 1} pages=65536 refused=1 shared=1",
             f"[private-memory-isolation] denied holder={holder} operation={operation} address={probe} victim_preserved=1",
@@ -919,7 +941,9 @@ def check_private_isolation_controls(gate) -> int:
     lines.extend([
         f"[private-memory-isolation] execute address={address} pages=65536",
         f"SLIME_GRAPH component fault task=1 kind=VirtualMemory {{ access: Execute, status: 15 }} address=Some({address})",
-        "[private-memory-isolation] complete read=1 write=1 execute=1 kind_denied=4",
+        "[private-memory-isolation] complete read=1 write=1 execute=1 buffer_window_denied=4 loan_window_denied=4 unowned_denied=6 seal_denied=2 loan_transfer=2",
+        "SLIME_GRAPH native task_caps=0 exports=0 tickets=0",
+        "SLIME_GRAPH capabilities exports=2 imports=2 cancels=0 finalized=2 outstanding=0 tickets=0",
         "SLIME_GRAPH loans served=2 loans=0 mappings=0 regions=0 orphans=0 quota=0",
         "SLIME_GRAPH HEALTHY generation=57 required=2 live=0 completed=2 failed=0",
     ])
@@ -951,10 +975,199 @@ def check_private_isolation_controls(gate) -> int:
         ("isolation explicit component failure", transcript.replace("[private-memory-isolation] complete", "[private-memory-1g] FAIL pattern mismatch\n[private-memory-isolation] complete")),
         ("isolation leaked authority at exit", transcript.replace("loans=0 mappings=0 regions=0 orphans=0 quota=0", "loans=0 mappings=1 regions=1 orphans=0 quota=0")),
     )
+    mutations = list(mutations)
+    for source, receiver, lender, recipient, loan, exported in ((1, 2, 2, 3, 10, 30), (2, 1, 3, 2, 11, 31)):
+        receiver_marker = next(line for line in lines if line.startswith(f"[private-memory-isolation] loan receiver source={source} "))
+        lender_marker = next(line for line in lines if line.startswith(f"[private-memory-isolation] loan lender holder={source} "))
+        created = f"SLIME_GRAPH loan created task={lender} slot=21 id={loan} to={recipient} offset=0 length=4096"
+        imported = f"SLIME_GRAPH capability imported task={recipient} id={exported} kind=loan rights=0x200 retain=0"
+        mapped = f"SLIME_GRAPH loan mapped task={recipient} slot=22 id={loan}"
+        returned = f"SLIME_GRAPH loan returned task={recipient} slot=22 id={loan}"
+        direction = f"isolation loan {source}->{receiver}: "
+        for label, old, new in (
+            ("source buffer absent", f"SLIME_GRAPH buffer created task={lender} slot=20 id={source + 1} pages=1 writable=1\n", ""),
+            ("creation absent", created + "\n", ""),
+            ("receiver binding wrong", created, created.replace(f"to={recipient}", "to=1")),
+            ("import absent", imported + "\n", ""),
+            ("transfer identity mismatch", imported, imported.replace(f"id={exported}", "id=999")),
+            ("imported by wrong task", imported, imported.replace(f"task={recipient}", "task=1")),
+            ("positive map absent", mapped + "\n", ""),
+            ("positive map wrong loan", mapped, mapped.replace(f"id={loan}", "id=999")),
+            ("return absent", returned + "\n", ""),
+            ("return wrong slot", returned, returned.replace("slot=22", "slot=23")),
+            ("return precedes map", mapped + "\n" + returned, returned + "\n" + mapped),
+            ("positive read failed", receiver_marker, receiver_marker.replace("positive=1", "positive=0")),
+            ("explicit unmap absent", receiver_marker, receiver_marker.replace("unmapped=1", "unmapped=0")),
+            ("single return not enforced", receiver_marker, receiver_marker.replace("return_denied=1", "return_denied=0")),
+            ("receiver retains mapping", receiver_marker, receiver_marker.replace("mappings=0", "mappings=1")),
+            ("receiver report duplicated", receiver_marker, receiver_marker + "\n" + receiver_marker),
+            ("lender source not released", lender_marker, lender_marker.replace("released=1", "released=0")),
+            ("lender retains buffer", lender_marker, lender_marker.replace("buffers=0", "buffers=1")),
+            ("lender release precedes return", receiver_marker + "\n" + lender_marker, lender_marker + "\n" + receiver_marker),
+        ):
+            mutations.append((direction + label, transcript.replace(old, new, 1)))
+        for target in (address, probe):
+            refusal = f"SLIME_MEM mapping refused task={recipient} base=0x{target:x} end=0x{target + 4096:x} window=0x{address:x}..0x{address + 65536 * 4096:x}"
+            mutations.append((direction + f"window refusal {target:x} absent", transcript.replace(refusal + "\n", "", 1)))
+            mutations.append((direction + f"window refusal {target:x} wrong task", transcript.replace(refusal, refusal.replace(f"task={recipient}", "task=1"), 1)))
+    for holder, task in ((1, 2), (2, 3)):
+        marker = next(line for line in lines if line.startswith(f"[private-memory-isolation] attacker holder={holder} "))
+        for field in ("own_buffer=1", "buffer_window_denied=2", "unowned_denied=3", "seal_denied=1"):
+            mutations.append((f"isolation attacker {holder} missing {field}", transcript.replace(marker, marker.replace(field, field.split("=")[0] + "=0"), 1)))
+        sealed = f"SLIME_GRAPH buffer map refused task={task} slot=20 class=write"
+        mutations.append((f"isolation attacker {holder} seal denial missing", transcript.replace(sealed + "\n", "", 1)))
+        mutations.append((f"isolation attacker {holder} seal refusal wrong capability", transcript.replace(sealed, sealed.replace("slot=20", "slot=21"), 1)))
+    late_growth = f"SLIME_MEM grown task=3 delta=1 previous=0 pages=1 base=0x{address:x} quota=1 total=65538 large_frames=0 base_frames=1 leaf_tables=1"
+    mutations.extend([
+        ("isolation receiver private page backed only after exchange", transcript.replace(late_growth + "\n", "", 1) + "\n" + late_growth),
+        ("isolation export survives teardown", transcript.replace("outstanding=0 tickets=0", "outstanding=1 tickets=1")),
+        ("isolation native capability survives teardown", transcript.replace("task_caps=0 exports=0", "task_caps=1 exports=0")),
+        ("isolation transfer not finalized", transcript.replace("finalized=2", "finalized=1")),
+        ("isolation extra loan mapping", transcript + "\nSLIME_GRAPH loan mapped task=3 slot=22 id=10"),
+        ("isolation duplicate loan identity", transcript.replace("id=11", "id=10")),
+        ("isolation duplicate transfer identity", transcript.replace("id=31", "id=30")),
+    ])
     for description, mutated in mutations:
+        if mutated == transcript:
+            fail(f"{description}: mutation did not change the transcript")
         require_rejection(description, "private isolation:",
             lambda mutated=mutated: gate.check_private_isolation(mutated))
     return len(mutations)
+
+
+def check_private_stress_controls(gate) -> int:
+    address = 0x10000000
+    lines = []
+    for index, name in enumerate("abc"):
+        task = index + 2
+        lines += [
+            f"SLIME_GRAPH spawned task=1 child={task} component=private-memory-1g-holder-{name} slots=8",
+            f"SLIME_MEM grown task={task} delta=65536 previous=0 pages=65536 base=0x{address:x} quota=65536 total={(index + 1) * 65536} large_frames=128 base_frames=0 leaf_tables=0",
+        ]
+    for attempt, case in enumerate(("construction", "slots", "descriptors")):
+        lines += [
+            f"SLIME_MEM stress census attempt={attempt} phase=before slots=1000 descriptors=1000 extents=100 objects=100 bytes=1000 reusable_anchors=0 reusable_bytes=0 ordinary_bytes=10000 preserved_bytes=0 preserved_anchors=0",
+            f"SLIME_MEM stress construction case={case} attempt={attempt} actual=1000 effective=1 required=2 reserved={0 if case == 'construction' else 999}",
+            f"SLIME_MEM stress census attempt={attempt} phase=after slots=1000 descriptors=1000 extents=100 objects=100 bytes=1000 reusable_anchors=0 reusable_bytes=0 ordinary_bytes=10000 preserved_bytes=0 preserved_anchors=0",
+            *[f"[private-memory-1g] verified holder={holder} incarnation=0 round=0 pages=65536 refused=1 shared={int(holder == 0)}" for holder in range(3)],
+            f"[private-memory-stress] spawn_refused attempt={attempt + 1} peers_preserved=3",
+        ]
+    for incarnation, task in enumerate((8, 9)):
+        lines += [
+            f"SLIME_MEM quota task={task} instance=private-memory-1g-holder-d declared=65536 installed=65536 base=0x{address:x}",
+            f"SLIME_GRAPH spawned task=1 child={task} component=private-memory-1g-holder-d slots=8",
+        ]
+        schedule = [(12, 1), (12, 511)]
+        if incarnation == 0:
+            schedule += [(13, 1024)]
+        schedule += [(12, 1024), (12, 63998)]
+        if incarnation == 0:
+            schedule += [(13, 2)]
+        schedule += [(12, 2), (14, 0)]
+        pages = 0
+        for stage, (operation, delta) in enumerate(schedule):
+            previous = pages
+            if operation == 13:
+                case, backed = ("map", 512) if previous == 512 else ("allocation", 1)
+                lines += [
+                    f"SLIME_MEM stress growth case={case} previous={previous} delta={delta} backed={backed}",
+                    f"SLIME_MEM refused task={task} delta={delta} cause=frames detail=Frames {{ allocated: {backed}, error: NotEnoughMemory }}",
+                ]
+            elif operation == 12:
+                pages += delta
+                large = max(0, pages // 512 - 1)
+                base = pages - large * 512
+                lines += [f"SLIME_MEM grown task={task} delta={delta} previous={previous} pages={pages} base=0x{address:x} quota=65536 total={196608 + pages} large_frames={large} base_frames={base} leaf_tables=2"]
+            lines += [f"[private-memory-stress] stage incarnation={incarnation} operation={operation} delta={delta} previous={previous} pages={pages} zeroed={int(operation == 12)} preserved=1"]
+            if operation != 14:
+                lines += [f"[private-memory-1g] verified holder={holder} incarnation=0 round={stage} pages=65536 refused=1 shared={int(holder == 0)}" for holder in range(3)]
+                lines += [f"[private-memory-stress] retained incarnation={incarnation} stage={stage} peers=3 pages=196608"]
+        if incarnation == 0:
+            lines += [f"SLIME_GRAPH component exit task={task} status=0"]
+        else:
+            lines += [f"SLIME_GRAPH component fault task={task} kind=VirtualMemory {{ access: Write, status: 15 }} address=Some({address + 65536 * 4096})"]
+        lines += [f"SLIME_MEM census retired={task} mapped_pages=196608 free_slots=1000"]
+        lines += [f"SLIME_ROOT reclaim census task={task} slots=1000 bytes=1000 live_objects=100 extent_reuses={incarnation + 1}"]
+        lines += [f"[private-memory-1g] verified holder={holder} incarnation=0 round=0 pages=65536 refused=1 shared={int(holder == 0)}" for holder in range(3)]
+    lines += [f"SLIME_GRAPH component exit task={task} status=0" for task in (2, 3, 4)]
+    lines += [
+        "[private-memory-stress] complete spawn_refused=3 growth_refused=2 retries=2 replacements=1 faults=1 exits=4",
+        "SLIME_GRAPH native task_caps=0 exports=0 tickets=0",
+        "SLIME_GRAPH loans served=0 loans=0 mappings=0 regions=0 orphans=0 quota=0",
+        "SLIME_GRAPH HEALTHY generation=58 required=2 live=0 completed=2 failed=0",
+    ]
+    lines += ["SLIME_MEM stress fragmented guards=4 bytes=16777216 released=1"]
+    lines += [f"SLIME_MEM stress backing attempt={attempt} data_extents=128 discontinuities=3 reused={0 if attempt == 0 else 256}" for attempt in (0, 1, 3, 4)]
+    transcript = "\n".join(lines)
+    gate.check_stress_workload(transcript)
+    mutations = []
+    for index, line in enumerate(lines):
+        if line.startswith(("SLIME_MEM stress ", "[private-memory-stress]", "[private-memory-1g] verified", "SLIME_MEM grown", "SLIME_GRAPH component")):
+            mutations.append((f"stress missing evidence {index}", "\n".join(lines[:index] + lines[index + 1:])))
+    for description, old, new in (
+        ("slot limit not binding", "case=slots attempt=1 actual=1000 effective=1 required=2", "case=slots attempt=1 actual=1000 effective=2 required=2"),
+        ("unwind leaks slots", "phase=after slots=1000", "phase=after slots=999"),
+        ("unwind leaks descriptors", "phase=after slots=1000 descriptors=1000", "phase=after slots=1000 descriptors=999"),
+        ("wrong failed subject", "refused task=8 delta=1024", "refused task=2 delta=1024"),
+        ("mapping failure before partial work", "case=map previous=512 delta=1024 backed=512", "case=map previous=512 delta=1024 backed=0"),
+        ("wrong retry population", "quota=65536 total=198144", "quota=65536 total=198143"),
+        ("peer reclaimed with subject", "retired=8 mapped_pages=196608", "retired=8 mapped_pages=131072"),
+        ("foreign fault", "fault task=9", "fault task=2"),
+        ("backing never reused", "extent_reuses=2", "extent_reuses=1"),
+        ("reclamation drift", "retired=9 mapped_pages=196608 free_slots=1000", "retired=9 mapped_pages=196608 free_slots=999"),
+        ("pressure not reserved", "required=2 reserved=999", "required=2 reserved=0"),
+        ("backing contiguous", "discontinuities=3", "discontinuities=0"),
+        ("fragmented backing not reused", "reused=256", "reused=0"),
+        ("only base pages", "large_frames=127 base_frames=512", "large_frames=0 base_frames=65536"),
+        ("leaked export", "task_caps=0 exports=0", "task_caps=0 exports=1"),
+    ):
+        mutations.append((description, transcript.replace(old, new, 1)))
+    for description, mutated in mutations:
+        if mutated == transcript:
+            fail(f"{description}: stress mutation did not change evidence")
+        require_rejection(description, "private stress:", lambda mutated=mutated: gate.check_stress_workload(mutated))
+    peer_checks = [f"[private-memory-1g] verified holder={holder} incarnation=0 round=0 pages=65536 refused=1 shared={int(holder == 0)}" for holder in range(3)]
+    heap_lines = []
+    for index, name in enumerate("abc"):
+        heap_lines += [
+            f"SLIME_GRAPH spawned task=1 child={index + 2} component=private-memory-1g-holder-{name} slots=8",
+            f"SLIME_MEM grown task={index + 2} delta=65536 previous=0 pages=65536 base=0x10000000 quota=65536 total={(index + 1) * 65536} large_frames=128 base_frames=0 leaf_tables=0",
+        ]
+    heap_lines += [
+        "SLIME_MEM quota task=5 instance=private-heap-probe declared=65536 installed=65536 base=0x10000000",
+        "SLIME_GRAPH spawned task=1 child=5 component=private-heap-probe slots=8",
+        *peer_checks,
+        "SLIME_MEM grown task=5 delta=61457 previous=0 pages=61457 base=0x10000000 quota=65536 total=258065 large_frames=119 base_frames=529 leaf_tables=2",
+        "[private-heap-probe:stress] capacity payload=251723776 overhead=4096 backed=251727872 pages=61457 touched=1 vecs=120 boxes=120 small=256",
+        "[private-heap-probe:stress] holes reused=1 growths=1 pages=61457",
+        "[private-heap-probe:stress] exhaustion requested=16777216 refused=1 intact=1 pages=61457",
+        *peer_checks,
+        "[private-heap-probe:stress] verified payload=251723776 intact=1",
+        *peer_checks,
+        "[private-heap-probe:stress] released live=0 reused=1 growths=1 pages=61457",
+        "SLIME_GRAPH component exit task=5 status=0",
+        *peer_checks,
+        *[f"SLIME_GRAPH component exit task={task} status=0" for task in (2, 3, 4)],
+        "[private-memory-stress] heap_complete peers=3 exits=4",
+        "SLIME_GRAPH native task_caps=0 exports=0 tickets=0",
+        "SLIME_GRAPH loans served=0 loans=0 mappings=0 regions=0 orphans=0 quota=0",
+        "SLIME_GRAPH HEALTHY generation=59 required=2 live=0 completed=2 failed=0",
+    ]
+    heap = "\n".join(heap_lines)
+    gate.check_heap_stress_workload(heap)
+    for index in range(len(heap_lines)):
+        mutated = "\n".join(heap_lines[:index] + heap_lines[index + 1:])
+        require_rejection(f"heap stress missing evidence {index}", "heap stress:", lambda mutated=mutated: gate.check_heap_stress_workload(mutated))
+    heap_mutations = (
+        ("heap wrong quota", heap.replace("installed=65536", "installed=65535", 1)),
+        ("heap wrong root charge", heap.replace("total=258065", "total=258064", 1)),
+        ("heap reuse grew backing", heap.replace("released live=0 reused=1 growths=1", "released live=0 reused=1 growths=2", 1)),
+        ("heap wrong task", heap.replace("grown task=5", "grown task=6", 1)),
+        ("heap explicit failure", heap + "\n[private-heap-probe:stress] FAIL injected"),
+    )
+    for description, mutated in heap_mutations:
+        require_rejection(description, "heap stress:", lambda mutated=mutated: gate.check_heap_stress_workload(mutated))
+    return len(mutations) + len(heap_lines) + len(heap_mutations)
 
 
 def check_private_memory_capacity_controls() -> int:
@@ -1204,10 +1417,12 @@ def check_private_memory_capacity_controls() -> int:
         require_rejection(description, "cycle fault attribution:",
             lambda transcript=transcript: gate.check_cycle_fault_attribution(transcript, 16384))
     isolation_mutations = check_private_isolation_controls(gate)
+    stress_mutations = check_private_stress_controls(gate)
     workload_mutations = check_private_capacity_controls(gate)
     return (
         workload_mutations
         + isolation_mutations
+        + stress_mutations
         + len(fault_mutations)
         + len(ledger_mutations)
         + len(conservation_mutations)

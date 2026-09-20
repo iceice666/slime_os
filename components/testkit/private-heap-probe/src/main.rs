@@ -35,9 +35,14 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+mod stress;
+
 slime_rt::entry!(main);
 
 fn main(_startup_arg: u32) {
+    if let Ok(endpoint) = slime_rt::resolve_binding(b"private-stress-heap-control") {
+        stress::run(endpoint);
+    }
     // Which instance this is, decided *before* the self-check runs so its
     // console label can name the role. The allocator answers, not a build flag:
     // a component with no declared quota has no region, so its base is zero,

@@ -85,12 +85,26 @@ Two compositions qualify that envelope, both owned by
   peers a single page. Every task's window starts at the same virtual address,
   so each peer first proves its own page works, is refused a second, and then
   reads or writes 128 MiB into that same address range — inside the victim's
-  extent, outside its own page. Each access faults with its own task, access
-  kind, and exact address, and the victim then faults on executing its own
-  backed private memory.
+  extent, outside its own page. Before either peer faults, both lend and receive
+  a sealed shared buffer over their declared transferable endpoint. Each received
+  loan maps and verifies outside the private window, is refused at its backed
+  and reserved addresses, and is explicitly unmapped and returned before its
+  source buffer is released. Owned buffers separately exercise those destination
+  refusals, unowned-handle rejection, and sealed-write rejection. Each peer's
+  private page remains intact and its buffer/loan accounting returns to zero.
+  Each foreign access faults with its own task, access kind, and exact address,
+  and the victim then faults on executing its own backed private memory.
 
 These are QEMU envelopes on two architectures. They qualify no physical machine
 and no larger target.
+
+The capacity raise retains private-memory-budget/v1 and lifecycle-policy/v1:
+record layouts, field meanings and identity domains are unchanged; only the
+admitted target-specific quota and restart-attempt bounds increase. Existing
+smaller declarations remain valid. This is not forward acceptance by older
+readers: a root with the previous bounds must refuse a newly enlarged declaration.
+Generation/image identities bind the selected contracts and implementation, so
+the qualification does not authorize replaying a new budget against an old root.
 
 ## Userspace allocation
 
@@ -142,6 +156,12 @@ the private-memory mechanism.
   boundary between holders on both of them.
 - `just private_memory_cycles_check` exercises repeated zeroing and reclamation
   across exit and fault.
+- `just private_memory_stress_check` runs mixed-growth rollback and userspace
+  heap pressure on both QEMU architectures while three 256 MiB peers retain
+  their patterns. Its injected images reserve real allocator CSlot/descriptor
+  entries near their limits, without claiming a kernel CNode full of installed
+  capabilities. Interleaved, reclaimed 4 MiB guard extents leave measured gaps
+  between reused 2 MiB data extents; retained backing remains explicitly owned.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

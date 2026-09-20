@@ -334,7 +334,7 @@
       bufferCount = 1;
       bytePages = 1;
       holder = "private-memory-1g-holder-c";
-      loanCount = 0;
+      loanCount = 1;
       mappingCount = 1;
     };
   ];

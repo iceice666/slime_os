@@ -20,6 +20,7 @@ test = false
 # `just component_crate_split_check` pins the grouping.
 slime-rt = { path = "../../runtime", features = ["private-heap"] }
 boot-contracts = { path = "../../../boot-contracts" }
+slime-proto = { path = "../../proto" }
 
 [build-dependencies]
 slime-build-support = { path = "../../build-support" }
