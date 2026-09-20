@@ -655,6 +655,23 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         self.tasks.iter().flatten()
     }
 
+    #[cfg(slime_private_stress)]
+    fn stress_census(allocator: &ObjectAllocator, attempt: usize, phase: &str) {
+        sel4::debug_println!(
+            "SLIME_MEM stress census attempt={attempt} phase={phase} slots={} descriptors={} extents={} objects={} bytes={} reusable_anchors={} reusable_bytes={} ordinary_bytes={} preserved_bytes={} preserved_anchors={}",
+            allocator.free_slots(),
+            allocator.allocation_descriptors_free(),
+            allocator.extent_descriptors_free(),
+            allocator.live_objects(),
+            allocator.live_bytes(),
+            allocator.reusable_extent_anchors(),
+            allocator.reusable_extent_bytes(),
+            allocator.untyped_bytes_remaining(),
+            allocator.preserved_bytes_remaining(),
+            allocator.preserved_anchor_count(),
+        );
+    }
+
     /// Build a child task from a validated image.
     ///
     /// Allocation order is VSpace and image frames, then CNode, then TCB, then
@@ -740,6 +757,23 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     size_bits: usize::BITS as usize,
                     remaining: 0,
                 }))?;
+        #[cfg(slime_private_stress)]
+        let stress_attempt = {
+            static ATTEMPTS: core::sync::atomic::AtomicUsize =
+                core::sync::atomic::AtomicUsize::new(0);
+            let attempt = if spawner.is_some()
+                && private_memory_pages == 65_536
+                && self.private.total_pages() == 3 * 65_536
+            {
+                ATTEMPTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+            } else {
+                usize::MAX
+            };
+            if attempt < 3 {
+                Self::stress_census(allocator, attempt, "before");
+            }
+            attempt
+        };
         let arena = allocator.begin_task_arena(arena_bits)?;
         // Reserve physical extents, allocation descriptors, and CSlots as one
         // construction boundary. `plan` counts retyped VSpace, image, and
@@ -750,20 +784,55 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let private_allocations =
             crate::object_allocator::PrivateBackingLayout::for_quota(private_memory_pages)
                 .allocation_descriptors;
-        if construction_allocation_descriptors(
+        let required_descriptors = construction_allocation_descriptors(
             private_allocations,
             plan.allocation_count(),
             threads,
-        )
-        .is_none_or(|required| required > allocator.allocation_descriptors_free())
-        {
+        );
+        #[cfg(slime_private_stress)]
+        if stress_attempt == 2 {
+            let actual = allocator.allocation_descriptors_free();
+            let required = required_descriptors.unwrap_or(usize::MAX);
+            let reserved = allocator.reserve_stress_descriptors(required.saturating_sub(1));
+            let effective = allocator.allocation_descriptors_free();
+            sel4::debug_println!(
+                "SLIME_MEM stress construction case=descriptors attempt=2 actual={actual} effective={effective} required={required} reserved={reserved}"
+            );
+        }
+        let available_descriptors = allocator.allocation_descriptors_free();
+        let refused = required_descriptors.is_none_or(|required| required > available_descriptors);
+        #[cfg(slime_private_stress)]
+        allocator.release_stress_descriptors();
+        if refused {
             self.unwind_construction(allocator, id, arena)?;
+            #[cfg(slime_private_stress)]
+            if stress_attempt < 3 {
+                Self::stress_census(allocator, stress_attempt, "after");
+            }
             return Err(TaskError::Alloc(AllocError::ArenaSlotTableFull {
-                limit: allocator.allocation_descriptors_free(),
+                limit: available_descriptors,
             }));
         }
-        if let Err(error) = allocator.provision_private_backing(arena, private_memory_pages) {
+        #[cfg(slime_private_stress)]
+        if stress_attempt == 1 {
+            crate::object_allocator::stress_slot_pressure(stress_attempt);
+        }
+        #[cfg(slime_private_stress)]
+        let provisioning = if stress_attempt != usize::MAX {
+            allocator.provision_stress_private_backing(arena, private_memory_pages, stress_attempt)
+        } else {
+            allocator.provision_private_backing(arena, private_memory_pages)
+        };
+        #[cfg(not(slime_private_stress))]
+        let provisioning = allocator.provision_private_backing(arena, private_memory_pages);
+        if let Err(error) = provisioning {
+            #[cfg(slime_private_stress)]
+            crate::object_allocator::stress_slot_pressure(usize::MAX);
             self.unwind_construction(allocator, id, arena)?;
+            #[cfg(slime_private_stress)]
+            if stress_attempt < 3 {
+                Self::stress_census(allocator, stress_attempt, "after");
+            }
             return Err(TaskError::Alloc(error));
         }
 
@@ -783,6 +852,13 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             let tcb = allocator
                 .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
                 .cap();
+            #[cfg(slime_private_stress)]
+            if stress_attempt == 0 {
+                sel4::debug_println!(
+                    "SLIME_MEM stress construction case=construction attempt=0 actual=0 effective=0 required=0 reserved=0"
+                );
+                return Err(TaskError::ForcedConstructionFailure);
+            }
             #[cfg(slime_b38_force_unwind)]
             if spawner.is_some() && crate::object_allocator::take_forced_unwind() {
                 return Err(TaskError::ForcedConstructionFailure);
@@ -1027,6 +1103,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             Ok(task) => task,
             Err(error) => {
                 self.unwind_construction(allocator, id, arena)?;
+                #[cfg(slime_private_stress)]
+                if stress_attempt < 3 {
+                    Self::stress_census(allocator, stress_attempt, "after");
+                }
                 return Err(error);
             }
         };

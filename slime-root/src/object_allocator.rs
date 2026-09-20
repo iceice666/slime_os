@@ -57,6 +57,15 @@ pub(crate) fn take_forced_private_large_map_failure() -> bool {
     FORCE_PRIVATE_LARGE_MAP_FAILURE.swap(false, PrivateMapOrdering::Relaxed)
 }
 
+#[cfg(slime_private_stress)]
+static STRESS_SLOT_ATTEMPT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+
+#[cfg(slime_private_stress)]
+pub(crate) fn stress_slot_pressure(attempt: usize) {
+    STRESS_SLOT_ATTEMPT.store(attempt, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Untyped regions the root accepts from BootInfo, kernel and device each.
 ///
 /// Derived from the kernel's own `MAX_NUM_BOOTINFO_UNTYPED_CAPS` rather than
@@ -880,6 +889,8 @@ struct SlotPool {
     len: usize,
     used: [usize; SLOT_WORDS],
     issued: [usize; SLOT_WORDS],
+    #[cfg(any(slime_private_stress, test))]
+    stress_reserved: [usize; SLOT_WORDS],
     live: usize,
 }
 
@@ -889,6 +900,8 @@ impl SlotPool {
         len: 0,
         used: [0; SLOT_WORDS],
         issued: [0; SLOT_WORDS],
+        #[cfg(any(slime_private_stress, test))]
+        stress_reserved: [0; SLOT_WORDS],
         live: 0,
     };
 
@@ -937,6 +950,35 @@ impl SlotPool {
         Err(AllocError::SlotsExhausted {
             allocated: total_allocated,
         })
+    }
+
+    #[cfg(any(slime_private_stress, test))]
+    fn reserve_stress_pressure(&mut self, leave_free: usize) -> usize {
+        let count = self.free().saturating_sub(leave_free);
+        let mut remaining = count;
+        for offset in 0..self.len {
+            if remaining == 0 {
+                break;
+            }
+            let word = offset / SLOT_WORD_BITS;
+            let mask = 1usize << (offset % SLOT_WORD_BITS);
+            if self.used[word] & mask == 0 {
+                self.used[word] |= mask;
+                self.stress_reserved[word] |= mask;
+                self.live += 1;
+                remaining -= 1;
+            }
+        }
+        count
+    }
+
+    #[cfg(any(slime_private_stress, test))]
+    fn release_stress_pressure(&mut self) {
+        for (used, reserved) in self.used.iter_mut().zip(self.stress_reserved.iter_mut()) {
+            *used &= !*reserved;
+            self.live -= reserved.count_ones() as usize;
+            *reserved = 0;
+        }
     }
 
     fn first_contiguous(&self, count: usize, extra_used: Option<usize>) -> Option<usize> {
@@ -1148,6 +1190,8 @@ enum ExtentKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExtentRecord {
     parent: sel4::cap::Untyped,
+    #[cfg(slime_private_stress)]
+    stress_paddr: usize,
     size_bits: usize,
     owner: u16,
     serial: u32,
@@ -1163,6 +1207,8 @@ impl ExtentRecord {
     fn new(parent: sel4::cap::Untyped, size_bits: usize) -> Self {
         Self {
             parent,
+            #[cfg(slime_private_stress)]
+            stress_paddr: 0,
             size_bits,
             owner: u16::MAX,
             serial: 0,
@@ -2138,6 +2184,13 @@ impl ObjectAllocator {
             let parent =
                 sel4::init_thread::Slot::<sel4::cap_type::Untyped>::from_index(parent_slot).cap();
             self.extents[index] = Some(ExtentRecord::new(parent, size_bits));
+            #[cfg(slime_private_stress)]
+            {
+                self.extents[index]
+                    .as_mut()
+                    .expect("new extent")
+                    .stress_paddr = self.last_paddr;
+            }
             index
         };
         self.extents[index]
@@ -2299,6 +2352,34 @@ impl ObjectAllocator {
                 .count()
     }
 
+    #[cfg(any(slime_private_stress, test))]
+    pub(crate) fn reserve_stress_descriptors(&mut self, leave_free: usize) -> usize {
+        let count = self
+            .allocation_descriptors_free()
+            .saturating_sub(leave_free);
+        let mut remaining = count;
+        for record in &mut self.allocations {
+            if remaining == 0 {
+                break;
+            }
+            if record.owner == u16::MAX {
+                // Reserved metadata has no capability and belongs to no task arena.
+                record.owner = u16::MAX - 1;
+                remaining -= 1;
+            }
+        }
+        count
+    }
+
+    #[cfg(any(slime_private_stress, test))]
+    pub(crate) fn release_stress_descriptors(&mut self) {
+        for record in &mut self.allocations {
+            if record.owner == u16::MAX - 1 {
+                *record = AllocationRecord::EMPTY;
+            }
+        }
+    }
+
     pub fn extent_descriptors_free(&self) -> usize {
         self.extents.iter().filter(|entry| entry.is_none()).count()
     }
@@ -2351,13 +2432,84 @@ impl ObjectAllocator {
         })
     }
 
+    #[cfg(slime_private_stress)]
+    pub(crate) fn provision_stress_private_backing(
+        &mut self,
+        id: TaskArenaId,
+        quota: usize,
+        attempt: usize,
+    ) -> Result<(), AllocError> {
+        let guard = if attempt == 0 {
+            Some(self.begin_task_arena(MAX_PRIVATE_EXTENT_BYTES.trailing_zeros() as usize + 1)?)
+        } else {
+            None
+        };
+        let reused_before = self.extents_reused;
+        let mut data = 0;
+        let result = provision_private_backing_with(quota, |request| match request {
+            PrivateBackingRequest::Extent { kind, size_bits } => {
+                self.provision_extent(id, size_bits, kind)?;
+                if kind == ExtentKind::PrivateData {
+                    data += 1;
+                    if data <= 3
+                        && let Some(guard) = guard
+                    {
+                        self.provision_extent(guard, size_bits + 1, ExtentKind::Static)?;
+                    }
+                }
+                Ok(())
+            }
+            PrivateBackingRequest::Slots { count } => self.provision_private_slots(id, count),
+        });
+        if let Some(guard) = guard {
+            self.release_task_arena(guard)?;
+            sel4::debug_println!("SLIME_MEM stress fragmented guards=4 bytes=16777216 released=1");
+        }
+        let mut previous = None;
+        let mut discontinuities = 0;
+        for extent in self
+            .extents
+            .iter()
+            .flatten()
+            .filter(|extent| extent.belongs_to(id) && extent.kind == ExtentKind::PrivateData)
+        {
+            if previous
+                .is_some_and(|address| address + MAX_PRIVATE_EXTENT_BYTES != extent.stress_paddr)
+            {
+                discontinuities += 1;
+            }
+            previous = Some(extent.stress_paddr);
+        }
+        let reused = self.extents_reused - reused_before;
+        sel4::debug_println!(
+            "SLIME_MEM stress backing attempt={attempt} data_extents={data} discontinuities={discontinuities} reused={reused}"
+        );
+        result
+    }
+
     pub fn provision_private_slots(
         &mut self,
         id: TaskArenaId,
         count: usize,
     ) -> Result<(), AllocError> {
         self.private_arena(id)?;
-        if count > self.allocation_descriptors_free() || count > self.free_slots() {
+        #[cfg(slime_private_stress)]
+        {
+            let attempt =
+                STRESS_SLOT_ATTEMPT.swap(usize::MAX, core::sync::atomic::Ordering::Relaxed);
+            if attempt != usize::MAX {
+                let actual = self.free_slots();
+                let reserved = self.slots.reserve_stress_pressure(count.saturating_sub(1));
+                let effective = self.free_slots();
+                sel4::debug_println!(
+                    "SLIME_MEM stress construction case=slots attempt={attempt} actual={actual} effective={effective} required={count} reserved={reserved}"
+                );
+            }
+        }
+        let refused = count > self.allocation_descriptors_free() || count > self.free_slots();
+        #[cfg(slime_private_stress)]
+        self.slots.release_stress_pressure();
+        if refused {
             return Err(Self::private_record_error());
         }
         for _ in 0..count {
@@ -4167,6 +4319,123 @@ mod tests {
                         .count(),
                     1
                 );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn raised_window_rolls_back_partial_mapping_and_allocation_then_retries() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let quota = crate::private_memory::MAX_REGION_PAGES;
+                if quota < 65_536 {
+                    return;
+                }
+                let (mut allocator, arena) = setup_private_growth_fixture_for(65_536);
+                let descriptors = allocator.allocation_descriptors_free();
+                let original = allocator.allocations.clone();
+                assert_eq!(allocator.reserve_stress_descriptors(1), descriptors - 1);
+                assert_eq!(allocator.allocation_descriptors_free(), 1);
+                allocator.release_stress_descriptors();
+                assert_eq!(allocator.allocations, original);
+                let slots = allocator.free_slots();
+                assert_eq!(allocator.slots.reserve_stress_pressure(1), slots - 1);
+                assert_eq!(allocator.free_slots(), 1);
+                let (last, _) = allocator.slots.allocate(0).unwrap();
+                assert_eq!(allocator.free_slots(), 0);
+                assert!(allocator.slots.allocate(0).is_err());
+                allocator.slots.release_stress_pressure();
+                assert_eq!(allocator.free_slots(), slots - 1);
+                assert!(allocator.slots.release(last));
+                assert_eq!(allocator.free_slots(), slots);
+                let mut table = Table::new();
+                let mut region = Region::reserved(0x1000_0000, 65_536);
+                let vspace = sel4::cap::VSpace::from_bits(7);
+                let mut kernel = RecordingPrivateKernel::default();
+                for (delta, previous) in [(1, 0), (511, 1)] {
+                    assert_eq!(
+                        table.grow_with_kernel(
+                            &mut allocator,
+                            arena,
+                            vspace,
+                            &mut region,
+                            delta,
+                            &mut kernel
+                        ),
+                        Ok(previous)
+                    );
+                }
+                kernel.fail_map_frame_at = Some(kernel.frame_maps + 2);
+                assert!(matches!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        1024,
+                        &mut kernel
+                    ),
+                    Err(crate::private_memory::GrowError::Frames { allocated: 512, .. })
+                ));
+                assert_eq!(region.pages(), 512);
+                assert_eq!(table.total_pages(), 512);
+                kernel.fail_map_frame_at = None;
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        1024,
+                        &mut kernel
+                    ),
+                    Ok(512)
+                );
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        65_534 - 1536,
+                        &mut kernel
+                    ),
+                    Ok(1536)
+                );
+                kernel.fail_retype_at = Some(kernel.retypes + 2);
+                assert!(matches!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        2,
+                        &mut kernel
+                    ),
+                    Err(crate::private_memory::GrowError::Frames { allocated: 1, .. })
+                ));
+                assert_eq!(region.pages(), 65_534);
+                assert_eq!(table.total_pages(), 65_534);
+                kernel.fail_retype_at = None;
+                assert_eq!(
+                    table.grow_with_kernel(
+                        &mut allocator,
+                        arena,
+                        vspace,
+                        &mut region,
+                        2,
+                        &mut kernel
+                    ),
+                    Ok(65_534)
+                );
+                assert_eq!(region.pages(), 65_536);
+                assert_eq!(region.large_frames(), 126);
+                assert_eq!(region.base_frames(), 1024);
+                assert_eq!(region.leaf_tables(), 2);
+                assert_eq!(table.total_pages(), 65_536);
             })
             .unwrap()
             .join()

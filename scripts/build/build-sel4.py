@@ -279,6 +279,12 @@ DEMO_IMAGE = BUILD_ROOT / "slime-sel4-demo.elf"
 DEMO_MANIFEST = BUILD_ROOT / "slime-sel4-demo.identity.json"
 PRIVATE_MEMORY_IMAGE = BUILD_ROOT / "slime-sel4-private-memory.elf"
 PRIVATE_MEMORY_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory.identity.json"
+PRIVATE_1G_IMAGE = BUILD_ROOT / "slime-sel4-private-memory-1g.elf"
+PRIVATE_1G_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory-1g.identity.json"
+PRIVATE_1G_VARIANT = "private-memory-1g"
+PRIVATE_ISOLATION_VARIANT = "private-memory-isolation"
+PRIVATE_ISOLATION_IMAGE = BUILD_ROOT / "slime-sel4-private-memory-isolation.elf"
+PRIVATE_ISOLATION_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory-isolation.identity.json"
 PRIVATE_CYCLES_IMAGE = BUILD_ROOT / "slime-sel4-private-memory-cycles.elf"
 PRIVATE_CYCLES_MANIFEST = BUILD_ROOT / "slime-sel4-private-memory-cycles.identity.json"
 
@@ -327,6 +333,8 @@ VARIANT_MANIFESTS = {
     BOOT_SELECTION_VARIANT: "sel4",
     PRIVATE_MEMORY_VARIANT: "sel4-private-memory",
     PRIVATE_CYCLES_VARIANT: "sel4-private-memory-cycles",
+    PRIVATE_1G_VARIANT: "sel4-private-memory-1g",
+    PRIVATE_ISOLATION_VARIANT: "sel4-private-memory-isolation",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -339,6 +347,8 @@ VARIANT_TARGET_DIRS = {
     BOOT_SELECTION_VARIANT: "root-boot-selection",
     PRIVATE_MEMORY_VARIANT: "root-private-memory",
     PRIVATE_CYCLES_VARIANT: "root-private-memory-cycles",
+    PRIVATE_1G_VARIANT: "root-private-memory-1g",
+    PRIVATE_ISOLATION_VARIANT: "root-private-memory-isolation",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -351,6 +361,8 @@ VARIANT_IMAGES = {
     BOOT_SELECTION_VARIANT: (BOOT_SELECTION_IMAGE, BOOT_SELECTION_MANIFEST),
     PRIVATE_MEMORY_VARIANT: (PRIVATE_MEMORY_IMAGE, PRIVATE_MEMORY_MANIFEST),
     PRIVATE_CYCLES_VARIANT: (PRIVATE_CYCLES_IMAGE, PRIVATE_CYCLES_MANIFEST),
+    PRIVATE_1G_VARIANT: (PRIVATE_1G_IMAGE, PRIVATE_1G_MANIFEST),
+    PRIVATE_ISOLATION_VARIANT: (PRIVATE_ISOLATION_IMAGE, PRIVATE_ISOLATION_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -1043,6 +1055,11 @@ def build_application(
             root_environment["RUSTFLAGS"] = (
                 f"{rustflags} --cfg slime_private_fail_second_allocation".strip()
             )
+        if closure_root_role == "private-memory-stress":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_stress".strip()
+            )
         if closure_root_role == "private-memory-fail-large-map":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (
@@ -1536,6 +1553,16 @@ def main() -> None:
         help="embed the private-memory generation, writing a separate image",
     )
     parser.add_argument(
+        "--private-memory-isolation-plane",
+        action="store_true",
+        help="embed private-memory fault and authority isolation qualification",
+    )
+    parser.add_argument(
+        "--private-memory-1g-plane",
+        action="store_true",
+        help="embed the simultaneous private-memory capacity qualification",
+    )
+    parser.add_argument(
         "--private-memory-cycles-plane",
         action="store_true",
         help=("embed MEM-64M's private-memory reuse-cycle generation, writing a separate image"),
@@ -1579,6 +1606,8 @@ def main() -> None:
             (BOOT_SELECTION_VARIANT, arguments.boot_selection),
             (PRIVATE_MEMORY_VARIANT, arguments.private_memory_plane),
             (PRIVATE_CYCLES_VARIANT, arguments.private_memory_cycles_plane),
+            (PRIVATE_1G_VARIANT, arguments.private_memory_1g_plane),
+            (PRIVATE_ISOLATION_VARIANT, arguments.private_memory_isolation_plane),
         )
         if chosen
     ]

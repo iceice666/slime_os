@@ -1183,6 +1183,52 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-memory-1g-holder-a"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-memory-1g-holder-b"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-memory-1g-holder-c"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-memory-1g-holder-d"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-memory-1g-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
  "slime-rt",
 ]
 

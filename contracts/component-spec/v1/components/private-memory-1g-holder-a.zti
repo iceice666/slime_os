@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-memory-1g-probe";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-memory-1g-holder-a";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-memory-1g-holder-a";
+  owner = "private-memory-1g-probe";
+  provides = [];
+  purpose = "Retains and verifies a zero-initialized 256 MiB private region under declared coordination.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 1;
+      bufferCount = 1;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 1;
+      privatePageQuota = 65536;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "1024 MiB remains simultaneously resident and isolated with reclaimed backing reused without drift.";
+    passFailCriteria = "[private-memory-1g] complete faults=20 replacements=20 exits=4";
+    requiredTestEnvironment = "private_memory_check";
+    testCondition = "Four holders retain data through twenty fault and restart cycles on both QEMU architectures.";
+  };
+  version = "1.0.0";
+}

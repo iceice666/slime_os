@@ -784,12 +784,22 @@ pub(super) fn launch_instance_graph(
     {
         // The qualification the *admitted* envelope supports, not a larger one
         // the planner can merely represent. The per-holder figure is the
-        // target's declared region ceiling and the holder count is what the
-        // aggregate ceiling admits at that size, so `fit` answers a question
-        // about resources rather than about an unqualified claim. MEM-1G
-        // raises the contract row; this report follows it.
+        // target's declared region ceiling, and the holder count is the
+        // headroom the aggregate ceiling still admits beyond the quotas this
+        // generation already declares: admission refuses anything past that
+        // ceiling, so counting the declared graph plus a second full aggregate
+        // would report a population no image can install. MEM-1G raises the
+        // contract row; this report follows it.
         const PAGES_PER_HOLDER: usize = private_memory::MAX_REGION_PAGES;
-        const HOLDERS: usize = private_memory::MAX_TOTAL_PAGES / PAGES_PER_HOLDER;
+        let declared_pages = private_budget.as_ref().map_or(0, |budget| {
+            (0..budget.holder_count())
+                .filter_map(|index| budget.holder(index))
+                .fold(0usize, |total, holder| {
+                    total.saturating_add(holder.page_quota as usize)
+                })
+        });
+        let holders =
+            private_memory::MAX_TOTAL_PAGES.saturating_sub(declared_pages) / PAGES_PER_HOLDER;
         const ROOT_STACK_BYTES: usize = 1024 * 1024;
         const ROOT_HEAP_BYTES: usize = 512 * 1024;
         let exemplar_instance = (0..generation.instance_count()).find(|index| {
@@ -813,13 +823,13 @@ pub(super) fn launch_instance_graph(
         let capacity = object_allocator::TaskBackingCapacity {
             plan,
             static_backing,
-            holders: HOLDERS,
+            holders,
             cslots_available: allocator.free_slots(),
             allocation_descriptors_available: allocator.allocation_descriptors_free(),
             extent_descriptors_available: allocator.extent_descriptors_free(),
             ordinary_bytes_available: allocator.untyped_bytes_remaining()
                 + allocator.preserved_bytes_remaining(),
-            ordinary_layout_fits: allocator.task_backing_extents_fit(plan, static_backing, HOLDERS),
+            ordinary_layout_fits: allocator.task_backing_extents_fit(plan, static_backing, holders),
             root_image_bytes: bootinfo.user_image_frames().len() * child_vspace::GRANULE_SIZE,
             root_stack_bytes: ROOT_STACK_BYTES,
             root_heap_bytes: ROOT_HEAP_BYTES,
@@ -827,21 +837,21 @@ pub(super) fn launch_instance_graph(
         let Some(required) = capacity.requirements() else {
             fatal!("SLIME_MEM FAIL capacity arithmetic overflow")
         };
-        let private_allocations = plan.allocation_descriptors * HOLDERS;
-        let private_extents = plan.extent_descriptors * HOLDERS;
-        let private_cslots = plan.required_cslots * HOLDERS;
-        let private_reserved = plan.reserved_bytes * HOLDERS;
+        let private_allocations = plan.allocation_descriptors * holders;
+        let private_extents = plan.extent_descriptors * holders;
+        let private_cslots = plan.required_cslots * holders;
+        let private_reserved = plan.reserved_bytes * holders;
         sel4::debug_println!(
-            "SLIME_MEM qualification scope=staged-graph-plus-admitted-holder-clones holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
+            "SLIME_MEM qualification scope=contract-aggregate-headroom holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
             capacity.holders,
             plan.private_pages,
             private_allocations,
             private_extents,
             private_cslots,
             private_reserved,
-            plan.payload_bytes * HOLDERS,
-            plan.page_table_bytes * HOLDERS,
-            plan.alignment_waste * HOLDERS,
+            plan.payload_bytes * holders,
+            plan.page_table_bytes * holders,
+            plan.alignment_waste * holders,
             static_backing.allocation_descriptors,
             static_backing.reserved_bytes,
             required.allocation_descriptors,

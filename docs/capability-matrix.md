@@ -205,6 +205,15 @@ Semantics not visible in the table:
   `route_identity` and `direction` are bytes a userspace fabric uses to bind the
   move to a declared edge, and `FLAG_RETAIN_TRANSFER` is the descriptor's own
   record of a disposition the request registers already carried.
+- Private memory is a generation-declared quota, not a capability or a
+  transferable object. An absent or zero `private-memory-budget/v1` quota
+  denies growth. A task can grow only its own fixed-base reserved window;
+  private pages cannot be shared, loaned, sealed, or mapped into another task.
+  Shared-buffer and received-loan mappings cannot overlap any part of that
+  window, including its unbacked reservation. Private mappings are writable
+  and execute-never on AArch64 and RV64; the x86-64 mapping API currently does
+  not enforce execute prevention. See [private component memory](architecture/private-memory.md)
+  for the mapping, reclamation, and qualification boundaries.
 - Shared-buffer mappings are page-aligned, non-executable, charged one unit per
   live map to the mapper's generation quota, and never overwrite an existing
   user page. `SHARED BUFFER SEAL` downgrades every live writable mapping before
@@ -314,7 +323,8 @@ Semantics not visible in the table:
 | Peer endpoints / notifications | `MAX_PEER_ENDPOINTS = 48`, `MAX_NOTIFICATIONS = 31` | `slime-root/src/{peer_endpoint,notification}.rs` |
 | Clock-authority holders / live timers | `MAX_HOLDERS = 48`, `MAX_LIVE_TIMERS_PER_HOLDER = 4`, `MAX_LIVE_TIMERS = 64` | `clock-authority/v1` decode plus `ClockService::arm`; omission denies every clock operation |
 | Threads per component | `MAX_CHILD_THREADS = 2` | `slime-root/src/child_vspace.rs` (B47) |
-| Task arenas / root CSlots | `MAX_TASK_ARENAS = 48`, `MAX_ROOT_CSLOTS = 262_144` | `slime-root/src/object_allocator.rs` |
+| Task arenas / root CSlots | `MAX_TASK_ARENAS = 48`; `MAX_ROOT_CSLOTS = 524_288` is the software bitmap ceiling, not a platform entitlement. Available slots come from the selected kernel's BootInfo span; narrower kernels retain smaller descriptor tables | `slime-root/src/object_allocator.rs` |
+| Private-memory pages per holder / aggregate | `private-memory-budget/v1`: 65,536 / 262,144 pages (256 MiB / 1 GiB) only on `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`; all other targets retain 512 / 2,048 pages (2 MiB / 8 MiB). Declared holder quotas must individually and collectively fit the target envelope; omission denies growth. These QEMU results qualify no physical machine | `contracts/private-memory-budget/v1/schema.zt`; target-bound admission in `boot-contracts/src/private_memory_budget.rs` and `slime-root/src/generation.rs`; growth accounting in `slime-root/src/private_memory.rs` |
 | Live shared buffers | `MAX_SHARED_BUFFERS = 32` | `SharedBufferError::ObjectsExhausted` |
 | Shared-buffer total pages | `MAX_TOTAL_PAGES = 256` (1 MiB) | `SharedBufferError::BytesExhausted` |
 | Pages per shared buffer | `MAX_BUFFER_PAGES = 64` | `SharedBufferError::BadSize` |

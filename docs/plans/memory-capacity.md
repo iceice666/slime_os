@@ -4,8 +4,9 @@
 
 ## Goal
 
-Extend the completed private-memory mechanism beyond its current target-qualified
-64 MiB holder envelope without turning emulator RAM size into a capability claim.
+Extend the completed private-memory mechanism from the earlier target-qualified
+64 MiB holder envelope to four simultaneous 256 MiB holders without turning
+emulator RAM size into a capability claim.
 This is a bounded qualification workload, not a general promise of large-memory
 or physical-board support.
 
@@ -31,9 +32,10 @@ page does not restate their state.
   Physical targets retain the conservative default: a board's 12-bit root CNode
   cannot hold the descriptor tables a larger holder needs, and no board has run
   the workload.
-- The 256 MiB per-holder and 1 GiB aggregate envelope remains unpublished:
-  its arithmetic fits the available ARM window, but simultaneous residency has
-  not been observed. Publication requires the qualification workload to run.
+- Envelopes beyond the published 256 MiB per holder and 1 GiB aggregate remain
+  unpublished, as does that envelope on any target other than the two QEMU
+  profiles that ran the qualification workload. Publication requires the
+  workload to run on the target being published.
 - Virtual reservation, owned backing extents, committed quota pages, frame
   objects, page tables, slots, and metadata are reported separately.
 - Legal small growth requests must fit the published worst-case metadata and

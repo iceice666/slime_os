@@ -10,8 +10,9 @@ with the repository itself:
 
 1. the row set and the composition directory are the same set — no composition
    without a row, no row without a composition;
-2. every `derived` row names an existing system spec and an existing frozen
-   baseline, and is exactly a member of `system_spec.DERIVED_GENERATION_FIXTURES`;
+2. every `derived` row names an existing system spec and historical baseline;
+   every `specNative` row names a system spec and forbids an invented baseline;
+   both are exactly members of `system_spec.DERIVED_GENERATION_FIXTURES`;
 3. every `handAuthored` row is absent from that table and carries a reason from
    the contract's closed vocabulary;
 4. the two path fields are non-empty exactly for `derived` rows and the reason
@@ -157,22 +158,32 @@ def validate(inventory: dict, compositions: set[str], derived_table: dict[str, s
         if entry["owningGate"] not in recipes:
             refuse(f"{name}: owningGate {entry['owningGate']!r} is no Justfile recipe")
 
-        if entry["state"] == CONTRACT.STATE_DERIVED:
+        if entry["state"] in (CONTRACT.STATE_DERIVED, CONTRACT.STATE_SPEC_NATIVE):
             derived += 1
             if entry["deferralReason"]:
-                refuse(f"{name}: a derived composition declares no deferral reason")
-            for field, root in (("systemSpec", SYSTEM_ROOT), ("baseline", BASELINE_ROOT)):
-                declared = entry[field]
-                if not declared:
-                    refuse(f"{name}: a derived composition must name its {field}")
-                path = (ROOT / declared).resolve()
-                if not path.is_relative_to(root) or not path.is_file():
-                    refuse(f"{name}: {field} {declared!r} is no file under {root.name}/")
-                if path.stem != name:
-                    refuse(f"{name}: {field} {declared!r} names another composition")
+                refuse(f"{name}: a generated composition declares no deferral reason")
+            declared = entry["systemSpec"]
+            if not declared:
+                refuse(f"{name}: a generated composition must name its systemSpec")
+            path = (ROOT / declared).resolve()
+            if not path.is_relative_to(SYSTEM_ROOT) or not path.is_file():
+                refuse(f"{name}: systemSpec {declared!r} is no file under systems/")
+            if path.stem != name:
+                refuse(f"{name}: systemSpec {declared!r} names another composition")
+            baseline = entry["baseline"]
+            if entry["state"] == CONTRACT.STATE_DERIVED:
+                if not baseline:
+                    refuse(f"{name}: a derived composition must name its baseline")
+                baseline_path = (ROOT / baseline).resolve()
+                if not baseline_path.is_relative_to(BASELINE_ROOT) or not baseline_path.is_file():
+                    refuse(f"{name}: baseline {baseline!r} is no file under baselines/")
+                if baseline_path.stem != name:
+                    refuse(f"{name}: baseline {baseline!r} names another composition")
+            elif baseline:
+                refuse(f"{name}: a spec-native composition must not invent a baseline")
             if name not in derived_table:
                 refuse(
-                    f"{name}: claimed derived, but the generator's derivation table "
+                    f"{name}: claimed generated, but the generator's derivation table "
                     "does not convert it"
                 )
         else:
@@ -327,6 +338,22 @@ def missing_baseline(value: dict) -> None:
     fail("no derived row to mutate")
 
 
+def invented_spec_native_baseline(value: dict) -> None:
+    for row in value["entries"]:
+        if row["state"] == CONTRACT.STATE_SPEC_NATIVE:
+            row["baseline"] = "contracts/system-spec/v1/baselines/sel4.zti"
+            return
+    fail("no spec-native row to mutate")
+
+
+def spec_native_without_system(value: dict) -> None:
+    for row in value["entries"]:
+        if row["state"] == CONTRACT.STATE_SPEC_NATIVE:
+            row["systemSpec"] = ""
+            return
+    fail("no spec-native row to mutate")
+
+
 rejected("a composition with no inventory row", drop_row)
 rejected("an inventory row naming no composition", add_unknown_row)
 rejected("a deferred composition claimed as derived", claim_deferred_is_derived)
@@ -334,6 +361,8 @@ rejected("a derived composition claimed as deferred", claim_derived_is_deferred)
 rejected("an unknown deferral reason", unknown_reason)
 rejected("an owning gate that is no Justfile recipe", unknown_gate)
 rejected("a derived row whose frozen baseline is missing", missing_baseline)
+rejected("a spec-native row inventing a historical baseline", invented_spec_native_baseline)
+rejected("a spec-native row missing its system spec", spec_native_without_system)
 
 deferred = len(COMMITTED["entries"]) - DERIVED_COUNT
 reasons = sorted(

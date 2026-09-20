@@ -80,10 +80,10 @@ maxDependencies :: Int = 32;
 -- reflexive edge a component needs to reach its *own* parameters.
 maxParameterGrants :: Int = 48;
 
--- The declared restart-attempt ceiling. A bound this high is already a
--- supervision bug rather than a policy, and it keeps the root's per-instance
--- counter inside one byte of meaning.
-maxRestartAttempts :: Int = 16;
+-- The declared restart-attempt ceiling: the largest attempt count any manifest
+-- may declare. A bound beyond it is a supervision bug rather than a policy, and
+-- this keeps the root's per-instance counter inside one byte of meaning.
+maxRestartAttempts :: Int = 20;
 -- The declared backoff ceiling, in counter ticks. The gate's own plane arms real
 -- timers against this, so an unbounded delay would be a watchdog failure rather
 -- than an observation.

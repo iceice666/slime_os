@@ -193,12 +193,60 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory.zti";
     };
     {
+      baseline = "contracts/system-spec/v1/baselines/sel4-private-memory-1g.zti";
+      composition = "sel4-private-memory-1g";
+      deferralReason = "";
+      owningGate = "private_memory_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-1g.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-private-memory-cycles.zti";
       composition = "sel4-private-memory-cycles";
       deferralReason = "";
       owningGate = "private_memory_cycles_check";
       state = "derived";
       systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-cycles.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-heap-stress";
+      deferralReason = "";
+      owningGate = "private_memory_stress_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-heap-stress.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-heap-stress-rv64";
+      deferralReason = "";
+      owningGate = "private_memory_stress_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-heap-stress-rv64.zti";
+    };
+    {
+      baseline = "contracts/system-spec/v1/baselines/sel4-private-memory-isolation.zti";
+      composition = "sel4-private-memory-isolation";
+      deferralReason = "";
+      owningGate = "private_memory_isolation_check";
+      state = "derived";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-isolation.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-stress";
+      deferralReason = "";
+      owningGate = "private_memory_stress_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-stress.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-stress-rv64";
+      deferralReason = "";
+      owningGate = "private_memory_stress_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-stress-rv64.zti";
     };
     {
       baseline = "contracts/system-spec/v1/baselines/sel4-qos.zti";

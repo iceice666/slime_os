@@ -47,7 +47,10 @@ from system_spec import (
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 NEGATIVE_ROOT = CLOSURE_ROOT.parent / "negative"
 INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "inputs"
-PREFIX = INPUT_ROOT / "sel4-prefix"
+PREFIXES = {
+    "qemu-arm-virt": INPUT_ROOT / "sel4-prefix",
+    "qemu-riscv-virt": INPUT_ROOT / "sel4-riscv64-prefix",
+}
 
 # The shared workspace inputs `resolve_closure` requires of every closure, as
 # `(name, repository-relative path, kind)`. The target specification is added
@@ -68,11 +71,6 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("just-recipes", "just", "tree"),
     ("justfile", "Justfile", "file"),
     ("root-child", "slime-root/child", "tree"),
-    (
-        "root-target",
-        "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json",
-        "file",
-    ),
     ("workspace-manifest", "Cargo.toml", "file"),
 )
 
@@ -164,6 +162,12 @@ SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
 # `(base composition, root role, root parameters)`. The base is the graph the
 # role's own gate boots, and the role changes only the root or embedded fixture.
 ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "sel4-private-memory-stress-injected": (
+        "sel4-private-memory-stress", "private-memory-stress", (),
+    ),
+    "sel4-private-memory-stress-rv64-injected": (
+        "sel4-private-memory-stress-rv64", "private-memory-stress", (),
+    ),
     "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
     "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
     # The two private-memory roles compile bounded, one-shot allocator failures.
@@ -321,7 +325,7 @@ def closure_for(
     source = base or name
     system = compile_system(SYSTEM_ROOT / f"{source}.zti", components=components)
     profile_name = system.spec["targetRequirement"]
-    if not profile_name.startswith("aarch64-sel4"):
+    if not profile_name.startswith(("aarch64-sel4", "riscv64-sel4")):
         return None
 
     implementations = []
@@ -359,6 +363,12 @@ def closure_for(
         fail(f"no loader submodule declared for platform {platform!r}")
     pin_table = pins(ROOT)
     rust_sel4 = pin_table["rust_sel4"]
+    prefix = PREFIXES.get(platform)
+    if prefix is None:
+        fail(f"no committed seL4 prefix snapshot for platform {platform!r}")
+    root_target = str(rust_sel4[
+        "riscv64_root_target" if profile_name.startswith("riscv64-") else "root_target"
+    ])
     target_spec = (
         Path("deps") / "rust-sel4" / "support" / "targets" / Path(str(binding["cargo_target"])).name
     ).as_posix()
@@ -371,7 +381,7 @@ def closure_for(
         "target": {
             "profile": profile_name,
             "platform": platform,
-            "prefix": artifact(str(PREFIX.relative_to(ROOT)), "tree"),
+            "prefix": artifact(str(prefix.relative_to(ROOT)), "tree"),
             "toolchain": rust_sel4["toolchain"],
             "rustSel4Commit": rust_sel4["commit"],
         },
@@ -390,7 +400,10 @@ def closure_for(
                 {"name": input_name, "artifact": artifact(relative, kind)}
                 for input_name, relative, kind in RELEASE_INPUTS
             ]
-            + [{"name": "target-spec", "artifact": artifact(target_spec, "file")}],
+            + [
+                {"name": "target-spec", "artifact": artifact(target_spec, "file")},
+                {"name": "root-target", "artifact": artifact(root_target, "file")},
+            ],
             key=lambda entry: entry["name"],
         ),
         "buildParameters": [

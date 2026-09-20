@@ -67,6 +67,45 @@ parents, remain owned for the root lifetime, so this is not unlimited allocator
 metadata or adaptive memory support. Actual target image/CSlot fit still requires
 its own admission and boot evidence.
 
+## Qualified simultaneous capacity
+
+The QEMU budget admits four 65536-page (256 MiB) holders, 262144 pages in total,
+on `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`. A budget that declares
+one page beyond either bound is refused at admission rather than at first
+growth, so an image that cannot be honoured in full never boots.
+
+Two compositions qualify that envelope, both owned by
+`scripts/check/check-sel4-private-memory-plane.py`:
+
+- `sel4-private-memory-1g` keeps four holders resident while one of them dies
+  and is readmitted twenty times. The surviving three re-verify their whole
+  patterns after every replacement, and each replacement observes a zeroed
+  region, so retention and non-disclosure are separate observations.
+- `sel4-private-memory-isolation` gives one holder the full 256 MiB and two
+  peers a single page. Every task's window starts at the same virtual address,
+  so each peer first proves its own page works, is refused a second, and then
+  reads or writes 128 MiB into that same address range — inside the victim's
+  extent, outside its own page. Before either peer faults, both lend and receive
+  a sealed shared buffer over their declared transferable endpoint. Each received
+  loan maps and verifies outside the private window, is refused at its backed
+  and reserved addresses, and is explicitly unmapped and returned before its
+  source buffer is released. Owned buffers separately exercise those destination
+  refusals, unowned-handle rejection, and sealed-write rejection. Each peer's
+  private page remains intact and its buffer/loan accounting returns to zero.
+  Each foreign access faults with its own task, access kind, and exact address,
+  and the victim then faults on executing its own backed private memory.
+
+These are QEMU envelopes on two architectures. They qualify no physical machine
+and no larger target.
+
+The capacity raise retains private-memory-budget/v1 and lifecycle-policy/v1:
+record layouts, field meanings and identity domains are unchanged; only the
+admitted target-specific quota and restart-attempt bounds increase. Existing
+smaller declarations remain valid. This is not forward acceptance by older
+readers: a root with the previous bounds must refuse a newly enlarged declaration.
+Generation/image identities bind the selected contracts and implementation, so
+the qualification does not authorize replaying a new budget against an old root.
+
 ## Userspace allocation
 
 Components built with the private-heap feature install the first-fit, address-
@@ -99,10 +138,11 @@ memory plane checker.
 
 ## Current capacity
 
-The contract publishes 16,384 pages (64 MiB) per holder and 32,768 pages total
-only for `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`. Targets without an
-explicit row retain the conservative 512-page per-holder and 2,048-page total
-bounds. A QEMU capacity result proves no physical board's memory map.
+The contract publishes 65,536 pages (256 MiB) per holder and 262,144 pages
+(1 GiB) total only for `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`.
+Targets without an explicit row retain the conservative 512-page per-holder and
+2,048-page total bounds. A QEMU capacity result proves no physical board's
+memory map.
 
 Further capacity work is specified in
 [`../plans/memory-capacity.md`](../plans/memory-capacity.md). It does not reopen
@@ -110,10 +150,18 @@ the private-memory mechanism.
 
 ## Verification
 
-- `just private_memory_check` exercises declared quotas and isolation on both
-  QEMU reference architectures.
+- `just private_memory_check` exercises declared quotas and the published
+  capacity envelope on both QEMU reference architectures.
+- `just private_memory_isolation_check` exercises the fault and authority
+  boundary between holders on both of them.
 - `just private_memory_cycles_check` exercises repeated zeroing and reclamation
   across exit and fault.
+- `just private_memory_stress_check` runs mixed-growth rollback and userspace
+  heap pressure on both QEMU architectures while three 256 MiB peers retain
+  their patterns. Its injected images reserve real allocator CSlot/descriptor
+  entries near their limits, without claiming a kernel CNode full of installed
+  capabilities. Interleaved, reclaimed 4 MiB guard extents leave measured gaps
+  between reused 2 MiB data extents; retained backing remains explicitly owned.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

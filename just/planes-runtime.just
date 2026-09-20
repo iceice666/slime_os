@@ -2,6 +2,20 @@
 private_memory_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py --platform qemu-arm-virt
     python3 scripts/check/check-sel4-private-memory-plane.py --platform qemu-riscv-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm capacity --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm capacity --platform qemu-riscv-virt
+
+[group('planes / runtime')]
+private_memory_stress_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm stress --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm stress --platform qemu-riscv-virt
+
+# MEM-1G's authority and permission boundary, kept separate from the capacity
+# arm so a 1 GiB working set is never the reason an isolation denial is missed.
+[group('planes / runtime')]
+private_memory_isolation_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm isolation --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm isolation --platform qemu-riscv-virt
 
 # MEM-64M requires both QEMU architectures to carry this workload, so an
 # architecture-specific reclamation path cannot regress behind the other's

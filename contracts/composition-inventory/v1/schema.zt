@@ -51,15 +51,18 @@ deferralRouteNameVariance :: Text = "routeNameVariance";
 deferralUnpinnedExternalImplementation :: Text = "unpinnedExternalImplementation";
 
 stateDerived :: Text = "derived";
+-- A composition authored directly as a system spec has no pre-migration
+-- hand-written manifest to freeze. It remains generator-owned and fully gated,
+-- but must not invent a historical baseline merely to enter this inventory.
+stateSpecNative :: Text = "specNative";
 stateHandAuthored :: Text = "handAuthored";
 
 -- One composition.
 --
--- `systemSpec` and `baseline` are repository-relative paths and are non-empty
--- exactly when `state` is `derived`: a derived composition has a reviewed
--- source and a frozen pre-migration copy to be checked against, and a
--- hand-authored one has neither. `deferralReason` is the mirror image —
--- non-empty exactly when `state` is `handAuthored`.
+-- `systemSpec` is non-empty for `derived` and `specNative`. `baseline` is
+-- non-empty only for `derived`, whose pre-migration manifest was frozen;
+-- `specNative` forbids one because no historical manifest existed.
+-- `handAuthored` has neither path and carries the closed deferral reason.
 --
 -- `owningGate` is required of both, because a composition nothing boots is
 -- unverified whether or not it is derived.
@@ -102,6 +105,7 @@ decodeCompositionInventory :: Data -> Validation DecodeIssue CompositionInventor
   maxNameBytes =;
   maxPathBytes =;
   stateDerived =;
+  stateSpecNative =;
   stateHandAuthored =;
   deferralMultiInstanceExecutable =;
   deferralExecutableNameCollision =;

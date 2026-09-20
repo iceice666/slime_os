@@ -1,0 +1,222 @@
+{
+  acceptanceCriteria = "private_memory_stress_check observes retained peers, exact refusals, retry, and resource conservation.";
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  bootAction = "private-memory";
+  bootAttempts = 3;
+  bootLayoutObject = true;
+  bootProfiles = [];
+  bootstrapInstance = "init";
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  commandBindings = [];
+  components = [
+    "init";
+    "private-memory-1g-holder-a";
+    "private-memory-1g-holder-b";
+    "private-memory-1g-holder-c";
+    "private-memory-1g-holder-d";
+    "private-memory-1g-probe";
+  ];
+  defaultImageBytes = 65536;
+  deploymentConstraint = "Dedicated QEMU qualification; no physical-machine claim.";
+  extraBindings = [];
+  formatVersion = 1;
+  generation = 58;
+  grants = [
+    {
+      capabilityKind = "sharedBufferFactory";
+      name = "capacity-shared-factory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "private-memory-1g-holder-a";
+      target = "private-memory-1g-holder-a";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "holder-a-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-a";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "holder-a-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-a";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "holder-b-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-b";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "holder-b-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-b";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "holder-c-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-c";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "holder-c-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-c";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "holder-d-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-d";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "holder-d-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-d";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "private-stress-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-memory-1g-probe";
+      target = "private-memory-1g-holder-d";
+      transferable = false;
+    };
+  ];
+  imageSizes = [];
+  instances = [
+    {
+      executable = "init";
+      name = "init";
+    };
+    {
+      autostart = false;
+      bufferBytePages = 1;
+      bufferCount = 1;
+      executable = "private-memory-1g-holder-a";
+      health = "optional";
+      mappingCount = 1;
+      name = "private-memory-1g-holder-a";
+      owner = "private-memory-1g-probe";
+      privatePageQuota = 65536;
+    };
+    {
+      autostart = false;
+      executable = "private-memory-1g-holder-b";
+      health = "optional";
+      name = "private-memory-1g-holder-b";
+      owner = "private-memory-1g-probe";
+      privatePageQuota = 65536;
+    };
+    {
+      autostart = false;
+      executable = "private-memory-1g-holder-c";
+      health = "optional";
+      name = "private-memory-1g-holder-c";
+      owner = "private-memory-1g-probe";
+      privatePageQuota = 65536;
+    };
+    {
+      autostart = false;
+      executable = "private-memory-1g-holder-d";
+      health = "optional";
+      name = "private-memory-1g-holder-d";
+      owner = "private-memory-1g-probe";
+      privatePageQuota = 65536;
+    };
+    {
+      executable = "private-memory-1g-probe";
+      health = "required";
+      name = "private-memory-1g-probe";
+    };
+  ];
+  interfaceSchemas = [];
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [];
+    restarts = [];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Error";
+      };
+    ];
+  };
+  mintedBindings = [];
+  name = "sel4-private-memory-stress";
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  notificationBindings = [];
+  notifications = [];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  recording = [];
+  recordingObject = false;
+  sharedBufferBudgetObject = true;
+  slotPins = [];
+  state = [];
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  waitSet = [];
+  waitSetObject = false;
+  networkInterfaces = [];
+  networkInterfacesObject = false;
+}
