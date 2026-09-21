@@ -42,6 +42,15 @@
 //! * **Allocation policy is userspace's.** The root tracks a page count and
 //!   never an allocation; `free` is a free-list operation inside the component.
 
+pub mod elastic;
+#[cfg(any(
+    slime_private_elastic,
+    slime_private_fragmentation,
+    slime_private_rollback,
+    slime_private_conservation
+))]
+pub mod qualification;
+
 use sel4::CapTypeForObjectOfFixedSize;
 
 use crate::child_vspace::{
@@ -132,6 +141,13 @@ pub struct Region {
     base_frames: usize,
     leaf_tables: usize,
     leaf_spans: [usize; LEAF_SPAN_WORDS],
+    /// Backing for this region arrives per request from the common pool.
+    ///
+    /// A quota is a promise the construction path already paid for; an elastic
+    /// maximum is permission to ask. The distinction is carried here so a
+    /// region cannot be grown through the path that does not own its backing
+    /// model.
+    elastic: bool,
 }
 
 impl Region {
@@ -150,6 +166,7 @@ impl Region {
         base_frames: 0,
         leaf_tables: 0,
         leaf_spans: [0; LEAF_SPAN_WORDS],
+        elastic: false,
     };
 
     /// A region reserved at `base`, with `quota` pages of growth authorized.
@@ -175,11 +192,57 @@ impl Region {
             base_frames: 0,
             leaf_tables: 0,
             leaf_spans: [0; LEAF_SPAN_WORDS],
+            elastic: false,
+        }
+    }
+
+    /// A region whose window is reserved but whose backing is not.
+    ///
+    /// `maximum` is authorization, not a promise: nothing is taken from the
+    /// pool here, and a holder that never grows costs the machine only the
+    /// address space no other mapping may use. The clamp to the compiled
+    /// window is the same structural bound the fixed path applies, for the
+    /// same reason: the base cannot move, so growth cannot pass it.
+    ///
+    /// A base that is not large-frame aligned is refused outright. Leaf-table
+    /// ownership is tracked per 2 MiB span of the *window*, so a misaligned
+    /// base would put one span's pages under two leaf tables and the second
+    /// would never be priced or recorded. Deny-by-default is the only safe
+    /// answer: returning a window whose accounting cannot represent it would
+    /// fail later, during a mapping, with pages already committed.
+    pub const fn elastic(base: usize, maximum: usize) -> Self {
+        if !base.is_multiple_of(LARGE_FRAME_BYTES) {
+            return Self::DENIED;
+        }
+        let maximum = if maximum > MAX_REGION_PAGES {
+            MAX_REGION_PAGES
+        } else {
+            maximum
+        };
+        Self {
+            base,
+            reservation: MAX_REGION_PAGES,
+            quota: maximum,
+            pages: 0,
+            large_frames: 0,
+            base_frames: 0,
+            leaf_tables: 0,
+            leaf_spans: [0; LEAF_SPAN_WORDS],
+            elastic: true,
         }
     }
 
     pub const fn base(self) -> usize {
         self.base
+    }
+
+    /// Pages of address space the window can ever hold.
+    pub const fn reservation(self) -> usize {
+        self.reservation
+    }
+
+    pub const fn is_elastic(self) -> bool {
+        self.elastic
     }
 
     /// Pages currently backed by a frame.
@@ -207,6 +270,20 @@ impl Region {
         let word = span / usize::BITS as usize;
         let bit = span % usize::BITS as usize;
         word < LEAF_SPAN_WORDS && self.leaf_spans[word] & (1usize << bit) != 0
+    }
+
+    /// Apply a priced shape to this region without a kernel, for host tests of
+    /// the pricing itself: the mapping paths stay the seL4 gates' to prove.
+    #[cfg(test)]
+    fn commit_shape_for_test(&mut self, shape: elastic::Shape) {
+        let mut page = self.pages;
+        for _ in 0..shape.tables {
+            self.mark_leaf_table(page / LARGE_FRAME_PAGES);
+        }
+        page += shape.pages();
+        self.pages = page;
+        self.large_frames += shape.large_frames;
+        self.base_frames += shape.base_pages;
     }
 
     fn mark_leaf_table(&mut self, span: usize) {
@@ -532,14 +609,98 @@ impl Table {
         delta: usize,
         kernel: &mut K,
     ) -> Result<usize, GrowError> {
+        if region.elastic {
+            return Err(GrowError::QuotaExceeded {
+                pages: region.pages,
+                delta,
+                quota: region.quota,
+            });
+        }
         region.admit(delta, self.total_pages)?;
         let previous = region.pages;
         if delta == 0 {
             return Ok(previous);
         }
-        let mut pages_backed = 0;
-        let mut large_frames = 0;
-        let mut base_frames = 0;
+        let outcome = map_growth(allocator, arena, vspace, region, delta, kernel)?;
+        allocator
+            .commit_private_transaction(arena)
+            .map_err(|error| GrowError::Frames {
+                allocated: outcome.pages_backed,
+                error,
+            })?;
+        self.record_growth(region, delta, outcome.large_frames, outcome.base_frames);
+        Ok(previous)
+    }
+
+    /// Charge one settled growth to the region and the root-wide totals.
+    ///
+    /// Separated from the mapping loop because both backing models share the
+    /// accounting and neither may charge before every page has real backing.
+    pub(crate) fn record_growth(
+        &mut self,
+        region: &mut Region,
+        delta: usize,
+        large_frames: usize,
+        base_frames: usize,
+    ) {
+        region.pages += delta;
+        region.large_frames += large_frames;
+        region.base_frames += base_frames;
+        self.total_pages += delta;
+        self.grown_pages += delta;
+        self.grants += 1;
+    }
+
+    /// Return one dying task's pages to the root-wide total.
+    ///
+    /// The frames themselves are destroyed by the task-arena revoke every
+    /// reclamation already performs — they were retyped from that arena's
+    /// untyped, so nothing separate has to unmap them. What this returns is the
+    /// *charge*, which is bookkeeping the revoke cannot see.
+    ///
+    /// Idempotent: reclaiming a region twice returns zero the second time, so a
+    /// retried teardown cannot drive the total negative.
+    pub fn reclaim(&mut self, region: &mut Region) -> usize {
+        let pages = region.pages;
+        region.pages = 0;
+        region.large_frames = 0;
+        region.base_frames = 0;
+        region.leaf_tables = 0;
+        region.leaf_spans = [0; LEAF_SPAN_WORDS];
+        self.total_pages = self.total_pages.saturating_sub(pages);
+        self.reclaimed_pages += pages;
+        pages
+    }
+}
+
+/// What one growth's mappings cost, once they exist.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GrowthOutcome {
+    pub(crate) pages_backed: usize,
+    pub(crate) large_frames: usize,
+    pub(crate) base_frames: usize,
+}
+
+/// Back `delta` further pages of `region`, mapping each one as it is taken.
+///
+/// Shared by both backing models: what differs between them is where the
+/// resources came from and who authorized them, not how a page is mapped. The
+/// caller settles the transaction — this leaves every mapping in flight, so a
+/// failure unwinds this attempt alone and no charge is made against a page
+/// that is not yet backed.
+pub(crate) fn map_growth<K: PrivateMemoryKernel>(
+    allocator: &mut ObjectAllocator,
+    arena: TaskArenaId,
+    vspace: sel4::cap::VSpace,
+    region: &mut Region,
+    delta: usize,
+    kernel: &mut K,
+) -> Result<GrowthOutcome, GrowError> {
+    let previous = region.pages;
+    let mut pages_backed = 0;
+    let mut large_frames = 0;
+    let mut base_frames = 0;
+    {
         // Each 2 MiB span has its own leaf table when base pages are used.
         // Failed growth retains a mapped table bound to that span for retry,
         // and large-frame spans may precede it, so presence is tracked by span.
@@ -624,41 +785,12 @@ impl Table {
                 }
             }
         }
-        allocator
-            .commit_private_transaction(arena)
-            .map_err(|error| GrowError::Frames {
-                allocated: pages_backed,
-                error,
-            })?;
-        region.pages = previous + delta;
-        region.large_frames += large_frames;
-        region.base_frames += base_frames;
-        self.total_pages += delta;
-        self.grown_pages += delta;
-        self.grants += 1;
-        Ok(previous)
     }
-
-    /// Return one dying task's pages to the root-wide total.
-    ///
-    /// The frames themselves are destroyed by the task-arena revoke every
-    /// reclamation already performs — they were retyped from that arena's
-    /// untyped, so nothing separate has to unmap them. What this returns is the
-    /// *charge*, which is bookkeeping the revoke cannot see.
-    ///
-    /// Idempotent: reclaiming a region twice returns zero the second time, so a
-    /// retried teardown cannot drive the total negative.
-    pub fn reclaim(&mut self, region: &mut Region) -> usize {
-        let pages = region.pages;
-        region.pages = 0;
-        region.large_frames = 0;
-        region.base_frames = 0;
-        region.leaf_tables = 0;
-        region.leaf_spans = [0; LEAF_SPAN_WORDS];
-        self.total_pages = self.total_pages.saturating_sub(pages);
-        self.reclaimed_pages += pages;
-        pages
-    }
+    Ok(GrowthOutcome {
+        pages_backed,
+        large_frames,
+        base_frames,
+    })
 }
 
 /// One mapping an in-flight growth has taken. Persistent transaction state is

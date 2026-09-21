@@ -838,6 +838,21 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     allocator
         .exercise_bootstrap_boundaries()
         .unwrap_or_else(|error| fatal!("bootstrap boundary qualification: {error:?}"));
+    // Demand-backed private memory runs here for the same reason: its holders
+    // live in windows of the root's own address space, so a refusal, a
+    // rollback or a revoke it provokes cannot reach a component.
+    #[cfg(slime_private_elastic)]
+    slime_root::private_memory::qualification::exercise_idle_and_guarantee(allocator)
+        .unwrap_or_else(|error| fatal!("elastic guarantee qualification: {error:?}"));
+    #[cfg(slime_private_fragmentation)]
+    slime_root::private_memory::qualification::exercise_mixed_fragmentation(allocator)
+        .unwrap_or_else(|error| fatal!("elastic fragmentation qualification: {error:?}"));
+    #[cfg(slime_private_rollback)]
+    slime_root::private_memory::qualification::exercise_failure_rollback(allocator)
+        .unwrap_or_else(|error| fatal!("elastic rollback qualification: {error:?}"));
+    #[cfg(slime_private_conservation)]
+    slime_root::private_memory::qualification::exercise_cross_holder_conservation(allocator)
+        .unwrap_or_else(|error| fatal!("elastic conservation qualification: {error:?}"));
     let initial_slots = allocator.slots_remaining();
     let initial_untypeds = allocator.untyped_count();
     let initial_bytes = allocator.untyped_bytes_remaining();

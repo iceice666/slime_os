@@ -8,6 +8,7 @@
 //! task. Root CSlots are managed by a bounded bitmap and are returned only after
 //! the corresponding capability is known to be gone.
 
+pub mod elastic;
 mod global_backing;
 mod infrastructure;
 mod mapping_tables;
@@ -1061,8 +1062,13 @@ enum ExtentKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExtentRecord {
     parent: sel4::cap::Untyped,
-    #[cfg(slime_private_stress)]
-    stress_paddr: usize,
+    /// Physical base of the retype that created this extent.
+    ///
+    /// Retained for the lifetime of the record, including while it is
+    /// reusable: a returned extent keeps the bytes it always had, and an
+    /// elastic transaction certifies its placements against the physical
+    /// range it will actually occupy rather than against a predicted one.
+    paddr: usize,
     size_bits: usize,
     owner: u16,
     serial: u32,
@@ -1078,8 +1084,7 @@ impl ExtentRecord {
     fn new(parent: sel4::cap::Untyped, size_bits: usize) -> Self {
         Self {
             parent,
-            #[cfg(slime_private_stress)]
-            stress_paddr: 0,
+            paddr: 0,
             size_bits,
             owner: u16::MAX,
             serial: 0,
@@ -1161,6 +1166,8 @@ struct ArenaRecord {
     in_flight_head: u32,
     in_flight_granules: usize,
     releasing: bool,
+    /// Backing arrives on demand and in mixed sizes for this arena.
+    elastic: bool,
 }
 
 impl ArenaRecord {
@@ -1173,6 +1180,7 @@ impl ArenaRecord {
             in_flight_head: PRIVATE_STATE_NONE,
             in_flight_granules: 0,
             releasing: false,
+            elastic: false,
         }
     }
 
@@ -1232,6 +1240,12 @@ pub struct ObjectAllocator {
     physical: ProvenanceTable,
     shared_backing: shared_backing::BuddyBacking,
     mapping_tables: mapping_tables::MappingTables,
+    /// One failed elastic rollback, still owned and still retryable.
+    ///
+    /// Root serializes growth, so at most one transaction can be unsettled.
+    /// Holding the record here rather than in the caller is what keeps the
+    /// resources named after the caller that took them has returned.
+    elastic_quarantine: Option<elastic::ElasticAcquisition>,
     #[cfg(test)]
     private_visits: PrivateRecordVisits,
 }
@@ -1270,6 +1284,7 @@ impl ObjectAllocator {
             physical: ProvenanceTable::new(),
             shared_backing: shared_backing::BuddyBacking::new(),
             mapping_tables: mapping_tables::MappingTables::new(),
+            elastic_quarantine: None,
             #[cfg(test)]
             private_visits: PrivateRecordVisits {
                 reusable: 0,
@@ -2468,13 +2483,7 @@ impl ObjectAllocator {
                 crate::root_cspace::RootSlot::<sel4::cap_type::Untyped>::from_address(parent_slot)
                     .cap();
             self.extents[index] = Some(ExtentRecord::new(parent, size_bits));
-            #[cfg(slime_private_stress)]
-            {
-                self.extents[index]
-                    .as_mut()
-                    .expect("new extent")
-                    .stress_paddr = self.last_paddr;
-            }
+            self.extents[index].as_mut().expect("new extent").paddr = self.last_paddr;
             index
         };
         self.extents[index]
@@ -2512,21 +2521,38 @@ impl ObjectAllocator {
         Ok(position)
     }
 
+    /// Select the extent one object is retyped from.
+    ///
+    /// A fixed arena's private extents are all one size, so first fit is the
+    /// selection it has always made. An elastic arena holds extents sized to
+    /// the requests that acquired them, and there first fit would let a base
+    /// page consume the aligned 2 MiB extent a large frame in the same
+    /// transaction was planned to occupy, failing a growth whose resources all
+    /// exist. Best fit by extent size keeps every planned mapping payable.
     fn extent_for_allocation(
         &self,
         id: TaskArenaId,
         kind: ExtentKind,
         size_bits: usize,
     ) -> Result<(usize, usize), AllocError> {
-        self.extents
+        let elastic = self.arena(id).is_ok_and(|arena| arena.elastic);
+        let candidates = self
+            .extents
             .iter()
             .enumerate()
             .filter_map(|(index, extent)| extent.as_ref().map(|extent| (index, extent)))
             .filter(|(_, extent)| extent.belongs_to(id) && extent.kind == kind && !extent.revoked)
-            .find_map(|(index, extent)| {
+            .filter_map(|(index, extent)| {
                 plan_allocation(extent.watermark, 1usize << extent.size_bits, size_bits)
-                    .map(|(_, watermark)| (index, watermark))
-            })
+                    .map(|(_, watermark)| (index, extent.size_bits, watermark))
+            });
+        let selected = if elastic {
+            candidates.min_by_key(|(_, extent_bits, _)| *extent_bits)
+        } else {
+            candidates.into_iter().next()
+        };
+        selected
+            .map(|(index, _, watermark)| (index, watermark))
             .ok_or(AllocError::ArenaTooSmall {
                 size_bits,
                 required: 1usize << size_bits,
@@ -2661,7 +2687,7 @@ impl ObjectAllocator {
                 .count()
     }
 
-    #[cfg(any(slime_private_stress, test))]
+    #[cfg(any(slime_private_stress, slime_private_rollback, test))]
     pub(crate) fn reserve_stress_descriptors(&mut self, leave_free: usize) -> usize {
         let count = self
             .allocation_descriptors_free()
@@ -2680,7 +2706,7 @@ impl ObjectAllocator {
         count
     }
 
-    #[cfg(any(slime_private_stress, test))]
+    #[cfg(any(slime_private_stress, slime_private_rollback, test))]
     pub(crate) fn release_stress_descriptors(&mut self) {
         for record in self.allocations.iter_mut() {
             if record.owner == u16::MAX - 1 {
@@ -2837,12 +2863,10 @@ impl ObjectAllocator {
             .flatten()
             .filter(|extent| extent.belongs_to(id) && extent.kind == ExtentKind::PrivateData)
         {
-            if previous
-                .is_some_and(|address| address + MAX_PRIVATE_EXTENT_BYTES != extent.stress_paddr)
-            {
+            if previous.is_some_and(|address| address + MAX_PRIVATE_EXTENT_BYTES != extent.paddr) {
                 discontinuities += 1;
             }
-            previous = Some(extent.stress_paddr);
+            previous = Some(extent.paddr);
         }
         let reused = self.extents_reused - reused_before;
         sel4::debug_println!(
@@ -3192,6 +3216,17 @@ impl ObjectAllocator {
                 continue;
             }
             let parent_slot = extent.parent.bits() as usize;
+            // A reclamation whose revoke does not complete must keep the
+            // holder's ownership rather than advertise capacity the machine
+            // has not recovered; this injection makes that path observable.
+            #[cfg(slime_private_conservation)]
+            if elastic::inject_arena_revoke_failure() {
+                self.arenas[id.index()].releasing = false;
+                return Err(AllocError::ArenaCleanup {
+                    slot: parent_slot,
+                    error: sel4::Error::IllegalOperation,
+                });
+            }
             root.absolute_cptr(sel4::CPtr::from_bits(parent_slot as _))
                 .revoke()
                 .map_err(|error| AllocError::ArenaCleanup {
@@ -4166,6 +4201,7 @@ mod tests {
         ];
         let static_extent = |owner: TaskArenaId, revoked: bool| ExtentRecord {
             parent: sel4::cap::Untyped::from_bits(1),
+            paddr: 0,
             size_bits: 16,
             owner: owner.index as u16,
             serial: owner.serial,

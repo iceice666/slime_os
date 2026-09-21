@@ -1075,6 +1075,26 @@ def build_application(
             root_environment["RUSTFLAGS"] = (
                 f"{rustflags} --cfg slime_bootstrap_boundaries".strip()
             )
+        if closure_root_role == "private-memory-elastic":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_elastic".strip()
+            )
+        if closure_root_role == "private-memory-fragmentation":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_fragmentation".strip()
+            )
+        if closure_root_role == "private-memory-rollback":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_rollback".strip()
+            )
+        if closure_root_role == "private-memory-conservation":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_conservation".strip()
+            )
         if closure_root_role == "private-memory-fail-large-map":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (

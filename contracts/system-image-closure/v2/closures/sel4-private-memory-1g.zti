@@ -91,7 +91,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "745122cc4b4d5a77f308e72871ff9b2357dc6b38ab0efbdde13ee83ce69e45b2";
+      identity = "63764a64e55234a5f51a71d60a4ce526d0776dfd69ff87f6aabdb0ec2eb76574";
     };
     parameters = [];
   };
@@ -190,7 +190,7 @@
       artifact = {
         path = "scripts/build/build-sel4.py";
         kind = "file";
-        identity = "141479e8d0b2aec67c37183e889085f3abd3e1bb3326236784273cb9dab6471b";
+        identity = "456584c32b4725ec5387a983ffe974b1e61bb51aa2634e48a6ee4ba451395fbf";
       };
     };
     {
@@ -206,7 +206,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "8b847844a2a3248688e623ddd3c4e4a668981e676aa7f292b93cefba4baad2c5";
+        identity = "54b96b781c614ab11c38748cec23433ef934a3437ed8360978b66e8e610cbe51";
       };
     };
     {

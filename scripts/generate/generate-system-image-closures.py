@@ -191,6 +191,33 @@ ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sel4-private-memory-bootstrap-rv64": (
         "sel4-private-memory-heap-stress-rv64", "bootstrap-boundaries", (),
     ),
+    # The four demand-backed roles run their holders in windows of the root's
+    # own address space before any component is published, so they need only a
+    # composition that boots; each reference architecture carries all four.
+    "sel4-private-memory-elastic": (
+        "sel4-private-memory", "private-memory-elastic", (),
+    ),
+    "sel4-private-memory-elastic-rv64": (
+        "sel4-private-memory-heap-stress-rv64", "private-memory-elastic", (),
+    ),
+    "sel4-private-memory-fragmentation": (
+        "sel4-private-memory", "private-memory-fragmentation", (),
+    ),
+    "sel4-private-memory-fragmentation-rv64": (
+        "sel4-private-memory-heap-stress-rv64", "private-memory-fragmentation", (),
+    ),
+    "sel4-private-memory-rollback": (
+        "sel4-private-memory", "private-memory-rollback", (),
+    ),
+    "sel4-private-memory-rollback-rv64": (
+        "sel4-private-memory-heap-stress-rv64", "private-memory-rollback", (),
+    ),
+    "sel4-private-memory-conservation": (
+        "sel4-private-memory", "private-memory-conservation", (),
+    ),
+    "sel4-private-memory-conservation-rv64": (
+        "sel4-private-memory-heap-stress-rv64", "private-memory-conservation", (),
+    ),
     "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
     "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
     # The two private-memory roles compile bounded, one-shot allocator failures.

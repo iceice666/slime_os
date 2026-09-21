@@ -401,12 +401,100 @@ BOOTSTRAP_CHAINS = (
     )) for cause in ("ram", "cnode-slots", "metadata")),
 )
 
+ELASTIC_CENSUS = (
+    r"ordinary=\d+ retained=\d+ reusable=\d+ live_bytes=\d+ extents_active=\d+ "
+    r"extents_anchored=\d+ slots_free=\d+ descriptors_free=\d+ extent_records_free=\d+ metadata=\d+"
+)
+ELASTIC_CHAINS = (
+    ("an idle maximum reserves nothing a peer then consumes", (
+        rf"SLIME_MEM elastic census phase=admitted {ELASTIC_CENSUS}",
+        r"SLIME_MEM elastic admitted pool_bytes=\d+ guarantee_pages=\d+ holders=3",
+        r"SLIME_MEM elastic idle subject=qualification-idle maximum=\d+ reserved_bytes=0 "
+        r"pool_before=\d+ pool_after=\d+",
+        r"SLIME_MEM elastic grow subject=qualification-bulk committed=\d+ bytes=\d+ pool_after=\d+",
+        r"SLIME_MEM elastic refused subject=qualification-bulk pages=\d+ cause=\S+ "
+        r"committed=\d+ peer_committed=\d+",
+        # Same chain, because the order is the claim: the guarantee is served
+        # *after* the pool the elastic holders share ran out.
+        r"SLIME_MEM elastic guarantee subject=qualification-guaranteed-holder committed=\d+ "
+        r"promised=\d+ served=1",
+        r"SLIME_MEM elastic idle_request subject=qualification-idle served=\d+ committed=\d+",
+        r"SLIME_MEM elastic intact bulk=1 guaranteed=1 idle=1 pages=\d+",
+    )),
+    ("every holder returns its capacity", (
+        rf"SLIME_MEM elastic census phase=served {ELASTIC_CENSUS}",
+        rf"SLIME_MEM elastic census phase=retired {ELASTIC_CENSUS}",
+        r"SLIME_MEM elastic complete case=idle-and-guarantee holders=3 granted=\d+ reclaimed=\d+",
+        HEALTHY_MARKER,
+    )),
+)
+FRAGMENTATION_CHAINS = (
+    ("page-granular and span requests are priced separately", (
+        r"SLIME_MEM elastic inventory pool_bytes=\d+ largest_aligned=\d+ retained=\d+ reusable=\d+",
+        r"SLIME_MEM elastic request kind=single pages=1 committed=1 charged=\d+ large=0 base=1 tables=1",
+        r"SLIME_MEM elastic request kind=mixed pages=\d+ committed=\d+ charged=\d+ large=\d+ base=\d+ tables=\d+",
+    )),
+    ("fragmented backing serves pages no aligned span could", (
+        r"SLIME_MEM elastic fragmented ordinary_aligned=0 served=1 committed=\d+ "
+        r"retained=\d+ reusable=\d+",
+        r"SLIME_MEM elastic fragmented_span served=0 cause=\S+ committed=\d+",
+    )),
+    ("a terminal refusal names its resource and still serves a fitting request", (
+        r"SLIME_MEM elastic request kind=bulk pages=\d+ committed=\d+ charged=\d+ large=\d+ base=0 tables=0",
+        r"SLIME_MEM elastic cost small_bytes_per_page=\d+ bulk_bytes_per_page=\d+",
+        r"SLIME_MEM elastic refusal kind=bulk resource=\S+ pool_bytes=\d+ ordinary=\d+ "
+        r"retained=\d+ reusable=\d+",
+        r"SLIME_MEM elastic next kind=fitting served=1 committed=\d+ pool_bytes=\d+",
+        r"SLIME_MEM elastic reuse returned_pages=\d+ reused_extents=\d+ served=\d+ committed=\d+",
+        r"SLIME_MEM elastic complete case=mixed-fragmentation granted=\d+ reclaimed=\d+",
+        HEALTHY_MARKER,
+    )),
+)
+ROLLBACK_STAGES = (
+    "extent", "descriptors", "retype", "table-map", "frame-map", "near-limit-descriptors",
+)
+ROLLBACK_CHAINS = (
+    ("every injected stage leaves committed state and sentinels untouched", (
+        r"SLIME_MEM elastic baseline committed=\d+ charged=\d+ pool_bytes=\d+ peer=\d+",
+    ) + tuple(
+        rf"SLIME_MEM elastic injected stage={stage} cause=\S+ committed=\d+ pool_before=\d+ "
+        rf"pool_after=\d+ ordinary_before=\d+ ordinary_after=\d+ retained_tables=\d+ "
+        rf"sentinels=1 quarantined=0"
+        for stage in ROLLBACK_STAGES
+    )),
+    ("a retry after every failure charges once", (
+        r"SLIME_MEM elastic retry stage=all committed=\d+ charged=\d+ clean=\d+ doubled=0",
+        r"SLIME_MEM elastic quarantine stage=cleanup cause=\S+ owned=1 refused=1 released=1 "
+        r"remaining=0 pool_held=\d+ pool_after=\d+",
+        r"SLIME_MEM elastic complete case=failure-rollback stages=7 granted=\d+ reclaimed=\d+",
+        HEALTHY_MARKER,
+    )),
+)
+CONSERVATION_CHAINS = (
+    ("a revoked holder's capacity becomes another holder's", (
+        r"SLIME_MEM elastic holder subject=qualification-first committed=\d+ pattern=1 pool_bytes=\d+",
+        r"SLIME_MEM elastic retire subject=qualification-first revoked=1 returned_pages=\d+ "
+        r"pool_before=\d+ pool_after=\d+ reusable=\d+",
+        r"SLIME_MEM elastic reuse subject=qualification-second committed=\d+ reused_extents=\d+ "
+        r"zeroed=1 peer_pattern=1",
+    )),
+    ("a failed revoke keeps ownership until its retry", (
+        r"SLIME_MEM elastic revoke_failure subject=qualification-stuck first_attempt=0 "
+        r"retained=1 retry=1 pool_before=\d+ pool_held=\d+ pool_after=\d+",
+        r"SLIME_MEM elastic baseline phase=final owned_before=\d+ owned_after=\d+ "
+        r"slots_before=\d+ slots_after=\d+ pool_before=\d+ pool_after=\d+ granted=\d+ reclaimed=\d+",
+        r"SLIME_MEM elastic complete case=cross-holder-conservation holders=4 granted=\d+ reclaimed=\d+",
+        HEALTHY_MARKER,
+    )),
+)
+
 # The union, for `sel4_gate_control_check`'s coverage count only. Each arm
 # matches its own chains; a transcript from one arm does not carry the other's
 # markers, so matching the union would fail every run.
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     CEILING_CHAINS + CYCLE_CHAINS + CAPACITY_CHAINS + ISOLATION_CHAINS
     + CSPACE_CHAINS + METADATA_CHAINS + BOOTSTRAP_CHAINS
+    + ELASTIC_CHAINS + FRAGMENTATION_CHAINS + ROLLBACK_CHAINS + CONSERVATION_CHAINS
 )
 
 EXPECTED_UNORDERED: tuple[str, ...] = (
@@ -2443,6 +2531,205 @@ def check_bootstrap_boundaries(transcript: str) -> None:
             fail(prefix + "exhaustion outside reserve/completion interval")
 
 
+def elastic_rows(transcript: str, name: str, fields: str, prefix: str) -> list[re.Match[str]]:
+    marker = "SLIME_MEM elastic " + name
+    return adaptive_rows(transcript, marker, marker + " " + fields, prefix)
+
+
+def check_idle_and_guarantee(transcript: str) -> None:
+    prefix = "elastic guarantee: "
+    check_adaptive_markers(transcript, ELASTIC_CHAINS, prefix)
+    idle = elastic_rows(
+        transcript,
+        "idle",
+        r"subject=(\S+) maximum=(\d+) reserved_bytes=(\d+) pool_before=(\d+) pool_after=(\d+)",
+        prefix,
+    )
+    grow = elastic_rows(
+        transcript, "grow", r"subject=(\S+) committed=(\d+) bytes=(\d+) pool_after=(\d+)", prefix
+    )
+    refused = elastic_rows(
+        transcript,
+        "refused",
+        r"subject=(\S+) pages=(\d+) cause=(\S+) committed=(\d+) peer_committed=(\d+)",
+        prefix,
+    )
+    guarantee = elastic_rows(
+        transcript, "guarantee", r"subject=(\S+) committed=(\d+) promised=(\d+) served=(\d+)", prefix
+    )
+    if len(idle) != 1 or len(grow) != 1 or len(refused) != 1 or len(guarantee) != 1:
+        fail(prefix + "wrong holder population")
+    maximum, reserved, before, after = (int(value) for value in idle[0].groups()[1:])
+    if reserved != 0 or before != after or maximum == 0:
+        fail(prefix + "an authorized maximum reserved pool capacity")
+    committed, bytes_backed = (int(value) for value in grow[0].groups()[1:3])
+    if committed == 0 or bytes_backed != committed * 4096:
+        fail(prefix + "the peer consumed no spare capacity")
+    # The peer's idle neighbour held nothing, and the refusal did not shrink
+    # what the peer already had.
+    if int(refused[0].group(4)) != committed or int(refused[0].group(5)) != 0:
+        fail(prefix + "a refusal changed a holder's committed pages")
+    served, promised = int(guarantee[0].group(4)), int(guarantee[0].group(3))
+    if served != 1 or int(guarantee[0].group(2)) != promised:
+        fail(prefix + "the guarantee was not serviceable under elastic pressure")
+    if refused[0].start() >= guarantee[0].start():
+        fail(prefix + "the guarantee was served before the pool was exhausted")
+
+
+def check_mixed_fragmentation(transcript: str) -> None:
+    prefix = "elastic fragmentation: "
+    check_adaptive_markers(transcript, FRAGMENTATION_CHAINS, prefix)
+    requests = {
+        row.group(1): tuple(int(value) for value in row.groups()[1:])
+        for row in elastic_rows(
+            transcript,
+            "request",
+            r"kind=(\S+) pages=(\d+) committed=(\d+) charged=(\d+) large=(\d+) base=(\d+) tables=(\d+)",
+            prefix,
+        )
+    }
+    if sorted(requests) != ["bulk", "mixed", "single"]:
+        fail(prefix + "wrong request population")
+    if requests["single"][2] != 2 * 4096:
+        fail(prefix + "a one-page request charged more than a page and its table")
+    if requests["mixed"][3] == 0 or requests["mixed"][4] == 0:
+        fail(prefix + "the mixed request took only one frame size")
+    cost = elastic_rows(
+        transcript, "cost", r"small_bytes_per_page=(\d+) bulk_bytes_per_page=(\d+)", prefix
+    )
+    if len(cost) != 1:
+        fail(prefix + "per-page costs were not reported")
+    small, bulk = (int(value) for value in cost[0].groups())
+    if bulk >= small:
+        fail(prefix + "bulk capacity was reported as the small-page cost")
+    fragmented = elastic_rows(
+        transcript,
+        "fragmented",
+        r"ordinary_aligned=(\d+) served=(\d+) committed=(\d+) retained=(\d+) reusable=(\d+)",
+        prefix,
+    )
+    span = elastic_rows(
+        transcript, "fragmented_span", r"served=(\d+) cause=(\S+) committed=(\d+)", prefix
+    )
+    if len(fragmented) != 1 or len(span) != 1:
+        fail(prefix + "wrong fragmented-service population")
+    if int(fragmented[0].group(1)) != 0 or int(fragmented[0].group(2)) != 1:
+        fail(prefix + "page-granular growth required an aligned block")
+    if int(span[0].group(1)) != 0 or span[0].group(2) in ("none", "policy"):
+        fail(prefix + "an unbackable span request was not refused by a named resource")
+    reuse = elastic_rows(
+        transcript,
+        "reuse",
+        r"returned_pages=(\d+) reused_extents=(\d+) served=(\d+) committed=(\d+)",
+        prefix,
+    )
+    if len(reuse) != 1 or int(reuse[0].group(1)) == 0 or int(reuse[0].group(2)) == 0:
+        fail(prefix + "returned extents were not reused")
+
+
+def check_failure_rollback(transcript: str) -> None:
+    prefix = "elastic rollback: "
+    check_adaptive_markers(transcript, ROLLBACK_CHAINS, prefix)
+    baseline = elastic_rows(
+        transcript, "baseline", r"committed=(\d+) charged=(\d+) pool_bytes=(\d+) peer=(\d+)", prefix
+    )
+    injected = elastic_rows(
+        transcript,
+        "injected",
+        r"stage=(\S+) cause=(\S+) committed=(\d+) pool_before=(\d+) pool_after=(\d+) "
+        r"ordinary_before=(\d+) ordinary_after=(\d+) retained_tables=(\d+) sentinels=(\d+) "
+        r"quarantined=(\d+)",
+        prefix,
+    )
+    if len(baseline) != 1 or [row.group(1) for row in injected] != list(ROLLBACK_STAGES):
+        fail(prefix + "wrong injected-stage population or order")
+    committed = int(baseline[0].group(1))
+    for row in injected:
+        values = row.groups()
+        if int(values[2]) != committed:
+            fail(prefix + f"stage {values[0]} changed committed pages")
+        if values[8] != "1" or values[9] != "0":
+            fail(prefix + f"stage {values[0]} damaged a holder or left resources owned")
+        # Everything a failed growth took comes back except a leaf table it
+        # already bound to a span, which stays charged by exactly its bytes.
+        retained = int(values[7]) * 4096
+        if int(values[3]) - int(values[4]) != retained:
+            fail(prefix + f"stage {values[0]} did not return its pool bytes")
+    if not any(int(row.group(8)) for row in injected):
+        fail(prefix + "no stage retained a span-bound leaf table")
+    retry = elastic_rows(
+        transcript, "retry", r"stage=all committed=(\d+) charged=(\d+) clean=(\d+) doubled=(\d+)", prefix
+    )
+    if len(retry) != 1 or retry[0].group(4) != "0" or int(retry[0].group(2)) > int(retry[0].group(3)):
+        fail(prefix + "a retry after the injected failures charged twice")
+    quarantine = elastic_rows(
+        transcript,
+        "quarantine",
+        r"stage=cleanup cause=(\S+) owned=(\d+) refused=(\d+) released=(\d+) remaining=(\d+) "
+        r"pool_held=(\d+) pool_after=(\d+)",
+        prefix,
+    )
+    if len(quarantine) != 1:
+        fail(prefix + "the cleanup failure was not reported")
+    owned, refused, released, remaining = (int(value) for value in quarantine[0].groups()[1:5])
+    if (owned, refused, released, remaining) != (1, 1, 1, 0):
+        fail(prefix + "a failed cleanup was not owned, refusing and retryable exactly once")
+    if injected[-1].start() >= quarantine[0].start():
+        fail(prefix + "the quarantine case did not follow the injected stages")
+
+
+def check_cross_holder_conservation(transcript: str) -> None:
+    prefix = "elastic conservation: "
+    check_adaptive_markers(transcript, CONSERVATION_CHAINS, prefix)
+    retire = elastic_rows(
+        transcript,
+        "retire",
+        r"subject=(\S+) revoked=(\d+) returned_pages=(\d+) pool_before=(\d+) pool_after=(\d+) "
+        r"reusable=(\d+)",
+        prefix,
+    )
+    reuse = elastic_rows(
+        transcript,
+        "reuse",
+        r"subject=(\S+) committed=(\d+) reused_extents=(\d+) zeroed=(\d+) peer_pattern=(\d+)",
+        prefix,
+    )
+    stuck = elastic_rows(
+        transcript,
+        "revoke_failure",
+        r"subject=(\S+) first_attempt=(\d+) retained=(\d+) retry=(\d+) pool_before=(\d+) "
+        r"pool_held=(\d+) pool_after=(\d+)",
+        prefix,
+    )
+    final = elastic_rows(
+        transcript,
+        "baseline",
+        r"phase=final owned_before=(\d+) owned_after=(\d+) slots_before=(\d+) slots_after=(\d+) "
+        r"pool_before=(\d+) pool_after=(\d+) granted=(\d+) reclaimed=(\d+)",
+        prefix,
+    )
+    if len(retire) != 1 or len(reuse) != 1 or len(stuck) != 1 or len(final) != 1:
+        fail(prefix + "wrong conservation population")
+    returned, before, after = (int(value) for value in retire[0].groups()[2:5])
+    if returned == 0 or after <= before:
+        fail(prefix + "a completed revoke returned no capacity")
+    committed, reused, zeroed, peer = (int(value) for value in reuse[0].groups()[1:])
+    if committed == 0 or reused == 0 or zeroed != 1 or peer != 1:
+        fail(prefix + "recovered capacity was not reused, zeroed and peer-safe")
+    first, retained, retry, held_before, held, released = (
+        int(value) for value in stuck[0].groups()[1:7]
+    )
+    if first != 0 or retained != 1 or retry != 1 or held != held_before or released < held:
+        fail(prefix + "a failed revoke advertised or lost capacity")
+    owned_before, owned_after, _, slots_after, _, _, granted, reclaimed = (
+        int(value) for value in final[0].groups()
+    )
+    if owned_after < owned_before or granted != reclaimed:
+        fail(prefix + "the workload's capacity did not return to its baseline")
+    if slots_after == 0:
+        fail(prefix + "no root CSlots survived the workload")
+
+
 def run_adaptive_arm(platform: str, arm: str) -> None:
     section, qemu_binary = PLATFORMS[platform]
     profile = load_qemu_profile(fail, PINS, section)
@@ -2461,7 +2748,15 @@ def run_adaptive_arm(platform: str, arm: str) -> None:
     if sha256_file(built.image, fail) != digest:
         fail(f"{arm} image: packaged bytes changed during execution")
     (ROOT / "build" / f"{variant}.log").write_text(transcript + "\n", encoding="utf-8")
-    {"cspace": check_cspace_execution, "metadata": check_metadata_lifecycle, "bootstrap": check_bootstrap_boundaries}[arm](transcript)
+    {
+        "cspace": check_cspace_execution,
+        "metadata": check_metadata_lifecycle,
+        "bootstrap": check_bootstrap_boundaries,
+        "elastic": check_idle_and_guarantee,
+        "fragmentation": check_mixed_fragmentation,
+        "rollback": check_failure_rollback,
+        "conservation": check_cross_holder_conservation,
+    }[arm](transcript)
     print(f"private-memory {arm} workload finished: {variant} image={digest}")
 
 
@@ -2536,7 +2831,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
     parser.add_argument(
         "--arm",
-        choices=("ceiling", "cycles", "capacity", "isolation", "stress", "cspace", "metadata", "bootstrap"),
+        choices=(
+            "ceiling", "cycles", "capacity", "isolation", "stress", "cspace", "metadata",
+            "bootstrap", "elastic", "fragmentation", "rollback", "conservation",
+        ),
         default="ceiling",
         help="which qualification to run: the declared ceiling or MEM-64M's reuse cycles",
     )
@@ -2547,7 +2845,9 @@ def main() -> None:
         help="the pinned QEMU profile and image to build and boot",
     )
     arguments = parser.parse_args()
-    if arguments.arm in ("cspace", "metadata", "bootstrap"):
+    if arguments.arm in (
+        "cspace", "metadata", "bootstrap", "elastic", "fragmentation", "rollback", "conservation",
+    ):
         run_adaptive_arm(arguments.platform, arguments.arm)
         return
     if arguments.arm == "stress":

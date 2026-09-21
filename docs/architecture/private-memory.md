@@ -211,9 +211,51 @@ until cleanup. Quarantined payload remains charged against authorization maxima.
 Payload quotas do not count metadata or unused extent backing as mapped pages;
 all such overhead remains charged to the resource pool, not hidden as free RAM.
 The pure model does not prove kernel placement or discover RAM. Expandable
-CSpace and resource-backed metadata are implemented and qualified; demand-backed
-private allocation, dynamic task windows and multi-inventory runtime
-qualification remain separate work.
+CSpace, resource-backed metadata and demand-backed allocation are implemented
+and qualified; dynamic task windows, spawn/admission integration and
+multi-inventory runtime qualification remain separate work.
+
+## Demand-backed acquisition
+
+`slime-root/src/object_allocator/elastic.rs` and
+`slime-root/src/private_memory/elastic.rs` implement the acquisition an elastic
+holder's growth performs. An authorized maximum reserves nothing: a request
+resolves into the mappings it will take, that shape is priced as a complete
+resource tuple with checked arithmetic, the tuple is taken from the common
+pool, and only then is a frame retyped or a page mapped.
+
+Extents are sized to the request rather than to a quota. Large frames each take
+their own aligned 2 MiB extent; base pages take an exact power-of-two
+decomposition capped at 2 MiB; each new leaf table takes its own granule
+extent. A growth's reserved bytes therefore equal its payload plus its tables,
+which is what lets a fragmented machine serve page-granular growth from blocks
+no aligned span would fit. Elastic arenas select backing best-fit, so a base
+page cannot consume the aligned extent a large frame in the same transaction
+was planned to occupy.
+
+Acquisition precedes judgment because it is reversible. The ledger validates
+the placements the allocator actually obtained — not a prediction — and a
+policy refusal returns the whole acquisition before any mapping exists. A
+failure after mapping unwinds the attempt, returns every unused extent,
+descriptor and CSlot, and retains only leaf tables already bound to a span:
+those name one fixed address, stay charged to their holder, and never enter a
+kind-wide reusable pool. The ledger charges such a table's granule extent as a
+table rather than as a separate extent record, so one record per retained table
+stays allocated while the ledger counts none; the allocator's own record
+capacity, not the ledger's, is what refuses a demand that cannot be stored.
+
+A cleanup that does not complete is quarantined rather than lost: the
+acquisition record stays in the allocator, the holder keeps ownership, its next
+request is refused, and exactly one retry returns the resources. Guarantees are
+reserved in the ledger at admission rather than pre-provisioned physically, so
+an exhausted elastic pool refuses elastic transactions while a guaranteed
+holder's first growth still finds its bytes.
+
+The qualification roles run their holders in windows of the root's own address
+space before any component is published. That exercises the same allocator,
+ledger, retypes and kernel mappings a component's growth would take, and
+deliberately not the spawn, admission or window-placement path, which the next
+stage owns.
 
 ## Verification
 
@@ -241,6 +283,24 @@ qualification remain separate work.
   refusing before any task is published.
 - `just private_memory_phase2_regression_check` aggregates the fixed-capacity
   surface those three must not regress.
+- `just private_memory_elastic_check` proves an idle authorized maximum takes
+  nothing from the pool, a peer consumes the spare capacity, a guaranteed
+  holder is still served after the elastic pool is exhausted, and the refusal
+  damages neither holder's pages.
+- `just private_memory_fragmentation_check` prices one-page, mixed and bulk
+  growth separately, serves page-granular growth from a machine with no aligned
+  2 MiB block left, refuses the span request by the resource that ran out, and
+  takes a returned holder's extents for the next request.
+- `just private_memory_rollback_check` injects failure at extent acquisition,
+  descriptor provisioning, retype, table mapping, frame mapping and a
+  near-limit descriptor window, then proves a retry charges once and a failed
+  cleanup is owned, refusing and retryable exactly once.
+- `just private_memory_conservation_check` returns one holder's capacity to
+  another with zeroed pages and an unchanged peer pattern, keeps ownership
+  through a failed revoke, and reconciles unallocated bytes to their
+  pre-workload baseline.
+- `just private_memory_phase3_check` runs all four over the phase-2 surface, so
+  one execution binds them to the same code closure and images.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

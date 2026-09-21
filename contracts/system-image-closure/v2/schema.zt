@@ -247,6 +247,12 @@ providerExternal :: Text = "external";
 -- `cspace-expanded` adds expanded-CSpace pressure, `metadata-lifecycle` exercises
 -- metadata segment lifecycle with injected failures, and `bootstrap-boundaries`
 -- exercises bootstrap reserve boundary cases; all three are test-only.
+-- The four `private-memory-*` demand roles qualify elastic private memory:
+-- `-elastic` proves an idle maximum reserves nothing while a guarantee stays
+-- serviceable, `-fragmentation` serves page-granular growth from blocks no
+-- aligned span fits, `-rollback` injects failure at each acquisition and
+-- mapping stage, and `-conservation` returns one holder's capacity to
+-- another. All are test-only.
 rootRoleEmbeddedGeneration :: Text = "embedded-generation";
 rootRoleBootSelector :: Text = "boot-selector";
 rootRoleFixture :: Text = "root-fixture";
@@ -257,6 +263,10 @@ rootRolePrivateMemoryStress :: Text = "private-memory-stress";
 rootRoleCspaceExpanded :: Text = "cspace-expanded";
 rootRoleMetadataLifecycle :: Text = "metadata-lifecycle";
 rootRoleBootstrapBoundaries :: Text = "bootstrap-boundaries";
+rootRolePrivateMemoryElastic :: Text = "private-memory-elastic";
+rootRolePrivateMemoryFragmentation :: Text = "private-memory-fragmentation";
+rootRolePrivateMemoryRollback :: Text = "private-memory-rollback";
+rootRolePrivateMemoryConservation :: Text = "private-memory-conservation";
 loaderRoleKernelLoader :: Text = "kernel-loader";
 
 -- One closed root-role parameter. `BuildRole.parameters` was declared by CP11
@@ -342,6 +352,10 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   rootRoleCspaceExpanded =;
   rootRoleMetadataLifecycle =;
   rootRoleBootstrapBoundaries =;
+  rootRolePrivateMemoryElastic =;
+  rootRolePrivateMemoryFragmentation =;
+  rootRolePrivateMemoryRollback =;
+  rootRolePrivateMemoryConservation =;
   loaderRoleKernelLoader =;
   rootParameterQemuKeyboard =;
   rootParameterDuoTestTerminator =;

@@ -63,6 +63,10 @@ render :: Text = t.join "" {
     schema.rootRoleCspaceExpanded;
     schema.rootRoleMetadataLifecycle;
     schema.rootRoleBootstrapBoundaries;
+    schema.rootRolePrivateMemoryElastic;
+    schema.rootRolePrivateMemoryFragmentation;
+    schema.rootRolePrivateMemoryRollback;
+    schema.rootRolePrivateMemoryConservation;
   };
   text "ROOT_ROLE_EMBEDDED_GENERATION" schema.rootRoleEmbeddedGeneration;
   text "ROOT_ROLE_BOOT_SELECTOR" schema.rootRoleBootSelector;
@@ -74,6 +78,10 @@ render :: Text = t.join "" {
   text "ROOT_ROLE_CSPACE_EXPANDED" schema.rootRoleCspaceExpanded;
   text "ROOT_ROLE_METADATA_LIFECYCLE" schema.rootRoleMetadataLifecycle;
   text "ROOT_ROLE_BOOTSTRAP_BOUNDARIES" schema.rootRoleBootstrapBoundaries;
+  text "ROOT_ROLE_PRIVATE_MEMORY_ELASTIC" schema.rootRolePrivateMemoryElastic;
+  text "ROOT_ROLE_PRIVATE_MEMORY_FRAGMENTATION" schema.rootRolePrivateMemoryFragmentation;
+  text "ROOT_ROLE_PRIVATE_MEMORY_ROLLBACK" schema.rootRolePrivateMemoryRollback;
+  text "ROOT_ROLE_PRIVATE_MEMORY_CONSERVATION" schema.rootRolePrivateMemoryConservation;
   tuple "ROOT_PARAMETERS" {
     schema.rootParameterQemuKeyboard;
     schema.rootParameterDuoTestTerminator;

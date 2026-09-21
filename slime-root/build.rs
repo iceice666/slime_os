@@ -22,6 +22,10 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_cspace_expanded)");
     println!("cargo::rustc-check-cfg=cfg(slime_metadata_lifecycle)");
     println!("cargo::rustc-check-cfg=cfg(slime_bootstrap_boundaries)");
+    println!("cargo::rustc-check-cfg=cfg(slime_private_elastic)");
+    println!("cargo::rustc-check-cfg=cfg(slime_private_fragmentation)");
+    println!("cargo::rustc-check-cfg=cfg(slime_private_rollback)");
+    println!("cargo::rustc-check-cfg=cfg(slime_private_conservation)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_missing)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_extra)");
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_aliased)");

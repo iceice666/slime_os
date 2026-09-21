@@ -41,8 +41,10 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    # 54 existing markers plus 6 cspace, 12 metadata and 14 bootstrap markers.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 86),
+    # 54 existing markers plus 6 cspace, 12 metadata and 14 bootstrap markers,
+    # 12 elastic, 12 fragmentation, 11 rollback and 7 conservation markers, and
+    # one order-independent marker.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 128),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -1316,6 +1318,165 @@ def check_private_bootstrap_controls(gate) -> int:
     return check_adaptive_control_mutations(gate.check_bootstrap_boundaries, "bootstrap boundaries:", lines, mutations)
 
 
+def check_private_elastic_controls(gate) -> int:
+    census = (
+        "ordinary=1587035824 retained=10512 reusable=0 live_bytes=512 extents_active=0 "
+        "extents_anchored=0 slots_free=523220 descriptors_free=400000 "
+        "extent_records_free=2048 metadata=851888"
+    )
+    lines = [
+        f"SLIME_MEM elastic census phase=admitted {census}",
+        "SLIME_MEM elastic admitted pool_bytes=33554432 guarantee_pages=64 holders=3",
+        "SLIME_MEM elastic idle subject=qualification-idle maximum=65536 reserved_bytes=0 "
+        "pool_before=33554432 pool_after=33554432",
+        "SLIME_MEM elastic grow subject=qualification-bulk committed=512 bytes=2097152 "
+        "pool_after=31457280",
+        "SLIME_MEM elastic refused subject=qualification-bulk pages=512 cause=policy "
+        "committed=512 peer_committed=0",
+        "SLIME_MEM elastic guarantee subject=qualification-guaranteed-holder committed=64 "
+        "promised=64 served=1",
+        "SLIME_MEM elastic idle_request subject=qualification-idle served=1 committed=1",
+        "SLIME_MEM elastic intact bulk=1 guaranteed=1 idle=1 pages=577",
+        f"SLIME_MEM elastic census phase=served {census}",
+        f"SLIME_MEM elastic census phase=retired {census}",
+        "SLIME_MEM elastic complete case=idle-and-guarantee holders=3 granted=577 reclaimed=577",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    mutations = [
+        ("idle maximum reserved bytes", transcript.replace("reserved_bytes=0", "reserved_bytes=4096")),
+        ("idle maximum shrank the pool", transcript.replace("pool_before=33554432 pool_after=33554432", "pool_before=33554432 pool_after=31457280")),
+        ("idle holder had no authorization", transcript.replace("maximum=65536", "maximum=0")),
+        ("peer consumed nothing", transcript.replace("grow subject=qualification-bulk committed=512 bytes=2097152", "grow subject=qualification-bulk committed=0 bytes=0")),
+        ("grown bytes do not match pages", transcript.replace("bytes=2097152", "bytes=2097151")),
+        ("refusal changed committed pages", transcript.replace("cause=policy committed=512", "cause=policy committed=256")),
+        ("idle neighbour silently held pages", transcript.replace("peer_committed=0", "peer_committed=4")),
+        ("guarantee unserved", transcript.replace("promised=64 served=1", "promised=64 served=0")),
+        ("guarantee partially served", transcript.replace("guarantee subject=qualification-guaranteed-holder committed=64", "guarantee subject=qualification-guaranteed-holder committed=32")),
+        ("guarantee served before exhaustion", "\n".join(lines[:4] + [lines[5], lines[4]] + lines[6:])),
+        ("a refusal damaged the peer", transcript.replace("intact bulk=1", "intact bulk=0")),
+        ("a refusal damaged the guarantee", transcript.replace("guaranteed=1 idle=1", "guaranteed=0 idle=1")),
+    ]
+    return check_adaptive_control_mutations(
+        gate.check_idle_and_guarantee, "elastic guarantee:", lines, mutations
+    )
+
+
+def check_private_fragmentation_controls(gate) -> int:
+    lines = [
+        "SLIME_MEM elastic inventory pool_bytes=33554432 largest_aligned=2097152 retained=10512 reusable=0",
+        "SLIME_MEM elastic request kind=single pages=1 committed=1 charged=8192 large=0 base=1 tables=1",
+        "SLIME_MEM elastic request kind=mixed pages=515 committed=515 charged=2113536 large=1 base=3 tables=1",
+        "SLIME_MEM elastic fragmented ordinary_aligned=0 served=1 committed=2 retained=2144496 reusable=0",
+        "SLIME_MEM elastic fragmented_span served=0 cause=acquisition committed=515",
+        "SLIME_MEM elastic request kind=bulk pages=7168 committed=7168 charged=29360128 large=14 base=0 tables=0",
+        "SLIME_MEM elastic cost small_bytes_per_page=8192 bulk_bytes_per_page=4096",
+        "SLIME_MEM elastic refusal kind=bulk resource=policy pool_bytes=2068480 ordinary=1544896256 retained=8370368 reusable=2097152",
+        "SLIME_MEM elastic next kind=fitting served=1 committed=3 pool_bytes=2064384",
+        "SLIME_MEM elastic reuse returned_pages=7168 reused_extents=1 served=1 committed=515",
+        "SLIME_MEM elastic complete case=mixed-fragmentation granted=8198 reclaimed=8198",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    mutations = [
+        ("a single page charged a span", transcript.replace("charged=8192", "charged=2097152")),
+        ("the mixed request took no large frame", transcript.replace("charged=2113536 large=1", "charged=2113536 large=0")),
+        ("the mixed request took no base page", transcript.replace("large=1 base=3", "large=1 base=0")),
+        ("bulk capacity reported as the small-page cost", transcript.replace("bulk_bytes_per_page=4096", "bulk_bytes_per_page=8192")),
+        ("fragmented service still had an aligned block", transcript.replace("ordinary_aligned=0", "ordinary_aligned=2097152")),
+        ("page-granular growth was refused", transcript.replace("ordinary_aligned=0 served=1", "ordinary_aligned=0 served=0")),
+        ("the span refusal was an authorization answer", transcript.replace("cause=acquisition", "cause=policy")),
+        ("the unbackable span was served", transcript.replace("fragmented_span served=0", "fragmented_span served=1")),
+        ("no fitting request followed the refusal", transcript.replace("next kind=fitting served=1", "next kind=fitting served=0")),
+        ("returned extents were not reused", transcript.replace("reused_extents=1", "reused_extents=0")),
+        ("nothing was returned to reuse", transcript.replace("returned_pages=7168", "returned_pages=0")),
+    ]
+    return check_adaptive_control_mutations(
+        gate.check_mixed_fragmentation, "elastic fragmentation:", lines, mutations
+    )
+
+
+def check_private_rollback_controls(gate) -> int:
+    def stage(name: str, *, committed: int = 8, retained: int = 0, sentinels: int = 1, quarantined: int = 0) -> str:
+        pool = 33480704
+        return (
+            f"SLIME_MEM elastic injected stage={name} cause=acquisition committed={committed} "
+            f"pool_before={pool} pool_after={pool - retained * 4096} ordinary_before=1584725712 "
+            f"ordinary_after=1584725712 retained_tables={retained} sentinels={sentinels} "
+            f"quarantined={quarantined}"
+        )
+
+    lines = [
+        "SLIME_MEM elastic baseline committed=8 charged=16384 pool_bytes=33480704 peer=8",
+        stage("extent"),
+        stage("descriptors"),
+        stage("retype"),
+        stage("table-map"),
+        stage("frame-map", retained=1),
+        stage("near-limit-descriptors"),
+        "SLIME_MEM elastic retry stage=all committed=12 charged=16384 clean=16384 doubled=0",
+        "SLIME_MEM elastic quarantine stage=cleanup cause=cleanup owned=1 refused=1 released=1 "
+        "remaining=0 pool_held=33443840 pool_after=33443840",
+        "SLIME_MEM elastic complete case=failure-rollback stages=7 granted=20 reclaimed=20",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    mutations = [
+        ("a failed stage changed committed pages", transcript.replace(lines[1], stage("extent", committed=12))),
+        ("a failed stage damaged a sentinel", transcript.replace(lines[2], stage("descriptors", sentinels=0))),
+        ("a failed stage kept resources owned", transcript.replace(lines[3], stage("retype", quarantined=1))),
+        ("a failed stage kept pool bytes", transcript.replace(lines[4], stage("table-map").replace("pool_after=33480704", "pool_after=33476608"))),
+        ("a retained table was not charged", transcript.replace(lines[5], stage("frame-map", retained=1).replace("pool_after=33476608", "pool_after=33480704"))),
+        ("no stage reached a span-bound table", transcript.replace(lines[5], stage("frame-map"))),
+        ("stages ran out of order", "\n".join(lines[:1] + [lines[2], lines[1]] + lines[3:])),
+        ("the retry charged twice", transcript.replace("charged=16384 clean=16384 doubled=0", "charged=32768 clean=16384 doubled=0")),
+        ("the retry admitted doubling", transcript.replace("doubled=0", "doubled=1")),
+        ("a failed cleanup owned nothing", transcript.replace("owned=1 refused=1", "owned=0 refused=1")),
+        ("a quarantined holder was served", transcript.replace("refused=1 released=1", "refused=0 released=1")),
+        ("the quarantine was not retryable", transcript.replace("released=1 remaining=0", "released=0 remaining=0")),
+        ("the retry left resources owned", transcript.replace("remaining=0", "remaining=1")),
+        ("the cleanup case preceded its stages", "\n".join([lines[0], lines[8]] + lines[1:8] + lines[9:])),
+    ]
+    return check_adaptive_control_mutations(
+        gate.check_failure_rollback, "elastic rollback:", lines, mutations
+    )
+
+
+def check_private_conservation_controls(gate) -> int:
+    lines = [
+        "SLIME_MEM elastic holder subject=qualification-first committed=512 pattern=1 pool_bytes=29360128",
+        "SLIME_MEM elastic retire subject=qualification-first revoked=1 returned_pages=512 "
+        "pool_before=29360128 pool_after=31457280 reusable=2097152",
+        "SLIME_MEM elastic reuse subject=qualification-second committed=512 reused_extents=1 "
+        "zeroed=1 peer_pattern=1",
+        "SLIME_MEM elastic revoke_failure subject=qualification-stuck first_attempt=0 retained=1 "
+        "retry=1 pool_before=29323264 pool_held=29323264 pool_after=29360128",
+        "SLIME_MEM elastic baseline phase=final owned_before=1587046336 owned_after=1587046336 "
+        "slots_before=523220 slots_after=523167 pool_before=33554432 pool_after=33554432 "
+        "granted=1544 reclaimed=1544",
+        "SLIME_MEM elastic complete case=cross-holder-conservation holders=4 granted=1544 reclaimed=1544",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    mutations = [
+        ("a completed revoke returned nothing", transcript.replace("returned_pages=512", "returned_pages=0")),
+        ("a completed revoke freed no capacity", transcript.replace("pool_before=29360128 pool_after=31457280", "pool_before=29360128 pool_after=29360128")),
+        ("recovered pages carried the previous holder's bytes", transcript.replace("zeroed=1", "zeroed=0")),
+        ("a peer's pattern was lost", transcript.replace("peer_pattern=1", "peer_pattern=0")),
+        ("recovered extents were not reused", transcript.replace("reused_extents=1", "reused_extents=0")),
+        ("the failed revoke reported success", transcript.replace("first_attempt=0", "first_attempt=1")),
+        ("the failed revoke released ownership", transcript.replace("retained=1", "retained=0")),
+        ("the failed revoke advertised capacity", transcript.replace("pool_held=29323264", "pool_held=31457280")),
+        ("the retry lost capacity", transcript.replace("pool_held=29323264 pool_after=29360128", "pool_held=29323264 pool_after=29000000")),
+        ("owned capacity drifted downward", transcript.replace("owned_after=1587046336", "owned_after=1587042240")),
+        ("granted pages were never reclaimed", transcript.replace(lines[4], lines[4].replace("reclaimed=1544", "reclaimed=1540"))),
+        ("no root CSlots survived", transcript.replace("slots_after=523167", "slots_after=0")),
+    ]
+    return check_adaptive_control_mutations(
+        gate.check_cross_holder_conservation, "elastic conservation:", lines, mutations
+    )
+
+
 def check_private_memory_capacity_controls() -> int:
     gate = load_script(
         "sel4_private_memory_semantic_controls", "check/check-sel4-private-memory-plane.py"
@@ -1586,6 +1747,10 @@ def check_private_memory_capacity_controls() -> int:
         + check_private_cspace_controls(gate)
         + check_private_metadata_controls(gate)
         + check_private_bootstrap_controls(gate)
+        + check_private_elastic_controls(gate)
+        + check_private_fragmentation_controls(gate)
+        + check_private_rollback_controls(gate)
+        + check_private_conservation_controls(gate)
         + len(fault_mutations)
         + len(ledger_mutations)
         + len(conservation_mutations)
@@ -1611,7 +1776,7 @@ def main() -> None:
         identity_controls = check_image_identity_controls(control_root)
         runtime_controls = check_plane_runtime_controls(control_root)
     print(
-        f"seL4 gate control check: {len(GATES) + 1} gates plus 3 adaptive arms reject "
+        f"seL4 gate control check: {len(GATES) + 1} gates plus 7 adaptive arms reject "
         f"{total} mutated transcripts and layouts; "
         f"{identity_controls} identity cases and {runtime_controls} runtime cases passed"
     )
