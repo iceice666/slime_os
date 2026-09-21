@@ -44,6 +44,7 @@ RUST_SEL4_PATH = ROOT / "deps" / "rust-sel4"
 LOADER_SUBMODULE_PATHS = {
     "rust_sel4_bcm2712_rpi5": ROOT / "deps" / "rust-sel4-bcm2712-rpi5",
     "rust_sel4_cv1800b_duo": ROOT / "deps" / "rust-sel4-cv1800b-duo",
+    "rust_sel4_rubikpi3": ROOT / "deps" / "rust-sel4-rubikpi3",
 }
 # Each platform installs its own prefix and pins its own artifact hashes: the
 # platforms build different kernels, so one hash set cannot describe all.
@@ -62,6 +63,10 @@ PREFIX_PATHS = {
         "observed_prefix_cv1800b_duo",
     ),
     "qemu-pc99": (ROOT / "build" / "sel4-pc99-prefix", "observed_prefix_qemu_pc99"),
+    "rubikpi3": (
+        ROOT / "build" / "sel4-rubikpi3-prefix",
+        "observed_prefix_rubikpi3",
+    ),
 }
 # An x86 machine describes itself through ACPI at run time, so seL4 pc99
 # compiles no device tree and generates no `platform_gen.yaml`: its install has
@@ -72,6 +77,7 @@ PREFIX_HAS_PLATFORM_DESCRIPTION = {
     "qemu-riscv-virt",
     "bcm2712-rpi5",
     "cv1800b-duo",
+    "rubikpi3",
 }
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 DATED_NIGHTLY = re.compile(r"nightly-\d{4}-\d{2}-\d{2}")
@@ -442,8 +448,10 @@ def check_qemu_dtb_parameters() -> None:
     parameters = qemu_dtb_parameters()
     for platform in ("qemu-arm-virt", "qemu-riscv-virt"):
         value = parameters.get(platform)
-        if not isinstance(value, tuple) or len(value) != 3 or not all(
-            isinstance(item, str) and item for item in value
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 3
+            or not all(isinstance(item, str) and item for item in value)
         ):
             fail(
                 f"QEMU_DTB_PARAMETERS[{platform!r}] must contain only executable, "
@@ -725,7 +733,7 @@ def check_profile(pins: dict[str, object]) -> None:
     if text(pc99_pins, "cpu", "qemu_pc99") != "Haswell":
         fail(
             "qemu_pc99 must pin a CPU model implementing FSGSBASE; the kernel's "
-            "KernelFSGSBase \"inst\" boot path halts without it"
+            'KernelFSGSBase "inst" boot path halts without it'
         )
     if text(pc99_pins, "fsgs_base", "qemu_pc99") != required_pc99["KernelFSGSBase"]:
         fail("qemu_pc99 fsgs_base pin disagrees with the CMake profile")
@@ -1032,9 +1040,7 @@ def parse_pinned_address(value: str, section: str, key: str) -> int:
 def check_platform_memory_window(
     pins: dict[str, object], platform: str, platform_info: Path
 ) -> None:
-    section = {"qemu-arm-virt": "qemu_arm_virt", "qemu-riscv-virt": "qemu_riscv_virt"}.get(
-        platform
-    )
+    section = {"qemu-arm-virt": "qemu_arm_virt", "qemu-riscv-virt": "qemu_riscv_virt"}.get(platform)
     if section is None:
         return
     profile = table(pins, section)
@@ -1123,6 +1129,7 @@ def check_prefix(pins: dict[str, object], platform: str) -> None:
         "bcm2712-rpi5": "just sel4_rpi5_image_check",
         "cv1800b-duo": "just sel4_duo_image_check",
         "qemu-pc99": "just x86_64_sel4_image_check",
+        "rubikpi3": "just sel4_rubikpi3_image_check",
     }[platform]
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")

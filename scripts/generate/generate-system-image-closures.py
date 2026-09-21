@@ -85,6 +85,7 @@ LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
     "qemu-riscv-virt": ("deps/rust-sel4", "tree"),
     "bcm2712-rpi5": ("deps/rust-sel4-bcm2712-rpi5", "tree"),
     "cv1800b-duo": ("deps/rust-sel4-cv1800b-duo", "tree"),
+    "rubikpi3": ("deps/rust-sel4-rubikpi3", "tree"),
 }
 
 # Which compositions get a closure. Every derived composition except the

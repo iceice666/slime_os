@@ -318,9 +318,14 @@ SEL4_RISCV64_DUO_TARGET_PROFILE = "riscv64-sel4-milkv-duo"
 # and platform identity, so no executable is interchangeable with them.
 SEL4_X86_64_TARGET_PROFILE = "x86_64-sel4-qemu-pc99"
 SEL4_X86_64_FRAMEWORK_TARGET_PROFILE = "x86_64-sel4-framework13-ai300"
+# The Rubik Pi 3's QCS6490. Same generated graph and native seL4 transport as
+# the AArch64 reference, and a distinct platform identity: its kernel is built
+# for a different SoC, so no executable is interchangeable with QEMU `virt`.
+SEL4_RUBIKPI3_TARGET_PROFILE = "aarch64-sel4-rubikpi3"
 SEL4_TARGET_PROFILES = (
     SEL4_TARGET_PROFILE,
     SEL4_BOARD_TARGET_PROFILE,
+    SEL4_RUBIKPI3_TARGET_PROFILE,
     SEL4_RISCV64_TARGET_PROFILE,
     SEL4_RISCV64_DUO_TARGET_PROFILE,
     SEL4_X86_64_TARGET_PROFILE,
@@ -1132,6 +1137,7 @@ def sel4_component_environment(
             # Sharing the prefix would be wrong once its kernel configuration
             # diverges, and the profile has no gate until then.
             SEL4_X86_64_FRAMEWORK_TARGET_PROFILE: ROOT / "build" / "sel4-pc99-prefix",
+            SEL4_RUBIKPI3_TARGET_PROFILE: ROOT / "build" / "sel4-rubikpi3-prefix",
         }
         prefix = prefix_by_profile.get(target_profile.name)
         if prefix is None:

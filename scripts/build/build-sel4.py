@@ -27,6 +27,7 @@ RUST_SEL4_SOURCE = ROOT / "deps" / "rust-sel4"
 # patch and build the loader from `RUST_SEL4_SOURCE` directly.
 RUST_SEL4_BCM2712_RPI5_SOURCE = ROOT / "deps" / "rust-sel4-bcm2712-rpi5"
 RUST_SEL4_CV1800B_DUO_SOURCE = ROOT / "deps" / "rust-sel4-cv1800b-duo"
+RUST_SEL4_RUBIKPI3_SOURCE = ROOT / "deps" / "rust-sel4-rubikpi3"
 BUILD_ROOT = ROOT / "build"
 CARGO_BUILD = BUILD_ROOT / "sel4-cargo"
 ARTIFACTS = BUILD_ROOT / "sel4-artifacts"
@@ -146,6 +147,29 @@ BCM2712_RPI5 = Platform(
     loader_source=RUST_SEL4_BCM2712_RPI5_SOURCE,
 )
 
+# The Rubik Pi 3's QCS6490. Its kernel, loader console, RAM window, and
+# interrupt controller all differ from every other platform here, so it builds
+# into its own prefix and pins its own artifact hashes.
+RUBIKPI3 = Platform(
+    name="rubikpi3",
+    config=ROOT / "sel4" / "config" / "rubikpi3.cmake",
+    build_dir=BUILD_ROOT / "sel4-rubikpi3",
+    prefix_dir=BUILD_ROOT / "sel4-rubikpi3-prefix",
+    target_profile="aarch64-sel4-rubikpi3",
+    pins_section="rubikpi3",
+    observed_prefix_section="observed_prefix_rubikpi3",
+    random_seed="slime-sel4-rubikpi3",
+    qemu_dtb=False,
+    emulated=False,
+    boot_route="kernel-loader",
+    architecture="aarch64",
+    root_target_key="root_target",
+    child_target_name="aarch64-sel4-minimal.json",
+    loader_target_key="loader_target",
+    cross_compiler_environment="CROSS_COMPILER_PREFIX",
+    loader_source=RUST_SEL4_RUBIKPI3_SOURCE,
+)
+
 QEMU_RISCV_VIRT = Platform(
     name="qemu-riscv-virt",
     config=ROOT / "sel4" / "config" / "qemu-riscv-virt.cmake",
@@ -251,6 +275,7 @@ PLATFORMS = {
     for platform in (
         QEMU_ARM_VIRT,
         BCM2712_RPI5,
+        RUBIKPI3,
         QEMU_RISCV_VIRT,
         CV1800B_DUO,
         QEMU_PC99,
