@@ -15,3 +15,7 @@
 	path = deps/rust-sel4-cv1800b-duo
 	url = https://github.com/iceice666/rust-sel4.git
 	branch = slime-cv1800b-duo
+[submodule "deps/rust-sel4-rubikpi3"]
+	path = deps/rust-sel4-rubikpi3
+	url = https://github.com/iceice666/rust-sel4.git
+	branch = slime/rubikpi3-loader-platform

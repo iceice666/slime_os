@@ -14,7 +14,7 @@ schema = 1
 # `src/arch/x86/multiboot.S` alone, so no AArch64 or RISC-V artifact moves.
 repository = "https://github.com/iceice666/seL4.git"
 release = "16.0.0"
-commit = "fea36b20f5b410288631c9cf1c6b090a4beac88e"
+commit = "a54e30a6076f73d3e74ae8d233680b4a662b9c34"
 
 [rust_sel4]
 # The shared base. Every platform builds `crates/sel4`,
@@ -74,6 +74,15 @@ riscv64_loader_target = "riscv64imac-unknown-none-elf"
 repository = "https://github.com/iceice666/rust-sel4.git"
 branch = "slime/bcm2712-loader-platform"
 commit = "1ef65fb100051a54c74eecc03050fa48ac0dec69"
+
+[rust_sel4_rubikpi3]
+# QCS6490 GENI serial-engine console for the Rubik Pi 3 debug UART, plus an
+# Info log level. The board issues a PMIC PSHOLD warm reset a bounded time
+# after Linux stops running, and a Debug transcript over this polled UART is
+# slow enough that the reset arrives before the loader reaches the kernel.
+repository = "https://github.com/iceice666/rust-sel4.git"
+branch = "slime/rubikpi3-loader-platform"
+commit = "6c3eeedab87e591dbc19b4cca92f38e0da84995e"
 
 [rust_sel4_cv1800b_duo]
 # Single-hart start (the Duo's OpenSBI 0.9 exposes no HSM extension, so the
@@ -450,6 +459,61 @@ platform_info_sha256 = "006e9747dc0ddb8f49b00c65fe2488e07d06a86e1a2c99972ad63ebe
 # rather than dumped from an emulator, so this hash changes if and only if the
 # pinned kernel's own board description changes. Widening the memory overlay
 # moves it, which is the intended alarm.
+# P7's physical AArch64 target. Every value here was read from the running
+# board or from the generated kernel configuration, never asserted:
+#  * `cpu` from the boot CPU's MIDR_EL1 `0x412fd050`.
+#  * `serial`/`serial_baud` from the firmware-final device tree's
+#    `serial@994000` and its `stdout-path`, the same engine the vendor Linux
+#    drives as `ttyMSM0`.
+#  * `interrupt_controller` and its two windows from `interrupt-controller@
+#    17a00000`, whose `compatible` is `arm,gic-v3`.
+#  * `timer_frequency_hz` from `CNTFRQ_EL0`, confirmed by the KVM-enabled
+#    Linux boot.
+#  * `max_irq` from Linux's own report of 928 implemented SPIs, which is an
+#    inclusive maximum ID of 959 after the 16 SGIs and 16 PPIs.
+#  * `usable_memory_bytes` is the conservative window this port declares
+#    (`0xa0200000..0xb9700000`), not the board's whole DRAM: the low fragmented
+#    firmware and subsystem ranges are withheld until separately qualified,
+#    and the space below the window stays available to the Linux kexec loader
+#    that hands control over.
+#
+# The board reaches EL2 only under the official QLI 1.6 KVM `xbl_config`
+# overlay; under the shipped Gunyah configuration a payload enters at EL1 and
+# this kernel's hypervisor build cannot run.
+[rubikpi3]
+platform = "rubikpi3"
+sel4_arch = "aarch64"
+cpu = "cortex-a55"
+soc = "qcs6490"
+board = "thundercomm-rubik-pi-3-v02"
+hypervisor = true
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+serial = "uart0-qcom-geni-0x00994000"
+serial_baud = 115200
+interrupt_controller = "arm-gic-v3"
+timer_frequency_hz = 19200000
+max_irq = 959
+usable_memory_bytes = 424673280
+# Empty because it is true, not because it is unknown: this board's firmware
+# loads no Slime file. Control arrives by `kexec` from the installed Linux,
+# which copies an arm64 `Image` to a fixed physical base and jumps to it, so
+# the handoff contract is that image's own header and placement rather than a
+# set of files a boot ROM reads.
+boot_files = []
+export_pcnt_user = true
+export_ptmr_user = true
+
+[observed_prefix_rubikpi3]
+kernel_sha256 = "0b1fd2ecba7a0a4b92c2635ea59513003f2725d9cde39f453475fe29d1cd9969"
+kernel_config_sha256 = "a0efc7a1704d952f8fb7b92d8c27210bade9c1641a7d44ee0f70c18209309cc3"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
+dtb_sha256 = "6c056f7fe9abedf428806702159fc6e4a3dbb3b7bcb599d73ebc8d807df2021f"
+platform_info_sha256 = "bccf1d16b7d794f8ea717c59bb0c62d1739df6cf25ccbbf5c9bbcd7e39952c0f"
+
 [observed_prefix_bcm2712_rpi5]
 kernel_sha256 = "4c29234e4d811baa21af74783377d3fdd80161bfe26582eff96f3fa4d1520a4c"
 kernel_config_sha256 = "cd840a2d821a9c6aa57fbb095c3c2522d49b6341747e4605cea1014b902de61e"
