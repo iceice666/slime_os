@@ -341,7 +341,7 @@ def check_reproducible() -> None:
         "kernel": ROOT / "build" / "sel4-pc99-prefix" / "bin" / "kernel.elf",
         "root": ROOT / "build" / "sel4-artifacts" / PLATFORM / "slime-root.elf",
         "child": ROOT / "build" / "sel4-artifacts" / PLATFORM / "slime-root-child.elf",
-        "component": ROOT / "build" / "slisp-product-x86_64.elf",
+        "component": ROOT / "build" / f"slisp-product-{PLATFORM}.elf",
         "generation": GENERATION_PATH,
         "identity": MANIFEST_PATH,
         # P6.2's EFI tree is what a boot reads, so it belongs here beside the

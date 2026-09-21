@@ -927,14 +927,22 @@ def build_sel4_generation(
 
 
 def build_product_slisp(platform: Platform) -> tuple[Path, str]:
-    """Build the in-tree freestanding Slisp ELF for external admission."""
-    output = BUILD_ROOT / f"slisp-product-{platform.architecture}.elf"
+    """Build the in-tree freestanding Slisp ELF for external admission.
+
+    Named and compiled per platform rather than per architecture: the component
+    includes this platform's installed libsel4 headers, so two AArch64 boards
+    with different kernel configurations produce different ELFs and must not
+    share one output path.
+    """
+    output = BUILD_ROOT / f"slisp-product-{platform.name}.elf"
     run(
         [
             sys.executable,
             str(ROOT / "scripts" / "build" / "build-c-component.py"),
             "--architecture",
             platform.architecture,
+            "--sel4-prefix",
+            str(platform.prefix_dir),
             str(ROOT / "components" / "slisp" / "slisp.c"),
             str(ROOT / "components" / "slisp" / "main.c"),
             str(output),
