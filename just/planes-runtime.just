@@ -10,6 +10,24 @@ private_memory_stress_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py --arm stress --platform qemu-arm-virt
     python3 scripts/check/check-sel4-private-memory-plane.py --arm stress --platform qemu-riscv-virt
 
+# Prove kernel capability operations execute beyond the initial CNode.
+[group('planes / runtime')]
+private_memory_cspace_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm cspace --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm cspace --platform qemu-riscv-virt
+
+# Prove metadata growth, charged reuse and quarantine retry reconcile.
+[group('planes / runtime')]
+private_memory_metadata_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm metadata --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm metadata --platform qemu-riscv-virt
+
+# Prove bootstrap reserve bounds and independent refusal before publication.
+[group('planes / runtime')]
+private_memory_bootstrap_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm bootstrap --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm bootstrap --platform qemu-riscv-virt
+
 # MEM-1G's authority and permission boundary, kept separate from the capacity
 # arm so a 1 GiB working set is never the reason an isolation denial is missed.
 [group('planes / runtime')]

@@ -427,14 +427,7 @@ impl PrivateMemoryKernel for NativePrivateMemoryKernel {
         if self.refuse(true) {
             return Err(sel4::Error::NotEnoughMemory);
         }
-        parent.untyped_retype(
-            blueprint,
-            &sel4::init_thread::slot::CNODE
-                .cap()
-                .absolute_cptr_for_self(),
-            slot,
-            1,
-        )
+        crate::root_cspace::retype(parent, blueprint, slot, 1)
     }
 
     fn map_frame(

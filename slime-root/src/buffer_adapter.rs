@@ -19,7 +19,7 @@
 //!
 //! Frame identity crosses the pure/live boundary as a
 //! [`FrameCap`], which is a root CSlot index. That index is exactly what
-//! [`sel4::init_thread::Slot::from_index`] reconstitutes, so the state machine
+//! [`crate::root_cspace::RootSlot::from_address`] reconstitutes, so the state machine
 //! stores an unforgeable number and this module recovers the capability.
 
 use crate::object_allocator::{AllocError, ObjectAllocator};
@@ -768,11 +768,11 @@ impl SharedBufferAdapter for BufferAdapter<'_> {
 /// a root CSlot index produced by [`BufferAdapter::allocate_frame`], never a
 /// caller-supplied pointer.
 fn frame_cap(frame: FrameCap) -> sel4::cap::Granule {
-    sel4::init_thread::Slot::<sel4::cap_type::Granule>::from_index(frame.0).cap()
+    crate::root_cspace::RootSlot::<sel4::cap_type::Granule>::from_address(frame.0).cap()
 }
 
 fn vspace_cap(vspace: VSpaceCap) -> sel4::cap::VSpace {
-    sel4::init_thread::Slot::<sel4::cap_type::VSpace>::from_index(vspace.0).cap()
+    crate::root_cspace::RootSlot::<sel4::cap_type::VSpace>::from_address(vspace.0).cap()
 }
 
 /// The absolute path to a frame's slot in the root CNode, for revoke/delete.
@@ -787,7 +787,7 @@ mod tests {
     use super::*;
 
     fn alias_cap(index: usize) -> sel4::cap::Granule {
-        sel4::init_thread::Slot::<sel4::cap_type::Granule>::from_index(index).cap()
+        crate::root_cspace::RootSlot::<sel4::cap_type::Granule>::from_address(index).cap()
     }
 
     #[test]

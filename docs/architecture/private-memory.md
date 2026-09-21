@@ -60,12 +60,38 @@ kernel objects, not only page-sized memory.
 
 Ordinary tails, unconsumed preserved leaves, reusable task/shared extents and
 initially live backing are separate, disjoint accounting categories. Retained
-anchor CSlots are occupied resources, not free slots. The preservation registry
-is bounded (4096 entries on large-descriptor images, 256 otherwise); exhaustion
-refuses provisioning without skipping unowned bytes. Entries, including consumed
-parents, remain owned for the root lifetime, so this is not unlimited allocator
-metadata or adaptive memory support. Actual target image/CSlot fit still requires
-its own admission and boot evidence.
+anchor CSlots are occupied resources, not free slots. Retained-prefix records
+live in resource-backed storage that grows on demand from the root metadata
+window, so exhaustion is a refusal for want of admitted memory rather than of
+a compile-time table. Entries, including consumed parents, remain owned for
+the root lifetime. Actual target image/CSlot fit still requires its own
+admission and boot evidence.
+
+## Expandable root CSpace and metadata storage
+
+`slime-root/src/root_cspace.rs` installs a four-bit root CNode around the
+kernel's initial CNode before any other root thread starts. Branch zero keeps
+the initial authority at its original addresses under a guard; every later
+leaf is an unguarded ten-bit CNode installed at an expanded prefix, and a
+capability address is the full path, not an index into one flat node. Every
+root-sharing thread configures the installed tree's guard, so a second root
+thread resolves the same addresses.
+
+`slime-root/src/object_allocator/segmented.rs` holds slot occupancy words,
+allocation and extent descriptors, retained-prefix records and the metadata
+ownership ledger in page-backed storage whose indices are stable and whose
+lookup is constant time. Pages come from the bootstrap allocator in
+`object_allocator/infrastructure.rs`, which owns one adopted ordinary source,
+sixty-four emergency slots, and every transaction retained after a failed
+mapping, installation or delete. Growth is charged, reported as
+`infrastructure_owned`, and reusable: released records return to the pool
+rather than to the platform, and the pool never exceeds the high-water demand
+that funded it.
+
+Capacity is therefore not a constant. The qualification report names the
+resource that refuses a plan — allocation descriptors, extent descriptors,
+root CSlots, ordinary bytes, metadata records or ordinary layout — and root
+CSpace is grown to a generation's plan before that plan is admitted.
 
 ## Qualified simultaneous capacity
 
@@ -184,9 +210,10 @@ only elastic-funded table resources; otherwise it remains pending or quarantined
 until cleanup. Quarantined payload remains charged against authorization maxima.
 Payload quotas do not count metadata or unused extent backing as mapped pages;
 all such overhead remains charged to the resource pool, not hidden as free RAM.
-The pure model does not prove
-kernel placement or discover RAM. Expandable CSpace, demand-backed allocation,
-dynamic windows and multi-inventory runtime qualification remain separate work.
+The pure model does not prove kernel placement or discover RAM. Expandable
+CSpace and resource-backed metadata are implemented and qualified; demand-backed
+private allocation, dynamic task windows and multi-inventory runtime
+qualification remain separate work.
 
 ## Verification
 
@@ -202,6 +229,18 @@ dynamic windows and multi-inventory runtime qualification remain separate work.
   entries near their limits, without claiming a kernel CNode full of installed
   capabilities. Interleaved, reclaimed 4 MiB guard extents leave measured gaps
   between reused 2 MiB data extents; retained backing remains explicitly owned.
+- `just private_memory_cspace_check` proves capabilities created, invoked,
+  copied, retyped, deleted and revoked beyond the initial CNode namespace on
+  both QEMU architectures, from the root thread and from a second root thread,
+  with the initial namespace deliberately retired first.
+- `just private_memory_metadata_check` grows, reuses and reconciles metadata
+  storage, injects a retained construction and a failed delete, and proves each
+  retry releases exactly once while nothing quarantined is reassigned.
+- `just private_memory_bootstrap_check` measures the bootstrap reserve and
+  exhausts RAM, root CSlots and the metadata window independently, each
+  refusing before any task is published.
+- `just private_memory_phase2_regression_check` aggregates the fixed-capacity
+  surface those three must not regress.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

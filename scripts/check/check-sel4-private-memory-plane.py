@@ -360,11 +360,53 @@ ISOLATION_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+HEALTHY_MARKER = r"SLIME_GRAPH HEALTHY generation=\d+ required=\d+ live=\d+ completed=\d+ failed=0"
+METADATA_FIELDS = (
+    "pages", "bytes", "allocations_live", "allocations_free", "extents_live",
+    "extents_free", "preserved_live", "preserved_free", "slot_words", "slots_free",
+    "nodes", "quarantined", "pending",
+)
+METADATA_VALUES = " ".join(field + r"=\d+" for field in METADATA_FIELDS)
+CSPACE_CHAINS = (("expanded cspace pressure precedes execution and healthy graph", (
+    r"SLIME_ROOT cspace expanded base=\d+ infrastructure_caps=\d+",
+    r"SLIME_ROOT cspace pressure initial_limit=\d+ retired=\d+ free=\d+",
+    r"SLIME_ROOT cspace leaf base=\d+ slots=\d+ beyond_initial=1",
+    r"SLIME_ROOT cspace exercised created=\d+ invoked=\d+ copied=\d+ retyped=\d+ deleted=\d+ revoked=\d+ min_address=\d+ initial_limit=\d+",
+    r"SLIME_ROOT cspace live root=1 second=1 leaves=\d+",
+    HEALTHY_MARKER,
+)),)
+METADATA_CHAINS = (
+    ("metadata capacity grows and reconciles after release", tuple(
+        rf"SLIME_ROOT metadata census phase={phase} {METADATA_VALUES}"
+        for phase in ("baseline", "grown", "released", "final")
+    ) + (HEALTHY_MARKER,)),
+    ("metadata growth funds later reuse", tuple(
+        rf"SLIME_ROOT metadata round={index} grew=\d+ reused=\d+" for index in range(3)
+    )),
+    *((f"metadata {kind} quarantine precedes retry", (
+        rf"SLIME_ROOT metadata injected kind={kind} retained=\d+ reassigned=0",
+        rf"SLIME_ROOT metadata retry kind={kind} released=1 reassigned=0",
+    )) for kind in ("construction", "revoke")),
+)
+BOOTSTRAP_CHAINS = (
+    ("bootstrap source precedes bounded reservation", (
+        r"SLIME_ROOT metadata bootstrap objects=\d+ alignment=\d+ remaining=\d+",
+        r"SLIME_ROOT bootstrap reserve objects=\d+ alignment=\d+ remaining=\d+ slots=64 transaction=\d+ recursion=0 fit=1",
+    )),
+    *((f"independent {cause} refusal precedes publication", (
+        rf"SLIME_ROOT bootstrap exhausted cause={cause} published=0 refused=1 ram_free=\d+ slots_free=\d+ metadata_free=\d+",
+        r"SLIME_ROOT bootstrap boundaries complete cases=3 published=1",
+        r"SLIME_GRAPH staged task=\d+ .*",
+        HEALTHY_MARKER,
+    )) for cause in ("ram", "cnode-slots", "metadata")),
+)
+
 # The union, for `sel4_gate_control_check`'s coverage count only. Each arm
 # matches its own chains; a transcript from one arm does not carry the other's
 # markers, so matching the union would fail every run.
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     CEILING_CHAINS + CYCLE_CHAINS + CAPACITY_CHAINS + ISOLATION_CHAINS
+    + CSPACE_CHAINS + METADATA_CHAINS + BOOTSTRAP_CHAINS
 )
 
 EXPECTED_UNORDERED: tuple[str, ...] = (
@@ -1431,7 +1473,7 @@ def check_segmented_capacity_report(
         r"cslots_available=(?P<cslots_available>\d+) ordinary_available=(?P<ordinary_available>\d+) "
         r"ordinary_layout=(?P<ordinary_layout>\d+) root_image=(?P<image>\d+) "
         r"root_metadata=(?P<metadata>\d+) root_stack=(?P<stack>\d+) "
-        r"root_heap=(?P<heap>\d+) fit=(?P<fit>\d+)$",
+        r"root_heap=(?P<heap>\d+) fit=(?P<fit>\d+) limit=(?P<limit>[a-z-]+)$",
         re.MULTILINE,
     )
     reports = list(pattern.finditer(transcript))
@@ -1441,7 +1483,7 @@ def check_segmented_capacity_report(
     report = reports[0]
     values: dict[str, int] = {}
     for name, token in report.groupdict().items():
-        if name == "scope":
+        if name in ("scope", "limit"):
             continue
         value = int(token)
         if value > 2**64 - 1:
@@ -1496,6 +1538,25 @@ def check_segmented_capacity_report(
         fail(prefix + "fit disagrees with required-versus-available resources")
     if values["fit"] != 1:
         fail(prefix + "admitted holders do not fit the live platform resources")
+    # A refusal must name the resource that ran out; the layout cause is not
+    # derivable from this line, so any of its three causes is accepted there.
+    limit = report.group("limit")
+    if values["required_allocations"] > values["allocations_available"]:
+        expected_limits = {"allocation-descriptors"}
+    elif values["required_extents"] > values["extents_available"]:
+        expected_limits = {"extent-descriptors"}
+    elif values["required_cslots"] > values["cslots_available"]:
+        expected_limits = {"root-cslots"}
+    elif values["required_reserved"] > values["ordinary_available"]:
+        expected_limits = {"ordinary-bytes"}
+    elif values["ordinary_layout"] != 1:
+        expected_limits = {"metadata-records", "root-cslots", "ordinary-layout"}
+    else:
+        expected_limits = {"none"}
+    if limit not in expected_limits:
+        fail(prefix + f"limit={limit} does not name the refusing resource")
+    if (limit == "none") != (values["fit"] == 1):
+        fail(prefix + "limit disagrees with fit")
     platform_bytes = profile_integer(profile, "memory_mib", fail, section) * 1024 * 1024
     # This milestone qualifies the fixed 2 GiB platform, not a larger profile.
     # Live ordinary availability already excludes the root image (including its
@@ -1585,13 +1646,13 @@ def check_capacity_conservation(transcript: str) -> None:
     required = {
         "untyped", "reusable", "shared_reusable", "preserved_bytes",
         "active_extent_bytes", "mapped_pages", "free_slots", "anchors",
-        "shared_anchors", "preserved_anchors", "allocations_free",
+        "shared_anchors", "preserved_anchors", "allocations_free", "infrastructure_owned",
     }
     if any(not required <= row.keys() for row in (initial, final)):
         fail("capacity conservation: incomplete resource ledger")
     if initial["mapped_pages"] != 0 or final["mapped_pages"] != 0 or final["active_extent_bytes"] != 0:
         fail("capacity conservation: workload did not return private mappings and active backing")
-    available = ("untyped", "reusable", "shared_reusable", "preserved_bytes")
+    available = ("untyped", "reusable", "shared_reusable", "preserved_bytes", "infrastructure_owned")
     expected = sum(initial[key] for key in available) + initial["active_extent_bytes"]
     observed = sum(final[key] for key in available)
     if observed != expected:
@@ -1781,6 +1842,22 @@ def check_backing_ledger(transcript: str) -> None:
                 fail(prefix + "overlapping inventory")
             inventory.append((start, size))
             nodes[cap] = {"kind": "ordinary", "paddr": start, "bytes": size, "used": 0}
+        elif kind == "infrastructure":
+            exact(row, "parent anchor paddr bytes")
+            parent, anchor, start, size = (integer(row, key) for key in ("parent", "anchor", "paddr", "bytes"))
+            node = owned(parent)
+            if node["kind"] != "ordinary" or start != integer(node, "paddr") or size != integer(node, "bytes"):
+                fail(prefix + "infrastructure must exclusively own a complete ordinary source")
+            consume_range(parent, start, size)
+            consumed.append((anchor, start, size))
+        elif kind == "infrastructure_tail":
+            exact(row, "parent paddr bytes")
+            parent, start, size = (integer(row, key) for key in ("parent", "paddr", "bytes"))
+            node = owned(parent)
+            if node["kind"] != "ordinary" or size != integer(node, "bytes") - integer(node, "used"):
+                fail(prefix + "infrastructure tail must own the complete remaining ordinary tail")
+            consume_range(parent, start, size)
+            consumed.append((parent, start, size))
         elif kind in {"preserve", "split"}:
             exact(row, "parent child paddr bytes")
             parent, child, start, size = (integer(row, key) for key in ("parent", "child", "paddr", "bytes"))
@@ -2076,7 +2153,7 @@ def check_stress_workload(transcript: str) -> None:
 
     for index, task in enumerate(peers):
         take(rf"^SLIME_MEM grown task={task} delta=65536 previous=0 pages=65536 base=0x[0-9a-f]+ quota=65536 total={(index + 1) * 65536} large_frames=128 base_frames=0 leaf_tables=0$")
-    census_pattern = r"slots=(\d+) descriptors=(\d+) extents=(\d+) objects=(\d+) bytes=(\d+) reusable_anchors=(\d+) reusable_bytes=(\d+) ordinary_bytes=(\d+) preserved_bytes=(\d+) preserved_anchors=(\d+)"
+    census_pattern = r"slots=(\d+) descriptors=(\d+) extents=(\d+) objects=(\d+) bytes=(\d+) reusable_anchors=(\d+) reusable_bytes=(\d+) ordinary_bytes=(\d+) preserved_bytes=(\d+) preserved_anchors=(\d+) descriptor_capacity=(\d+) extent_capacity=(\d+) infrastructure_owned=(\d+)"
     for attempt, case in enumerate(("construction", "slots", "descriptors")):
         before = take(rf"^SLIME_MEM stress census attempt={attempt} phase=before {census_pattern}$")
         injection = take(rf"^SLIME_MEM stress construction case={case} attempt={attempt} actual=(\d+) effective=(\d+) required=(\d+) reserved=(\d+)$")
@@ -2087,7 +2164,7 @@ def check_stress_workload(transcript: str) -> None:
             fail(prefix + "resource pressure was not an effective limit below the required allocation")
         after = take(rf"^SLIME_MEM stress census attempt={attempt} phase=after {census_pattern}$")
         pre, post = tuple(map(int, before.groups())), tuple(map(int, after.groups()))
-        if (pre[0] + pre[5] + pre[9], pre[1], pre[2] + pre[5], pre[3] - pre[5] - pre[9], pre[4] - pre[6], sum(pre[6:9])) != (post[0] + post[5] + post[9], post[1], post[2] + post[5], post[3] - post[5] - post[9], post[4] - post[6], sum(post[6:9])):
+        if (pre[0] + pre[5] + pre[9], pre[10] - pre[1], pre[11] - pre[2] - pre[5], pre[3] - pre[5] - pre[9], pre[4] - pre[6], sum(pre[6:9]) + pre[12]) != (post[0] + post[5] + post[9], post[10] - post[1], post[11] - post[2] - post[5], post[3] - post[5] - post[9], post[4] - post[6], sum(post[6:9]) + post[12]):
             fail(prefix + "failed construction leaked resources beyond retained backing anchors")
         for holder in range(3):
             take(rf"^\[private-memory-1g\] verified holder={holder} incarnation=0 round=\d+ pages=65536 refused=1 shared={int(holder == 0)}$")
@@ -2236,6 +2313,158 @@ def check_heap_stress_workload(transcript: str) -> None:
         fail(prefix + "heap or retained peer faulted")
 
 
+def adaptive_rows(transcript: str, marker: str, pattern: str, prefix: str) -> list[re.Match[str]]:
+    rows = list(re.finditer(r"^" + pattern + r"$", transcript, re.MULTILINE))
+    if len(rows) != len(re.findall(r"^" + re.escape(marker) + r"(?: |$)", transcript, re.MULTILINE)):
+        fail(prefix + f"malformed {marker}")
+    return rows
+
+
+def check_adaptive_markers(transcript: str, chains, prefix: str) -> None:
+    match_marker_contract(
+        transcript,
+        tuple((label, tuple("(?m)^" + pattern + "$" for pattern in patterns)) for label, patterns in chains),
+        FAILURE_MARKERS,
+        lambda message: fail(prefix + message),
+    )
+
+
+def check_cspace_execution(transcript: str) -> None:
+    prefix = "cspace execution: "
+    check_adaptive_markers(transcript, CSPACE_CHAINS, prefix)
+
+    def rows(name: str, fields: str) -> list[re.Match[str]]:
+        marker = "SLIME_ROOT cspace " + name
+        return adaptive_rows(transcript, marker, marker + " " + fields, prefix)
+
+    pressure = rows("pressure", r"initial_limit=(\d+) retired=(\d+) free=(\d+)")
+    exercised = rows("exercised", r"created=(\d+) invoked=(\d+) copied=(\d+) retyped=(\d+) deleted=(\d+) revoked=(\d+) min_address=(\d+) initial_limit=(\d+)")
+    live = rows("live", r"root=(\d+) second=(\d+) leaves=(\d+)")
+    expanded = rows("expanded", r"base=(\d+) infrastructure_caps=(\d+)")
+    leaves = rows("leaf", r"base=(\d+) slots=(\d+) beyond_initial=(\d+)")
+    if any(len(group) != 1 for group in (pressure, exercised, live, expanded)) or not leaves:
+        fail(prefix + "wrong marker population")
+    limit, retired, free = map(int, pressure[0].groups())
+    counters = tuple(map(int, exercised[0].groups()))
+    if limit != 1 << 19 or counters[-1] != limit:
+        fail(prefix + "initial CNode limit differs from kernel width")
+    if retired == 0 or free >= 1024:
+        fail(prefix + "initial namespace was not exhausted")
+    bases = set()
+    for leaf in leaves:
+        base, slots, beyond = map(int, leaf.groups())
+        if base < 1 << 60 or slots != 1024 or beyond != 1 or base in bases:
+            fail(prefix + "invalid or duplicate expanded leaf")
+        if leaf.start() <= pressure[0].end():
+            fail(prefix + "leaf admitted before pressure")
+        bases.add(base)
+    if any(value == 0 for value in counters[:6]) or counters[-2] <= limit:
+        fail(prefix + "kernel operations did not exercise expanded addresses")
+    leaves_before_live = sum(leaf.start() < live[0].start() for leaf in leaves)
+    if tuple(map(int, live[0].groups())) != (1, 1, leaves_before_live):
+        fail(prefix + "root/second-thread liveness or leaf count differs")
+    slots = []
+    for line in transcript[pressure[0].end():].splitlines():
+        if line.startswith(("SLIME_ALLOC ", "SLIME_BACKING ", "SLIME_MEM ")):
+            slots.extend(int(value) for value in re.findall(r"\bslot=(\d+)(?= |$)", line))
+    if not slots or any(slot <= limit for slot in slots):
+        fail(prefix + "workload allocation aliases the initial namespace or lacks slot evidence")
+
+
+def check_metadata_lifecycle(transcript: str) -> None:
+    prefix = "metadata lifecycle: "
+    check_adaptive_markers(transcript, METADATA_CHAINS, prefix)
+    pattern = r"SLIME_ROOT metadata census phase=(baseline|grown|released|final) " + " ".join(field + r"=(\d+)" for field in METADATA_FIELDS)
+    rows = adaptive_rows(transcript, "SLIME_ROOT metadata census", pattern, prefix)
+    if [row.group(1) for row in rows] != ["baseline", "grown", "released", "final"]:
+        fail(prefix + "wrong census phase population/order")
+    census = [dict(zip(METADATA_FIELDS, map(int, row.groups()[1:]), strict=True)) for row in rows]
+    baseline, grown, released, final = census
+    if grown["pages"] <= baseline["pages"] or released["pages"] != grown["pages"] + 1:
+        fail(prefix + "metadata growth or retried page publication differs")
+    if grown["nodes"] != baseline["nodes"] or released["nodes"] != baseline["nodes"] + 1:
+        fail(prefix + "retried construction did not publish exactly one node")
+    if not baseline["allocations_free"] < grown["allocations_free"] < released["allocations_free"]:
+        fail(prefix + "quarantined metadata page became reusable before retry")
+    for field in ("allocations_live", "extents_live", "preserved_live", "slots_free"):
+        if released[field] != baseline[field]:
+            fail(prefix + f"released baseline leaked {field}")
+    if any(final[field] < released[field] for field in ("pages", "bytes", "nodes")):
+        fail(prefix + "final retained pool regressed")
+    if any(later["bytes"] < earlier["bytes"] for earlier, later in zip(census, census[1:], strict=False)):
+        fail(prefix + "infrastructure-owned bytes decreased")
+    if any(row["pending"] != expected for row, expected in zip(census, (0, 1, 0, 0), strict=True)) or grown["quarantined"] == 0 or any(row["quarantined"] != 0 for row in (baseline, released, final)):
+        fail(prefix + "quarantine/pending lifecycle differs")
+    rounds = list(re.finditer(r"^SLIME_ROOT metadata round=(\d+) grew=(\d+) reused=(\d+)$", transcript, re.MULTILINE))
+    # Round numbers belong to the marker itself, unlike the named census fields.
+    if len(rounds) != len(re.findall(r"^SLIME_ROOT metadata round=", transcript, re.MULTILINE)):
+        fail(prefix + "malformed round evidence")
+    if [int(row.group(1)) for row in rounds] != [0, 1, 2]:
+        fail(prefix + "wrong round population/order")
+    if not any(int(earlier.group(2)) > 0 and int(later.group(3)) > 0 for index, earlier in enumerate(rounds) for later in rounds[index + 1:]):
+        fail(prefix + "growth did not fund later reuse")
+    if not all(rows[0].end() < row.start() < rows[1].start() for row in rounds):
+        fail(prefix + "rounds outside baseline/grown interval")
+    injected = adaptive_rows(transcript, "SLIME_ROOT metadata injected", r"SLIME_ROOT metadata injected kind=(construction|revoke) retained=(\d+) reassigned=(\d+)", prefix)
+    retries = adaptive_rows(transcript, "SLIME_ROOT metadata retry", r"SLIME_ROOT metadata retry kind=(construction|revoke) released=(\d+) reassigned=(\d+)", prefix)
+    if sorted(row.group(1) for row in injected) != ["construction", "revoke"] or sorted(row.group(1) for row in retries) != ["construction", "revoke"]:
+        fail(prefix + "wrong injection/retry population")
+    for injection in injected:
+        retry = next(row for row in retries if row.group(1) == injection.group(1))
+        if int(injection.group(2)) == 0 or injection.group(3) != "0" or retry.groups()[1:] != ("1", "0"):
+            fail(prefix + "quarantined resource reassigned or not released")
+        if not rounds[-1].end() < injection.start() < rows[1].start() < rows[1].end() < retry.start() < rows[2].start():
+            fail(prefix + "missing pending census between injection and retry")
+
+
+def check_bootstrap_boundaries(transcript: str) -> None:
+    prefix = "bootstrap boundaries: "
+    check_adaptive_markers(transcript, BOOTSTRAP_CHAINS, prefix)
+    source = adaptive_rows(transcript, "SLIME_ROOT metadata bootstrap", r"SLIME_ROOT metadata bootstrap objects=(\d+) alignment=(\d+) remaining=(\d+)", prefix)
+    reserve = adaptive_rows(transcript, "SLIME_ROOT bootstrap reserve", r"SLIME_ROOT bootstrap reserve objects=(\d+) alignment=(\d+) remaining=(\d+) slots=(\d+) transaction=(\d+) recursion=(\d+) fit=(\d+)", prefix)
+    exhausted = adaptive_rows(transcript, "SLIME_ROOT bootstrap exhausted", r"SLIME_ROOT bootstrap exhausted cause=(ram|cnode-slots|metadata) published=(\d+) refused=(\d+) ram_free=(\d+) slots_free=(\d+) metadata_free=(\d+)", prefix)
+    complete = adaptive_rows(transcript, "SLIME_ROOT bootstrap boundaries complete", r"SLIME_ROOT bootstrap boundaries complete cases=(\d+) published=(\d+)", prefix)
+    if any(len(group) != 1 for group in (source, reserve, complete)):
+        fail(prefix + "wrong reservation/completion population")
+    values = tuple(map(int, reserve[0].groups()))
+    if values[3] != 64 or values[4] >= values[3] or values[5:] != (0, 1) or sum(values[:3]) != sum(map(int, source[0].groups())):
+        fail(prefix + "reserve exceeds adopted source or transaction bounds")
+    causes = ("ram", "cnode-slots", "metadata")
+    if sorted(row.group(1) for row in exhausted) != sorted(causes):
+        fail(prefix + "wrong exhaustion cause population")
+    publication = re.search(r"^SLIME_GRAPH (?:staged task=|spawned |activated )", transcript, re.MULTILINE)
+    if publication is None or complete[0].groups() != ("3", "1") or complete[0].end() >= publication.start():
+        fail(prefix + "completion did not precede first publication")
+    for row in exhausted:
+        counters = tuple(map(int, row.groups()[3:]))
+        if row.groups()[1:3] != ("0", "1") or any((value == 0) != (index == causes.index(row.group(1))) for index, value in enumerate(counters)):
+            fail(prefix + "exhaustion was not independent and unpublished")
+        if not reserve[0].end() < row.start() < complete[0].start():
+            fail(prefix + "exhaustion outside reserve/completion interval")
+
+
+def run_adaptive_arm(platform: str, arm: str) -> None:
+    section, qemu_binary = PLATFORMS[platform]
+    profile = load_qemu_profile(fail, PINS, section)
+    suffix = "-rv64" if platform == "qemu-riscv-virt" else ""
+    variant = f"sel4-private-memory-{arm}{suffix}"
+    try:
+        built = build_closure_image(variant)
+    except ClosureImageError as error:
+        fail(str(error))
+    if built.build_result.get("platform") != platform or built.build_result.get("targetProfile") != TARGET_PROFILES[platform]:
+        fail(f"{arm} image: closure target differs from requested platform")
+    digest = sha256_file(built.image, fail)
+    if digest != built.digest():
+        fail(f"{arm} image: packaged digest differs from build result")
+    transcript = boot(profile, section=section, qemu_binary=qemu_binary, image=built.image)
+    if sha256_file(built.image, fail) != digest:
+        fail(f"{arm} image: packaged bytes changed during execution")
+    (ROOT / "build" / f"{variant}.log").write_text(transcript + "\n", encoding="utf-8")
+    {"cspace": check_cspace_execution, "metadata": check_metadata_lifecycle, "bootstrap": check_bootstrap_boundaries}[arm](transcript)
+    print(f"private-memory {arm} workload finished: {variant} image={digest}")
+
+
 def run_stress_arm(platform: str) -> None:
     section, qemu_binary = PLATFORMS[platform]
     profile = load_qemu_profile(fail, PINS, section)
@@ -2307,7 +2536,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
     parser.add_argument(
         "--arm",
-        choices=("ceiling", "cycles", "capacity", "isolation", "stress"),
+        choices=("ceiling", "cycles", "capacity", "isolation", "stress", "cspace", "metadata", "bootstrap"),
         default="ceiling",
         help="which qualification to run: the declared ceiling or MEM-64M's reuse cycles",
     )
@@ -2318,6 +2547,9 @@ def main() -> None:
         help="the pinned QEMU profile and image to build and boot",
     )
     arguments = parser.parse_args()
+    if arguments.arm in ("cspace", "metadata", "bootstrap"):
+        run_adaptive_arm(arguments.platform, arguments.arm)
+        return
     if arguments.arm == "stress":
         run_stress_arm(arguments.platform)
         return

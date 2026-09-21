@@ -515,7 +515,8 @@ fn write_pattern_through_scratch(
     scratch: &ScratchPage,
     pattern: u64,
 ) -> Result<(), sel4::Error> {
-    let cap = sel4::init_thread::Slot::<sel4::cap_type::Granule>::from_index(frame.0).cap();
+    let cap =
+        slime_root::root_cspace::RootSlot::<sel4::cap_type::Granule>::from_address(frame.0).cap();
     cap.frame_map(
         sel4::init_thread::slot::VSPACE.cap(),
         scratch.addr(),
@@ -537,7 +538,8 @@ fn read_word_through_scratch(
     frame: shared_buffer::FrameCap,
     scratch: &ScratchPage,
 ) -> Result<u64, sel4::Error> {
-    let cap = sel4::init_thread::Slot::<sel4::cap_type::Granule>::from_index(frame.0).cap();
+    let cap =
+        slime_root::root_cspace::RootSlot::<sel4::cap_type::Granule>::from_address(frame.0).cap();
     cap.frame_map(
         sel4::init_thread::slot::VSPACE.cap(),
         scratch.addr(),

@@ -818,7 +818,7 @@ pub(super) fn report_memory_census(
     retired: u32,
 ) {
     sel4::debug_println!(
-        "SLIME_MEM census retired={} free_slots={} live_objects={} live_bytes={} untyped={} reusable={} anchors={} mapped_pages={} allocations_free={} extents_free={} shared_reusable={} shared_retained={} shared_anchors={} active_extent_bytes={} preserved_bytes={} preserved_anchors={}",
+        "SLIME_MEM census retired={} free_slots={} live_objects={} live_bytes={} untyped={} reusable={} anchors={} mapped_pages={} allocations_free={} extents_free={} shared_reusable={} shared_retained={} shared_anchors={} active_extent_bytes={} preserved_bytes={} preserved_anchors={} infrastructure_owned={}",
         retired,
         allocator.free_slots(),
         allocator.live_objects(),
@@ -835,6 +835,7 @@ pub(super) fn report_memory_census(
         allocator.active_extent_bytes(),
         allocator.preserved_bytes_remaining(),
         allocator.preserved_anchor_count(),
+        allocator.infrastructure_owned_bytes(),
     );
 }
 

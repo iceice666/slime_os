@@ -820,6 +820,20 @@ pub(super) fn launch_instance_graph(
         let Some(plan) = object_allocator::plan_task_backing(PAGES_PER_HOLDER) else {
             fatal!("SLIME_MEM FAIL capacity arithmetic overflow")
         };
+        let required_descriptors = plan
+            .allocation_descriptors
+            .checked_add(static_backing.allocation_descriptors)
+            .and_then(|per_holder| per_holder.checked_mul(holders))
+            .unwrap_or_else(|| fatal!("SLIME_MEM FAIL capacity arithmetic overflow"));
+        allocator
+            .ensure_allocation_descriptors(required_descriptors)
+            .unwrap_or_else(|error| fatal!("SLIME_MEM FAIL capacity metadata backing: {error:?}"));
+        allocator
+            .ensure_extent_descriptors((plan.extent_descriptors + 1) * holders)
+            .unwrap_or_else(|error| fatal!("SLIME_MEM FAIL capacity extent metadata: {error:?}"));
+        // Planning may fund metadata or CSpace growth from admitted ordinary
+        // resources, so every availability figure is read after it settles.
+        let ordinary_layout = allocator.task_backing_extents_fit(plan, static_backing, holders);
         let capacity = object_allocator::TaskBackingCapacity {
             plan,
             static_backing,
@@ -829,7 +843,7 @@ pub(super) fn launch_instance_graph(
             extent_descriptors_available: allocator.extent_descriptors_free(),
             ordinary_bytes_available: allocator.untyped_bytes_remaining()
                 + allocator.preserved_bytes_remaining(),
-            ordinary_layout_fits: allocator.task_backing_extents_fit(plan, static_backing, holders),
+            ordinary_layout,
             root_image_bytes: bootinfo.user_image_frames().len() * child_vspace::GRANULE_SIZE,
             root_stack_bytes: ROOT_STACK_BYTES,
             root_heap_bytes: ROOT_HEAP_BYTES,
@@ -842,7 +856,7 @@ pub(super) fn launch_instance_graph(
         let private_cslots = plan.required_cslots * holders;
         let private_reserved = plan.reserved_bytes * holders;
         sel4::debug_println!(
-            "SLIME_MEM qualification scope=contract-aggregate-headroom holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={}",
+            "SLIME_MEM qualification scope=contract-aggregate-headroom holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={} limit={}",
             capacity.holders,
             plan.private_pages,
             private_allocations,
@@ -858,18 +872,23 @@ pub(super) fn launch_instance_graph(
             required.extent_descriptors,
             required.cslots,
             required.reserved_bytes,
-            object_allocator::MAX_TASK_ALLOCATIONS,
+            allocator.allocation_descriptor_capacity(),
             capacity.allocation_descriptors_available,
-            object_allocator::MAX_TASK_EXTENTS,
+            allocator.extent_descriptor_capacity(),
             capacity.extent_descriptors_available,
             capacity.cslots_available,
             capacity.ordinary_bytes_available,
-            capacity.ordinary_layout_fits as u8,
+            capacity.ordinary_layout.is_ok() as u8,
             capacity.root_image_bytes,
-            core::mem::size_of::<ObjectAllocator>() + core::mem::size_of::<TaskTable<MAX_TASKS>>(),
+            // Static root structures plus every byte the allocator's dynamic
+            // metadata and CSpace bootstrap retains, charged exactly once.
+            core::mem::size_of::<ObjectAllocator>()
+                + core::mem::size_of::<TaskTable<MAX_TASKS>>()
+                + allocator.infrastructure_owned_bytes(),
             capacity.root_stack_bytes,
             capacity.root_heap_bytes,
             capacity.fits() as u8,
+            capacity.limiting_resource().unwrap_or("none"),
         );
     }
     let mut active = [false; MAX_TASKS];

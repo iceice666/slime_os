@@ -160,8 +160,7 @@ pub(super) fn start_console_dispatcher(
         // somewhere that would swallow it.
         sel4::CPtr::from_bits(0),
         sel4::init_thread::slot::CNODE.cap(),
-        // The root CNode's own guard. A zero guard faults every lookup: a CPtr
-        // resolves to `WORD_SIZE` bits and the CNode holds fewer.
+        // Every root-sharing thread must use the installed tree's guard.
         child_vspace::root_cspace_guard(bootinfo),
         sel4::init_thread::slot::VSPACE.cap(),
         ipc_addr as sel4::Word,

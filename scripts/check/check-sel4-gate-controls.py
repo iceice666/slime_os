@@ -41,9 +41,8 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    # 24 ceiling markers, MEM-64M's 11 reuse-cycle markers, and MEM-1G's 8
-    # simultaneous-capacity plus 11 isolation markers.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 54),
+    # 54 existing markers plus 6 cspace, 12 metadata and 14 bootstrap markers.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 86),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -1046,9 +1045,9 @@ def check_private_stress_controls(gate) -> int:
         ]
     for attempt, case in enumerate(("construction", "slots", "descriptors")):
         lines += [
-            f"SLIME_MEM stress census attempt={attempt} phase=before slots=1000 descriptors=1000 extents=100 objects=100 bytes=1000 reusable_anchors=0 reusable_bytes=0 ordinary_bytes=10000 preserved_bytes=0 preserved_anchors=0",
+            f"SLIME_MEM stress census attempt={attempt} phase=before slots=1000 descriptors=1000 extents=100 objects=100 bytes=1000 reusable_anchors=0 reusable_bytes=0 ordinary_bytes=10000 preserved_bytes=0 preserved_anchors=0 descriptor_capacity=1000 extent_capacity=100 infrastructure_owned=0",
             f"SLIME_MEM stress construction case={case} attempt={attempt} actual=1000 effective=1 required=2 reserved={0 if case == 'construction' else 999}",
-            f"SLIME_MEM stress census attempt={attempt} phase=after slots=1000 descriptors=1000 extents=100 objects=100 bytes=1000 reusable_anchors=0 reusable_bytes=0 ordinary_bytes=10000 preserved_bytes=0 preserved_anchors=0",
+            f"SLIME_MEM stress census attempt={attempt} phase=after slots=1000 descriptors=1000 extents=100 objects=100 bytes=1000 reusable_anchors=0 reusable_bytes=0 ordinary_bytes=10000 preserved_bytes=0 preserved_anchors=0 descriptor_capacity=1000 extent_capacity=100 infrastructure_owned=0",
             *[f"[private-memory-1g] verified holder={holder} incarnation=0 round=0 pages=65536 refused=1 shared={int(holder == 0)}" for holder in range(3)],
             f"[private-memory-stress] spawn_refused attempt={attempt + 1} peers_preserved=3",
         ]
@@ -1170,6 +1169,153 @@ def check_private_stress_controls(gate) -> int:
     return len(mutations) + len(heap_lines) + len(heap_mutations)
 
 
+def check_adaptive_control_mutations(validator, prefix: str, lines: list[str], mutations: list[tuple[str, str]]) -> int:
+    transcript = "\n".join(lines)
+    validator(transcript)
+    for index in range(len(lines)):
+        mutations.append((f"missing line {index}", "\n".join(lines[:index] + lines[index + 1:])))
+    mutations.append(("explicit failure", transcript + "\nSLIME_ROOT FATAL injected"))
+    for description, mutated in mutations:
+        if mutated == transcript:
+            fail(f"{prefix}{description}: mutation did not change evidence")
+        require_rejection(description, prefix, lambda mutated=mutated: validator(mutated))
+    return len(mutations)
+
+
+def check_private_cspace_controls(gate) -> int:
+    base = 1 << 60
+    lines = [
+        f"SLIME_ROOT cspace expanded base={base} infrastructure_caps=2",
+        "SLIME_ROOT cspace pressure initial_limit=524288 retired=64 free=0",
+        f"SLIME_ROOT cspace leaf base={base} slots=1024 beyond_initial=1",
+        f"SLIME_ROOT cspace exercised created=1 invoked=1 copied=1 retyped=1 deleted=1 revoked=1 min_address={base + 1} initial_limit=524288",
+        "SLIME_ROOT cspace live root=1 second=1 leaves=1",
+        f"SLIME_ALLOC global region=0 parent=10 slot={base + 2} prior=0 start=0 end=4096 bytes=4096 gap=0",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    later_leaf = lines[2].replace(str(base), str(base + 1024))
+    after_live = transcript.replace(lines[5], later_leaf + "\n" + lines[5])
+    gate.check_cspace_execution(after_live)
+    before_live = transcript.replace(lines[4], later_leaf + "\n" + lines[4]).replace("leaves=1", "leaves=2")
+    gate.check_cspace_execution(before_live)
+    mutations = []
+    for old, new in (
+        ("initial_limit=524288", "initial_limit=262144"),
+        ("retired=64", "retired=0"), ("free=0", "free=1024"),
+        ("slots=1024", "slots=512"), ("beyond_initial=1", "beyond_initial=0"),
+        (f"leaf base={base}", f"leaf base={base - 1}"),
+        (f"min_address={base + 1}", "min_address=524288"),
+        ("second=1", "second=0"), ("root=1", "root=0"), ("leaves=1", "leaves=2"),
+        (f"slot={base + 2}", "slot=524288"),
+        *((f"{field}=1", f"{field}=0") for field in ("created", "invoked", "copied", "retyped", "deleted", "revoked")),
+    ):
+        mutations.append((old, transcript.replace(old, new, 1)))
+    mutations += [
+        ("inconsistent exercised limit", transcript.replace(lines[3], lines[3].replace("initial_limit=524288", "initial_limit=262144"))),
+        ("duplicate leaf", transcript.replace(lines[2], lines[2] + "\n" + lines[2]).replace("leaves=1", "leaves=2")),
+        ("pressure after leaf", "\n".join(lines[:1] + [lines[2], lines[1]] + lines[3:])),
+        ("live counts future leaf", after_live.replace("leaves=1", "leaves=2")),
+        ("live omits preceding leaf", before_live.replace("leaves=2", "leaves=1")),
+        ("no leaf before exercise", "\n".join(lines[:2] + [lines[3], lines[2]] + lines[4:])),
+        ("late duplicate leaf", after_live.replace(later_leaf, lines[2])),
+        ("late leaf aliases initial namespace", after_live.replace(later_leaf, later_leaf.replace(f"base={base + 1024}", "base=524288"))),
+        ("late leaf wrong width", after_live.replace(later_leaf, later_leaf.replace("slots=1024", "slots=512"))),
+        ("late leaf not expanded", after_live.replace(later_leaf, later_leaf.replace("beyond_initial=1", "beyond_initial=0"))),
+    ]
+    for family in ("SLIME_MEM grown", "SLIME_BACKING preserve"):
+        mutations.append((family + " aliases branch zero", transcript + f"\n{family} slot=524288"))
+    return check_adaptive_control_mutations(gate.check_cspace_execution, "cspace execution:", lines, mutations)
+
+
+def check_private_metadata_controls(gate) -> int:
+    def census(phase: str, **changes: int) -> str:
+        fields = dict(zip(gate.METADATA_FIELDS, (2, 8192, 2, 10, 2, 10, 2, 10, 16, 100, 1, 0, 0), strict=True))
+        fields.update(changes)
+        return f"SLIME_ROOT metadata census phase={phase} " + " ".join(f"{key}={value}" for key, value in fields.items())
+
+    lines = [
+        census("baseline"),
+        "SLIME_ROOT metadata round=0 grew=2 reused=0",
+        "SLIME_ROOT metadata round=1 grew=0 reused=2",
+        "SLIME_ROOT metadata round=2 grew=0 reused=2",
+        "SLIME_ROOT metadata injected kind=construction retained=1 reassigned=0",
+        "SLIME_ROOT metadata injected kind=revoke retained=1 reassigned=0",
+        census("grown", pages=4, bytes=16384, allocations_free=20, quarantined=2, pending=1),
+        "SLIME_ROOT metadata retry kind=construction released=1 reassigned=0",
+        "SLIME_ROOT metadata retry kind=revoke released=1 reassigned=0",
+        census("released", pages=5, bytes=16384, allocations_free=30, nodes=2),
+        census("final", pages=5, bytes=20480, nodes=2),
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    gate.check_metadata_lifecycle(transcript.replace(lines[9], lines[9].replace("bytes=16384", "bytes=20480")))
+    mutations = []
+    for index, field, value in (
+        (6, "pages", 2), (9, "pages", 4), (9, "pages", 6), (9, "bytes", 12288),
+        *((9, field, 3) for field in ("allocations_live", "extents_live", "preserved_live", "slots_free")),
+        (6, "nodes", 2), (9, "nodes", 1), (9, "nodes", 3),
+        (6, "allocations_free", 10), (6, "allocations_free", 30),
+        (9, "allocations_free", 20), (9, "allocations_free", 10),
+        (10, "pages", 3), (10, "bytes", 12288), (10, "nodes", 0),
+        (0, "bytes", 32768),
+        *((index, "pending", value) for index, value in ((0, 1), (6, 0), (9, 1), (10, 1))),
+        *((index, "quarantined", value) for index, value in ((0, 1), (6, 0), (9, 1), (10, 1))),
+    ):
+        changed = re.sub(rf"\b{field}=\d+", f"{field}={value}", lines[index])
+        mutations.append((f"census {index} {field}", transcript.replace(lines[index], changed)))
+    for index in (4, 5, 7, 8):
+        mutations.append((f"premature reassignment {index}", transcript.replace(lines[index], lines[index].replace("reassigned=0", "reassigned=1"))))
+        field = "retained" if index < 7 else "released"
+        mutations.append((f"missing {field} {index}", transcript.replace(lines[index], lines[index].replace(f"{field}=1", f"{field}=0"))))
+    mutations += [
+        ("growth missing", transcript.replace("grew=2", "grew=0")),
+        ("later reuse missing", transcript.replace("reused=2", "reused=0")),
+        ("reuse before growth only", transcript.replace("round=0 grew=2 reused=0", "round=0 grew=0 reused=2").replace("round=1 grew=0 reused=2", "round=1 grew=0 reused=0").replace("round=2 grew=0 reused=2", "round=2 grew=2 reused=0")),
+        ("duplicate census", transcript + "\n" + lines[9]),
+        ("duplicate round", transcript.replace(lines[3], lines[3] + "\n" + lines[3])),
+        ("duplicate injection", transcript.replace(lines[4], lines[4] + "\n" + lines[4])),
+        ("duplicate retry", transcript.replace(lines[7], lines[7] + "\n" + lines[7])),
+        ("phases reordered", transcript.replace(lines[9], "PHASE").replace(lines[10], lines[9]).replace("PHASE", lines[10])),
+        ("retry before pending census", "\n".join(lines[:6] + [lines[7], lines[6]] + lines[8:])),
+        ("round outside baseline", "\n".join([lines[1], lines[0]] + lines[2:])),
+    ]
+    return check_adaptive_control_mutations(gate.check_metadata_lifecycle, "metadata lifecycle:", lines, mutations)
+
+
+def check_private_bootstrap_controls(gate) -> int:
+    lines = [
+        "SLIME_ROOT metadata bootstrap objects=4096 alignment=4096 remaining=8192",
+        "SLIME_ROOT bootstrap reserve objects=4096 alignment=4096 remaining=8192 slots=64 transaction=12 recursion=0 fit=1",
+        "SLIME_ROOT bootstrap exhausted cause=ram published=0 refused=1 ram_free=0 slots_free=64 metadata_free=10",
+        "SLIME_ROOT bootstrap exhausted cause=cnode-slots published=0 refused=1 ram_free=8192 slots_free=0 metadata_free=10",
+        "SLIME_ROOT bootstrap exhausted cause=metadata published=0 refused=1 ram_free=8192 slots_free=64 metadata_free=0",
+        "SLIME_ROOT bootstrap boundaries complete cases=3 published=1",
+        "SLIME_GRAPH staged task=0 instance=init",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    transcript = "\n".join(lines)
+    mutations = []
+    for old, new in (("slots=64", "slots=63"), ("transaction=12", "transaction=64"), ("recursion=0", "recursion=1"), ("fit=1", "fit=0"), ("remaining=8192", "remaining=8191"), ("cases=3", "cases=2"), ("complete cases=3 published=1", "complete cases=3 published=0")):
+        mutations.append((old, transcript.replace(old, new, 1)))
+    for index in (2, 3, 4):
+        for old, new in (("published=0", "published=1"), ("refused=1", "refused=0")):
+            mutations.append((f"refusal {index} {old}", transcript.replace(lines[index], lines[index].replace(old, new))))
+        for field in ("ram_free", "slots_free", "metadata_free"):
+            value = int(re.search(rf"{field}=(\d+)", lines[index]).group(1))
+            changed = re.sub(rf"{field}=\d+", f"{field}={int(value == 0)}", lines[index])
+            mutations.append((f"non-independent exhaustion {index} {field}", transcript.replace(lines[index], changed)))
+    mutations += [
+        ("duplicate cause", transcript.replace(lines[2], lines[2] + "\n" + lines[2])),
+        ("cause omitted", transcript.replace("cause=metadata", "cause=ram")),
+        ("refusal after completion", "\n".join(lines[:4] + [lines[5], lines[4]] + lines[6:])),
+        ("first publication before refusal", lines[6] + "\n" + transcript),
+        ("refusal before reservation", "\n".join([lines[0], lines[2], lines[1]] + lines[3:])),
+        ("duplicate reserve", transcript.replace(lines[1], lines[1] + "\n" + lines[1])),
+    ]
+    return check_adaptive_control_mutations(gate.check_bootstrap_boundaries, "bootstrap boundaries:", lines, mutations)
+
+
 def check_private_memory_capacity_controls() -> int:
     gate = load_script(
         "sel4_private_memory_semantic_controls", "check/check-sel4-private-memory-plane.py"
@@ -1187,7 +1333,7 @@ def check_private_memory_capacity_controls() -> int:
         "allocation_capacity=400000 allocations_available=380000 extent_capacity=2048 "
         "extents_available=1500 cslots_available=500000 ordinary_available=2013265920 "
         "ordinary_layout=1 root_image=8388608 root_metadata=1048576 root_stack=1048576 "
-        "root_heap=524288 fit=1"
+        "root_heap=524288 fit=1 limit=none"
     )
     gate.check_segmented_capacity_report(qualification, profile, section, target, 0)
     # The headroom the report claims must follow the quotas the generation
@@ -1198,7 +1344,7 @@ def check_private_memory_capacity_controls() -> int:
         lambda: gate.check_segmented_capacity_report(qualification, profile, section, target, 65536),
     )
     capacity_mutations = (
-        ("capacity false refusal", qualification[:-1] + "0"),
+        ("capacity false refusal", qualification.replace("fit=1 limit=none", "fit=0 limit=none")),
         (
             "capacity missing static descriptors",
             qualification.replace("required_allocations=263200", "required_allocations=263168"),
@@ -1209,7 +1355,19 @@ def check_private_memory_capacity_controls() -> int:
         ),
         (
             "capacity ignores impossible ordinary layout",
-            qualification.replace("ordinary_layout=1", "ordinary_layout=0")[:-1] + "1",
+            qualification.replace("ordinary_layout=1", "ordinary_layout=0"),
+        ),
+        ("capacity forged limit", qualification.replace("limit=none", "limit=ordinary-bytes")),
+        ("capacity missing limit", qualification.replace(" limit=none", "")),
+        (
+            "capacity unnamed refusal",
+            qualification.replace("allocations_available=380000", "allocations_available=263199")
+            .replace("fit=1 limit=none", "fit=0 limit=none"),
+        ),
+        (
+            "capacity misnamed refusal",
+            qualification.replace("allocations_available=380000", "allocations_available=263199")
+            .replace("fit=1 limit=none", "fit=0 limit=extent-descriptors"),
         ),
         ("capacity allocation exhaustion", qualification.replace("allocations_available=380000", "allocations_available=263199")),
         ("capacity extent exhaustion", qualification.replace("extents_available=1500", "extents_available=1027")),
@@ -1334,15 +1492,17 @@ def check_private_memory_capacity_controls() -> int:
     cold = (
         "SLIME_MEM census retired=0 untyped=10000 reusable=0 shared_reusable=0 "
         "preserved_bytes=0 active_extent_bytes=100 mapped_pages=0 free_slots=100 "
-        "anchors=0 shared_anchors=0 preserved_anchors=0 allocations_free=100\n"
+        "anchors=0 shared_anchors=0 preserved_anchors=0 allocations_free=100 infrastructure_owned=0\n"
         "SLIME_ALLOC preserved parent=1 slot=2 paddr=4096 bytes=16\n"
         "SLIME_MEM census retired=1 untyped=9000 reusable=1000 shared_reusable=16 "
         "preserved_bytes=84 active_extent_bytes=0 mapped_pages=0 free_slots=96 "
-        "anchors=2 shared_anchors=1 preserved_anchors=1 allocations_free=102"
+        "anchors=2 shared_anchors=1 preserved_anchors=1 allocations_free=102 infrastructure_owned=0"
     )
     gate.check_capacity_conservation(cold)
     conservation_mutations = (
         ("cold backing lost", cold.replace("untyped=9000", "untyped=8999")),
+        ("infrastructure charge forged", cold.replace("allocations_free=102 infrastructure_owned=0", "allocations_free=102 infrastructure_owned=1")),
+        ("infrastructure charge missing", cold.replace(" infrastructure_owned=0", "")),
         ("cold backing double counted", cold.replace("preserved_bytes=84", "preserved_bytes=85")),
         ("cold slots lost", cold.replace("free_slots=96", "free_slots=95")),
         ("cold mapping remains", cold.replace("active_extent_bytes=0 mapped_pages=0", "active_extent_bytes=0 mapped_pages=1")),
@@ -1423,6 +1583,9 @@ def check_private_memory_capacity_controls() -> int:
         workload_mutations
         + isolation_mutations
         + stress_mutations
+        + check_private_cspace_controls(gate)
+        + check_private_metadata_controls(gate)
+        + check_private_bootstrap_controls(gate)
         + len(fault_mutations)
         + len(ledger_mutations)
         + len(conservation_mutations)
@@ -1448,7 +1611,7 @@ def main() -> None:
         identity_controls = check_image_identity_controls(control_root)
         runtime_controls = check_plane_runtime_controls(control_root)
     print(
-        f"seL4 gate control check: {len(GATES) + 1} gates reject "
+        f"seL4 gate control check: {len(GATES) + 1} gates plus 3 adaptive arms reject "
         f"{total} mutated transcripts and layouts; "
         f"{identity_controls} identity cases and {runtime_controls} runtime cases passed"
     )

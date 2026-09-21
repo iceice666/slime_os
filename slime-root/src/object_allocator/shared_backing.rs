@@ -258,6 +258,7 @@ impl ObjectAllocator {
     pub fn allocate_shared_granules(&mut self, pages: usize) -> Result<(usize, usize), AllocError> {
         self.settle_shared_releases()?;
         let lease_slot = self.shared_backing.lease_slot()?;
+        self.ensure_contiguous_root_slots(pages)?;
         let index = self.acquire_shared_leaf(pages)?;
         let node = self.shared_backing.node(index);
         let (first, reused) = match self.slots.allocate_contiguous(pages, self.slots_allocated) {
@@ -286,11 +287,9 @@ impl ObjectAllocator {
         }
         let blueprint =
             <sel4::cap_type::Granule as sel4::CapTypeForObjectOfFixedSize>::object_blueprint();
-        if let Err(error) = sel4::cap::Untyped::from_bits(node.slot as _).untyped_retype(
+        if let Err(error) = crate::root_cspace::retype(
+            sel4::cap::Untyped::from_bits(node.slot as _),
             &blueprint,
-            &sel4::init_thread::slot::CNODE
-                .cap()
-                .absolute_cptr_for_self(),
             first,
             pages,
         ) {
@@ -479,19 +478,16 @@ impl ObjectAllocator {
         };
         while self.shared_backing.node(index).order > order {
             index = self.split_shared_leaf_with(index, |parent, bits, first| {
-                sel4::cap::Untyped::from_bits(parent as _)
-                    .untyped_retype(
-                        &sel4::ObjectBlueprint::Untyped { size_bits: bits },
-                        &sel4::init_thread::slot::CNODE
-                            .cap()
-                            .absolute_cptr_for_self(),
-                        first,
-                        2,
-                    )
-                    .map_err(|error| AllocError::Retype {
-                        size_bits: bits,
-                        error,
-                    })
+                crate::root_cspace::retype(
+                    sel4::cap::Untyped::from_bits(parent as _),
+                    &sel4::ObjectBlueprint::Untyped { size_bits: bits },
+                    first,
+                    2,
+                )
+                .map_err(|error| AllocError::Retype {
+                    size_bits: bits,
+                    error,
+                })
             })?;
         }
         self.shared_backing.lease(index);
@@ -505,6 +501,7 @@ impl ObjectAllocator {
     ) -> Result<usize, AllocError> {
         let positions = self.shared_backing.split_positions(index)?;
         let node = self.shared_backing.node(index);
+        self.ensure_contiguous_root_slots(2)?;
         let (first, reused) = self.slots.allocate_contiguous(2, self.slots_allocated)?;
         // The kernel validates both destination slots before publishing either
         // child. A refused retype leaves the parent and metadata untouched.
