@@ -64,6 +64,14 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
+    // An adaptive policy is admitted and its guarantees are reserved against
+    // real inventory, but no task binds an entitlement yet. Fail the boot
+    // here rather than launch every holder with no window: a component whose
+    // declared memory silently resolves to nothing looks like a healthy boot
+    // and fails much later, inside the allocator it was promised.
+    if crate::generation::private_memory_policy_object(generation).is_some() {
+        fatal!("SLIME_MEM FAIL adaptive entitlements are not bound to tasks yet")
+    }
     sel4::debug_println!(
         "SLIME_MEM budget holders={} declared={}",
         private_budget

@@ -562,18 +562,93 @@ fn select_private_memory_object<'a>(
     Ok(found)
 }
 
-/// Fixed-budget lookup for launch paths; adaptive generations never pass admission.
+/// The declared format version of the generation's private-memory resource.
+///
+/// One family, two formats: the version decides which reader owns the bytes,
+/// and a resource that is neither is refused rather than read by the older one.
+fn private_memory_version(bytes: &[u8]) -> Result<u32, GenerationError> {
+    let version = bytes
+        .get(
+            private_memory_policy::OFF_HEADER_FORMAT_VERSION
+                ..private_memory_policy::OFF_HEADER_FORMAT_VERSION_END,
+        )
+        .ok_or(GenerationError::MalformedPrivateMemoryPolicy)?;
+    Ok(u32::from_le_bytes(version.try_into().unwrap()))
+}
+
+/// Fixed-budget lookup for launch paths.
+///
+/// A generation carrying the adaptive format answers `None`: it declares no
+/// fixed budget, so every holder resolves to no quota through this reader and
+/// the adaptive path owns its own binding. Returning a decode error instead
+/// would fail an adaptive boot on the reader rather than on the policy.
 pub fn private_memory_budget_object<'a>(
     generation: &Generation<'a>,
 ) -> Option<Result<PrivateMemoryBudget<'a>, GenerationError>> {
     match private_memory_object(generation) {
-        Ok(Some(bytes)) => Some(
-            PrivateMemoryBudget::decode(bytes)
-                .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget),
-        ),
+        Ok(Some(bytes)) => match private_memory_version(bytes) {
+            Ok(private_memory_policy::FORMAT_VERSION) => None,
+            Ok(_) => Some(
+                PrivateMemoryBudget::decode(bytes)
+                    .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget),
+            ),
+            Err(error) => Some(Err(error)),
+        },
         Ok(None) => None,
         Err(error) => Some(Err(error)),
     }
+}
+
+/// Adaptive-policy lookup for the paths that bind entitlements.
+///
+/// The mirror of [`private_memory_budget_object`]: a fixed budget answers
+/// `None` here, so each reader sees only the format it owns and neither has to
+/// guess what the other's absence means.
+pub fn private_memory_policy_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<PrivateMemoryPolicy<'a>, GenerationError>> {
+    match private_memory_object(generation) {
+        Ok(Some(bytes)) => match private_memory_version(bytes) {
+            Ok(private_memory_policy::FORMAT_VERSION) => Some(
+                PrivateMemoryPolicy::decode(bytes)
+                    .map_err(|_| GenerationError::MalformedPrivateMemoryPolicy),
+            ),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        },
+        Ok(None) => None,
+        Err(error) => Some(Err(error)),
+    }
+}
+
+/// This generation's instances as the policy's trusted topology.
+///
+/// Identities are derived from the instance names the generation itself
+/// declares and ownership from its own owner field, so a policy can never
+/// name a subject this generation does not contain, and membership stays
+/// explicit: a subtree root restricts its listed members rather than
+/// admitting every descendant.
+pub fn private_memory_instances(
+    generation: &Generation<'_>,
+    instances: &mut [private_memory_policy::Instance],
+) -> Result<usize, GenerationError> {
+    let count = generation.instance_count();
+    if count > instances.len() {
+        return Err(GenerationError::MalformedPrivateMemoryPolicy);
+    }
+    for (index, slot) in instances.iter_mut().enumerate().take(count) {
+        let instance = generation.instance(index)?;
+        *slot = private_memory_policy::Instance {
+            identity: private_memory_policy::subject_identity(instance.name),
+            owner: match instance.owner {
+                boot_contracts::generation::InstanceOwner::Root => None,
+                boot_contracts::generation::InstanceOwner::Instance(owner) => Some(
+                    private_memory_policy::subject_identity(generation.instance(owner)?.name),
+                ),
+            },
+        };
+    }
+    Ok(count)
 }
 pub fn io_resource_budget_object<'a>(
     generation: &Generation<'a>,
@@ -1293,41 +1368,14 @@ fn private_memory_budget_admission(
     let Some(bytes) = private_memory_object(generation)? else {
         return Ok(None);
     };
-    let version = bytes
-        .get(
-            private_memory_policy::OFF_HEADER_FORMAT_VERSION
-                ..private_memory_policy::OFF_HEADER_FORMAT_VERSION_END,
-        )
-        .ok_or(GenerationError::MalformedPrivateMemoryPolicy)?;
-    let version = u32::from_le_bytes(version.try_into().unwrap());
+    let version = private_memory_version(bytes)?;
     if version == private_memory_policy::FORMAT_VERSION {
         let mut instances = [private_memory_policy::Instance {
             identity: [0; 32],
             owner: None,
         }; MAX_ADMITTED_INSTANCES];
-        if generation.instance_count() > instances.len() {
-            return Err(GenerationError::MalformedPrivateMemoryPolicy);
-        }
-        for (index, slot) in instances
-            .iter_mut()
-            .enumerate()
-            .take(generation.instance_count())
-        {
-            let instance = generation.instance(index)?;
-            *slot = private_memory_policy::Instance {
-                identity: private_memory_policy::subject_identity(instance.name),
-                owner: match instance.owner {
-                    boot_contracts::generation::InstanceOwner::Root => None,
-                    boot_contracts::generation::InstanceOwner::Instance(owner) => Some(
-                        private_memory_policy::subject_identity(generation.instance(owner)?.name),
-                    ),
-                },
-            };
-        }
-        return adaptive_private_memory_activation(
-            bytes,
-            &instances[..generation.instance_count()],
-        );
+        let count = private_memory_instances(generation, &mut instances)?;
+        return adaptive_private_memory_activation(bytes, &instances[..count]);
     }
     if version != private_memory_budget::FORMAT_VERSION {
         return Err(GenerationError::UnsupportedPrivateMemoryPolicy);
@@ -1338,6 +1386,12 @@ fn private_memory_budget_admission(
     Ok(Some(budget.holder_count()))
 }
 
+/// Admit an adaptive policy's structure against this generation's topology.
+///
+/// Structure only. Whether the machine can actually reserve every guarantee is
+/// a question about inventory the allocator owns, and it is answered by
+/// [`admit_private_memory_ledger`] before any task is published; deciding it
+/// here would compare a policy against a pool this code cannot see.
 fn adaptive_private_memory_activation(
     bytes: &[u8],
     instances: &[private_memory_policy::Instance],
@@ -1347,7 +1401,47 @@ fn adaptive_private_memory_activation(
     policy
         .validate_instances(instances)
         .map_err(|_| GenerationError::MalformedPrivateMemoryPolicy)?;
-    Err(GenerationError::UnsupportedAdaptivePrivateMemoryPolicy)
+    Ok(Some(policy.subject_count()))
+}
+
+/// Reserve an adaptive policy's guarantees against the real ordinary pool.
+///
+/// The resource half of admission, and the reason it takes an allocator: a
+/// policy is admissible only against the inventory this machine actually has,
+/// after its own operational reserve and every already-committed root
+/// allocation. Each entitlement's guarantee is reserved in full and
+/// simultaneously, with a conservative per-page envelope that covers the
+/// page's bytes and its table, descriptor, extent and slot alike. Elastic
+/// maxima are never summed: permission to ask is not a promise, and adding
+/// them would refuse compositions this machine can serve.
+///
+/// Nothing is physically provisioned here. The ledger records what is
+/// reserved so a later growth cannot spend another holder's guarantee.
+pub fn admit_private_memory_ledger<'a>(
+    policy: PrivateMemoryPolicy<'a>,
+    instances: &[private_memory_policy::Instance],
+    available: private_memory_policy::ledger::Resources,
+) -> Result<private_memory_policy::ledger::Ledger<'a>, private_memory_policy::ledger::Error> {
+    use private_memory_policy::ledger::{Error, Resources};
+    let mut guarantees = [Resources::ZERO; private_memory_policy::MAX_ENTITLEMENTS];
+    let count = policy.entitlement_count();
+    if count > guarantees.len() {
+        return Err(Error::Guarantee);
+    }
+    for (index, slot) in guarantees.iter_mut().enumerate().take(count) {
+        let entitlement = policy.entitlement(index).ok_or(Error::Guarantee)?;
+        let pages = entitlement.guarantee_pages;
+        *slot = Resources {
+            bytes: pages
+                .checked_mul(private_memory_policy::PAGE_BYTES)
+                .ok_or(Error::Overflow)?,
+            slots: pages,
+            descriptors: pages,
+            extents: pages,
+            tables: pages,
+        };
+    }
+    private_memory_policy::ledger::Ledger::admit(policy, instances, available, &guarantees[..count])
 }
 
 /// The result of admitting a v5 generation graph.
@@ -2832,17 +2926,51 @@ mod adaptive_policy_tests {
     }
 
     #[test]
-    fn adaptive_policy_is_structurally_checked_but_never_activated() {
+    fn an_adaptive_policy_is_admitted_on_structure_and_refused_on_malformation() {
         let valid = deny_all_policy();
-        assert_eq!(
-            adaptive_private_memory_activation(&valid, &[]),
-            Err(GenerationError::UnsupportedAdaptivePrivateMemoryPolicy)
-        );
+        // A policy naming no subject admits, and says so: nobody may grow,
+        // which is a composition rather than a failure.
+        assert_eq!(adaptive_private_memory_activation(&valid, &[]), Ok(Some(0)));
         let mut invalid = valid;
         invalid[private_memory_policy::OFF_HEADER_REQUIRED_FLAGS] = 1;
         assert_eq!(
             adaptive_private_memory_activation(&invalid, &[]),
             Err(GenerationError::MalformedPrivateMemoryPolicy)
+        );
+    }
+
+    #[test]
+    fn a_guarantee_larger_than_the_pool_is_refused_before_anything_launches() {
+        use private_memory_policy::ledger::Resources;
+        let bytes = deny_all_policy();
+        let policy = PrivateMemoryPolicy::decode(&bytes).expect("policy");
+        // No entitlement, so the only claim on the pool is the policy's own
+        // reserve, which this one declares as zero.
+        assert!(admit_private_memory_ledger(policy, &[], Resources::ZERO).is_ok());
+
+        let mut over = bytes.clone();
+        over[private_memory_policy::OFF_HEADER_RESERVE_BYTES
+            ..private_memory_policy::OFF_HEADER_RESERVE_BYTES + 8]
+            .copy_from_slice(&4096u64.to_le_bytes());
+        let policy = PrivateMemoryPolicy::decode(&over).expect("policy");
+        // The reserve is subtracted from the real pool first, so a machine
+        // that cannot fund it refuses the policy rather than publishing tasks
+        // whose operational capacity was never there.
+        assert!(admit_private_memory_ledger(policy, &[], Resources::ZERO).is_err());
+        let policy = PrivateMemoryPolicy::decode(&over).expect("policy");
+        assert!(
+            admit_private_memory_ledger(
+                policy,
+                &[],
+                Resources {
+                    bytes: 8192,
+                    slots: 8,
+                    descriptors: 8,
+                    extents: 8,
+                    tables: 8,
+                }
+            )
+            .is_ok()
         );
     }
 }
