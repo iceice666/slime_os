@@ -11,9 +11,14 @@ hardware with timer, IPC, shared-buffer rights, private-memory quota, fault
 isolation, and reclamation markers all observed, and an idle run has stayed up
 for a quarter of an hour.
 
+Two cold boots of that fixture are recorded and judged by
+`just rubikpi3_cold_boot_check`: both reached the same terminal line at 7.05
+and 7.04 seconds after kernel entry, differing only in the timer's poll count
+and its raw counter readings. The gate proves it can refuse forged evidence
+before it reports anything.
+
 That is a CPU and root-mechanism claim about one machine. No component has
-reported ready on the board, no cold boot has been repeated, and no device of
-any kind is supported.
+reported ready on the board, and no device of any kind is supported.
 
 ## How to reach the board
 
