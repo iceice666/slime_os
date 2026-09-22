@@ -15,6 +15,7 @@ pub mod generation_composition;
 pub mod link_frames;
 #[cfg(feature = "component-runtime")]
 pub mod private_memory_capacity;
+pub mod servo_failsafe;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
 pub mod tick_clock;

@@ -46,6 +46,8 @@ def run_host_vectors(output: Path) -> None:
             "-Wextra",
             "-Werror",
             "-pedantic",
+            "-I",
+            str(ROOT / "components" / "runtime" / "include"),
             str(SLISP_ROOT / "slisp.c"),
             str(SLISP_ROOT / "host_main.c"),
             "-o",
@@ -62,7 +64,8 @@ def run_host_vectors(output: Path) -> None:
     if result.returncode != 0 or result.stdout.strip() != (
         "Slisp core: 15 behavior vectors passed\n"
         "Slisp session: persistent define passed\n"
-        "Slisp effects: spawn selection passed"
+        "Slisp effects: spawn selection passed\n"
+        "Slisp effects: pwm selection and the pinned request vector passed"
     ):
         fail(f"host behavior vectors failed: {result.stderr.strip() or result.stdout.strip()}")
 

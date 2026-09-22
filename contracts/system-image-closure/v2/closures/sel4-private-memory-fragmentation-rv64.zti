@@ -14,7 +14,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "26df6c1c6c67c96f49b979a0453073285320dfcf6e28810ea7532a5a9b74aa6d";
+        identity = "0853a4270a91961a9818c600cb7072d2786c668fd398cbcadb1f21a6f46d92e1";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
       buildProfile = "default";
@@ -91,7 +91,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "63764a64e55234a5f51a71d60a4ce526d0776dfd69ff87f6aabdb0ec2eb76574";
+      identity = "1d8da0dbfe991cf0272161a3c4557d826393943559df790c73469d71e4dc9e16";
     };
     parameters = [];
   };
@@ -118,7 +118,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "90f490a0535989e6dc44c240d2650c09d7bfd2340276b9f487982af3ee39041a";
+        identity = "6f24e53b391ce907996f253a25104509dd297a72ad33595f0facb10a4a3fe37b";
       };
     };
     {
@@ -142,7 +142,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "adc9f17ab326b2c865120d9d99938fa8cff1dad9a2d2b5a75d8af467fc300013";
+        identity = "5157b6ffda73205be78712d7691ba5d2fceb5ac80fe7322f0dae115b14ee58ce";
       };
     };
     {
@@ -150,7 +150,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "4f3ddbeb5bf33d0303c99a82440621fe5c05a60f8923954c229ca1be2a5aa2cc";
+        identity = "13fd818630a25dc18e1ba84450cbca797a97be45763c65cc6358b4d71c8ee08f";
       };
     };
     {
@@ -158,7 +158,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "5b4b50cf61cac0dd293a57e21e7ed1012530b1a0cf24aa1e0f731010460945c6";
+        identity = "b456e3f56089a43793853fd31806f249282f0a6c0f1225d62b7baca06b94b4df";
       };
     };
     {
@@ -166,7 +166,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "5a3715bb1d16ab276a9dceb85fb26d21236753e573b4dec8a43b67f08a1e86e4";
+        identity = "d03b01d9102cddfdcec2dcfff0d1266d9c869e3bc5e4bd124771bf529bd61861";
       };
     };
     {
@@ -206,7 +206,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "54b96b781c614ab11c38748cec23433ef934a3437ed8360978b66e8e610cbe51";
+        identity = "ae0cb21d481cd3e35ebd32a3881b7505ab163a8df6604196260df82f9daad5e8";
       };
     };
     {
@@ -246,7 +246,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "97d51162cb6cf65d49ff8d0349a06fb1f542060c7f8b240a9062119c7775f8b9";
+        identity = "4d5904fb60fa1e434e3502dbe7714732d0414a05ad6bd26bed88da3649d9e790";
       };
     };
   ];

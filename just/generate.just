@@ -27,6 +27,10 @@ spawn_gen:
     python3 scripts/generate/generate-spawn-bindings.py
 
 [group('generate')]
+pwm_servo_gen:
+    python3 scripts/generate/generate-pwm-servo-bindings.py
+
+[group('generate')]
 component_runtime_abi_gen:
     python3 scripts/generate/generate-component-runtime-abi-bindings.py
 

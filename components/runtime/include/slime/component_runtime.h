@@ -42,7 +42,20 @@ void slime_component_main(uint32_t startup_arg);
 
 void slime_debug_write(const uint8_t *bytes, size_t len);
 int64_t slime_input_read(uint32_t slot, SlimeInputEvent *event);
+/* A send followed by a receive on the same endpoint: for a peer that answers
+ * with a blocking send. */
 int64_t slime_endpoint_exchange(
+    uint32_t slot,
+    const uint8_t *request,
+    size_t request_len,
+    uint8_t *reply,
+    size_t reply_capacity);
+/* One seL4_Call: the peer answers through the reply capability the kernel
+ * hands it, so a peer that polls its endpoint still reaches this caller and no
+ * other peer can take the answer. The slot must hold the send right, which
+ * carries the reply grant; without it the kernel parks the caller instead of
+ * faulting. */
+int64_t slime_endpoint_call(
     uint32_t slot,
     const uint8_t *request,
     size_t request_len,
