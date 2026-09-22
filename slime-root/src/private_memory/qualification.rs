@@ -232,12 +232,20 @@ impl Holder {
     ) -> Result<Self, QualificationError> {
         let arena = allocator.begin_task_arena(16)?;
         allocator.mark_arena_elastic(arena)?;
-        let base = WINDOW_BASE + index * WINDOW_STRIDE;
+        let base = WINDOW_BASE
+            .checked_add(
+                index
+                    .checked_mul(WINDOW_STRIDE)
+                    .ok_or(QualificationError::Unmet(
+                        "holder window stride does not fit an address",
+                    ))?,
+            )
+            .ok_or(QualificationError::Unmet(
+                "holder window base does not fit an address",
+            ))?;
         reserve_window(allocator, arena, base)?;
-        let region = Region::elastic(base, maximum);
-        if !region.is_elastic() {
-            return Err(QualificationError::Unmet("window base is unrepresentable"));
-        }
+        let region = Region::reserve(allocator, base, HOLDER_WINDOW_PAGES, maximum, true)
+            .map_err(|_| QualificationError::Unmet("window base is unrepresentable"))?;
         let token = ledger.bind(&policy::subject_identity(name))?;
         Ok(Self {
             name,
@@ -307,7 +315,14 @@ impl Holder {
         ledger: &mut Ledger<'_>,
     ) -> Result<usize, QualificationError> {
         let revoked = allocator.release_task_arena(self.arena).is_ok();
-        let pages = elastic::retire(table, ledger, self.token, &mut self.region, revoked)?;
+        let pages = elastic::retire(
+            table,
+            allocator,
+            ledger,
+            self.token,
+            &mut self.region,
+            revoked,
+        )?;
         self.committed = 0;
         Ok(pages)
     }

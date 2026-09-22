@@ -11,6 +11,10 @@
 pub mod elastic;
 mod global_backing;
 mod infrastructure;
+mod leaf_spans;
+pub(crate) use leaf_spans::LeafSpanBits;
+#[cfg(test)]
+pub(crate) use leaf_spans::host::{bits as host_leaf_spans, release as host_release_leaf_spans};
 mod mapping_tables;
 mod preserved;
 mod qualification;
@@ -375,6 +379,24 @@ pub enum AllocError {
     /// the device would read or write memory nothing granted it.
     ProvenanceTableFull {
         limit: usize,
+    },
+    /// A private window needs more 2 MiB spans than one span-ownership record
+    /// addresses.
+    ///
+    /// An addressing limit of the tracking storage, not a capacity the image
+    /// reserves: it refuses the window outright rather than tracking part of
+    /// it, because a span whose table ownership is untracked would be priced
+    /// as empty and take a second table over the same address.
+    PrivateRegionSpans {
+        spans: usize,
+        limit: usize,
+    },
+    /// A private window is malformed: empty, misaligned, or ending past the
+    /// last address. Refused before the window exists, because every later
+    /// page address is derived from it unchecked.
+    PrivateRegionWindow {
+        base: usize,
+        reservation: usize,
     },
 }
 
@@ -1222,6 +1244,8 @@ pub struct ObjectAllocator {
     untypeds: [Option<UntypedRegion>; MAX_KERNEL_UNTYPEDS],
     untyped_len: usize,
     preserved: preserved::PreservedStore,
+    /// Span-ownership records private regions hold pointers into.
+    leaf_spans: leaf_spans::LeafSpanStore,
     devices: [Option<DeviceRegion>; MAX_DEVICE_UNTYPEDS],
     device_len: usize,
     arenas: [ArenaRecord; MAX_TASK_ARENAS],
@@ -1266,6 +1290,7 @@ impl ObjectAllocator {
             untypeds: [None; MAX_KERNEL_UNTYPEDS],
             untyped_len: 0,
             preserved: preserved::PreservedStore::new(),
+            leaf_spans: leaf_spans::LeafSpanStore::new(),
             devices: [None; MAX_DEVICE_UNTYPEDS],
             device_len: 0,
             arenas: [ArenaRecord::empty(); MAX_TASK_ARENAS],
@@ -2672,6 +2697,49 @@ impl ObjectAllocator {
 
     pub fn infrastructure_owned_bytes(&self) -> usize {
         self.infrastructure.owned_bytes()
+    }
+
+    /// Hand a private region the record tracking which spans own a leaf table.
+    ///
+    /// Funded like every other metadata table: a page is taken from the same
+    /// infrastructure allocator and stays owned by it, so the record's address
+    /// is stable for the region's whole life. A window wider than one record
+    /// addresses is refused here rather than silently tracked in part.
+    pub(crate) fn acquire_leaf_spans(
+        &mut self,
+        spans: usize,
+    ) -> Result<leaf_spans::LeafSpanBits, AllocError> {
+        if spans == 0 || spans > leaf_spans::MAX_WINDOW_SPANS {
+            return Err(AllocError::PrivateRegionSpans {
+                spans,
+                limit: leaf_spans::MAX_WINDOW_SPANS,
+            });
+        }
+        if self.leaf_spans.available() == 0 {
+            #[cfg(test)]
+            self.leaf_spans
+                .provision_host(leaf_spans::LeafSpanStore::entries_per_page());
+            if self.leaf_spans.available() == 0 {
+                let page = self.map_metadata_page()?;
+                // SAFETY: page ownership is retained by the metadata ledger and
+                // no other record table references this freshly mapped page.
+                unsafe { self.leaf_spans.append(page) }
+                    .map_err(|()| Self::private_record_error())?;
+            }
+        }
+        self.leaf_spans
+            .acquire(spans)
+            .ok_or_else(Self::private_record_error)
+    }
+
+    /// Return a reclaimed region's span record for the next region.
+    pub(crate) fn release_leaf_spans(&mut self, bits: leaf_spans::LeafSpanBits) {
+        self.leaf_spans.release(bits);
+    }
+
+    /// Span records this allocator can hand out without new backing.
+    pub(crate) fn leaf_span_records_free(&self) -> usize {
+        self.leaf_spans.available()
     }
 
     pub fn allocation_descriptor_capacity(&self) -> usize {
@@ -4344,7 +4412,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 for page in 0..512 {
@@ -4539,7 +4614,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     fail_map_frame_at: Some(1),
@@ -4696,7 +4778,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert_eq!(
@@ -4776,7 +4865,14 @@ mod tests {
                 assert!(allocator.slots.release(last));
                 assert_eq!(allocator.free_slots(), slots);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 65_536);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    65_536,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 for (delta, previous) in [(1, 0), (511, 1)] {
@@ -4873,7 +4969,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     fail_retype_at: Some(3),
@@ -4920,7 +5023,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     fail_retype_at: Some(3),
@@ -4981,7 +5091,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture_for(513);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 513);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    513,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     // Retype and map the first span's leaf, then fail the first
@@ -5083,7 +5200,7 @@ mod tests {
                     PRIVATE_STATE_NONE
                 );
                 assert_eq!(allocator.arenas[arena.index()].in_flight_granules, 0);
-                assert_eq!(table.reclaim(&mut region), 513);
+                assert_eq!(table.reclaim(&mut allocator, &mut region), 513);
                 assert_eq!(
                     (region.pages(), region.base_frames(), region.leaf_tables()),
                     (0, 0, 0)
@@ -5102,7 +5219,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture_for(514);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 514);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    514,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert_eq!(
@@ -5160,7 +5284,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture_for(513);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 513);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    513,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert_eq!(

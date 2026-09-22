@@ -314,12 +314,13 @@ fn settle_failure(
 /// not actually recovered.
 pub fn retire(
     table: &mut Table,
+    allocator: &mut ObjectAllocator,
     ledger: &mut Ledger<'_>,
     token: Incarnation,
     region: &mut Region,
     revoked: bool,
 ) -> Result<usize, ledger::Error> {
-    let pages = table.reclaim(region);
+    let pages = table.reclaim(allocator, region);
     ledger.retire(token, revoked)?;
     Ok(pages)
 }
@@ -329,8 +330,14 @@ mod tests {
     use super::*;
     use crate::child_vspace::GRANULE_SIZE;
 
+    /// A window of the compiled per-region capacity, for shape tests that are
+    /// about mapping selection rather than about how wide a window may be.
     fn region(base: usize) -> Region {
-        Region::elastic(base, super::super::MAX_REGION_PAGES)
+        region_of(base, super::super::MAX_REGION_PAGES)
+    }
+
+    fn region_of(base: usize, reservation: usize) -> Region {
+        Region::reserve_for_test(base, reservation, reservation, true).expect("host test window")
     }
 
     #[test]
@@ -399,17 +406,43 @@ mod tests {
     }
 
     #[test]
-    fn a_window_whose_spans_cannot_be_represented_is_denied_not_priced() {
+    fn a_misaligned_window_is_refused_at_construction_not_mispriced() {
         // Span ownership is indexed from the base, so a base one granule past
         // a 2 MiB boundary would put the first span's pages under two leaf
         // tables and price only one. Such a window is refused at construction
         // rather than mispriced at the mapping that would need the second.
-        let denied = Region::elastic((1 << 36) + GRANULE_SIZE, super::super::MAX_REGION_PAGES);
-        assert_eq!(denied, Region::DENIED);
-        assert!(!denied.is_elastic());
-        assert_eq!(denied.shape(LARGE_FRAME_PAGES).pages(), LARGE_FRAME_PAGES);
-        // And the growth that would use it cannot leave the empty window.
-        assert!(denied.reservation() == 0);
+        let base = (1 << 36) + GRANULE_SIZE;
+        assert!(
+            Region::reserve_for_test(base, LARGE_FRAME_PAGES, LARGE_FRAME_PAGES, true).is_err()
+        );
+        // A window that ends past the last address is refused for the same
+        // reason: every page address below derives from that sum unchecked.
+        let last_block = usize::MAX - LARGE_FRAME_BYTES + 1;
+        assert!(
+            Region::reserve_for_test(last_block, 2 * LARGE_FRAME_PAGES, 1, true).is_err(),
+            "a window ending past the last address must be refused"
+        );
+    }
+
+    #[test]
+    fn a_window_wider_than_the_compiled_row_prices_its_own_spans() {
+        // The window is policy-derived, so span ownership must extend past the
+        // per-region page count this image was compiled for; pricing a span
+        // beyond it as absent would take a second table over one address.
+        let reservation = super::super::MAX_REGION_PAGES + LARGE_FRAME_PAGES;
+        let mut region = region_of(1 << 36, reservation);
+        assert_eq!(region.reservation(), reservation);
+        let first = region.shape(super::super::MAX_REGION_PAGES);
+        region.commit_shape_for_test(first);
+        assert_eq!(
+            region.shape(LARGE_FRAME_PAGES),
+            Shape {
+                large_frames: 1,
+                base_pages: 0,
+                tables: 0,
+            },
+            "the span past the compiled row is still tracked as its own"
+        );
     }
 
     #[test]

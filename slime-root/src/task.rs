@@ -736,8 +736,24 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             return Err(TaskError::TableFull { limit: CAPACITY });
         };
         let id = TaskId(self.next_id);
+        // The window this address space is built around, decided once, here,
+        // and threaded through the arena plan, the mapped tables and the
+        // region alike so no second calculation can disagree with it.
+        //
+        // A v1 quota is a guarantee, not an address maximum: the generation
+        // declares how many pages the holder is promised, and the address
+        // space it may ever hold is the target profile's per-region capacity.
+        // Sizing the window to the quota instead would make the reserved-but-
+        // unbacked part of a small holder's window available to any other
+        // mapping, which is the space the window exists to defend. A task the
+        // generation gives no quota reserves nothing at all.
+        let reservation = if private_memory_pages == 0 {
+            0
+        } else {
+            crate::private_memory::MAX_REGION_PAGES
+        };
         let mut plan = image
-            .vspace_arena_plan(threads)
+            .vspace_arena_plan(threads, reservation)
             .map_err(VSpaceError::Image)?;
         plan.add(sel4::cap_type::CNode::object_blueprint(cnode_size_bits))
             .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
@@ -854,7 +870,23 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 scratch,
                 asid_pool,
                 threads,
+                reservation,
             )?;
+            // Built from the window the VSpace was actually constructed with,
+            // inside the construction boundary: a span record this cannot fund
+            // must unwind the task like any other construction failure, not
+            // leave a published task whose growth is untrackable.
+            let private_memory = if reservation == 0 {
+                crate::private_memory::Region::DENIED
+            } else {
+                crate::private_memory::Region::reserve(
+                    allocator,
+                    vspace.private_base,
+                    vspace.private_pages,
+                    private_memory_pages,
+                    false,
+                )?
+            };
             let cnode = allocator
                 .allocate_variable_in::<sel4::cap_type::CNode>(arena, cnode_size_bits)?
                 .cap();
@@ -1105,10 +1137,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     .map_err(TaskError::WriteRegisters)?;
                 *slot = Some(worker_tcb);
             }
-            Ok((vspace, cnode, tcb, entry, workers))
+            Ok((vspace, cnode, tcb, entry, workers, private_memory))
         })();
 
-        let (vspace, cnode, tcb, entry, workers) = match construction {
+        let (vspace, cnode, tcb, entry, workers, private_memory) = match construction {
             Ok(task) => task,
             Err(error) => {
                 self.unwind_construction(allocator, id, arena)?;
@@ -1138,15 +1170,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             spawner,
             executable,
             instance,
-            // Reserved at the base the VSpace construction chose, authorized
-            // for exactly the declared quota. A zero quota yields `DENIED`, so
+            // Reserved at the base the VSpace construction chose, over exactly
+            // the window it mapped tables for. A zero quota yields `DENIED`, so
             // a task the generation does not name carries no window at all
             // rather than a window it may not use.
-            private_memory: if private_memory_pages == 0 {
-                crate::private_memory::Region::DENIED
-            } else {
-                crate::private_memory::Region::reserved(vspace.private_base, private_memory_pages)
-            },
+            private_memory,
         });
         self.len += 1;
         self.next_id += 1;
@@ -1228,7 +1256,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // Past the fallible step: the frames are gone, so the charge they held
         // is genuinely free. Taken from the local snapshot, which is why the
         // table entry can be cleared either side of this.
-        self.private.reclaim(&mut task.private_memory);
+        self.private.reclaim(allocator, &mut task.private_memory);
         self.tasks[index] = None;
         self.len -= 1;
         if task.activated {
