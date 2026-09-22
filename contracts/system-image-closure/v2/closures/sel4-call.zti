@@ -69,7 +69,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "0853a4270a91961a9818c600cb7072d2786c668fd398cbcadb1f21a6f46d92e1";
+        identity = "0012a63510b70507948056b6e1147e370a2d0f468e747b7f6acc0c14353f1750";
       };
       identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
       buildProfile = "default";
@@ -118,7 +118,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "6f24e53b391ce907996f253a25104509dd297a72ad33595f0facb10a4a3fe37b";
+        identity = "3c0a5fbb87ac0de8f9009557223b8f98d409ca206f5490903197dae69b805de8";
       };
     };
     {
@@ -142,7 +142,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "5157b6ffda73205be78712d7691ba5d2fceb5ac80fe7322f0dae115b14ee58ce";
+        identity = "a84cd2c06a8721caf4f87330d3b09e5a54ae01d25117b930e7f9395c23c1882e";
       };
     };
     {
@@ -150,7 +150,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "13fd818630a25dc18e1ba84450cbca797a97be45763c65cc6358b4d71c8ee08f";
+        identity = "c499080408074471f1fd71c6484fe070b668ab0d2d092e16ea3e53b10b030b30";
       };
     };
     {
@@ -166,7 +166,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "d03b01d9102cddfdcec2dcfff0d1266d9c869e3bc5e4bd124771bf529bd61861";
+        identity = "de193c60d2f48740f9ece53fc88956843bfaeef2c2bc6a80c7d44534720ce33d";
       };
     };
     {
@@ -206,7 +206,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "ae0cb21d481cd3e35ebd32a3881b7505ab163a8df6604196260df82f9daad5e8";
+        identity = "c67ab1e192614d4efc73eb49be1e5bb610f7d1494a05a5953ca56ee6c383de72";
       };
     };
     {
@@ -246,7 +246,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "4d5904fb60fa1e434e3502dbe7714732d0414a05ad6bd26bed88da3649d9e790";
+        identity = "e0471ee0ee21878bbae37aaf61f586d14ecfe0aaaac4df717c77f790400647a5";
       };
     };
   ];

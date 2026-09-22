@@ -140,6 +140,10 @@ PLANES: tuple[tuple[str, str], ...] = (
     # driver's endpoint at slot 3. QEMU has no PWM block, so this gate is also
     # where the plane's boot is observed at all.
     ("sel4-pwm", "slime-sel4-pwm.elf"),
+    # IO9. The product graph plus the serial driver and the heartbeat producer:
+    # init holds two more executables and signals the producer's tick; the
+    # driver holds its endpoint, device, and region, the producer the endpoint.
+    ("sel4-mavlink", "slime-sel4-mavlink.elf"),
 )
 
 # The subset P6.4 replays on x86-64: the resident product graph plus the two
