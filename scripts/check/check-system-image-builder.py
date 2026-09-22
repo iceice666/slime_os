@@ -81,8 +81,15 @@ SELECTED = "sel4-channel"
 #
 #   `reference` targets `x86_64-qemu-virtio`, for which no seL4 platform asset
 #   exists to name.
+#
+#   `sel4-rubikpi3` targets a physical board. A closure names a committed seL4
+#   prefix snapshot, and only the two QEMU reference platforms commit one; the
+#   Pi 5 and the Duo do not, and neither does this board. The composition is
+#   still derived, still target-qualified, and still owned by a gate -- what it
+#   does not have is a snapshot to resolve against.
 WITHOUT_CLOSURE = {
     "reference": "targets x86_64-qemu-virtio, which has no seL4 platform asset",
+    "sel4-rubikpi3": "targets a physical board with no committed seL4 prefix snapshot",
 }
 
 

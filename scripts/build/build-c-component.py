@@ -99,6 +99,17 @@ def main() -> None:
     parser.add_argument("output", type=Path)
     parser.add_argument("--architecture", choices=ARCHITECTURES, default="aarch64")
     parser.add_argument(
+        "--sel4-prefix",
+        type=Path,
+        help=(
+            "installed seL4 prefix supplying libsel4 headers; defaults to the "
+            "architecture's reference platform. A board whose kernel is a "
+            "different build installs its own prefix, and compiling against "
+            "another platform's headers would bake in that platform's "
+            "generated configuration"
+        ),
+    )
+    parser.add_argument(
         "--cc",
         default=os.environ.get("SLIME_COMPONENT_CC", "clang"),
         help="Clang-compatible compiler for the selected freestanding target",
@@ -108,16 +119,15 @@ def main() -> None:
     architecture = ARCHITECTURES[arguments.architecture]
     target_flag = f"--target={architecture['target']}"
     common_flags = (target_flag, *architecture["machine_flags"], *COMMON_FLAGS)
-    sel4_include = architecture["prefix"] / "libsel4" / "include"
+    prefix = arguments.sel4_prefix.resolve() if arguments.sel4_prefix else architecture["prefix"]
+    sel4_include = prefix / "libsel4" / "include"
     sources = [source.resolve() for source in arguments.source]
     output = arguments.output.resolve()
     for source in sources:
         if not source.is_file():
             raise SystemExit(f"missing component source: {source}")
     if not sel4_include.is_dir():
-        raise SystemExit(
-            f"missing {architecture['prefix'].relative_to(ROOT)}; build the selected seL4 platform first"
-        )
+        raise SystemExit(f"missing {prefix}; build the selected seL4 platform first")
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="slime-c-component-") as temporary:
         staging = Path(temporary)

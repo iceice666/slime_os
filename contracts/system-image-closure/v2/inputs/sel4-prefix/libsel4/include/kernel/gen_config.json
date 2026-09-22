@@ -52,6 +52,7 @@
     "PLAT_RK3568": false,
     "PLAT_ROCKETCHIP": false,
     "PLAT_ROCKPRO64": false,
+    "PLAT_RUBIKPI3": false,
     "PLAT_BANANAPIF3": false,
     "PLAT_SPIKE": false,
     "PLAT_STAR64": false,

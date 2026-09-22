@@ -54,6 +54,7 @@
 /* disabled: CONFIG_PLAT_RK3568 */
 /* disabled: CONFIG_PLAT_ROCKETCHIP */
 /* disabled: CONFIG_PLAT_ROCKPRO64 */
+/* disabled: CONFIG_PLAT_RUBIKPI3 */
 /* disabled: CONFIG_PLAT_BANANAPIF3 */
 /* disabled: CONFIG_PLAT_SPIKE */
 /* disabled: CONFIG_PLAT_STAR64 */

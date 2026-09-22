@@ -3,7 +3,7 @@
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MAX_NAME_BYTES: usize = 32;
-pub const PROFILE_COUNT: usize = 9;
+pub const PROFILE_COUNT: usize = 10;
 
 pub const ARCH_X86_64: u32 = 1;
 pub const ARCH_AARCH64: u32 = 2;
@@ -34,6 +34,7 @@ pub const PROFILE_X86_64_QEMU_VIRTIO: u32 = 1;
 pub const PROFILE_AARCH64_QEMU_VIRT: u32 = 2;
 pub const PROFILE_AARCH64_RPI5: u32 = 3;
 pub const PROFILE_AARCH64_SEL4_QEMU_VIRT: u32 = 5;
+pub const PROFILE_AARCH64_SEL4_RUBIKPI3: u32 = 10;
 pub const PROFILE_RISCV64_QEMU_VIRT: u32 = 4;
 pub const PROFILE_RISCV64_SEL4_QEMU_VIRT: u32 = 6;
 pub const PROFILE_RISCV64_SEL4_MILKV_DUO: u32 = 7;
@@ -83,6 +84,19 @@ pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
     TargetProfile {
         id: 5,
         name: "aarch64-sel4-qemu-virt",
+        architecture: 2,
+        abi: 4,
+        page_profile: 2,
+        required_features: 66,
+        elf_machine: 183,
+        page_bytes: 4096,
+        kernel_preferred_base: 0xFFFF_FFFF_8000_0000,
+        kernel_load_base: 0xFFFF_FFFF_9000_0000,
+        component_base: 0x0040_0000,
+    },
+    TargetProfile {
+        id: 10,
+        name: "aarch64-sel4-rubikpi3",
         architecture: 2,
         abi: 4,
         page_profile: 2,

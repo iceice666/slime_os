@@ -1,0 +1,56 @@
+{
+  "boots": [
+    {
+      "coldStart": true,
+      "handoff": "kexec-from-linux",
+      "index": 0,
+      "outcome": "ready",
+      "recordLines": [
+        "Booting all finished, dropped to user space",
+        "SLIME_TIMER acquired irq=30 freq_hz=19200000",
+        "SLIME_TIMER delivered badge=0x1 polls=17431",
+        "SLIME_TIMER serviced events=1 programming=Disarm",
+        "SLIME_TIMER advanced start=3485603260 end=3485890989 delta=287729",
+        "SLIME_TIMER OK",
+        "SLIME_ROOT READY tasks=2 grants=2 declared_grants=11 reclaimed_slots=108"
+      ],
+      "secondsToReady": 7.05,
+      "secondsToTimerOk": 1.07,
+      "secondsToUserSpace": 0.04,
+      "targetProfile": "aarch64-sel4-rubikpi3",
+      "transcriptSha256": "69884313ae24f0cdf1430127352fffae725b32be616281e8b1818a2e48ec8512"
+    },
+    {
+      "coldStart": true,
+      "handoff": "kexec-from-linux",
+      "index": 1,
+      "outcome": "ready",
+      "recordLines": [
+        "Booting all finished, dropped to user space",
+        "SLIME_TIMER acquired irq=30 freq_hz=19200000",
+        "SLIME_TIMER delivered badge=0x1 polls=17432",
+        "SLIME_TIMER serviced events=1 programming=Disarm",
+        "SLIME_TIMER advanced start=9565153846 end=9565441567 delta=287721",
+        "SLIME_TIMER OK",
+        "SLIME_ROOT READY tasks=2 grants=2 declared_grants=11 reclaimed_slots=108"
+      ],
+      "secondsToReady": 7.04,
+      "secondsToTimerOk": 1.07,
+      "secondsToUserSpace": 0.04,
+      "targetProfile": "aarch64-sel4-rubikpi3",
+      "transcriptSha256": "70c3f16e676c836617766d029c9aa0a03c2beb9e25928efc5fff3cf8e327c1ca"
+    }
+  ],
+  "composition": "sel4-rubikpi3",
+  "formatVersion": 1,
+  "imageBytes": 2055304,
+  "imageSha256": "da967c943c4c7bf87d903bee2ca992911f54cc988a7536cf0ac2f4daddb8593e",
+  "limits": [
+    "Each boot is a full power cycle of the board followed by a kexec handoff from the installed Linux; the firmware loads no Slime file and internal storage is not written.",
+    "This records the root-boot fixture reaching READY. No component reported ready, and the board still resets about ten seconds after kernel entry when the system keeps working.",
+    "Only sampled fields differ between the two boots: the timer poll count and the raw counter readings. Every semantic field, including the terminal READY line, is identical."
+  ],
+  "machine": "thundercomm-rubik-pi-3-v02",
+  "soc": "qcs6490",
+  "targetProfile": "aarch64-sel4-rubikpi3"
+}

@@ -85,12 +85,18 @@ LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
     "qemu-riscv-virt": ("deps/rust-sel4", "tree"),
     "bcm2712-rpi5": ("deps/rust-sel4-bcm2712-rpi5", "tree"),
     "cv1800b-duo": ("deps/rust-sel4-cv1800b-duo", "tree"),
+    "rubikpi3": ("deps/rust-sel4-rubikpi3", "tree"),
 }
 
 # Which compositions get a closure. Every derived composition except the
 # reference generation, which targets `x86_64-qemu-virtio` and has no seL4
 # platform asset to name.
-EXCLUDED = {"reference"}
+# `reference` targets `x86_64-qemu-virtio`, which names no seL4 platform asset.
+# `sel4-rubikpi3` targets a physical board: a closure resolves against a
+# committed seL4 prefix snapshot, and only the QEMU reference platforms commit
+# one. `check-system-image-builder.py` carries the matching declaration, and
+# refuses a name that appears in both places.
+EXCLUDED = {"reference", "sel4-rubikpi3"}
 
 
 # CP14: scenario closures. A scenario is one base composition plus declared

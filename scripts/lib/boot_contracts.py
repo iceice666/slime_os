@@ -640,6 +640,7 @@ PROFILE_X86_64_QEMU_VIRTIO = 1
 PROFILE_AARCH64_QEMU_VIRT = 2
 PROFILE_AARCH64_RPI5 = 3
 PROFILE_AARCH64_SEL4_QEMU_VIRT = 5
+PROFILE_AARCH64_SEL4_RUBIKPI3 = 10
 PROFILE_RISCV64_QEMU_VIRT = 4
 PROFILE_RISCV64_SEL4_QEMU_VIRT = 6
 PROFILE_RISCV64_SEL4_MILKV_DUO = 7
@@ -722,6 +723,21 @@ TARGET_PROFILES = (
         component_base=0x0040_0000,
         cargo_target="deps/rust-sel4/support/targets/aarch64-sel4-minimal.json",
         qemu_binary="qemu-system-aarch64",
+    ),
+    TargetProfile(
+        id=10,
+        name="aarch64-sel4-rubikpi3",
+        architecture=2,
+        abi=4,
+        page_profile=2,
+        required_features=66,
+        elf_machine=183,
+        page_bytes=4096,
+        kernel_preferred_base=0xFFFF_FFFF_8000_0000,
+        kernel_load_base=0xFFFF_FFFF_9000_0000,
+        component_base=0x0040_0000,
+        cargo_target="deps/rust-sel4/support/targets/aarch64-sel4-minimal.json",
+        qemu_binary="",
     ),
     TargetProfile(
         id=4,

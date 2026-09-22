@@ -36,6 +36,7 @@ _LOADER_PATHS = {
     "qemu-riscv-virt": Path("deps") / "rust-sel4",
     "bcm2712-rpi5": Path("deps") / "rust-sel4-bcm2712-rpi5",
     "cv1800b-duo": Path("deps") / "rust-sel4-cv1800b-duo",
+    "rubikpi3": Path("deps") / "rust-sel4-rubikpi3",
 }
 
 _IMAGE_FIELDS = {

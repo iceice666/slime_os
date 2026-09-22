@@ -174,6 +174,25 @@ PROFILE_PLATFORMS: dict[str, dict[str, object]] = {
             "build-std-features=compiler-builtins-mem",
         ),
     },
+    # The same specification and flags as the AArch64 seL4 reference, against a
+    # different kernel: the Rubik Pi 3's prefix is its own build, so a component
+    # qualified for QEMU `virt` is refused here and the reverse.
+    "aarch64-sel4-rubikpi3": {
+        "platform": "rubikpi3",
+        "prefix": "build/sel4-rubikpi3-prefix",
+        "pins": "observed_prefix_rubikpi3",
+        "cargo_target": target_spec_sdk_path("aarch64-sel4-minimal"),
+        "cargo_target_is_spec": True,
+        "rust_flags": ("-C", "link-arg=--build-id=none"),
+        "cargo_flags": (
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ),
+    },
     "aarch64-rpi5": {
         "platform": "bcm2712-rpi5",
         "prefix": "build/sel4-rpi5-prefix",

@@ -70,7 +70,7 @@
     prefix = {
       path = "contracts/system-image-closure/v2/inputs/sel4-prefix";
       kind = "tree";
-      identity = "4ea959e857a157116b94153c45b5916baaa13ba7aa6cd50a8b6ec13ed4a2bad2";
+      identity = "d38e0bcbf4c1821fc88e55304d90b2f5a5813949bfdbf0d7b694c49126245a85";
     };
     toolchain = "nightly-2026-04-04";
     rustSel4Commit = "14d98403c1dd95fd97109919e13466f0ecb37c01";
@@ -99,7 +99,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "013d9fad2ec297bdafd430d8468a53d6eb28b0ead44e3566673bd1ed3806a18b";
+        identity = "b3e5452c4cc1c51b8a4fff51e389dea301ceb7274063a31c1438826ec6c25141";
       };
     };
     {
@@ -171,7 +171,7 @@
       artifact = {
         path = "scripts/build/build-generation.py";
         kind = "file";
-        identity = "ee046a87ec82e88dafa4eb13aa443ed4cf80fc6c964f4f7a5e7cb43c9012c296";
+        identity = "2a56eab8490a5c45804d652f1691ca1b8cd11bada0a92890d463047a299004a5";
       };
     };
     {
@@ -179,7 +179,7 @@
       artifact = {
         path = "scripts/build/build-sel4.py";
         kind = "file";
-        identity = "456584c32b4725ec5387a983ffe974b1e61bb51aa2634e48a6ee4ba451395fbf";
+        identity = "2950d77e7c239af30a5bfecfe778aa782d2adbd8ee521952d8b0e1601f682b11";
       };
     };
     {
@@ -195,7 +195,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "54b96b781c614ab11c38748cec23433ef934a3437ed8360978b66e8e610cbe51";
+        identity = "83886eb7f821078e0e9e8a4aa4d60579a26f437aac6d5f5485ef7ec577bc185c";
       };
     };
     {

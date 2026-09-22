@@ -192,6 +192,31 @@ profiles :: List Profile = {
     qemuBinary = "qemu-system-aarch64";
   };
   {
+    constName = "AARCH64_SEL4_RUBIKPI3";
+    name = "aarch64-sel4-rubikpi3";
+    id = 10;
+    architecture = 2;
+    abi = 4;
+    pageProfile = 2;
+    -- Same userspace ABI as the AArch64 seL4 reference, and the same reason
+    -- for naming no interrupt controller or timer: they are seL4's to drive.
+    -- The identity is nonetheless distinct, because the Rubik Pi 3's QCS6490
+    -- Cortex-A55 topology, GICv3 layout, 19.2 MHz counter, GENI debug UART,
+    -- and firmware handoff are not interchangeable with QEMU `virt`.
+    requiredFeatures = 66;
+    elfMachine = 183;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    -- The component specification is the shared base's, not the Rubik loader
+    -- fork's: that fork diverges only in `sel4-kernel-loader`, and a component
+    -- built here is an ordinary AArch64 seL4 task.
+    cargoTarget = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json";
+    -- No emulator runs this profile.
+    qemuBinary = "";
+  };
+  {
     constName = "RISCV64_QEMU_VIRT";
     name = "riscv64-qemu-virt";
     id = 4;

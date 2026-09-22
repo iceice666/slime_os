@@ -297,6 +297,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-rollback.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-rubikpi3";
+      deferralReason = "";
+      owningGate = "sel4_rubikpi3_image_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-rubikpi3.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-sample.zti";
       composition = "sel4-sample";
       deferralReason = "";
