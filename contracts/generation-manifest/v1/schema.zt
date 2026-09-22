@@ -6,6 +6,8 @@
 -- Enumerated identifiers remain Text at the serialization boundary in format 1.
 -- The builder validates the closed value sets documented with this contract.
 
+privatePolicy ::= import private_policy.declarations;
+
 Object :: type {
   id : Text;
   kind : Text;
@@ -615,6 +617,8 @@ GenerationManifest :: type {
   -- that grants nobody working memory says so by omission instead of carrying
   -- an empty list it never reads.
   privateMemoryBudget? : List PrivateMemoryBudgetEntry;
+  -- Mutually exclusive with privateMemoryBudget, including an explicit empty list.
+  privateMemoryPolicy? : privatePolicy.Policy;
   -- Optional IO1 hardware-resource budget. Like the shared-buffer and private
   -- memory budgets, this is emitted as an authenticated resource object;
   -- absence and an empty list both deny every holder.

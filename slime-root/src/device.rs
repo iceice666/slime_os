@@ -760,7 +760,8 @@ impl DmaPage {
         let paddr = allocator
             .physical_address_of(slot)
             .ok_or(DeviceError::Allocate(AllocError::NoKernelUntyped))?;
-        let frame = sel4::init_thread::Slot::<sel4::cap_type::Granule>::from_index(slot).cap();
+        let frame =
+            crate::root_cspace::RootSlot::<sel4::cap_type::Granule>::from_address(slot).cap();
         let mut adapter = crate::buffer_adapter::BufferAdapter::new(allocator);
         adapter
             .map_frame(

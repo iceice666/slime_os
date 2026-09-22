@@ -1,0 +1,79 @@
+-- Version 2 separates guaranteed backing from elastic request permission.
+-- The v1 family magic is retained so an old root refuses this version rather
+-- than treating unfamiliar authority as an absent budget. Fixed v1 is unchanged.
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+t ::= import stdlib.text;
+gen ::= import "gen_rust.zt";
+formatVersion :: Int = 2;
+maxEntitlements :: Int = 32;
+maxSubjects :: Int = 64;
+fixedMode :: Int = 0;
+poolMode :: Int = 1;
+pageBytes :: Int = 4096;
+maxValue :: Int = 9223372036854775807;
+maxPages :: Int = 2251799813685247;
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+Header :: type {
+  magic : Int; format_version : Int; header_size : Int; required_flags : Int;
+  entitlement_count : Int; subject_count : Int; total_len : Int; reserved : Int;
+  reserve_bytes : Int; reserve_slots : Int; reserve_descriptors : Int;
+  reserve_extents : Int; reserve_tables : Int;
+};
+Entitlement :: type {
+  identity : Int; subtree_root : Int; guarantee_pages : Int;
+  maximum_pages : Int; maximum_mode : Int; reserved : Int;
+};
+Subject :: type {
+  identity : Int; entitlement : Int; maximum_pages : Int;
+  maximum_mode : Int; reserved : Int;
+};
+headerSchema ::= schema Header;
+entitlementSchema ::= schema Entitlement;
+subjectSchema ::= schema Subject;
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "entitlement_count"; width = 4; signed = false; byteArray = false; };
+  { name = "subject_count"; width = 4; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+  { name = "reserve_bytes"; width = 8; signed = false; byteArray = false; };
+  { name = "reserve_slots"; width = 8; signed = false; byteArray = false; };
+  { name = "reserve_descriptors"; width = 8; signed = false; byteArray = false; };
+  { name = "reserve_extents"; width = 8; signed = false; byteArray = false; };
+  { name = "reserve_tables"; width = 8; signed = false; byteArray = false; };
+};
+entitlementLayout :: List WireField = {
+  { name = "identity"; width = 32; signed = false; byteArray = true; };
+  { name = "subtree_root"; width = 32; signed = false; byteArray = true; };
+  { name = "guarantee_pages"; width = 8; signed = false; byteArray = false; };
+  { name = "maximum_pages"; width = 8; signed = false; byteArray = false; };
+  { name = "maximum_mode"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+subjectLayout :: List WireField = {
+  { name = "identity"; width = 32; signed = false; byteArray = true; };
+  { name = "entitlement"; width = 32; signed = false; byteArray = true; };
+  { name = "maximum_pages"; width = 8; signed = false; byteArray = false; };
+  { name = "maximum_mode"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+format ::= {
+  formatVersion =; maxEntitlements =; maxSubjects =; fixedMode =; poolMode =;
+  pageBytes =; maxValue =; maxPages =;
+  headerFields = headerSchema.fields ?? {;};
+  entitlementFields = entitlementSchema.fields ?? {;};
+  subjectFields = subjectSchema.fields ?? {;};
+  headerLayout =; entitlementLayout =; subjectLayout =;
+};
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    fs.writeAll caps.write (t.join "" { root; "/private_memory_policy.py"; }) bindings.python;
+    fs.writeAll caps.write (t.join "" { root; "/private_memory_policy.rs"; }) bindings.rust
+  ];
+main

@@ -1,4 +1,28 @@
 [group('quality')]
+private_memory_policy_check: contracts_check system_spec_check test_host test_sel4_root sel4_root_boot_check
+    just fmt_check_all
+    just lint_all
+    just ruff
+    just docs_check
+
+# Preserve the fixed-capacity regression surface on both reference architectures.
+[group('quality')]
+private_memory_phase2_regression_check: private_memory_policy_check private_memory_check private_memory_cycles_check private_memory_stress_check sel4_loan_check sel4_gate_control_check
+
+# One recipe covering every phase-2 acceptance, so a single execution input
+# binds the expandable-CSpace, metadata-lifecycle, bootstrap-boundary and
+# fixed-capacity evidence to the same code closure and images.
+[group('quality')]
+private_memory_phase2_check: private_memory_cspace_check private_memory_metadata_check private_memory_bootstrap_check private_memory_phase2_regression_check
+
+# One recipe covering every phase-3 acceptance. Demand-backed acquisition
+# changes the allocator every fixed-capacity holder also uses, so the
+# phase-2 surface is re-run here rather than assumed: a green elastic plane
+# over a regressed fixed one is not evidence of anything.
+[group('quality')]
+private_memory_phase3_check: private_memory_elastic_check private_memory_fragmentation_check private_memory_rollback_check private_memory_conservation_check private_memory_phase2_check
+
+[group('quality')]
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py
 
@@ -326,7 +350,7 @@ test_sel4_root:
     # modules that exist there: P6's `framebuffer` and `boot_record` are gated
     # to x86-64 because the boot framebuffer is reached through an x86 extra-
     # BootInfo record, and their tests are covered by the x86-64 planes instead.
-    expected=265
+    expected=286
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"
@@ -379,7 +403,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 21 modules"
+    echo "slime-root host tests: $actual/$expected across 25 modules"
 
 # The frame-level peer the network planes talk to, exercised without QEMU.
 [group('quality')]

@@ -812,6 +812,47 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     if let Err(error) = allocator.initialize(bootinfo) {
         fatal!("allocator rejected bootinfo: {error:?}")
     }
+    let root_node = allocator
+        .allocate(slime_root::root_cspace::blueprint())
+        .unwrap_or_else(|error| fatal!("root CSpace backing: {error:?}"));
+    slime_root::root_cspace::install(root_node.cap().downcast())
+        .unwrap_or_else(|error| fatal!("root CSpace cutover: {error:?}"));
+    allocator.release_slot(root_node.index());
+    allocator
+        .initialize_metadata(bootinfo)
+        .unwrap_or_else(|error| fatal!("root metadata bootstrap: {error:?}"));
+    // Qualification roles run before any task exists, so a refusal they
+    // provoke cannot reach a published component.
+    #[cfg(slime_cspace_expanded)]
+    {
+        allocator.pressure_initial_namespace();
+        allocator
+            .exercise_expanded_cspace(bootinfo)
+            .unwrap_or_else(|error| fatal!("expanded CSpace qualification: {error:?}"));
+    }
+    #[cfg(slime_metadata_lifecycle)]
+    allocator
+        .exercise_metadata_lifecycle()
+        .unwrap_or_else(|error| fatal!("metadata lifecycle qualification: {error:?}"));
+    #[cfg(slime_bootstrap_boundaries)]
+    allocator
+        .exercise_bootstrap_boundaries()
+        .unwrap_or_else(|error| fatal!("bootstrap boundary qualification: {error:?}"));
+    // Demand-backed private memory runs here for the same reason: its holders
+    // live in windows of the root's own address space, so a refusal, a
+    // rollback or a revoke it provokes cannot reach a component.
+    #[cfg(slime_private_elastic)]
+    slime_root::private_memory::qualification::exercise_idle_and_guarantee(allocator)
+        .unwrap_or_else(|error| fatal!("elastic guarantee qualification: {error:?}"));
+    #[cfg(slime_private_fragmentation)]
+    slime_root::private_memory::qualification::exercise_mixed_fragmentation(allocator)
+        .unwrap_or_else(|error| fatal!("elastic fragmentation qualification: {error:?}"));
+    #[cfg(slime_private_rollback)]
+    slime_root::private_memory::qualification::exercise_failure_rollback(allocator)
+        .unwrap_or_else(|error| fatal!("elastic rollback qualification: {error:?}"));
+    #[cfg(slime_private_conservation)]
+    slime_root::private_memory::qualification::exercise_cross_holder_conservation(allocator)
+        .unwrap_or_else(|error| fatal!("elastic conservation qualification: {error:?}"));
     let initial_slots = allocator.slots_remaining();
     let initial_untypeds = allocator.untyped_count();
     let initial_bytes = allocator.untyped_bytes_remaining();
@@ -1269,6 +1310,13 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // allocator knows (B49). Per-instance ceilings say each process fits; this
     // says they all fit together, before any component starts rather than
     // partway through construction with children already running.
+    //
+    // Root CSpace grows from admitted ordinary memory, so the first call only
+    // prices the plan and the pool is grown to it; the decision then compares
+    // the price against what this platform could actually fund.
+    if let Ok(required) = generation::admit_total_slots(&generation, usize::MAX) {
+        allocator.fund_root_slots(required);
+    }
     let planned_slots = match generation::admit_total_slots(&generation, allocator.free_slots()) {
         Ok(required) => required,
         Err(error) => fatal!("generation admission rejected: {error:?}"),

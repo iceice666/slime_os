@@ -1,6 +1,6 @@
 //! Aligned ordinary-untyped prefixes must remain owned before a later retype.
 
-use super::{AllocError, ObjectAllocator, UntypedRegion};
+use super::{AllocError, ObjectAllocator, UntypedRegion, preserved::PreservedRecords};
 
 pub(super) const MAX_PRESERVED: usize = if super::LARGE_DESCRIPTOR_TABLES {
     4096
@@ -13,15 +13,11 @@ impl ObjectAllocator {
     /// Preserved prefixes remain independently owned even if a subsequent
     /// allocation fails. Count only the unconsumed tails, never parent bytes.
     pub fn preserved_bytes_remaining(&self) -> usize {
-        self.preserved[..self.preserved_len]
-            .iter()
-            .flatten()
-            .map(UntypedRegion::remaining)
-            .sum()
+        self.preserved.iter().map(|region| region.remaining()).sum()
     }
 
     pub fn preserved_anchor_count(&self) -> usize {
-        self.preserved_len
+        self.preserved.len()
     }
 
     /// Snapshot disjoint backing owners without treating parent capabilities
@@ -37,7 +33,7 @@ impl ObjectAllocator {
                 region.watermark,
             );
         }
-        for region in self.preserved[..self.preserved_len].iter().flatten() {
+        for region in self.preserved.iter() {
             sel4::debug_println!(
                 "SLIME_BACKING retained parent={} paddr={} bytes={} used={}",
                 region.cap.bits(),
@@ -70,11 +66,10 @@ impl ObjectAllocator {
         if bits < MINIMUM_BITS {
             return Ok(false);
         }
-        let Some(mut index) = self.preserved[..self.preserved_len]
-            .iter()
-            .enumerate()
-            .filter_map(|(index, region)| {
-                region
+        let Some(mut index) = (0..self.preserved.len())
+            .filter_map(|index| {
+                self.preserved
+                    .get(index)
                     .filter(|region| region.watermark == 0 && region.size_bits >= bits)
                     .map(|region| (index, region.size_bits))
             })
@@ -83,14 +78,12 @@ impl ObjectAllocator {
         else {
             return Ok(false);
         };
-        let original = self.preserved[index].unwrap();
+        let original = self
+            .preserved
+            .get(index)
+            .ok_or(AllocError::NoKernelUntyped)?;
         let splits = original.size_bits - bits;
-        if 2 * splits > MAX_PRESERVED - self.preserved_len {
-            return Err(AllocError::UntypedTableFull {
-                limit: MAX_PRESERVED,
-                declared: self.preserved_len + 2 * splits,
-            });
-        }
+        self.ensure_preserved_records(2 * splits)?;
         if 2 * splits > self.free_slots() {
             return Err(AllocError::SlotsExhausted {
                 allocated: self.slots_allocated,
@@ -99,23 +92,30 @@ impl ObjectAllocator {
         // A free-slot count does not imply the pairs required by one atomic
         // two-child retype exist. Reserve the complete split shape in a copy
         // before publishing any child capability.
-        let mut planned_slots = self.slots.clone();
-        for _ in 0..splits {
-            planned_slots.allocate_contiguous(2, self.slots_allocated)?;
+        {
+            let mut planned_slots = self.slots.planner();
+            for _ in 0..splits {
+                planned_slots.allocate_contiguous(2, self.slots_allocated)?;
+            }
         }
-        while self.preserved[index].unwrap().size_bits > bits {
-            let parent = self.preserved[index].unwrap();
+        while self
+            .preserved
+            .get(index)
+            .is_some_and(|region| region.size_bits > bits)
+        {
+            let parent = self
+                .preserved
+                .get(index)
+                .ok_or(AllocError::NoKernelUntyped)?;
             let (first, reused) = self.slots.allocate_contiguous(2, self.slots_allocated)?;
             let child_bits = parent.size_bits - 1;
             // One invocation validates both destinations before creating either
             // child, so failure cannot strand an unrepresented sibling tail.
-            if let Err(error) = parent.cap.untyped_retype(
+            if let Err(error) = crate::root_cspace::retype(
+                parent.cap,
                 &sel4::ObjectBlueprint::Untyped {
                     size_bits: child_bits,
                 },
-                &sel4::init_thread::slot::CNODE
-                    .cap()
-                    .absolute_cptr_for_self(),
                 first,
                 2,
             ) {
@@ -129,12 +129,17 @@ impl ObjectAllocator {
             self.slots_allocated += 2;
             self.slots_reused += reused;
             for (side, slot) in [first, first + 1].into_iter().enumerate() {
-                self.preserved[self.preserved_len] = Some(UntypedRegion {
+                if !self.preserved.push(UntypedRegion {
                     cap: sel4::cap::Untyped::from_bits(slot as _),
                     paddr: parent.paddr + side * (1usize << child_bits),
                     size_bits: child_bits,
                     watermark: 0,
-                });
+                }) {
+                    return Err(AllocError::UntypedTableFull {
+                        limit: self.preserved.capacity(),
+                        declared: self.preserved.len() + 1,
+                    });
+                }
                 sel4::debug_println!(
                     "SLIME_BACKING split parent={} child={} paddr={} bytes={}",
                     parent.cap.bits(),
@@ -142,12 +147,13 @@ impl ObjectAllocator {
                     parent.paddr + side * (1usize << child_bits),
                     1usize << child_bits,
                 );
-                self.preserved_len += 1;
-                self.preserved[index].as_mut().unwrap().watermark += 1usize << child_bits;
+                let mut retained = parent;
+                retained.watermark += (side + 1) * (1usize << child_bits);
+                self.preserved.set(index, retained);
                 self.objects_allocated += 1;
                 self.live_objects += 1;
             }
-            index = self.preserved_len - 2;
+            index = self.preserved.len() - 2;
         }
         self.allocate_preserved_leaf(blueprint, destination, index)?;
         Ok(true)
@@ -160,7 +166,10 @@ impl ObjectAllocator {
         index: usize,
     ) -> Result<(), AllocError> {
         let bits = blueprint.physical_size_bits();
-        let leaf = self.preserved[index].ok_or(AllocError::NoKernelUntyped)?;
+        let leaf = self
+            .preserved
+            .get(index)
+            .ok_or(AllocError::NoKernelUntyped)?;
         if leaf.watermark != 0 || leaf.size_bits != bits {
             return Err(AllocError::NoKernelUntyped);
         }
@@ -168,14 +177,7 @@ impl ObjectAllocator {
         if recorded {
             self.physical.insert(destination, leaf.paddr)?;
         }
-        if let Err(error) = leaf.cap.untyped_retype(
-            &blueprint,
-            &sel4::init_thread::slot::CNODE
-                .cap()
-                .absolute_cptr_for_self(),
-            destination,
-            1,
-        ) {
+        if let Err(error) = crate::root_cspace::retype(leaf.cap, &blueprint, destination, 1) {
             if recorded {
                 self.physical.remove(destination);
             }
@@ -184,7 +186,13 @@ impl ObjectAllocator {
                 error,
             });
         }
-        self.preserved[index].as_mut().unwrap().watermark = 1usize << bits;
+        self.preserved.set(
+            index,
+            UntypedRegion {
+                watermark: 1usize << bits,
+                ..leaf
+            },
+        );
         self.last_paddr = leaf.paddr;
         self.objects_allocated += 1;
         self.live_objects += 1;
@@ -213,19 +221,16 @@ impl ObjectAllocator {
         end: usize,
     ) -> Result<(), AllocError> {
         self.preserve_global_prefix_with(index, end, |parent, bits, slot| {
-            parent
-                .untyped_retype(
-                    &sel4::ObjectBlueprint::Untyped { size_bits: bits },
-                    &sel4::init_thread::slot::CNODE
-                        .cap()
-                        .absolute_cptr_for_self(),
-                    slot,
-                    1,
-                )
-                .map_err(|error| AllocError::Retype {
-                    size_bits: bits,
-                    error,
-                })
+            crate::root_cspace::retype(
+                parent,
+                &sel4::ObjectBlueprint::Untyped { size_bits: bits },
+                slot,
+                1,
+            )
+            .map_err(|error| AllocError::Retype {
+                size_bits: bits,
+                error,
+            })
         })
     }
 
@@ -239,12 +244,7 @@ impl ObjectAllocator {
         let count = prefix_blocks(region.watermark, end, MINIMUM_BITS)
             .filter(|_| end <= region.capacity())
             .ok_or(AllocError::NoKernelUntyped)?;
-        if count > MAX_PRESERVED - self.preserved_len {
-            return Err(AllocError::UntypedTableFull {
-                limit: MAX_PRESERVED,
-                declared: self.preserved_len + count,
-            });
-        }
+        self.ensure_preserved_records(count)?;
         if count > self.free_slots() {
             return Err(AllocError::SlotsExhausted {
                 allocated: self.slots_allocated,
@@ -259,12 +259,18 @@ impl ObjectAllocator {
                 self.slots.release(slot);
                 return Err(error);
             }
-            self.preserved[self.preserved_len] = Some(UntypedRegion {
+            if !self.preserved.push(UntypedRegion {
                 cap: sel4::cap::Untyped::from_bits(slot as _),
                 paddr: region.paddr + cursor,
                 size_bits: bits,
                 watermark: 0,
-            });
+            }) {
+                self.slots.release(slot);
+                return Err(AllocError::UntypedTableFull {
+                    limit: self.preserved.capacity(),
+                    declared: self.preserved.len() + 1,
+                });
+            }
             #[cfg(not(test))]
             sel4::debug_println!(
                 "SLIME_BACKING preserve parent={} child={} paddr={} bytes={}",
@@ -273,7 +279,6 @@ impl ObjectAllocator {
                 region.paddr + cursor,
                 1usize << bits,
             );
-            self.preserved_len += 1;
             self.objects_allocated += 1;
             self.live_objects += 1;
             cursor += 1usize << bits;
@@ -283,115 +288,155 @@ impl ObjectAllocator {
     }
 }
 
+/// Why a planned extent could not be placed, so the caller can fund the
+/// resource the plan actually ran out of instead of reporting one boolean.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PlanShortfall {
+    /// Retained-prefix records the plan could not represent.
+    Records(usize),
+    /// Root CSlots the plan could not name.
+    Slots(usize),
+    /// No admitted ordinary range can place the extent at all.
+    Placement,
+}
+
 /// Simulate the same preserved-leaf selection and ordinary-prefix retention
 /// used by live extent provisioning, including all additional anchor slots.
 pub(super) fn plan_extent(
     ordinary: &mut [Option<UntypedRegion>],
-    preserved: &mut [Option<UntypedRegion>],
-    preserved_len: &mut usize,
+    preserved: &mut impl PreservedRecords,
     slots: &mut usize,
     bits: usize,
 ) -> bool {
-    plan_extent_with_slots(ordinary, preserved, preserved_len, slots, bits, None)
+    plan_extent_with_slots(ordinary, preserved, slots, bits, None).is_ok()
 }
 
 pub(super) fn plan_extent_with_slots(
     ordinary: &mut [Option<UntypedRegion>],
-    preserved: &mut [Option<UntypedRegion>],
-    preserved_len: &mut usize,
+    preserved: &mut impl PreservedRecords,
     slots: &mut usize,
     bits: usize,
-    mut slot_pool: Option<&mut super::SlotPool>,
-) -> bool {
+    mut slot_pool: Option<&mut super::SlotPlan<'_>>,
+) -> Result<(), PlanShortfall> {
     let Some(bytes) = u32::try_from(bits)
         .ok()
         .and_then(|bits| 1usize.checked_shl(bits))
     else {
-        return false;
+        return Err(PlanShortfall::Placement);
     };
-    if *slots == 0 || bits < MINIMUM_BITS {
-        return false;
+    if bits < MINIMUM_BITS {
+        return Err(PlanShortfall::Placement);
     }
-    if let Some((mut index, size_bits)) = preserved[..*preserved_len]
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            entry
+    if *slots == 0 {
+        return Err(PlanShortfall::Slots(1));
+    }
+    if let Some((mut index, size_bits)) = (0..preserved.len())
+        .filter_map(|index| {
+            preserved
+                .get(index)
                 .filter(|entry| entry.watermark == 0 && entry.size_bits >= bits)
                 .map(|entry| (index, entry.size_bits))
         })
         .min_by_key(|(_, size)| *size)
     {
         let extra = 2 * (size_bits - bits);
-        if extra > preserved.len() - *preserved_len || extra + 1 > *slots {
-            return false;
+        let free_records = preserved.capacity() - preserved.len();
+        if extra > free_records {
+            return Err(PlanShortfall::Records(extra - free_records));
+        }
+        if extra + 1 > *slots {
+            return Err(PlanShortfall::Slots(extra + 1 - *slots));
         }
         if let Some(pool) = slot_pool.as_mut() {
             if pool.allocate(0).is_err() {
-                return false;
+                return Err(PlanShortfall::Slots(1));
             }
             for _ in 0..size_bits - bits {
                 if pool.allocate_contiguous(2, 0).is_err() {
-                    return false;
+                    return Err(PlanShortfall::Slots(2));
                 }
             }
         }
-        while preserved[index].unwrap().size_bits > bits {
-            let parent = preserved[index].unwrap();
+        while preserved
+            .get(index)
+            .is_some_and(|entry| entry.size_bits > bits)
+        {
+            let parent = preserved.get(index).expect("selected planning record");
             let child_bits = parent.size_bits - 1;
-            let first = *preserved_len;
+            let first = preserved.len();
             for side in 0..2 {
-                preserved[*preserved_len] = Some(UntypedRegion {
+                if !preserved.push(UntypedRegion {
                     cap: parent.cap,
                     paddr: parent.paddr + side * (1usize << child_bits),
                     size_bits: child_bits,
                     watermark: 0,
-                });
-                *preserved_len += 1;
+                }) {
+                    return Err(PlanShortfall::Records(1));
+                }
             }
-            preserved[index].as_mut().unwrap().watermark = parent.capacity();
+            preserved.set(
+                index,
+                UntypedRegion {
+                    watermark: parent.capacity(),
+                    ..parent
+                },
+            );
             index = first;
         }
-        preserved[index].as_mut().unwrap().watermark = bytes;
+        let Some(leaf) = preserved.get(index) else {
+            return Err(PlanShortfall::Placement);
+        };
+        preserved.set(
+            index,
+            UntypedRegion {
+                watermark: bytes,
+                ..leaf
+            },
+        );
         *slots -= extra + 1;
-        return true;
+        return Ok(());
     }
     let Some((index, start, end)) = ordinary.iter().enumerate().find_map(|(index, entry)| {
         let entry = entry.as_ref()?;
         super::plan_allocation(entry.watermark, entry.capacity(), bits)
             .map(|(start, end)| (index, start, end))
     }) else {
-        return false;
+        return Err(PlanShortfall::Placement);
     };
     let parent = ordinary[index].unwrap();
     let Some(extra) = prefix_blocks(parent.watermark, start, MINIMUM_BITS) else {
-        return false;
+        return Err(PlanShortfall::Placement);
     };
-    if extra > preserved.len() - *preserved_len || extra + 1 > *slots {
-        return false;
+    let free_records = preserved.capacity() - preserved.len();
+    if extra > free_records {
+        return Err(PlanShortfall::Records(extra - free_records));
+    }
+    if extra + 1 > *slots {
+        return Err(PlanShortfall::Slots(extra + 1 - *slots));
     }
     if let Some(pool) = slot_pool.as_mut() {
         for _ in 0..extra + 1 {
             if pool.allocate(0).is_err() {
-                return false;
+                return Err(PlanShortfall::Slots(1));
             }
         }
     }
     let mut cursor = parent.watermark;
     while cursor < start {
         let gap_bits = prefix_block(cursor, start, MINIMUM_BITS).unwrap();
-        preserved[*preserved_len] = Some(UntypedRegion {
+        if !preserved.push(UntypedRegion {
             cap: parent.cap,
             paddr: parent.paddr + cursor,
             size_bits: gap_bits,
             watermark: 0,
-        });
-        *preserved_len += 1;
+        }) {
+            return Err(PlanShortfall::Records(1));
+        }
         cursor += 1usize << gap_bits;
     }
     ordinary[index].as_mut().unwrap().watermark = end;
     *slots -= extra + 1;
-    true
+    Ok(())
 }
 
 /// Return the largest aligned power-of-two block at `start` inside the prefix.
@@ -431,6 +476,13 @@ fn prefix_blocks(start: usize, end: usize, minimum_bits: usize) -> Option<usize>
 
 #[cfg(test)]
 mod tests {
+    fn records<'a>(
+        entries: &'a mut [Option<UntypedRegion>],
+        len: &'a mut usize,
+    ) -> super::super::preserved::SliceRecords<'a> {
+        super::super::preserved::SliceRecords { entries, len }
+    }
+
     extern crate std;
     use super::*;
 
@@ -453,14 +505,16 @@ mod tests {
         let before = preserved;
         let mut len = 1;
         let mut available = pool.free();
-        assert!(!plan_extent_with_slots(
-            &mut [],
-            &mut preserved,
-            &mut len,
-            &mut available,
-            12,
-            Some(&mut pool)
-        ));
+        assert_eq!(
+            plan_extent_with_slots(
+                &mut [],
+                &mut records(&mut preserved, &mut len),
+                &mut available,
+                12,
+                Some(&mut pool.planner())
+            ),
+            Err(PlanShortfall::Slots(2))
+        );
         assert_eq!(preserved, before);
         assert_eq!(len, 1);
         assert_eq!(available, 4);
@@ -480,8 +534,7 @@ mod tests {
         let mut slots = 32;
         assert!(plan_extent(
             &mut ordinary,
-            &mut preserved,
-            &mut len,
+            &mut records(&mut preserved, &mut len),
             &mut slots,
             12
         ));
@@ -490,8 +543,7 @@ mod tests {
         assert_eq!(slots, 23);
         assert!(plan_extent(
             &mut ordinary,
-            &mut preserved,
-            &mut len,
+            &mut records(&mut preserved, &mut len),
             &mut slots,
             4
         ));
@@ -504,8 +556,7 @@ mod tests {
         let mut slots = 32;
         assert!(!plan_extent(
             &mut ordinary,
-            &mut insufficient,
-            &mut len,
+            &mut records(&mut insufficient, &mut len),
             &mut slots,
             12
         ));
@@ -515,8 +566,7 @@ mod tests {
         slots = 8;
         assert!(!plan_extent(
             &mut ordinary,
-            &mut preserved,
-            &mut len,
+            &mut records(&mut preserved, &mut len),
             &mut slots,
             12
         ));
@@ -553,7 +603,7 @@ mod tests {
                         .is_err()
                 );
                 assert_eq!(allocator.untypeds[0].unwrap().watermark, 64);
-                assert_eq!(allocator.preserved_len, 2);
+                assert_eq!(allocator.preserved.len(), 2);
                 assert_eq!(allocator.preserved_bytes_remaining(), 48);
                 assert_eq!(
                     allocator.untyped_bytes_remaining() + allocator.preserved_bytes_remaining(),
@@ -567,7 +617,7 @@ mod tests {
                     })
                     .unwrap();
                 assert_eq!(bits_seen, [6, 7, 8, 9, 10, 11]);
-                assert_eq!(allocator.preserved_len, 8);
+                assert_eq!(allocator.preserved.len(), 8);
                 assert_eq!(allocator.untyped_bytes_remaining(), 0);
                 assert_eq!(allocator.preserved_bytes_remaining(), before);
                 assert_eq!(allocator.free_slots(), 42);
@@ -603,9 +653,17 @@ mod tests {
                         .is_err()
                 );
                 assert_eq!(allocator.untypeds[0].unwrap().watermark, 16);
-                assert_eq!(allocator.preserved_len, 0);
-                allocator.slots.initialize(100..150).unwrap();
-                allocator.preserved_len = MAX_PRESERVED;
+                assert_eq!(allocator.preserved.len(), 0);
+                allocator.slots = super::super::SlotPool::new(100..150).unwrap();
+                allocator.preserved.provision_host(MAX_PRESERVED);
+                // Fill the admitted envelope exactly: its capacity is a whole
+                // number of record pages, not the historical constant.
+                while allocator.preserved.push(UntypedRegion {
+                    cap: sel4::cap::Untyped::from_bits(1),
+                    paddr: 0,
+                    size_bits: MINIMUM_BITS,
+                    watermark: 1 << MINIMUM_BITS,
+                }) {}
                 assert!(
                     allocator
                         .preserve_global_prefix_with(0, 4096, |_, _, _| panic!(

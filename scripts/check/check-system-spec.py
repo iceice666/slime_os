@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 
 import system_spec_contract as CONTRACT
+import private_memory_policy
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT, load_script
 from system_spec import (
@@ -985,6 +986,101 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
             else:
                 fail(f"{target}: {label} private-memory boundary overflow was accepted")
             refusals += 1
+
+    adaptive_spec = copy.deepcopy(systems["sel4-private-memory-1g"].spec)
+    for instance in adaptive_spec["instances"]:
+        instance["privatePageQuota"] = 0
+    adaptive_spec["privateMemoryPolicy"] = {
+        "formatVersion": 2,
+        "reserve": dict.fromkeys(private_memory_policy.RESOURCES, 1),
+        "entitlements": [{"name": "workers", "subtreeRoot": "private-memory-1g-probe",
+                          "guaranteePages": 2, "maximumMode": "pool", "maximumPages": 0}],
+        "subjects": [{"instance": f"private-memory-1g-holder-{name}", "entitlement": "workers",
+                      "maximumMode": "pool", "maximumPages": 0} for name in "abcd"],
+    }
+    adaptive_manifest = memory_manifest(adaptive_spec)
+    if "privateMemoryBudget" in adaptive_manifest:
+        fail("adaptive derivation retained a fixed budget")
+    if [entry["id"] for entry in adaptive_manifest["objects"] if entry["id"].startswith("private-memory-")] != ["private-memory-policy"]:
+        fail("adaptive policy resource was not derived exactly once")
+    adaptive = private_memory_policy.manifest_policy(adaptive_manifest)
+    if adaptive != adaptive_spec["privateMemoryPolicy"]:
+        fail("adaptive policy changed during system derivation")
+    encoded = private_memory_policy.encode(adaptive, adaptive_manifest["instances"])
+    policy_blob = root / "private-memory-policy.bin"
+    policy_blob.write_bytes(encoded)
+    decoded_policy = subprocess.run(
+        ["cargo", "run", "--quiet", "-p", "boot-contracts", "--example", "admit_generation",
+         "--", "--private-memory-policy", str(policy_blob)],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    )
+    if decoded_policy.stdout.strip() != "policy 1 4":
+        fail(f"host policy encoder disagrees with native decoder: {decoded_policy.stdout}")
+    if encoded != private_memory_policy.encode(adaptive, adaptive_manifest["instances"]):
+        fail("adaptive encoding is not deterministic")
+
+    def policy_mutation(spec: dict, case: str) -> None:
+        policy = spec["privateMemoryPolicy"]
+        if case == "fixed-conflict":
+            spec["instances"][0]["privatePageQuota"] = 1
+        elif case == "duplicate-subject":
+            policy["subjects"].append(copy.deepcopy(policy["subjects"][0]))
+        elif case == "unknown-entitlement":
+            policy["subjects"][0]["entitlement"] = "missing"
+        elif case == "outside-subtree":
+            policy["subjects"][0]["instance"] = "init"
+        elif case == "maximum-below-guarantee":
+            policy["entitlements"][0].update(maximumMode="fixed", maximumPages=1)
+        elif case == "unknown-version":
+            policy["formatVersion"] = 3
+        elif case == "overflow":
+            policy["entitlements"][0]["guaranteePages"] = private_memory_policy.MAX_PAGES + 1
+        elif case == "implicit-pool-value":
+            policy["subjects"][0]["maximumPages"] = 1
+
+    for case, reason in (
+        ("fixed-conflict", "conflicts with effective fixed privatePageQuota"),
+        ("duplicate-subject", "unknown or duplicate subject"),
+        ("unknown-entitlement", "unknown entitlement"),
+        ("outside-subtree", "subject outside declared subtree"),
+        ("maximum-below-guarantee", "guarantee exceeds maximum"),
+        ("unknown-version", "unsupported version"),
+        ("overflow", "invalid guaranteePages"),
+        ("implicit-pool-value", "invalid maximum mode/value"),
+    ):
+        altered = copy.deepcopy(adaptive_spec)
+        policy_mutation(altered, case)
+        try:
+            memory_manifest(altered)
+        except SystemSpecError as error:
+            if reason not in str(error):
+                fail(f"adaptive policy {case} refused at the wrong boundary: {error}")
+            refusals += 1
+        else:
+            fail(f"adaptive policy accepted {case}")
+
+    for case in ("dual-declaration", "dual-resource", "missing-resource", "orphan-resource"):
+        altered = copy.deepcopy(adaptive_manifest)
+        if case == "dual-declaration":
+            altered["privateMemoryBudget"] = []
+        elif case == "dual-resource":
+            altered["objects"].append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
+        elif case == "missing-resource":
+            altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "private-memory-policy"]
+        else:
+            del altered["privateMemoryPolicy"]
+        try:
+            private_memory_policy.manifest_policy(altered)
+        except ValueError:
+            refusals += 1
+        else:
+            fail(f"adaptive manifest accepted {case}")
+
+    narrowed_instances = [entry for entry in adaptive_manifest["instances"]
+                          if not entry["name"].endswith(("-b", "-c", "-d"))]
+    narrowed_policy = private_memory_policy.narrow(adaptive, narrowed_instances)
+    if len(narrowed_policy["subjects"]) != 1 or narrowed_policy["entitlements"][0]["guaranteePages"] != 2:
+        fail("profile narrowing changed a shared guarantee or retained removed members")
 
 # The loan-field exception must refuse drift independently of the frozen
 # comparison, and must not conceal changes outside its exact scope.

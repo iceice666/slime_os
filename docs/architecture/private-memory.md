@@ -60,12 +60,38 @@ kernel objects, not only page-sized memory.
 
 Ordinary tails, unconsumed preserved leaves, reusable task/shared extents and
 initially live backing are separate, disjoint accounting categories. Retained
-anchor CSlots are occupied resources, not free slots. The preservation registry
-is bounded (4096 entries on large-descriptor images, 256 otherwise); exhaustion
-refuses provisioning without skipping unowned bytes. Entries, including consumed
-parents, remain owned for the root lifetime, so this is not unlimited allocator
-metadata or adaptive memory support. Actual target image/CSlot fit still requires
-its own admission and boot evidence.
+anchor CSlots are occupied resources, not free slots. Retained-prefix records
+live in resource-backed storage that grows on demand from the root metadata
+window, so exhaustion is a refusal for want of admitted memory rather than of
+a compile-time table. Entries, including consumed parents, remain owned for
+the root lifetime. Actual target image/CSlot fit still requires its own
+admission and boot evidence.
+
+## Expandable root CSpace and metadata storage
+
+`slime-root/src/root_cspace.rs` installs a four-bit root CNode around the
+kernel's initial CNode before any other root thread starts. Branch zero keeps
+the initial authority at its original addresses under a guard; every later
+leaf is an unguarded ten-bit CNode installed at an expanded prefix, and a
+capability address is the full path, not an index into one flat node. Every
+root-sharing thread configures the installed tree's guard, so a second root
+thread resolves the same addresses.
+
+`slime-root/src/object_allocator/segmented.rs` holds slot occupancy words,
+allocation and extent descriptors, retained-prefix records and the metadata
+ownership ledger in page-backed storage whose indices are stable and whose
+lookup is constant time. Pages come from the bootstrap allocator in
+`object_allocator/infrastructure.rs`, which owns one adopted ordinary source,
+sixty-four emergency slots, and every transaction retained after a failed
+mapping, installation or delete. Growth is charged, reported as
+`infrastructure_owned`, and reusable: released records return to the pool
+rather than to the platform, and the pool never exceeds the high-water demand
+that funded it.
+
+Capacity is therefore not a constant. The qualification report names the
+resource that refuses a plan — allocation descriptors, extent descriptors,
+root CSlots, ordinary bytes, metadata records or ordinary layout — and root
+CSpace is grown to a generation's plan before that plan is admitted.
 
 ## Qualified simultaneous capacity
 
@@ -148,6 +174,89 @@ Further capacity work is specified in
 [`../plans/memory-capacity.md`](../plans/memory-capacity.md). It does not reopen
 the private-memory mechanism.
 
+## Adaptive policy admission boundary
+
+`contracts/private-memory-budget/v2/` defines explicit entitlements and instance
+membership, separate guaranteed pages, fixed or pool-relative request maxima,
+and an operational/restart reserve of bytes, CSlots, descriptors, extents and
+tables. A subtree root restricts explicitly listed members; it never implicitly
+authorizes every descendant. System and generation declarations share these
+types. Component `privatePageQuota` remains a fixed-v1 default; a system opting
+into `privateMemoryPolicy` must explicitly clear every effective fixed quota.
+Fixed and adaptive declarations/resource objects cannot coexist.
+
+The v2 resource retains the `SLIMEPM` magic family and changes the version, so
+old v1 readers refuse it rather than treating authority as absent. The current
+root scans the whole resource family, rejects duplicates, validates v2 structure
+and instance ownership, then refuses adaptive activation before task publication.
+Existing fixed v1 bytes, target bounds and full-affordability semantics remain
+unchanged. This is a policy/host-accounting boundary, not an adaptive allocator.
+
+The allocation-free model in `boot-contracts/src/private_memory_policy/ledger.rs`
+charges guarantees once per entitlement, keeps incarnation tokens distinct from
+entitlement identity, and serializes transactions in caller receipt order.
+Committed bytes cannot be stolen. Failed cleanup retains quarantined charges;
+successful revocation returns ownership, and a restarted instance cannot spend
+the prior incarnation's token within that ledger. Callers must supply only ordinary
+inventory, never device ranges; the pure partition check proves disjoint coverage,
+not the provenance of its inputs. Boot exclusions appear only as absent ranges.
+Exact placement plans check alignment and fragmentation separately from affordability.
+
+The allocator supplying this model must certify simultaneous guarantee backing
+and a conservative per-page envelope of table/metadata/slot costs, reserve real
+resources before publication, and settle transactions only after kernel success.
+Partial redemptions cannot draw another page's share. Successful rollback retains
+only elastic-funded table resources; otherwise it remains pending or quarantined
+until cleanup. Quarantined payload remains charged against authorization maxima.
+Payload quotas do not count metadata or unused extent backing as mapped pages;
+all such overhead remains charged to the resource pool, not hidden as free RAM.
+The pure model does not prove kernel placement or discover RAM. Expandable
+CSpace, resource-backed metadata and demand-backed allocation are implemented
+and qualified; dynamic task windows, spawn/admission integration and
+multi-inventory runtime qualification remain separate work.
+
+## Demand-backed acquisition
+
+`slime-root/src/object_allocator/elastic.rs` and
+`slime-root/src/private_memory/elastic.rs` implement the acquisition an elastic
+holder's growth performs. An authorized maximum reserves nothing: a request
+resolves into the mappings it will take, that shape is priced as a complete
+resource tuple with checked arithmetic, the tuple is taken from the common
+pool, and only then is a frame retyped or a page mapped.
+
+Extents are sized to the request rather than to a quota. Large frames each take
+their own aligned 2 MiB extent; base pages take an exact power-of-two
+decomposition capped at 2 MiB; each new leaf table takes its own granule
+extent. A growth's reserved bytes therefore equal its payload plus its tables,
+which is what lets a fragmented machine serve page-granular growth from blocks
+no aligned span would fit. Elastic arenas select backing best-fit, so a base
+page cannot consume the aligned extent a large frame in the same transaction
+was planned to occupy.
+
+Acquisition precedes judgment because it is reversible. The ledger validates
+the placements the allocator actually obtained — not a prediction — and a
+policy refusal returns the whole acquisition before any mapping exists. A
+failure after mapping unwinds the attempt, returns every unused extent,
+descriptor and CSlot, and retains only leaf tables already bound to a span:
+those name one fixed address, stay charged to their holder, and never enter a
+kind-wide reusable pool. The ledger charges such a table's granule extent as a
+table rather than as a separate extent record, so one record per retained table
+stays allocated while the ledger counts none; the allocator's own record
+capacity, not the ledger's, is what refuses a demand that cannot be stored.
+
+A cleanup that does not complete is quarantined rather than lost: the
+acquisition record stays in the allocator, the holder keeps ownership, its next
+request is refused, and exactly one retry returns the resources. Guarantees are
+reserved in the ledger at admission rather than pre-provisioned physically, so
+an exhausted elastic pool refuses elastic transactions while a guaranteed
+holder's first growth still finds its bytes.
+
+The qualification roles run their holders in windows of the root's own address
+space before any component is published. That exercises the same allocator,
+ledger, retypes and kernel mappings a component's growth would take, and
+deliberately not the spawn, admission or window-placement path, which the next
+stage owns.
+
 ## Verification
 
 - `just private_memory_check` exercises declared quotas and the published
@@ -162,6 +271,36 @@ the private-memory mechanism.
   entries near their limits, without claiming a kernel CNode full of installed
   capabilities. Interleaved, reclaimed 4 MiB guard extents leave measured gaps
   between reused 2 MiB data extents; retained backing remains explicitly owned.
+- `just private_memory_cspace_check` proves capabilities created, invoked,
+  copied, retyped, deleted and revoked beyond the initial CNode namespace on
+  both QEMU architectures, from the root thread and from a second root thread,
+  with the initial namespace deliberately retired first.
+- `just private_memory_metadata_check` grows, reuses and reconciles metadata
+  storage, injects a retained construction and a failed delete, and proves each
+  retry releases exactly once while nothing quarantined is reassigned.
+- `just private_memory_bootstrap_check` measures the bootstrap reserve and
+  exhausts RAM, root CSlots and the metadata window independently, each
+  refusing before any task is published.
+- `just private_memory_phase2_regression_check` aggregates the fixed-capacity
+  surface those three must not regress.
+- `just private_memory_elastic_check` proves an idle authorized maximum takes
+  nothing from the pool, a peer consumes the spare capacity, a guaranteed
+  holder is still served after the elastic pool is exhausted, and the refusal
+  damages neither holder's pages.
+- `just private_memory_fragmentation_check` prices one-page, mixed and bulk
+  growth separately, serves page-granular growth from a machine with no aligned
+  2 MiB block left, refuses the span request by the resource that ran out, and
+  takes a returned holder's extents for the next request.
+- `just private_memory_rollback_check` injects failure at extent acquisition,
+  descriptor provisioning, retype, table mapping, frame mapping and a
+  near-limit descriptor window, then proves a retry charges once and a failed
+  cleanup is owned, refusing and retryable exactly once.
+- `just private_memory_conservation_check` returns one holder's capacity to
+  another with zeroed pages and an unchanged peer pattern, keeps ownership
+  through a failed revoke, and reconciles unallocated bytes to their
+  pre-workload baseline.
+- `just private_memory_phase3_check` runs all four over the phase-2 surface, so
+  one execution binds them to the same code closure and images.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

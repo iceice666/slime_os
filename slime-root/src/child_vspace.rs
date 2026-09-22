@@ -351,15 +351,9 @@ pub fn image_frame(bootinfo: &sel4::BootInfo, addr: usize) -> sel4::cap::Granule
     user_image_frame(bootinfo, addr).cap()
 }
 
-/// The CSpace guard for the root task's own CNode.
-///
-/// `tcb_configure` needs this for any thread sharing the root's CSpace: a CPtr
-/// resolves to `WORD_SIZE` bits and the root CNode holds only
-/// `initThreadCNodeSizeBits` of them, so the remainder is guard. A zero guard
-/// faults every lookup.
-pub fn root_cspace_guard(bootinfo: &sel4::BootInfo) -> sel4::CNodeCapData {
-    let size_bits = bootinfo.inner().initThreadCNodeSizeBits as usize;
-    sel4::CNodeCapData::new(0, sel4::WORD_SIZE - size_bits)
+/// Every thread sharing root authority uses the installed tree's root guard.
+pub fn root_cspace_guard(_bootinfo: &sel4::BootInfo) -> sel4::CNodeCapData {
+    crate::root_cspace::guard()
 }
 
 fn user_image_frame(
