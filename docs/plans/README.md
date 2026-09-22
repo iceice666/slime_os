@@ -23,6 +23,8 @@ Delivery chronology and historical verification results do not belong in a plan.
   exact destination authority, and bounded reset/restart behavior.
 - [Framework hardware](framework-hardware.md) — device qualification after
   CPU boot, IOMMU containment, recovery, and the internal-storage safety boundary.
+- [Rubik Pi 3 bring-up](rubikpi3-bring-up.md) — what the QCS6490 port proves,
+  the ten-second reset that bounds it, and the loading path's exact contract.
 - [Authority and trust](authority-and-trust.md) — revocation, secrets,
   accelerator authority, attestation, and distributed capabilities.
 - [RPi5 ROS 2 demo](rpi5-ros2-demo.md) — bounded middleware interoperability
