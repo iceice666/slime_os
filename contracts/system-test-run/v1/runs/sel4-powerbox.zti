@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-powerbox";
-  imageClosureIdentity = "eb4d0f5938a78a159db4bd344fc9278459f733b99f9b1eaba56e7830f5e20c32";
+  imageClosureIdentity = "118978142742455eef92ff2a22d834b2c69a2c61d4df331cace6d35bf161c418";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
