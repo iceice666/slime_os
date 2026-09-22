@@ -1,0 +1,96 @@
+{
+  bootAction = "boot";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "console";
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-console";
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-rubikpi3";
+}

@@ -91,7 +91,12 @@ LOADER_IMPLEMENTATIONS: dict[str, tuple[str, str]] = {
 # Which compositions get a closure. Every derived composition except the
 # reference generation, which targets `x86_64-qemu-virtio` and has no seL4
 # platform asset to name.
-EXCLUDED = {"reference"}
+# `reference` targets `x86_64-qemu-virtio`, which names no seL4 platform asset.
+# `sel4-rubikpi3` targets a physical board: a closure resolves against a
+# committed seL4 prefix snapshot, and only the QEMU reference platforms commit
+# one. `check-system-image-builder.py` carries the matching declaration, and
+# refuses a name that appears in both places.
+EXCLUDED = {"reference", "sel4-rubikpi3"}
 
 
 # CP14: scenario closures. A scenario is one base composition plus declared

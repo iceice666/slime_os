@@ -97,6 +97,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-replay": "sel4-replay.zti",
     "sel4-robot-runtime": "sel4-robot-runtime.zti",
     "sel4-rollback": "sel4-rollback.zti",
+    "sel4-rubikpi3": "sel4-rubikpi3.zti",
     "sel4-sample": "sel4-sample.zti",
     "sel4-scheduling-class": "sel4-scheduling-class.zti",
     "sel4-slisp": "sel4-slisp.zti",

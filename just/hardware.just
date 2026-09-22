@@ -100,3 +100,15 @@ duo_serial_monitor serial timeout="120":
 [group('hardware')]
 duo_gate_control_check:
     python3 scripts/check/check-duo-gate-control.py
+
+# P7's Rubik Pi 3 (QCS6490) build gate. Builds the board's own kernel, loader,
+# and packaged kexec image, and verifies the installed prefix against its pins.
+# It makes no boot claim: the board resets about ten seconds after kernel entry
+# while the system is still working, so no resident graph has been observed and
+# no gate can honestly own one yet.
+[group('hardware')]
+sel4_rubikpi3_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --platform rubikpi3 --skip-pin-check
+    python3 scripts/build/build-rubikpi3-image.py \
+        --input build/slime-sel4-rubikpi3.elf \
+        --output build/rubikpi3/slime-sel4-rubikpi3.img
