@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-queue";
-  imageClosureIdentity = "4bc2828a53af5f61f27f151ecc95dbba3fcb95cb3c8d2bc0486ed1f35e05c518";
+  imageClosureIdentity = "d0aa21387fed1f02eca6cf2016c9b9e24cf2508b9c6dc880fa3415cd97036cf0";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

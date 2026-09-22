@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-pwm";
+  imageClosureIdentity = "185ab328ee5e21dbf501974a2a8a40d4456e12126c8157fd0afc374ff3c0d0f2";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 120;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}
