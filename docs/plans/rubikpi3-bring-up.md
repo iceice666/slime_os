@@ -70,6 +70,7 @@ Four explanations are refuted by measurement, not argument:
 | Idle entry | A probe sat in a bare `wfi` loop and did not reset |
 | Memory access | A probe wrote and read back every 4 KiB page of the declared window with no mismatch |
 | The console | A bare payload emitted 9,040 lines over sixty continuous seconds and then reset itself on schedule |
+| Execution at EL1 | A probe dropped to EL1 and stayed there twenty-five seconds, faultless, then reset itself on schedule |
 
 One observation sits awkwardly against any simple story and should be kept in
 view: a bare payload spinning with the MMU **off** ran twenty-five minutes. What
@@ -82,11 +83,17 @@ interrupts.
 A progression of bare-metal probes, each staying busy past fifteen seconds and
 each resetting itself through PSCI on a deadline: add the MMU and caches, then
 the GIC, then a periodic timer interrupt. Whichever step first reproduces a
-reset at ten seconds identifies the mechanism.
+reset at ten seconds identifies the mechanism. Exception level is already done
+and refuted, so start at the MMU.
 
-Make every diagnostic payload self-reset. The first two probes looped forever
-and cost the operator three manual power cycles; the later ones reset themselves
-and recovered the board unattended.
+Two habits, both learned the hard way. Make every diagnostic payload self-reset,
+because the first two looped forever and cost the operator three manual power
+cycles. And have every probe print `CurrentEL` on entry and after any
+transition: the EL1 probe reset near seven seconds twice, convincingly, and both
+times it was the probe's own defect -- a clobbered register, a zeroed `SCTLR_EL1`
+whose RES1 bits make that undefined, and finally an EL1 counter read trapping to
+an EL2 with no vectors installed. A bare-metal probe can manufacture a reset
+that looks exactly like the one under investigation.
 
 ## Decisions already made, and why
 
