@@ -42,6 +42,7 @@ import re
 
 from harness import ROOT
 from just_metadata import recipes, targets as just_targets
+from sel4_boot import DEFAULT_PLATFORM, PLATFORMS
 from system_image_closure import negative_case_paths
 from system_spec import DERIVED_GENERATION_FIXTURES
 
@@ -72,6 +73,12 @@ IMAGES_WITHOUT_CLOSURE = {
     "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf": "the RV64 arm of MEM-64M's reuse cycles; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-rollback-qemu-riscv-virt.elf": "the RV64 arm of the rollback plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-qemu-riscv-virt.elf": "the RV64 arm of the product root-boot aggregate; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
+    # P6's pc99 arms. pc99's Multiboot2 media has no loader image, so both
+    # stay on the legacy builder until closure packaging supports that route.
+    "slime-sel4-qemu-pc99.elf": "the pc99 arm of the product root-boot aggregate; pc99's Multiboot2 media has no loader image, so it builds legacy until closure packaging supports that boot route",
+    "slime-sel4-graph-qemu-pc99.elf": "the pc99 arm of the component-graph gate; the same legacy Multiboot2 route as slime-sel4-qemu-pc99.elf",
+    "slime-sel4-sample-qemu-pc99.elf": "the pc99 arm of the sample plane; the same legacy Multiboot2 route as slime-sel4-qemu-pc99.elf",
+    "slime-sel4-wait-set-qemu-pc99.elf": "the pc99 arm of the wait-set plane; the same legacy Multiboot2 route as slime-sel4-qemu-pc99.elf",
 }
 
 
@@ -99,6 +106,13 @@ def booted_images() -> dict[str, set[str]]:
     from the platform vocabulary the same checker declares, because an image a
     recipe really boots must be visible to this gate whether or not its name is
     spelled in one piece.
+
+    A checker that resolves its image through `sel4_boot.artifact_paths` names
+    only the stem — `artifact_paths("slime-sel4", platform)` — and the suffix
+    is composed in the library, so neither scan above sees it. Its stem is
+    expanded here with the default platform and with every other platform of
+    `sel4_boot.PLATFORMS` the checker spells out, which is the vocabulary its
+    `--platform` arms admit.
     """
     found: dict[str, set[str]] = {}
     for path in sorted(CHECK_ROOT.glob("*.py")):
@@ -111,9 +125,14 @@ def booted_images() -> dict[str, set[str]]:
                 found.setdefault(match.group(1), set()).add(path.name)
         for stem in re.findall(r'f"(slime-[a-z0-9-]+)\{suffix\}\.elf"', text):
             for platform in re.findall(r'^\s+"(qemu-[a-z0-9-]+)":', text, re.MULTILINE):
-                if platform == "qemu-arm-virt":
+                if platform == DEFAULT_PLATFORM:
                     continue
                 found.setdefault(f"{stem}-{platform}.elf", set()).add(path.name)
+        for stem in re.findall(r'artifact_paths\(\s*"(slime-[a-z0-9-]+)"', text):
+            found.setdefault(f"{stem}.elf", set()).add(path.name)
+            for platform in PLATFORMS:
+                if platform != DEFAULT_PLATFORM and f'"{platform}"' in text:
+                    found.setdefault(f"{stem}-{platform}.elf", set()).add(path.name)
     if not found:
         fail("no check script names a plane image, so this gate asserts nothing")
     return found
@@ -214,12 +233,32 @@ def check_every_closure_is_exercised(images: dict[str, set[str]]) -> int:
     return len(list(CLOSURE_ROOT.glob("*.zti")))
 
 
+def composed_plane_flags(text: str) -> set[str]:
+    """The plane flags `text` builds through `f"--{name}-plane"`.
+
+    Only string literals bound to `name` in the same file are admitted, so a
+    flag composed from a runtime value stays invisible here and is reported as
+    an orphan rather than silently excused.
+    """
+    composed: set[str] = set()
+    for name in re.findall(r'f"--\{([A-Za-z_][A-Za-z0-9_]*)\}-plane"', text):
+        for binding in re.findall(rf'^\s*{name}\s*=\s*(.+)$', text, re.MULTILINE):
+            composed.update(f"--{value}-plane" for value in re.findall(r'"([a-z0-9-]+)"', binding))
+    return composed
+
+
 def check_plane_flags_are_owned() -> int:
     """Every plane build flag is reachable from exactly one owning gate.
 
     An image produced by a flag no gate runs is an image nobody verifies, which
     is the same drift class as a closure nobody exercises seen from the build
     side rather than the closure side.
+
+    A checker may compose its flag rather than spell it: the capacity arm
+    builds `f"--{variant}-plane"` from a variant bound in the same file, so a
+    literal scan sees neither flag it reaches. That idiom is expanded from the
+    string literals the file binds to that name, which is the vocabulary the
+    arm can actually select.
     """
     builder = SEL4_BUILDER.read_text(encoding="utf-8")
     declared = sorted(set(re.findall(r'"(--[a-z0-9-]+)"', builder)))
@@ -242,10 +281,11 @@ def check_plane_flags_are_owned() -> int:
                 used.setdefault(flag, set()).add(name)
     for path in sorted(CHECK_ROOT.glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        for flag in plane_flags:
-            if f'"{flag}"' in text:
-                for gate in owners.get(path.name, []):
-                    used.setdefault(flag, set()).add(gate)
+        reached = {flag for flag in plane_flags if f'"{flag}"' in text}
+        reached |= composed_plane_flags(text) & set(plane_flags)
+        for flag in reached:
+            for gate in owners.get(path.name, []):
+                used.setdefault(flag, set()).add(gate)
     orphaned = sorted(flag for flag in plane_flags if flag not in used)
     if orphaned:
         fail(f"plane flag(s) no just target reaches: {orphaned}")
@@ -353,6 +393,7 @@ def check_no_undeclared_build_knobs(extra_source: str | None = None) -> tuple[in
         "SLIME_DUO_TIMEBASE_HZ",
         "SLIME_GENERATION_CMD_CHECK",
         "SLIME_KNOWN_GOOD_FIRST",
+        "SLIME_PC99_COM1_PORT",
         "SLIME_PENDING_ATTEMPTS",
         "SLIME_PENDING_GENERATION",
         "SLIME_PENDING_RELEASE_SEQUENCE",
@@ -456,6 +497,12 @@ def check_migration_is_monotone() -> tuple[int, int]:
         "check-sel4-generation-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
         "check-sel4-rollback-plane.py": "its riscv64 arm has no closure; the closure names platform qemu-arm-virt",
         "check-sel4-private-memory-plane.py": "MEM-LARGE adds an RV64 arm before CP15 migrates that target's image to closure identity",
+        # P6's pc99 arms: pc99's Multiboot2 media has no loader image, so each
+        # builds legacy on that platform until closure packaging supports it.
+        "check-sel4-boot-layout.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
+        "check-sel4-component-graph.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
+        "check-sel4-sample-plane.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
+        "check-sel4-wait-set-plane.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
     }
     migrated, legacy, dual = [], [], []
     for path in sorted(CHECK_ROOT.glob("check-sel4-*.py")):

@@ -1060,6 +1060,41 @@ def build_application(
             root_environment["RUSTFLAGS"] = (
                 f"{rustflags} --cfg slime_private_stress".strip()
             )
+        if closure_root_role == "cspace-expanded":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_cspace_expanded".strip()
+            )
+        if closure_root_role == "metadata-lifecycle":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_metadata_lifecycle".strip()
+            )
+        if closure_root_role == "bootstrap-boundaries":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_bootstrap_boundaries".strip()
+            )
+        if closure_root_role == "private-memory-elastic":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_elastic".strip()
+            )
+        if closure_root_role == "private-memory-fragmentation":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_fragmentation".strip()
+            )
+        if closure_root_role == "private-memory-rollback":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_rollback".strip()
+            )
+        if closure_root_role == "private-memory-conservation":
+            rustflags = root_environment.get("RUSTFLAGS", "")
+            root_environment["RUSTFLAGS"] = (
+                f"{rustflags} --cfg slime_private_conservation".strip()
+            )
         if closure_root_role == "private-memory-fail-large-map":
             rustflags = root_environment.get("RUSTFLAGS", "")
             root_environment["RUSTFLAGS"] = (

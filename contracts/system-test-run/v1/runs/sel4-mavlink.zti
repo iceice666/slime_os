@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-mavlink";
+  imageClosureIdentity = "9d0c1bab779461ee00de0e88658fee5634f38df5e58fe899047450b71cfa324c";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 120;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

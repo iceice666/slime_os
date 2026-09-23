@@ -392,6 +392,7 @@ impl ObjectAllocator {
         let slot = if let Some(entry) = self.mapping_tables.records[index] {
             entry.slot
         } else {
+            self.ensure_allocation_descriptors(1)?;
             self.allocation_position()?;
             let bits = ty.blueprint().physical_size_bits();
             let extent = if let Ok((extent, _)) =

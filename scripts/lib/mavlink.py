@@ -21,46 +21,63 @@ Two properties matter for that use and are not obvious:
 
 from __future__ import annotations
 
-import struct
 from dataclasses import dataclass
 
-#: MAVLink v2 start byte. v1 (`0xFE`) is not produced or decoded here.
-STX = 0xFD
+from mavlink_heartbeat_contract import (
+    HEARTBEAT_AUTOPILOT,
+    HEARTBEAT_BASE_MODE,
+    HEARTBEAT_COMPID,
+    HEARTBEAT_CRC_EXTRA,
+    HEARTBEAT_CUSTOM_MODE,
+    HEARTBEAT_FRAME,
+    HEARTBEAT_FRAME_LEN,
+    HEARTBEAT_MAV_TYPE,
+    HEARTBEAT_MAVLINK_VERSION,
+    HEARTBEAT_MSGID,
+    HEARTBEAT_PAYLOAD_LEN,
+    HEARTBEAT_SYSID,
+    HEARTBEAT_SYSTEM_STATUS,
+    HEARTBEAT_VECTORS,
+    MAVLINK_CHECKSUM_LEN,
+    MAVLINK_CRC_INIT,
+    MAVLINK_HEADER_LEN,
+    MAVLINK_STX,
+)
 
-#: Message identities this module knows. `RADIO_STATUS` is not decoded beyond
-#: its signal-strength bytes; it is here because a linked radio emits it into
-#: the same stream and a decoder that treated it as corruption would resync
-#: through a heartbeat.
-HEARTBEAT_MSGID = 0
+# The frame's layout, identity, and reference vectors are
+# `contracts/mavlink-heartbeat/v1`'s; the names below are this module's
+# spelling of them. The checksum arithmetic and the decoder are behaviour, not
+# format, and live here.
+
+#: MAVLink v2 start byte. v1 (`0xFE`) is not produced or decoded here.
+STX = MAVLINK_STX
+
+#: `RADIO_STATUS` is not decoded beyond its signal-strength bytes; it is here
+#: because a linked radio emits it into the same stream and a decoder that
+#: treated it as corruption would resync through a heartbeat. It is the far
+#: radio's message, not part of the frame the contract describes.
 RADIO_STATUS_MSGID = 109
 
-#: HEARTBEAT's wire payload, in MAVLink's field order (descending field width,
-#: not declaration order), and the `CRC_EXTRA` its checksum mixes in.
-HEARTBEAT_LEN = 9
-HEARTBEAT_CRC_EXTRA = 50
-HEARTBEAT_FRAME_LEN = 12 + HEARTBEAT_LEN
+HEARTBEAT_LEN = HEARTBEAT_PAYLOAD_LEN
 
-#: Header, payload, and checksum sizes shared by every v2 frame. A signed frame
-#: carries 13 further bytes, which `incompat_flags` bit 0 announces.
-HEADER_LEN = 10
-CHECKSUM_LEN = 2
+#: Header and checksum sizes shared by every v2 frame. A signed frame carries
+#: 13 further bytes, which `incompat_flags` bit 0 announces.
+HEADER_LEN = MAVLINK_HEADER_LEN
+CHECKSUM_LEN = MAVLINK_CHECKSUM_LEN
 INCOMPAT_SIGNED = 0x01
 SIGNATURE_LEN = 13
 
-#: What this lane's heartbeat says it is: an onboard computer with no autopilot,
-#: active, speaking MAVLink 2. `MAV_COMP_ID_ONBOARD_COMPUTER`,
-#: `MAV_TYPE_ONBOARD_CONTROLLER`, `MAV_AUTOPILOT_INVALID`, `MAV_STATE_ACTIVE`.
-DEFAULT_SYSID = 1
-DEFAULT_COMPID = 191
-DEFAULT_TYPE = 18
-DEFAULT_AUTOPILOT = 8
-DEFAULT_BASE_MODE = 0
-DEFAULT_CUSTOM_MODE = 0
-DEFAULT_SYSTEM_STATUS = 4
-MAVLINK_VERSION = 3
+DEFAULT_SYSID = HEARTBEAT_SYSID
+DEFAULT_COMPID = HEARTBEAT_COMPID
+DEFAULT_TYPE = HEARTBEAT_MAV_TYPE
+DEFAULT_AUTOPILOT = HEARTBEAT_AUTOPILOT
+DEFAULT_BASE_MODE = HEARTBEAT_BASE_MODE
+DEFAULT_CUSTOM_MODE = HEARTBEAT_CUSTOM_MODE
+DEFAULT_SYSTEM_STATUS = HEARTBEAT_SYSTEM_STATUS
+MAVLINK_VERSION = HEARTBEAT_MAVLINK_VERSION
 
 
-def x25_crc(data: bytes, crc: int = 0xFFFF) -> int:
+def x25_crc(data: bytes, crc: int = MAVLINK_CRC_INIT) -> int:
     """CRC-16/MCRF4XX over `data`, MAVLink's checksum.
 
     Reflected polynomial 0x8408, initial value 0xFFFF, no final inversion.
@@ -93,8 +110,15 @@ def encode_heartbeat(
     """
     if not 0 <= seq <= 0xFF:
         raise ValueError(f"sequence {seq} is outside a MAVLink v2 sequence byte")
-    payload = struct.pack(
-        "<IBBBBB",
+    fields = (
+        STX,
+        HEARTBEAT_LEN,
+        0,
+        0,
+        seq,
+        sysid,
+        compid,
+        HEARTBEAT_MSGID.to_bytes(3, "little"),
         custom_mode,
         mav_type,
         autopilot,
@@ -102,18 +126,15 @@ def encode_heartbeat(
         system_status,
         mavlink_version,
     )
-    header = bytes([HEARTBEAT_LEN, 0, 0, seq, sysid, compid, HEARTBEAT_MSGID, 0, 0])
-    crc = x25_crc(bytes([HEARTBEAT_CRC_EXTRA]), x25_crc(header + payload))
-    return bytes([STX]) + header + payload + struct.pack("<H", crc)
+    unsealed = HEARTBEAT_FRAME.pack(*fields, 0)
+    covered = unsealed[1 : HEARTBEAT_FRAME_LEN - CHECKSUM_LEN]
+    crc = x25_crc(bytes([HEARTBEAT_CRC_EXTRA]), x25_crc(covered))
+    return HEARTBEAT_FRAME.pack(*fields, crc)
 
 
 #: Reference frames for `encode_heartbeat` with the default onboard-controller
 #: identity, including both ends of the sequence-byte range.
-PINNED_HEARTBEATS: dict[int, bytes] = {
-    0: bytes.fromhex("fd0900000001bf000000000000001208000403aec6"),
-    1: bytes.fromhex("fd0900000101bf000000000000001208000403be48"),
-    255: bytes.fromhex("fd090000ff01bf000000000000001208000403b77c"),
-}
+PINNED_HEARTBEATS: dict[int, bytes] = HEARTBEAT_VECTORS
 
 
 @dataclass(frozen=True)
@@ -143,9 +164,6 @@ class FrameDecoder:
     `crc_ok=False`, and scanning resumes one byte after its start marker rather
     than past its claimed end: a corrupt length would otherwise skip whatever
     real frame follows. A frame this module cannot verify (`crc_ok=None`) is
-    consumed whole: its length is as trustworthy as any other radio frame's,
-    and rescanning its body would turn a 0xFD in a sequence or signal byte into
-    a bogus frame that swallows the heartbeat behind it. A frame this module cannot verify (`crc_ok=None`) is
     consumed whole: its length is as trustworthy as any other radio frame's,
     and rescanning its body would turn a 0xFD in a sequence or signal byte into
     a bogus frame that swallows the heartbeat behind it.

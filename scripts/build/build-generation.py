@@ -118,6 +118,7 @@ from boot_layout import LAYOUT_KIND_ROLES, build_boot_layout, layout_from_manife
 from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_interface_paths
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
+import private_memory_policy
 
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT
 from generation_resources import (
@@ -208,6 +209,14 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
         resolved["privateMemoryBudget"] = [
             entry for entry in manifest["privateMemoryBudget"] if entry["holder"] in kept
         ]
+    if manifest.get("privateMemoryPolicy") is not None:
+        try:
+            private_memory_policy.manifest_policy(manifest)
+            resolved["privateMemoryPolicy"] = private_memory_policy.narrow(
+                manifest["privateMemoryPolicy"], resolved["instances"]
+            )
+        except ValueError as error:
+            fail(str(error))
     if manifest.get("ioResourceBudget") is not None:
         resolved["ioResourceBudget"] = [
             entry for entry in manifest["ioResourceBudget"] if entry["holder"] in kept
@@ -2314,6 +2323,14 @@ def build_generation(
     number: int,
     profile: TargetProfile,
 ) -> bytes:
+    try:
+        adaptive = private_memory_policy.manifest_policy(manifest)
+    except ValueError as error:
+        fail(str(error))
+    if adaptive is not None:
+        encoded = private_memory_policy.encode(adaptive, manifest["instances"])
+        if payloads.get("private-memory-policy") != encoded:
+            fail("private memory policy payload differs from its declaration")
     if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
         payloads = dict(payloads)
         # Derived from the manifest's own `InstanceBinding` records rather than
@@ -2982,6 +2999,10 @@ def build_sel4_generation(
     # nothing a component compiles against: B70's per-plane Rust profile is
     # gone, so no image is parameterized by which plane built it.
     resolved_profile = None
+    try:
+        adaptive_policy = private_memory_policy.manifest_policy(manifest)
+    except ValueError as error:
+        fail(str(error))
     if manifest.get("fabricGraph"):
         interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
         resolved_profile = resolve_fabric_profile(
@@ -3041,6 +3062,10 @@ def build_sel4_generation(
         # declaring holders without the object would boot with every one of
         # them denied and no indication why.
         fail("privateMemoryBudget declared without a private-memory-budget resource object")
+    if adaptive_policy is not None:
+        payloads["private-memory-policy"] = private_memory_policy.encode(
+            adaptive_policy, manifest["instances"]
+        )
     declared_io_resources = manifest.get("ioResourceBudget") or []
     if "io-resource-budget" in object_ids:
         payloads["io-resource-budget"] = build_io_resource_budget(declared_io_resources)
@@ -3119,6 +3144,8 @@ def build_sel4_generation(
     # `resolve_fabric_profile` refuses a graph whose declared fabric holder has
     # no `sharedBufferBudget` entry.
     quota_holders = {entry["holder"] for entry in declared_private_memory}
+    if adaptive_policy is not None:
+        quota_holders.update(entry["instance"] for entry in adaptive_policy["subjects"])
     for instance in manifest["instances"]:
         if instance["executable"] not in PRIVATE_HEAP_REQUIRED:
             continue

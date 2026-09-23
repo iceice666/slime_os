@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
+import private_memory_policy
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
@@ -80,6 +81,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-io-queue": "sel4-io-queue.zti",
     "sel4-lifecycle-restart": "sel4-lifecycle-restart.zti",
     "sel4-loan": "sel4-loan.zti",
+    "sel4-mavlink": "sel4-mavlink.zti",
     "sel4-operation": "sel4-operation.zti",
     "sel4-powerbox": "sel4-powerbox.zti",
     "sel4-private-memory": "sel4-private-memory.zti",
@@ -90,6 +92,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-private-memory-stress-rv64": "sel4-private-memory-stress-rv64.zti",
     "sel4-private-memory-heap-stress": "sel4-private-memory-heap-stress.zti",
     "sel4-private-memory-heap-stress-rv64": "sel4-private-memory-heap-stress-rv64.zti",
+    "sel4-pwm": "sel4-pwm.zti",
     "sel4-qos": "sel4-qos.zti",
     "sel4-reclamation": "sel4-reclamation.zti",
     "sel4-recovery": "sel4-recovery.zti",
@@ -175,6 +178,7 @@ _SPEC_FIELDS = {
     "waitSetObject",
     "schedulingClass",
     "lifecyclePolicy",
+    "privateMemoryPolicy",
     "recording",
     "recordingObject",
     "deploymentConstraint",
@@ -228,7 +232,7 @@ def _load(path: Path, contract: ModuleType) -> dict:
         _fail(f"{path}: expected a record")
     # `fabricGraph`, `schedulingClass`, and `lifecyclePolicy` are optional
     # records; their absence is a legitimate shape.
-    _OPTIONAL_FIELDS = {"fabricGraph", "schedulingClass", "lifecyclePolicy"}
+    _OPTIONAL_FIELDS = {"fabricGraph", "schedulingClass", "lifecyclePolicy", "privateMemoryPolicy"}
     # The IO11 interface table postdates every earlier spec; an absent field is
     # the same declaration as an empty one without an object.
     _DEFAULTED_FIELDS = {"networkInterfaces": [], "networkInterfacesObject": False}
@@ -1140,6 +1144,14 @@ def derive_manifest(system: CompiledSystem) -> dict:
         _fail(
             f"private memory: target {spec['targetRequirement']!r} aggregate exceeds capacity"
         )
+    policy = spec.get("privateMemoryPolicy")
+    if policy is not None:
+        if private_budget:
+            _fail("private memory policy conflicts with effective fixed privatePageQuota")
+        try:
+            policy = private_memory_policy.validate(policy, instances)
+        except ValueError as error:
+            _fail(str(error))
 
     # `fabric-graph`'s presence is strictly derived: the builder refuses a graph
     # without the object and an object without the graph, so there is nothing to
@@ -1159,6 +1171,8 @@ def derive_manifest(system: CompiledSystem) -> dict:
     # the object is present exactly when some component declared a quota.
     if private_budget:
         objects.append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
+    if policy is not None:
+        objects.append({"id": "private-memory-policy", "kind": "resource", "size": 4096})
     # The remaining eight sections follow `sharedBufferBudgetObject`'s pattern
     # exactly: object presence is a declared fact, independent of whether the
     # accompanying list happens to be empty.
@@ -1233,6 +1247,9 @@ def derive_manifest(system: CompiledSystem) -> dict:
         "state": sorted(spec["state"], key=lambda entry: entry["name"]),
         "target": spec["targetRequirement"],
     }
+    if policy is not None:
+        del manifest["privateMemoryBudget"]
+        manifest["privateMemoryPolicy"] = policy
     if spec["bootProfiles"]:
         manifest["bootProfiles"] = spec["bootProfiles"]
     if spec["notifications"]:

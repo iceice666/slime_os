@@ -56,8 +56,8 @@ pub(super) fn serve_instance_graph(
         allocator.live_slots(),
         allocator.live_objects(),
         allocator.live_bytes(),
-        object_allocator::MAX_TASK_ALLOCATIONS,
-        object_allocator::MAX_TASK_EXTENTS,
+        allocator.allocation_descriptor_capacity(),
+        allocator.extent_descriptor_capacity(),
     );
     let mut live = tasks.len();
     let mut unsupported = 0;
@@ -1727,6 +1727,12 @@ pub(super) fn serve_instance_graph(
     );
     if report_backing && tasks.is_empty() && retirements.is_empty() {
         allocator.report_backing_snapshot("final");
+    }
+    // The reconciled metadata state belongs before the terminal marker: the
+    // plane gates stop reading at it.
+    #[cfg(slime_metadata_lifecycle)]
+    if tasks.is_empty() && retirements.is_empty() {
+        allocator.report_metadata_census("final");
     }
     let completed = completed_required.iter().filter(|done| **done).count();
     if live == 0 && retirements.is_empty() && required != 0 && completed == required {

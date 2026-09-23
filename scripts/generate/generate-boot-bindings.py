@@ -52,6 +52,11 @@ GENERATORS = (
         "private_memory_budget.rs",
     ),
     (
+        ROOT / "contracts" / "private-memory-budget" / "v2" / "schema.zt",
+        "private_memory_policy.py",
+        "private_memory_policy.rs",
+    ),
+    (
         ROOT / "contracts" / "clock-authority" / "v1" / "schema.zt",
         "clock_authority.py",
         "clock_authority.rs",

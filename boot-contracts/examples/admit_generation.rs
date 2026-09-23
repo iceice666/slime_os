@@ -18,11 +18,28 @@ use boot_contracts::generation::Generation;
 
 fn main() -> Result<(), String> {
     let mut arguments = std::env::args().skip(1);
-    let path = arguments.next().ok_or("missing generation path")?;
+    let first = arguments.next().ok_or("missing generation path")?;
+    let policy = first == "--private-memory-policy";
+    let path = if policy {
+        arguments.next().ok_or("missing policy path")?
+    } else {
+        first
+    };
     if arguments.next().is_some() {
         return Err("too many arguments".into());
     }
     let bytes = std::fs::read(&path).map_err(|error| format!("{path}: {error}"))?;
+    if policy {
+        match boot_contracts::private_memory_policy::Policy::decode(&bytes) {
+            Ok(policy) => println!(
+                "policy {} {}",
+                policy.entitlement_count(),
+                policy.subject_count()
+            ),
+            Err(error) => println!("refused {error:?}"),
+        }
+        return Ok(());
+    }
     match Generation::decode(&bytes) {
         // Printed rather than returned so the caller reads one stable token on
         // stdout either way, and a decoder panic stays distinguishable from a

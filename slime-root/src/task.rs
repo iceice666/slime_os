@@ -658,7 +658,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     #[cfg(slime_private_stress)]
     fn stress_census(allocator: &ObjectAllocator, attempt: usize, phase: &str) {
         sel4::debug_println!(
-            "SLIME_MEM stress census attempt={attempt} phase={phase} slots={} descriptors={} extents={} objects={} bytes={} reusable_anchors={} reusable_bytes={} ordinary_bytes={} preserved_bytes={} preserved_anchors={}",
+            "SLIME_MEM stress census attempt={attempt} phase={phase} slots={} descriptors={} extents={} objects={} bytes={} reusable_anchors={} reusable_bytes={} ordinary_bytes={} preserved_bytes={} preserved_anchors={} descriptor_capacity={} extent_capacity={} infrastructure_owned={}",
             allocator.free_slots(),
             allocator.allocation_descriptors_free(),
             allocator.extent_descriptors_free(),
@@ -669,6 +669,9 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             allocator.untyped_bytes_remaining(),
             allocator.preserved_bytes_remaining(),
             allocator.preserved_anchor_count(),
+            allocator.allocation_descriptor_capacity(),
+            allocator.extent_descriptor_capacity(),
+            allocator.infrastructure_owned_bytes(),
         );
     }
 
@@ -789,6 +792,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             plan.allocation_count(),
             threads,
         );
+        if let Some(required) = required_descriptors
+            && let Err(error) = allocator.ensure_allocation_descriptors(required)
+        {
+            self.unwind_construction(allocator, id, arena)?;
+            return Err(TaskError::Alloc(error));
+        }
         #[cfg(slime_private_stress)]
         if stress_attempt == 2 {
             let actual = allocator.allocation_descriptors_free();
