@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
@@ -183,9 +183,338 @@ SPAWN_SERVICE_READY = r"\[spawn-service\] ready"
 # independently printing its own reply to the same console. Neither waits on
 # the other, so their order is a scheduling detail; asserting it made this gate
 # fail intermittently on whichever ran second.
-EXPECTED_UNORDERED: tuple[str, ...] = (
-    r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0",
+SUPERVISION_COLLECTED = r"SLIME_GRAPH supervision collected task=2 child=\d+ kind=0"
+EXPECTED_UNORDERED: tuple[str, ...] = (SUPERVISION_COLLECTED, SPAWN_SERVICE_READY)
+
+# IO8: the product graph plus `pwm-servo-driver`, on QEMU, where no PWM block
+# exists. Init launches the driver before Slisp (slot 10, task 3), the root
+# installs its declared device quota, the driver binds nothing and stays
+# resident, and Slisp's `(pwm 0 1600)` reaches it and comes back refused.
+# The task numbers and endpoint slots are the ones the root printed on the
+# frozen transcript in `devlog/2026-09-14-io8-pwm-servo/`.
+PWM_TERMINAL_MARKER = TERMINAL_MARKER
+PWM_REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        "generation admitted",
+        r"SLIME_ROOT generation admitted number=55 executables=7 instances=7 grants=\d+ ",
+    ),
+    ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
+    (
+        "all catalogue payloads are native ELF images",
+        r"SLIME_ROOT graph admitted executables=7 instances=7 slimecm=0 elf=7 unrecognized=0",
+    ),
+    (
+        "the generation declares no private-memory budget",
+        r"SLIME_MEM budget holders=0 declared=0",
+    ),
+    (
+        "only root-owned init was staged",
+        r"SLIME_GRAPH staged task=0 instance=init executable=init grants=7 bindings=7 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+",
+    ),
+    (
+        "the executable catalogue remained available to spawn",
+        r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=7 slimecm=0 wrong_target=0 unrecognized=0",
+    ),
+    ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
+    ("init began the declared graph", r"\[init\] launching component graph"),
+    (
+        "init authorized console through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0",
+    ),
+    (
+        "console received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=1 slot=33 side=both",
+    ),
+    (
+        "init spawned console as instance task 1",
+        r"SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized spawn-service through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3",
+    ),
+    (
+        "spawn-service received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
+    ),
+    (
+        "init spawned spawn-service as instance task 2",
+        r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1",
+    ),
+    (
+        "init authorized the pwm driver through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=10 component=pwm-servo-driver grants=0",
+    ),
+    (
+        "the pwm driver received Slisp's declared endpoint",
+        r"SLIME_GRAPH native endpoint task=3 slot=33 side=both",
+    ),
+    (
+        "the root installed the pwm driver's declared device quota",
+        r"SLIME_IO quota task=3 instance=pwm-servo-driver devices=0 shared_granule=0",
+    ),
+    (
+        "init spawned the pwm driver as instance task 3",
+        r"SLIME_GRAPH spawned task=0 child=3 component=pwm-servo-driver grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized Slisp through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0",
+    ),
+    (
+        "Slisp received its three declared service endpoints",
+        r"SLIME_GRAPH native endpoint task=4 slot=33 side=both",
+    ),
+    (
+        "Slisp received its second declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=4 slot=36 side=both",
+    ),
+    (
+        "Slisp received its third declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=4 slot=35 side=both",
+    ),
+    (
+        "init spawned Slisp as instance task 4",
+        r"SLIME_GRAPH spawned task=0 child=4 component=slisp grants=0 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "the supervisor certified the live graph",
+        r"SLIME_GRAPH healthy generation=55 instances=[0-9a-f]{16} required=5 live=5 idle=5 failed=0",
+    ),
+    ("init kept the product graph resident", r"\[init\] product services resident"),
+    ("the product identified the Slisp shell", r"Slisp"),
+    ("Slisp displayed its prompt", r"slisp> "),
+    ("Slisp entered resident input wait", INPUT_WAIT_MARKER),
+    ("Slisp received uninterrupted QEMU serial input", r"\(\+ 1 1\)\n=> 2"),
+    (
+        "Slisp carried the pwm request to the driver",
+        r"\(pwm 0 1600\)\n\[pwm-servo-driver\] request ch=0 period_us=20000 pulse_us=1600",
+    ),
+    ("the driver refused for want of a device and Slisp reported it", r"! pwm no-device"),
+    ("Slisp requested sysinfo through spawn-service", r"sysinfo\n\[spawn-service\] request"),
+    ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
+    ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
+    ("Slisp reported the accepted spawn", PWM_TERMINAL_MARKER),
+)
+# The driver reports its bind on its own schedule, before or after Slisp's
+# startup lines; the supervision record races Slisp's reply as above.
+PWM_EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"\[pwm-servo-driver\] device absent, refusing requests",
+    SUPERVISION_COLLECTED,
     SPAWN_SERVICE_READY,
+)
+
+
+# IO9: the product graph plus `uart16550-driver` and `mavlink-heartbeat`, on
+# QEMU, where no port exists. Init launches the driver (slot 10) and the
+# producer (slot 11) before Slisp; the driver binds nothing and stays resident,
+# and the producer sends one heartbeat per second and reports each refusal.
+# The task numbers and endpoint slots are the ones the root printed on the
+# frozen transcript in `devlog/2026-09-15-io9-serial-tx/`.
+MAVLINK_TERMINAL_MARKER = TERMINAL_MARKER
+MAVLINK_REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        "generation admitted",
+        r"SLIME_ROOT generation admitted number=56 executables=8 instances=8 grants=\d+ ",
+    ),
+    ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
+    (
+        "all catalogue payloads are native ELF images",
+        r"SLIME_ROOT graph admitted executables=8 instances=8 slimecm=0 elf=8 unrecognized=0",
+    ),
+    (
+        "the generation declares no private-memory budget",
+        r"SLIME_MEM budget holders=0 declared=0",
+    ),
+    (
+        "only root-owned init was staged",
+        r"SLIME_GRAPH staged task=0 instance=init executable=init grants=8 bindings=8 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+",
+    ),
+    (
+        "the executable catalogue remained available to spawn",
+        r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=8 slimecm=0 wrong_target=0 unrecognized=0",
+    ),
+    ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
+    ("init began the declared graph", r"\[init\] launching component graph"),
+    (
+        "init authorized console through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0",
+    ),
+    (
+        "console received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=1 slot=33 side=both",
+    ),
+    (
+        "init spawned console as instance task 1",
+        r"SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized spawn-service through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3",
+    ),
+    (
+        "spawn-service received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
+    ),
+    (
+        "init spawned spawn-service as instance task 2",
+        r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1",
+    ),
+    (
+        "init authorized the serial driver through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=10 component=uart16550-driver grants=0",
+    ),
+    (
+        "the serial driver received the producer's declared endpoint",
+        r"SLIME_GRAPH native endpoint task=3 slot=33 side=both",
+    ),
+    (
+        "the root installed the serial driver's declared device quota",
+        r"SLIME_IO quota task=3 instance=uart16550-driver devices=0 shared_granule=0",
+    ),
+    (
+        "init spawned the serial driver as instance task 3",
+        r"SLIME_GRAPH spawned task=0 child=3 component=uart16550-driver grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized the heartbeat producer through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=11 component=mavlink-heartbeat grants=0",
+    ),
+    (
+        "the heartbeat producer received its declared driver endpoint",
+        r"SLIME_GRAPH native endpoint task=4 slot=33 side=both",
+    ),
+    (
+        "init spawned the heartbeat producer as instance task 4",
+        r"SLIME_GRAPH spawned task=0 child=4 component=mavlink-heartbeat grants=0 endpoints=1 notifications=1 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized Slisp through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0",
+    ),
+    (
+        "Slisp received its two declared service endpoints",
+        r"SLIME_GRAPH native endpoint task=5 slot=33 side=both",
+    ),
+    (
+        "Slisp received its second declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=5 slot=35 side=both",
+    ),
+    (
+        "init spawned Slisp as instance task 5",
+        r"SLIME_GRAPH spawned task=0 child=5 component=slisp grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "the supervisor certified the live graph",
+        r"SLIME_GRAPH healthy generation=56 instances=[0-9a-f]{16} required=6 live=6 idle=6 failed=0",
+    ),
+    ("init kept the product graph resident", r"\[init\] product services resident"),
+    ("the product identified the Slisp shell", r"Slisp"),
+    ("Slisp displayed its prompt", r"slisp> "),
+    ("Slisp entered resident input wait", INPUT_WAIT_MARKER),
+    # The producer and the root's clock service write to the same console
+    # every second, so a typed command's echo may be split by their lines; the
+    # plain product arm owns the uninterrupted-input claim, and this arm
+    # asserts what each command did.
+    ("Slisp evaluated the typed expression", r"=> 2"),
+    ("Slisp requested sysinfo through spawn-service", r"\[spawn-service\] request"),
+    ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
+    ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
+    ("Slisp reported the accepted spawn", MAVLINK_TERMINAL_MARKER),
+)
+# The driver reports its bind on its own schedule, before or after Slisp's
+# startup lines; the supervision record races Slisp's reply as above.
+MAVLINK_EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"\[uart16550-driver\] device absent, refusing requests",
+    SUPERVISION_COLLECTED,
+    SPAWN_SERVICE_READY,
+)
+# The producer's beats interleave with every other task's output, so they are
+# their own chain: ordered among themselves, independent of Slisp's. The count
+# is pinned rather than read off the transcript, so a producer that stopped
+# beating fails here instead of passing against a shorter stream. The gate
+# types into Slisp only once the last of them has been seen.
+MAVLINK_BEAT_MARKERS: tuple[str, ...] = (
+    r"\[mavlink-heartbeat\] send seq=0 status=no-device deadline=\d+ now=\d+",
+    r"\[mavlink-heartbeat\] send seq=1 status=no-device deadline=\d+ now=\d+",
+    r"\[mavlink-heartbeat\] send seq=2 status=no-device deadline=\d+ now=\d+",
+    r"\[mavlink-heartbeat\] send seq=3 status=no-device deadline=\d+ now=\d+",
+    r"\[mavlink-heartbeat\] send seq=4 status=no-device deadline=\d+ now=\d+",
+)
+TIMER_RATE = r"SLIME_TIMER acquired irq=\d+ freq_hz=(\d+)"
+BEAT_VALUES = r"\[mavlink-heartbeat\] send seq=(\d+) status=(\S+) deadline=(\d+) now=(\d+)"
+
+
+class Composition(NamedTuple):
+    closure: str
+    fixture: Path
+    required: tuple[tuple[str, str], ...]
+    unordered: tuple[str, ...]
+    commands: tuple[str, ...]
+    terminal: str
+    summary: str
+    # A second ordered chain whose last marker must be seen before typing.
+    beats: tuple[str, ...] = ()
+
+
+COMPOSITIONS: dict[str, Composition] = {
+    "sel4": Composition(
+        closure="sel4",
+        fixture=FIXTURE,
+        required=REQUIRED_MARKERS,
+        unordered=EXPECTED_UNORDERED,
+        commands=("(+ 1 1)\n", "sysinfo\n"),
+        terminal=TERMINAL_MARKER,
+        summary=(
+            "seL4 component graph check: init launched console, spawn-service, and "
+            "Slisp with generation-declared authority; QEMU serial input evaluated "
+            "and launched sysinfo through its declared context endpoint; all four "
+            "required resident instances remained live"
+        ),
+    ),
+    "sel4-pwm": Composition(
+        closure="sel4-pwm",
+        fixture=GENERATION_COMPOSITIONS / "sel4-pwm.zti",
+        required=PWM_REQUIRED_MARKERS,
+        unordered=PWM_EXPECTED_UNORDERED,
+        commands=("(+ 1 1)\n", "(pwm 0 1600)\n", "sysinfo\n"),
+        terminal=PWM_TERMINAL_MARKER,
+        summary=(
+            "seL4 pwm graph check: init launched the pwm driver before Slisp with "
+            "its declared device quota; on QEMU the driver bound no device and stayed "
+            "resident; Slisp's (pwm 0 1600) reached it and came back no-device; "
+            "sysinfo still launched and all five required resident instances "
+            "remained live"
+        ),
+    ),
+    "sel4-mavlink": Composition(
+        closure="sel4-mavlink",
+        fixture=GENERATION_COMPOSITIONS / "sel4-mavlink.zti",
+        required=MAVLINK_REQUIRED_MARKERS,
+        unordered=MAVLINK_EXPECTED_UNORDERED,
+        commands=("(+ 1 1)\n", "sysinfo\n"),
+        terminal=MAVLINK_TERMINAL_MARKER,
+        summary=(
+            "seL4 mavlink graph check: init launched the serial driver and the "
+            "heartbeat producer before Slisp; on QEMU the driver bound no device and "
+            "stayed resident; the producer sent five heartbeats on a one-second "
+            "deadline grid, each refused no-device; sysinfo still launched and all "
+            "six required resident instances remained live"
+        ),
+        beats=MAVLINK_BEAT_MARKERS,
+    ),
+}
+# Both arms for the gate control, which mutates every marker of each.
+CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("required marker sequence", tuple(pattern for _, pattern in REQUIRED_MARKERS)),
+    ("pwm marker sequence", tuple(pattern for _, pattern in PWM_REQUIRED_MARKERS)),
+    ("mavlink marker sequence", tuple(pattern for _, pattern in MAVLINK_REQUIRED_MARKERS)),
+    ("mavlink heartbeat sequence", MAVLINK_BEAT_MARKERS),
+) + tuple(
+    ("order-independent marker", (pattern,))
+    for pattern in dict.fromkeys(
+        EXPECTED_UNORDERED + PWM_EXPECTED_UNORDERED + MAVLINK_EXPECTED_UNORDERED
+    )
 )
 
 # B50 is a repository-wide cutover. Guard every surviving implementation source
@@ -247,6 +576,9 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # mechanism handed a page to a holder no generation named.
     r"SLIME_MEM quota task=\d+ instance=\S+ declared=0 installed=[1-9]\d*",
     r"SLIME_MEM grown task=\d+ delta=[1-9]\d*",
+    # IO9: the producer's and the serial driver's fatal paths.
+    r"\[mavlink-heartbeat\] FAIL ",
+    r"\[uart16550-driver\] fail: ",
 )
 
 
@@ -263,12 +595,12 @@ def generator_module(name: str):
     return module
 
 
-def check_automatic_binding_slots() -> None:
+def check_automatic_binding_slots(fixture: Path) -> None:
     """Omitted product bindings must resolve to the frozen layout."""
     environment = dict(os.environ)
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
-        [str(binary()), "json", str(FIXTURE)],
+        [str(binary()), "json", str(fixture)],
         cwd=ROOT,
         env=environment,
         check=False,
@@ -277,11 +609,11 @@ def check_automatic_binding_slots() -> None:
         stderr=subprocess.PIPE,
     )
     if process.returncode:
-        fail(f"cannot decode {FIXTURE.relative_to(ROOT)}: {process.stderr.strip()}")
+        fail(f"cannot decode {fixture.relative_to(ROOT)}: {process.stderr.strip()}")
     try:
         manifest = json.loads(process.stdout)
     except json.JSONDecodeError as error:
-        fail(f"cannot parse decoded {FIXTURE.relative_to(ROOT)}: {error}")
+        fail(f"cannot parse decoded {fixture.relative_to(ROOT)}: {error}")
     spawn_service = next(
         (instance for instance in manifest["instances"] if instance["name"] == "spawn-service"),
         None,
@@ -318,7 +650,7 @@ def check_automatic_binding_slots() -> None:
     )
 
 
-def build_image(platform: str, image_path: Path) -> None:
+def build_image(platform: str, image_path: Path, closure: str) -> None:
     global IMAGE
     if platform == "qemu-pc99":
         # pc99's Multiboot2 media has no loader image, so it remains on the
@@ -329,7 +661,7 @@ def build_image(platform: str, image_path: Path) -> None:
             fail("image build failed")
         return
     try:
-        built = build_closure_image(CLOSURE)
+        built = build_closure_image(closure)
     except ClosureImageError as error:
         fail(str(error))
     actual = sha256_file(built.image, fail)
@@ -357,7 +689,12 @@ def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict
     return manifest
 
 
-def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
+def boot(
+    manifest: dict[str, object],
+    platform: str,
+    image_path: Path,
+    composition: Composition,
+) -> str:
     """Boot the resident product graph and drive one bounded input session.
 
     Unlike the fixture planes, this graph never drains: init stays alive
@@ -366,27 +703,37 @@ def boot(manifest: dict[str, object], platform: str, image_path: Path) -> str:
     announce that it is waiting for input rather than sending on a timer.
     """
     input_wait = re.compile(INPUT_WAIT_MARKER)
-    terminal = re.compile(TERMINAL_MARKER)
-    collected = re.compile(EXPECTED_UNORDERED[0])
+    hold = re.compile(composition.beats[-1]) if composition.beats else None
+    terminal = re.compile(composition.terminal)
+    collected = re.compile(SUPERVISION_COLLECTED)
     failures = re.compile("|".join(FAILURE_MARKERS))
 
     def feed(process: subprocess.Popen[str], lines: list[str]) -> None:
         assert process.stdin is not None
         assert process.stdout is not None
         sent_expression = False
+        saw_input_wait = False
+        saw_hold = hold is None
         saw_terminal = False
         saw_collected = False
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
             if failures.search(line):
                 break
-            if not sent_expression and input_wait.search(line):
+            # Slisp's input wait and the last pinned beat come from different
+            # tasks in either order; typing waits for both, so every pinned
+            # beat is inside the run however fast the shell came up.
+            if input_wait.search(line):
+                saw_input_wait = True
+            if hold is not None and hold.search(line):
+                saw_hold = True
+            if not sent_expression and saw_input_wait and saw_hold:
                 # Pauses between characters force the FIFO empty between
                 # keystrokes, so a diagnostic redrawn mid-command cannot be
                 # mistaken for the shell losing input.
                 time.sleep(0.5)
-                for text in ("(+ 1 1)\n", "sysinfo\n"):
-                    for character in text:
+                for command in composition.commands:
+                    for character in command:
                         process.stdin.write(character)
                         process.stdin.flush()
                         time.sleep(0.05)
@@ -497,14 +844,14 @@ def check_deleted_compatibility_surface() -> None:
     print("repository service surface: compatibility model deleted", flush=True)
 
 
-def check_transcript(transcript: str) -> None:
+def check_transcript(transcript: str, composition: Composition) -> None:
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
         if match is not None:
             report_transcript(transcript)
             fail(f"failure marker in serial transcript: {match.group(0)!r}")
     position = 0
-    for description, pattern in REQUIRED_MARKERS:
+    for description, pattern in composition.required:
         match = re.compile(pattern).search(transcript, position)
         if match is None:
             report_transcript(transcript)
@@ -512,10 +859,21 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
-    for pattern in EXPECTED_UNORDERED:
+    for pattern in composition.unordered:
         if re.search(pattern, transcript) is None:
             report_transcript(transcript)
             fail(f"missing unordered marker: {pattern}")
+    position = 0
+    for pattern in composition.beats:
+        match = re.compile(pattern).search(transcript, position)
+        if match is None:
+            report_transcript(transcript)
+            if re.search(pattern, transcript) is not None:
+                fail(f"beat out of order: {pattern}")
+            fail(f"missing beat: {pattern}")
+        position = match.end()
+    if composition.beats:
+        check_cadence(transcript, len(composition.beats))
     # Each task's window is its own region, which is the property the pinned
     # addresses used to carry before component code size made them brittle. Two
     # tasks bound at one base would mean one staging area serving both, and a
@@ -529,9 +887,71 @@ def check_transcript(transcript: str) -> None:
         flush=True,
     )
 
-    terminals = re.findall(TERMINAL_MARKER, transcript)
+    terminals = re.findall(composition.terminal, transcript)
     if len(terminals) != 1:
         fail(f"expected exactly one sysinfo completion marker, saw {len(terminals)}")
+
+
+def check_heartbeat_vectors() -> None:
+    """The checkers' encoder and decoder against the contract's pinned frames.
+
+    `components/proto/tests/mavlink_heartbeat.rs` pins the same frames from the
+    Rust side, so the producer and anything that decodes its wire agree by test.
+    """
+    import mavlink
+    from mavlink_heartbeat_contract import HEARTBEAT_MSGID, HEARTBEAT_VECTORS
+
+    if mavlink.x25_crc(b"123456789") != 0x6F91:
+        fail("the MAVLink checksum no longer matches its published check value")
+    for seq, frame in sorted(HEARTBEAT_VECTORS.items()):
+        if mavlink.encode_heartbeat(seq) != frame:
+            fail(f"the Python heartbeat encoder drifted from the pinned frame for seq={seq}")
+        decoded = mavlink.FrameDecoder().feed(frame)
+        if [(item.msgid, item.seq, item.crc_ok) for item in decoded] != [
+            (HEARTBEAT_MSGID, seq, True)
+        ]:
+            fail(f"the Python decoder did not return one verified heartbeat for seq={seq}")
+    print(
+        f"heartbeat vectors: {len(HEARTBEAT_VECTORS)} pinned frames encoded and decoded",
+        flush=True,
+    )
+
+
+def check_cadence(transcript: str, beats: int) -> None:
+    """Judge the producer's grid by its own arithmetic, not by wall time.
+
+    QEMU runs without instruction counting, so the counter the producer reads
+    follows the host and an interval check would flake on a loaded machine.
+    What the producer controls is exact: each deadline is the last plus one
+    second of the root's reported rate, and no beat is sent before its deadline.
+    """
+    rates = re.findall(TIMER_RATE, transcript)
+    if len(rates) != 1:
+        fail(f"expected one root timer rate report, saw {len(rates)}")
+    rate = int(rates[0])
+    observed = [
+        (int(seq), status, int(deadline), int(now))
+        for seq, status, deadline, now in re.findall(BEAT_VALUES, transcript)
+    ][:beats]
+    if len(observed) != beats:
+        fail(f"expected {beats} heartbeats, saw {len(observed)}")
+    for index, (seq, status, deadline, now) in enumerate(observed):
+        if seq != index:
+            fail(f"heartbeat {index} carried seq={seq}")
+        if status != "no-device":
+            fail(f"heartbeat {seq} reported status={status}, expected no-device")
+        if now < deadline:
+            fail(f"heartbeat {seq} was sent at {now}, before its deadline {deadline}")
+        if index and deadline != observed[index - 1][2] + rate:
+            fail(
+                f"heartbeat {seq} deadline {deadline} is not the previous deadline "
+                f"{observed[index - 1][2]} plus one second at {rate} Hz"
+            )
+    lateness = ", ".join(str(now - deadline) for _, _, deadline, now in observed)
+    print(
+        f"heartbeat cadence: {beats} beats on a {rate}-tick grid; lateness in ticks: {lateness}",
+        flush=True,
+    )
 
 
 def main() -> None:
@@ -550,18 +970,43 @@ def main() -> None:
         default="qemu-arm-virt",
         help="the pinned QEMU profile and image to build and boot",
     )
+    parser.add_argument(
+        "--composition",
+        choices=sorted(COMPOSITIONS),
+        default="sel4",
+        help=(
+            "which product composition to boot: the product graph, or it plus the pwm "
+            "driver, or it plus the serial driver and heartbeat producer"
+        ),
+    )
+    parser.add_argument(
+        "--transcript",
+        type=Path,
+        default=None,
+        help="also write the serial transcript to this path, for a devlog entry",
+    )
     arguments = parser.parse_args()
+    composition = COMPOSITIONS[arguments.composition]
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    check_automatic_binding_slots()
+    if arguments.composition != "sel4":
+        # The legacy image and pc99's Multiboot2 media both carry the `sel4`
+        # graph alone; every other composition is packaged by closure.
+        if arguments.no_build:
+            fail("--no-build boots the legacy product image, which is the sel4 composition")
+        if arguments.platform != "qemu-arm-virt":
+            fail(f"the {arguments.composition} composition is packaged by closure on qemu-arm-virt only")
+    check_automatic_binding_slots(composition.fixture)
+    if composition.beats:
+        check_heartbeat_vectors()
     image_path, manifest_path = artifact_paths("slime-sel4-graph", arguments.platform)
     if arguments.no_build:
         if arguments.platform != "qemu-arm-virt":
             fail("--no-build legacy admission is only supported on qemu-arm-virt")
         IMAGE = LEGACY_IMAGE
     else:
-        build_image(arguments.platform, image_path)
+        build_image(arguments.platform, image_path, composition.closure)
     if arguments.platform == "qemu-pc99":
         manifest = check_manifest(image_path, manifest_path, arguments.platform)
     else:
@@ -569,13 +1014,12 @@ def main() -> None:
         image_path = IMAGE
         manifest = {}
     check_deleted_compatibility_surface()
-    check_transcript(boot(manifest, arguments.platform, image_path))
-    print(
-        "seL4 component graph check: init launched console, spawn-service, and "
-        "Slisp with generation-declared authority; QEMU serial input evaluated "
-        "and launched sysinfo through its declared context endpoint; all four "
-        f"required resident instances remained live on {arguments.platform}"
-    )
+    transcript = boot(manifest, arguments.platform, image_path, composition)
+    if arguments.transcript is not None:
+        arguments.transcript.parent.mkdir(parents=True, exist_ok=True)
+        arguments.transcript.write_text(transcript + "\n", encoding="utf-8")
+    check_transcript(transcript, composition)
+    print(f"{composition.summary} on {arguments.platform}")
 
 
 if __name__ == "__main__":

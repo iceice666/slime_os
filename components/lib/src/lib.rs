@@ -17,7 +17,9 @@ pub mod link_frames;
 pub mod private_memory_adaptive;
 #[cfg(feature = "component-runtime")]
 pub mod private_memory_capacity;
+pub mod servo_failsafe;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
 pub mod tick_clock;
+pub mod uart16550;
 pub mod virtio_mmio;

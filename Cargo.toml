@@ -249,6 +249,21 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-pwm-servo-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-uart16550-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-mavlink-heartbeat]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-io-link-probe]
 opt-level = "s"
 codegen-units = 1

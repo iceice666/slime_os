@@ -1137,6 +1137,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-mavlink-heartbeat"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-network-service"
 version = "0.1.0"
 dependencies = [
@@ -1300,6 +1309,16 @@ version = "0.1.0"
 dependencies = [
  "boot-contracts",
  "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-pwm-servo-driver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
  "slime-rt",
 ]
 
@@ -1539,6 +1558,16 @@ name = "slime-component-sysinfo"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-uart16550-driver"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]

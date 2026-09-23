@@ -760,6 +760,57 @@ static SlispStatus spawn_effect(State *state, NodeRef expression, SlispEffect *e
     return SLISP_OK;
 }
 
+/* A servo width for the pwm driver. Two or three integer arguments, each a
+ * non-negative value that fits the wire's 32 bits; the period defaults to a
+ * 50 Hz frame. Any other shape of `(pwm ...)` is a type or arity error, never
+ * an evaluation. */
+#define SLISP_PWM_DEFAULT_PERIOD_US 20000U
+
+static int wire_u32(State *state, NodeRef node, uint32_t *value)
+{
+    if (state->nodes[node].kind != NODE_INT || state->nodes[node].value.integer < 0
+        || state->nodes[node].value.integer > (int64_t)UINT32_MAX) {
+        return 0;
+    }
+    *value = (uint32_t)state->nodes[node].value.integer;
+    return 1;
+}
+
+static SlispStatus pwm_effect(State *state, NodeRef expression, SlispEffect *effect)
+{
+    NodeRef head;
+    NodeRef arguments;
+    NodeRef items[3];
+    NodeRef rest;
+    size_t count = 0;
+    SlispStatus status;
+    if (state->nodes[expression].kind != NODE_PAIR) {
+        return SLISP_ERR_UNBOUND;
+    }
+    status = list_take(state, expression, &head, &arguments);
+    if (status != SLISP_OK || !symbol_is(state, head, "pwm")) {
+        return SLISP_ERR_UNBOUND;
+    }
+    rest = arguments;
+    while (rest != 0 && count < 3) {
+        status = list_take(state, rest, &items[count], &rest);
+        if (status != SLISP_OK) {
+            return status;
+        }
+        ++count;
+    }
+    if (rest != 0 || count < 2) {
+        return SLISP_ERR_ARITY;
+    }
+    effect->period_us = SLISP_PWM_DEFAULT_PERIOD_US;
+    if (!wire_u32(state, items[0], &effect->channel) || !wire_u32(state, items[1], &effect->pulse_us)
+        || (count == 3 && !wire_u32(state, items[2], &effect->period_us))) {
+        return SLISP_ERR_TYPE;
+    }
+    effect->kind = SLISP_EFFECT_PWM;
+    return SLISP_OK;
+}
+
 static SlispStatus run_in_state(
     State *state,
     EnvRef environment,
@@ -839,6 +890,9 @@ SlispStatus slisp_session_prepare(
     }
     effect->kind = SLISP_EFFECT_NONE;
     effect->command[0] = '\0';
+    effect->channel = 0;
+    effect->pulse_us = 0;
+    effect->period_us = 0;
     output[0] = '\0';
     session_state.source = source;
     session_state.cursor = 0;
@@ -851,6 +905,13 @@ SlispStatus slisp_session_prepare(
         return SLISP_ERR_SYNTAX;
     }
     status = spawn_effect(&session_state, expression, effect);
+    if (status == SLISP_OK) {
+        return SLISP_OK;
+    }
+    if (status != SLISP_ERR_UNBOUND) {
+        return status;
+    }
+    status = pwm_effect(&session_state, expression, effect);
     if (status == SLISP_OK) {
         return SLISP_OK;
     }
