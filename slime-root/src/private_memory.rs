@@ -658,7 +658,17 @@ impl Table {
         if delta == 0 {
             return Ok(previous);
         }
-        let outcome = map_growth(allocator, arena, vspace, region, delta, kernel)?;
+        // The fixed model's selection is unchanged: its quota is reserved whole
+        // at construction, so a large frame is always placeable.
+        let outcome = map_growth(
+            allocator,
+            arena,
+            vspace,
+            region,
+            delta,
+            GrowthPlan::elastic(),
+            kernel,
+        )?;
         allocator
             .commit_private_transaction(arena)
             .map_err(|error| GrowError::Frames {
@@ -732,6 +742,61 @@ impl Table {
     }
 }
 
+/// Which frame sizes one growth is allowed to use.
+///
+/// The single mapping decision for a growth, resolved by the caller and then
+/// consumed by pricing, acquisition and mapping alike. A guaranteed payload
+/// takes [`Lane::BasePage`] so its promise never depends on an aligned 2 MiB
+/// placement still existing when the page is finally asked for; elastic
+/// payload keeps [`Lane::LargeFrame`], which is the selection every fixed and
+/// elastic holder has always used.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Lane {
+    #[default]
+    LargeFrame,
+    BasePage,
+}
+
+impl Lane {
+    const fn allows_large_frames(self) -> bool {
+        matches!(self, Self::LargeFrame)
+    }
+}
+
+/// One growth's complete mapping decision, resolved once by the caller.
+///
+/// Pricing, acquisition, certification and mapping all read this same value.
+/// `guaranteed_pages` is a prefix of the growth rather than a set of page
+/// numbers because a transaction redeems its entitlement before it spends the
+/// pool, which is also the order the ledger charges them in.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GrowthPlan {
+    pub lane: Lane,
+    pub guaranteed_pages: usize,
+    pub reservation: Option<crate::object_allocator::guarantee_vault::ReservationId>,
+}
+
+impl GrowthPlan {
+    /// Ordinary growth: every page from the common pool, large frames allowed.
+    pub const fn elastic() -> Self {
+        Self {
+            lane: Lane::LargeFrame,
+            guaranteed_pages: 0,
+            reservation: None,
+        }
+    }
+
+    /// Where the `offset`-th page of this growth must be retyped from.
+    const fn source(self, offset: usize) -> crate::object_allocator::ExtentSource {
+        match self.reservation {
+            Some(id) if offset < self.guaranteed_pages => {
+                crate::object_allocator::ExtentSource::Guaranteed(id)
+            }
+            _ => crate::object_allocator::ExtentSource::Common,
+        }
+    }
+}
+
 /// What one growth's mappings cost, once they exist.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GrowthOutcome {
@@ -753,8 +818,10 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
     vspace: sel4::cap::VSpace,
     region: &mut Region,
     delta: usize,
+    plan: GrowthPlan,
     kernel: &mut K,
 ) -> Result<GrowthOutcome, GrowError> {
+    let lane = plan.lane;
     let previous = region.pages;
     let mut pages_backed = 0;
     let mut large_frames = 0;
@@ -773,9 +840,18 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
             }
             let vaddr = region.base + page * GRANULE_SIZE;
             let remaining = delta - pages_backed;
-            let large = !leaf_available
+            // The same predicate `Region::shape_in` priced, reading the same
+            // lane. Deciding it independently here is how a mapper could take
+            // a large frame the transaction was never charged for.
+            let large = lane.allows_large_frames()
+                && !leaf_available
                 && vaddr.is_multiple_of(LARGE_FRAME_BYTES)
                 && remaining >= LARGE_FRAME_PAGES;
+            // The page's own source, and the same source for the leaf table
+            // that page needs: a guaranteed page whose table came from the
+            // pool would leave the guarantee unredeemable after exactly the
+            // pool exhaustion it was supposed to be immune to.
+            let source = plan.source(pages_backed);
             let result = if large {
                 back_large(
                     allocator,
@@ -783,11 +859,12 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
                     vspace,
                     vaddr,
                     previous == 0 && delta == region.quota,
+                    source,
                     kernel,
                 )
             } else {
                 if !leaf_available {
-                    match back_leaf_table(allocator, arena, vspace, vaddr, kernel) {
+                    match back_leaf_table(allocator, arena, vspace, vaddr, source, kernel) {
                         Ok(table) => {
                             region.mark_leaf_table(span);
                             if let Err(error) =
@@ -812,7 +889,7 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
                         }
                     }
                 }
-                back_page(allocator, arena, vspace, vaddr, kernel)
+                back_page(allocator, arena, vspace, vaddr, source, kernel)
             };
             match result {
                 Ok(backing) => {
@@ -864,6 +941,7 @@ fn back_leaf_table<K: PrivateMemoryKernel>(
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     vaddr: usize,
+    source: crate::object_allocator::ExtentSource,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let ty = private_leaf_table_type();
@@ -872,6 +950,7 @@ fn back_leaf_table<K: PrivateMemoryKernel>(
         arena,
         PrivateObjectKind::LeafTable,
         ty.blueprint(),
+        source,
         kernel,
     )?;
     let table = allocation
@@ -894,6 +973,7 @@ fn back_page<K: PrivateMemoryKernel>(
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     vaddr: usize,
+    source: crate::object_allocator::ExtentSource,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let size_bits = sel4::FrameObjectType::GRANULE.bits();
@@ -901,6 +981,7 @@ fn back_page<K: PrivateMemoryKernel>(
         arena,
         PrivateObjectKind::Granule,
         sel4::cap_type::Granule::object_blueprint(),
+        source,
         kernel,
     )?;
     let frame = allocation.cap().cast::<sel4::cap_type::UnspecifiedPage>();
@@ -929,6 +1010,7 @@ fn back_large<K: PrivateMemoryKernel>(
     vaddr: usize,
     #[cfg_attr(not(slime_private_fail_large_map), allow(unused_variables))]
     first_of_full_window: bool,
+    source: crate::object_allocator::ExtentSource,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let size_bits = LARGE_FRAME_TYPE.bits();
@@ -936,6 +1018,7 @@ fn back_large<K: PrivateMemoryKernel>(
         arena,
         PrivateObjectKind::LargeFrame,
         LARGE_FRAME_TYPE.blueprint(),
+        source,
         kernel,
     )?;
     let frame = allocation.cap().cast::<sel4::cap_type::UnspecifiedPage>();

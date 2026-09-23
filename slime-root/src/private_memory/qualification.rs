@@ -273,6 +273,7 @@ impl Holder {
             sel4::init_thread::slot::VSPACE.cap(),
             &mut self.region,
             pages,
+            super::GrowthPlan::elastic(),
         )?;
         self.committed = self.region.pages();
         Ok(previous)
@@ -944,6 +945,7 @@ impl Holder {
             sel4::init_thread::slot::VSPACE.cap(),
             &mut self.region,
             pages,
+            super::GrowthPlan::elastic(),
             kernel,
         )?;
         self.committed = self.region.pages();

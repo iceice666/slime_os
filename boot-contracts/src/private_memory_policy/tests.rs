@@ -133,6 +133,48 @@ fn run_contention(policy: Policy<'_>) -> (Resources, Resources, Incarnation) {
 }
 
 #[test]
+fn binding_reports_fixed_and_pool_address_maxima_and_quarantines_duplicates() {
+    let mut fixed = subject("fixed", "shared");
+    fixed.maximum_mode = FIXED;
+    fixed.maximum_pages = 3;
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![fixed, subject("pooled", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[Resources::ZERO]).unwrap();
+
+    let fixed = ledger
+        .bind_with_maximum(&subject_identity("fixed"))
+        .unwrap();
+    assert_eq!(fixed.maximum_pages, 3);
+    assert_eq!(
+        ledger.bind_with_maximum(&subject_identity("fixed")),
+        Err(ledger::Error::Incarnation)
+    );
+
+    let pooled = ledger
+        .bind_with_maximum(&subject_identity("pooled"))
+        .unwrap();
+    assert_eq!(pooled.maximum_pages, 8);
+    ledger.quarantine(pooled.token).unwrap();
+    assert_eq!(
+        ledger.begin(pooled.token, 0, plan(0)),
+        Err(ledger::Error::Cleanup)
+    );
+    assert_eq!(
+        ledger.bind_with_maximum(&subject_identity("pooled")),
+        Err(ledger::Error::Incarnation)
+    );
+
+    ledger.retire(fixed.token, true).unwrap();
+    ledger.retire(pooled.token, true).unwrap();
+    assert!(ledger.bind(&subject_identity("pooled")).is_ok());
+}
+
+#[test]
 fn shared_guarantee_and_operational_reserve_survive_elastic_contention_and_restart() {
     let data = bytes(
         std::vec![entitlement("shared", 0), entitlement("reserved", 2)],
@@ -562,4 +604,168 @@ fn repeated_rollback_cannot_accumulate_tables_beyond_the_attempted_window() {
     ledger.abort(a, Resources::ZERO, true).unwrap();
     ledger.retire(a, true).unwrap();
     assert_eq!(ledger.available(), resources(4));
+}
+
+/// One protected range and one ordinary range, and the same placements
+/// certified three ways: refused outright without a witness, accepted with a
+/// witness that matches what physically landed in the protected range, and
+/// refused again when the witness overstates either its bytes or the payload
+/// pages it claims to redeem.
+#[test]
+fn a_protected_placement_is_certified_only_by_a_matching_witness() {
+    const PROTECTED: u64 = 1 << 20;
+    let sources = std::vec![
+        Range {
+            start: 0,
+            bytes: 4 * PAGE_BYTES,
+            class: Class::OrdinaryTail,
+        },
+        Range {
+            start: PROTECTED,
+            bytes: 4 * PAGE_BYTES,
+            class: Class::Guaranteed,
+        },
+    ];
+    let protected: Vec<_> = (0..2)
+        .map(|page| Placement {
+            start: PROTECTED + page * PAGE_BYTES,
+            size_bits: 12,
+        })
+        .collect();
+    let charged = resources(2);
+
+    // Reservation-owned backing is not free memory, and pointing a placement
+    // at it does not make it so.
+    assert_eq!(
+        Plan::validate(&sources, &protected, charged),
+        Err(ledger::Error::Placement)
+    );
+
+    let witness = ledger::Witness {
+        guaranteed: charged,
+        guarantee_pages: 2,
+    };
+    let plan = Plan::validate_reserved(&sources, &protected, charged, witness).unwrap();
+    assert_eq!(plan.resources(), charged);
+    assert_eq!(plan.guaranteed(), charged);
+    assert_eq!(plan.guarantee_pages(), 2);
+
+    // A witness claiming more protected bytes than landed, and one claiming
+    // more redeemed pages than its own bytes hold, are both refused.
+    for overstated in [
+        ledger::Witness {
+            guaranteed: resources(3),
+            guarantee_pages: 2,
+        },
+        ledger::Witness {
+            guaranteed: charged,
+            guarantee_pages: 3,
+        },
+    ] {
+        assert_eq!(
+            Plan::validate_reserved(&sources, &protected, charged, overstated),
+            Err(ledger::Error::Guarantee)
+        );
+    }
+
+    // An ordinary transaction is unchanged, with or without the new path: it
+    // draws from free ranges and redeems no guarantee.
+    let elastic: Vec<_> = (0..2)
+        .map(|page| Placement {
+            start: page * PAGE_BYTES,
+            size_bits: 12,
+        })
+        .collect();
+    let plan = Plan::validate(&sources, &elastic, charged).unwrap();
+    assert_eq!(plan.guaranteed(), Resources::ZERO);
+    assert_eq!(plan.guarantee_pages(), 0);
+    assert_eq!(
+        Plan::validate_reserved(
+            &sources,
+            &elastic,
+            charged,
+            ledger::Witness {
+                guaranteed: Resources::ZERO,
+                guarantee_pages: 0,
+            }
+        )
+        .map(Plan::resources),
+        Ok(charged)
+    );
+    // A mixed transaction certifies each half against its own source.
+    let mixed = std::vec![protected[0], elastic[0]];
+    let plan = Plan::validate_reserved(
+        &sources,
+        &mixed,
+        charged,
+        ledger::Witness {
+            guaranteed: resources(1),
+            guarantee_pages: 1,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.guaranteed(), resources(1));
+    assert_eq!(
+        plan.resources().subtract(plan.guaranteed()),
+        Ok(resources(1))
+    );
+}
+
+/// A certified protected transaction is charged to its entitlement rather
+/// than to the common pool, and it cannot redeem more than the entitlement
+/// promises.
+#[test]
+fn a_certified_guarantee_is_charged_to_its_entitlement_and_not_to_the_pool() {
+    const PROTECTED: u64 = 1 << 20;
+    let data = bytes(
+        std::vec![entitlement("shared", 2)],
+        std::vec![subject("a", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[resources(2)]).unwrap();
+    let pool = ledger.available();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+
+    let sources = std::vec![Range {
+        start: PROTECTED,
+        bytes: 2 * PAGE_BYTES,
+        class: Class::Guaranteed,
+    }];
+    let placements: Vec<_> = (0..2)
+        .map(|page| Placement {
+            start: PROTECTED + page * PAGE_BYTES,
+            size_bits: 12,
+        })
+        .collect();
+    let witness = ledger::Witness {
+        guaranteed: resources(2),
+        guarantee_pages: 2,
+    };
+    let plan = Plan::validate_reserved(&sources, &placements, resources(2), witness).unwrap();
+    ledger.begin(a, 2, plan).unwrap();
+    // The pool is untouched: every byte came from the entitlement's own
+    // protected backing.
+    assert_eq!(ledger.available(), pool);
+    assert_eq!(
+        ledger.guaranteed_available(&entitlement_identity("shared")),
+        Ok(Resources::ZERO)
+    );
+    ledger.commit(a).unwrap();
+    assert_eq!(ledger.pages(a), Ok(2));
+
+    // The guarantee is spent, so a further certified claim against it is
+    // refused rather than silently funded from the pool.
+    let plan = Plan::validate_reserved(
+        &sources[..],
+        &placements[..1],
+        resources(1),
+        ledger::Witness {
+            guaranteed: resources(1),
+            guarantee_pages: 1,
+        },
+    )
+    .unwrap();
+    assert_eq!(ledger.begin(a, 1, plan), Err(ledger::Error::Guarantee));
 }

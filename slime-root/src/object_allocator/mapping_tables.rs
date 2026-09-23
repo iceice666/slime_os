@@ -395,9 +395,12 @@ impl ObjectAllocator {
             self.ensure_allocation_descriptors(1)?;
             self.allocation_position()?;
             let bits = ty.blueprint().physical_size_bits();
-            let extent = if let Ok((extent, _)) =
-                self.extent_for_allocation(arena, ExtentKind::MappingTables, bits)
-            {
+            let extent = if let Ok((extent, _)) = self.extent_for_allocation(
+                arena,
+                ExtentKind::MappingTables,
+                bits,
+                super::ExtentSource::Common,
+            ) {
                 extent
             } else {
                 self.provision_extent(arena, bits, ExtentKind::MappingTables)?

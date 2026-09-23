@@ -573,14 +573,10 @@ impl ObjectAllocator {
             self.live_objects = self.live_objects.saturating_sub(extent.objects);
             self.live_bytes = self.live_bytes.saturating_sub(extent.bytes);
             self.release_extent_allocations(id, index);
-            let record = self.extents[index].as_mut().expect("extent exists");
-            record.active = false;
-            record.revoked = false;
-            record.owner = u16::MAX;
-            record.serial = 0;
-            record.watermark = 0;
-            record.objects = 0;
-            record.bytes = 0;
+            // Backing borrowed from a reservation returns to that reservation
+            // here, and only here: the revoke above has completed, so the
+            // entitlement regains capacity the machine has actually recovered.
+            self.settle_returned_extent(index);
         }
         // One rebuild after every release: a reusable chain may name any of
         // the positions this call cleared, and walking a stale head is how a
