@@ -1169,6 +1169,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-private-adaptive-coordinator"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-adaptive-denied"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-adaptive-guaranteed"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-adaptive-io"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-adaptive-pool-a"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-adaptive-pool-b"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-adaptive-restart"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-private-cycle-probe"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,63 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "none";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-adaptive-io";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-adaptive-io";
+  owner = "root";
+  provides = [];
+  purpose = "An adaptive holder that also drives a device, so device mappings meet the same private window.";
+  requires = [
+    "device";
+    "dmaAccount";
+    "mmioRegion";
+  ];
+  runtime = {
+    devices = [
+      "device";
+    ];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "MMIO and queue mappings are refused at backed and unbacked addresses of its own window and admitted outside it.";
+    passFailCriteria = "[private-adaptive:io] device mappings excluded from the private window";
+    requiredTestEnvironment = "private_memory_adaptive_check";
+    testCondition = "A holder with real device authority maps MMIO and a device queue at three addresses inside and outside its reservation.";
+  };
+  version = "1.0.0";
+}

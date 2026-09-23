@@ -91,7 +91,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "c65af619a61efa82998239f21c16135b48deb36b96224f174ac47a8af5c4081f";
+      identity = "13be59cdcfc388f68ad22ca77b5f8cc3ad5206abc4f6a5d9b9f1b486d10e3ee7";
     };
     parameters = [];
   };
@@ -110,7 +110,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "013d9fad2ec297bdafd430d8468a53d6eb28b0ead44e3566673bd1ed3806a18b";
+        identity = "56c4f249628bbbe66d1816d59941229091bc9dd54debfba5401058bd19652ea6";
       };
     };
     {
@@ -118,7 +118,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "90f490a0535989e6dc44c240d2650c09d7bfd2340276b9f487982af3ee39041a";
+        identity = "1fd9902d76cd5777de079d252bab5f0e0112bbab54af579b355ae099f2d6f99a";
       };
     };
     {
@@ -142,7 +142,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "adc9f17ab326b2c865120d9d99938fa8cff1dad9a2d2b5a75d8af467fc300013";
+        identity = "03320f3156d7360f5fb0ecedf1a77f123551f2919bfc141fed45d1904a4d4180";
       };
     };
     {
@@ -166,7 +166,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "5a3715bb1d16ab276a9dceb85fb26d21236753e573b4dec8a43b67f08a1e86e4";
+        identity = "74cce2018740ff5e463a8c47c93127858ab2be883c4cbb771d5f5136fe469acc";
       };
     };
     {
@@ -206,7 +206,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "1fd573a36dfb82aa2d13d5d90afa3731befca616af61bc31dc76ac692047d724";
+        identity = "f7136ebfe6e1e689a0e3ca77366af671ffd7bf2d613a5cd4bec3049115c18372";
       };
     };
     {
@@ -246,7 +246,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "97d51162cb6cf65d49ff8d0349a06fb1f542060c7f8b240a9062119c7775f8b9";
+        identity = "073544b1623282908878fad806ea01cbf0a823b1558fad998969f7ff314fadb5";
       };
     };
   ];

@@ -201,6 +201,30 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-1g.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-private-memory-adaptive";
+      deferralReason = "";
+      owningGate = "private_memory_adaptive_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-adaptive.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-adaptive-overcommit";
+      deferralReason = "";
+      owningGate = "private_memory_adaptive_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-adaptive-overcommit.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-adaptive-rv64";
+      deferralReason = "";
+      owningGate = "private_memory_adaptive_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-adaptive-rv64.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-private-memory-cycles.zti";
       composition = "sel4-private-memory-cycles";
       deferralReason = "";

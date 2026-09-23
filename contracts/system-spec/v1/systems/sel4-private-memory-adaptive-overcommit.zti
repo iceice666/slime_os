@@ -1,0 +1,253 @@
+{
+  acceptanceCriteria = "private_memory_adaptive_check observes this composition refuse admission for a guarantee no inventory can fund, before any instance is staged, spawned or activated.";
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  bootAction = "private-memory";
+  bootAttempts = 3;
+  bootLayoutObject = true;
+  bootProfiles = [];
+  bootstrapInstance = "init";
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  commandBindings = [];
+  components = [
+    "init";
+    "private-adaptive-coordinator";
+    "private-adaptive-denied";
+    "private-adaptive-guaranteed";
+    "private-adaptive-pool-a";
+    "private-adaptive-pool-b";
+    "private-adaptive-restart";
+  ];
+  defaultImageBytes = 65536;
+  deploymentConstraint = "Negative control only: declares a simultaneous guarantee larger than any reference machine's RAM so admission must fail closed. Never boots a graph.";
+  extraBindings = [];
+  formatVersion = 1;
+  generation = 64;
+  grants = [
+    {
+      capabilityKind = "endpoint";
+      name = "adaptive-denied-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-denied";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "adaptive-denied-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-denied";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "adaptive-guaranteed-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-guaranteed";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "adaptive-guaranteed-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-guaranteed";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "adaptive-pool-a-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-pool-a";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "adaptive-pool-a-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-pool-a";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "adaptive-pool-b-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-pool-b";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "adaptive-restart-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-restart";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "adaptive-restart-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-adaptive-coordinator";
+      target = "private-adaptive-restart";
+      transferable = false;
+    };
+  ];
+  imageSizes = [];
+  instances = [
+    {
+      executable = "init";
+      name = "init";
+    };
+    {
+      executable = "private-adaptive-coordinator";
+      health = "required";
+      name = "private-adaptive-coordinator";
+    };
+    {
+      autostart = false;
+      executable = "private-adaptive-denied";
+      health = "optional";
+      name = "private-adaptive-denied";
+    };
+    {
+      autostart = false;
+      executable = "private-adaptive-guaranteed";
+      health = "optional";
+      name = "private-adaptive-guaranteed";
+    };
+    {
+      autostart = false;
+      executable = "private-adaptive-pool-a";
+      health = "optional";
+      name = "private-adaptive-pool-a";
+    };
+    {
+      executable = "private-adaptive-pool-b";
+      health = "optional";
+      name = "private-adaptive-pool-b";
+    };
+    {
+      autostart = false;
+      executable = "private-adaptive-restart";
+      health = "optional";
+      name = "private-adaptive-restart";
+    };
+  ];
+  interfaceSchemas = [];
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  mintedBindings = [];
+  name = "sel4-private-memory-adaptive-overcommit";
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  networkInterfaces = [];
+  networkInterfacesObject = false;
+  notificationBindings = [];
+  notifications = [];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  privateMemoryPolicy = {
+    entitlements = [
+      {
+        guaranteePages = 4096;
+        maximumMode = "fixed";
+        maximumPages = 65792;
+        name = "adaptive-guaranteed";
+        subtreeRoot = "private-adaptive-coordinator";
+      };
+      {
+        guaranteePages = 1048576;
+        maximumMode = "fixed";
+        maximumPages = 1048576;
+        name = "adaptive-pool";
+        subtreeRoot = "";
+      };
+      {
+        guaranteePages = 2048;
+        maximumMode = "fixed";
+        maximumPages = 16384;
+        name = "adaptive-restart";
+        subtreeRoot = "private-adaptive-coordinator";
+      };
+    ];
+    formatVersion = 2;
+    reserve = {
+      bytes = 16777216;
+      descriptors = 1024;
+      extents = 128;
+      slots = 1024;
+      tables = 128;
+    };
+    subjects = [
+      {
+        entitlement = "adaptive-guaranteed";
+        instance = "private-adaptive-guaranteed";
+        maximumMode = "fixed";
+        maximumPages = 65792;
+      };
+      {
+        entitlement = "adaptive-pool";
+        instance = "private-adaptive-pool-a";
+        maximumMode = "fixed";
+        maximumPages = 1048576;
+      };
+      {
+        entitlement = "adaptive-pool";
+        instance = "private-adaptive-pool-b";
+        maximumMode = "fixed";
+        maximumPages = 1048576;
+      };
+      {
+        entitlement = "adaptive-restart";
+        instance = "private-adaptive-restart";
+        maximumMode = "fixed";
+        maximumPages = 16384;
+      };
+    ];
+  };
+  recording = [];
+  recordingObject = false;
+  sharedBufferBudgetObject = false;
+  slotPins = [];
+  state = [];
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  waitSet = [];
+  waitSetObject = false;
+}

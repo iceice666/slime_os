@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-adaptive-coordinator";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-adaptive-pool-a";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-adaptive-pool-a";
+  owner = "private-adaptive-coordinator";
+  provides = [];
+  purpose = "A zero-guarantee subject of a shared entitlement with a 1537 MiB elastic maximum.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "Its idle maximum reserves nothing and a request no inventory can fund is refused without charge.";
+    passFailCriteria = "[private-adaptive:pool-a] end incarnation=0 pages";
+    requiredTestEnvironment = "private_memory_adaptive_check";
+    testCondition = "Two subjects of one entitlement under different owners alternate small requests against a single pool.";
+  };
+  version = "1.0.0";
+}

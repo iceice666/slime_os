@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-adaptive-coordinator";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-adaptive-restart";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-adaptive-restart";
+  owner = "private-adaptive-coordinator";
+  provides = [];
+  purpose = "Dies by a deliberate unbacked access and is replaced, binding the original entitlement once.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "The replacement receives the same guarantee, at the same base, on zeroed backing.";
+    passFailCriteria = "[private-adaptive:restart] end incarnation=1 pages";
+    requiredTestEnvironment = "private_memory_adaptive_check";
+    testCondition = "One holder faults past its committed extent and a replacement incarnation rebinds its entitlement.";
+  };
+  version = "1.0.0";
+}

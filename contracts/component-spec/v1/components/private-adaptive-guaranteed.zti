@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-adaptive-coordinator";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-adaptive-guaranteed";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-adaptive-guaranteed";
+  owner = "private-adaptive-coordinator";
+  provides = [];
+  purpose = "Holds a fully reserved private-memory guarantee under a 257 MiB declared maximum.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "Its whole guarantee is served while a shared elastic pool is exhausted around it.";
+    passFailCriteria = "[private-adaptive:guaranteed] end incarnation=0 pages";
+    requiredTestEnvironment = "private_memory_adaptive_check";
+    testCondition = "The guaranteed subject interleaves requests with two pool subjects and is refused one page past its declared maximum.";
+  };
+  version = "1.0.0";
+}

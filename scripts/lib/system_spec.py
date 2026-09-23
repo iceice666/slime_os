@@ -84,6 +84,15 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-operation": "sel4-operation.zti",
     "sel4-powerbox": "sel4-powerbox.zti",
     "sel4-private-memory": "sel4-private-memory.zti",
+    # MEM-ADAPTIVE's declared-policy compositions. The `-rv64` row is a separate
+    # spec for the same reason every other private-memory plane's is: a closure's
+    # platform follows its system spec's `targetRequirement`, and a spec declares
+    # exactly one. `-overcommit` is a negative control that must never boot a
+    # graph — it declares a simultaneous guarantee no reference machine can fund,
+    # so admission has to fail closed before publication.
+    "sel4-private-memory-adaptive": "sel4-private-memory-adaptive.zti",
+    "sel4-private-memory-adaptive-rv64": "sel4-private-memory-adaptive-rv64.zti",
+    "sel4-private-memory-adaptive-overcommit": "sel4-private-memory-adaptive-overcommit.zti",
     "sel4-private-memory-cycles": "sel4-private-memory-cycles.zti",
     "sel4-private-memory-1g": "sel4-private-memory-1g.zti",
     "sel4-private-memory-isolation": "sel4-private-memory-isolation.zti",

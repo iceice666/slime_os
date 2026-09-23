@@ -270,6 +270,41 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-private-adaptive-coordinator]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-adaptive-denied]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-adaptive-guaranteed]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-adaptive-io]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-adaptive-pool-a]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-adaptive-pool-b]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-adaptive-restart]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-private-heap-probe]
 opt-level = "s"
 codegen-units = 1

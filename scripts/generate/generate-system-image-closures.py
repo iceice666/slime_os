@@ -218,6 +218,15 @@ ROOT_ROLE_CLOSURES: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "sel4-private-memory-conservation-rv64": (
         "sel4-private-memory-heap-stress-rv64", "private-memory-conservation", (),
     ),
+    # The adaptive plane under the conservation role, whose one compiled-in
+    # revoke failure lands on the first adaptive holder that dies. It is the
+    # only way to observe a real incarnation being quarantined and then
+    # returned by exactly one retry.
+    "sel4-private-memory-adaptive-lifecycle": (
+        "sel4-private-memory-adaptive",
+        "private-memory-conservation",
+        (),
+    ),
     "sel4-reclamation-unwind": ("sel4-reclamation", "reclamation-unwind", ()),
     "sel4-channel-fixture": ("sel4-channel", "root-fixture", ()),
     # The two private-memory roles compile bounded, one-shot allocator failures.
