@@ -14,6 +14,8 @@ pub mod fabric_visibility;
 pub mod generation_composition;
 pub mod link_frames;
 #[cfg(feature = "component-runtime")]
+pub mod private_memory_adaptive;
+#[cfg(feature = "component-runtime")]
 pub mod private_memory_capacity;
 pub mod servo_failsafe;
 #[cfg(feature = "component-runtime")]

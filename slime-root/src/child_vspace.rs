@@ -196,13 +196,22 @@ impl<'a> ChildImage<'a> {
     }
 
     /// Exact kernel-memory plan for the VSpace portion of this image.
-    pub fn vspace_arena_plan(&self, threads: usize) -> Result<ArenaPlan, ImageError> {
+    ///
+    /// `reservation` is the private window's page count, which decides how many
+    /// upper tables the address space needs: a wider window crosses more
+    /// upper-level spans, and the plan must count every one of them before the
+    /// arena is sized. It is the same value the VSpace is later built with.
+    pub fn vspace_arena_plan(
+        &self,
+        threads: usize,
+        reservation: usize,
+    ) -> Result<ArenaPlan, ImageError> {
         let mut plan = ArenaPlan::new();
         plan.add(sel4::cap_type::VSpace::object_blueprint())
             .ok_or(ImageError::FootprintOutOfRange)?;
         for level in 1..sel4::vspace_levels::NUM_LEVELS {
             let span_bytes = 1usize << sel4::vspace_levels::span_bits(level);
-            let planned = statically_mapped_span(&self.footprint, threads, level)?;
+            let planned = statically_mapped_span(&self.footprint, threads, level, reservation)?;
             let coarse = coarsen(&planned, span_bytes);
             let Some(ty) = sel4::TranslationTableObjectType::from_level(level) else {
                 continue;
@@ -305,6 +314,13 @@ pub struct ChildVSpace {
     /// the VSpace rather than recomputed by the grow path, so exactly one
     /// arithmetic decides where the window is.
     pub private_base: usize,
+    /// Pages that window reserves, as the construction was asked for.
+    ///
+    /// Carried beside the base because the two are one decision: the upper
+    /// tables mapped here cover exactly this many pages, so a region built
+    /// from a different count would either leave part of its window without a
+    /// table or claim address space no table covers.
+    pub private_pages: usize,
     pub frames_mapped: usize,
     pub tables_mapped: usize,
 }
@@ -378,9 +394,18 @@ pub fn create_child_vspace(
     scratch: &ScratchPage,
     asid_pool: sel4::cap::AsidPool,
     threads: usize,
+    // Pages the private window reserves, from the admitted policy. The same
+    // value the arena was planned with: the tables mapped below cover exactly
+    // this window, and the region installed on the task is built from what
+    // this returns rather than from a second calculation.
+    reservation: usize,
 ) -> Result<ChildVSpace, VSpaceError> {
     admit_thread_count(threads)?;
     let footprint = image.footprint();
+    // Resolved once, before any object exists: the plan, the tables, the
+    // returned base and the region all name this window.
+    let window = private_window(&footprint, threads, reservation).map_err(VSpaceError::Image)?;
+    thread_mapped_span(&footprint, threads, reservation).map_err(VSpaceError::Image)?;
     let vspace = allocator
         .allocate_fixed_in::<sel4::cap_type::VSpace>(arena)?
         .cap();
@@ -392,7 +417,8 @@ pub fn create_child_vspace(
     // The private window deliberately receives no leaf table: a later 2 MiB
     // frame occupies that parent entry directly, while 4 KiB growth creates
     // and owns the leaf table transactionally.
-    let tables_mapped = map_intermediate_tables(allocator, arena, vspace, &footprint, threads)?;
+    let tables_mapped =
+        map_intermediate_tables(allocator, arena, vspace, &footprint, threads, reservation)?;
 
     let page_count = image.image_pages();
     validate_image_page_rights(image, &footprint)?;
@@ -428,9 +454,8 @@ pub fn create_child_vspace(
         // Private growth installs its leaf table lazily when the first 4 KiB
         // mapping needs one; aligned full-window growth can instead map one
         // 2 MiB frame directly.
-        private_base: private_window(&footprint, threads)
-            .map_err(VSpaceError::Image)?
-            .start,
+        private_base: window.start,
+        private_pages: reservation,
         frames_mapped: page_count + 2 * threads,
         tables_mapped,
     })
@@ -526,12 +551,13 @@ fn map_intermediate_tables(
     vspace: sel4::cap::VSpace,
     footprint: &Range<usize>,
     threads: usize,
+    reservation: usize,
 ) -> Result<usize, VSpaceError> {
     let mut mapped = 0;
     for level in 1..sel4::vspace_levels::NUM_LEVELS {
         let span_bytes = 1usize << sel4::vspace_levels::span_bits(level);
-        let planned =
-            statically_mapped_span(footprint, threads, level).map_err(VSpaceError::Image)?;
+        let planned = statically_mapped_span(footprint, threads, level, reservation)
+            .map_err(VSpaceError::Image)?;
         let coarse = coarsen(&planned, span_bytes);
         let Some(ty) = sel4::TranslationTableObjectType::from_level(level) else {
             continue;
@@ -705,8 +731,15 @@ fn footprint(file: &ElfFile64<'_, Endianness>) -> Result<Range<usize>, ImageErro
     Ok(span)
 }
 
+/// Admit an image's own span, before any policy is known.
+///
+/// Deliberately reservation-free: this runs while the image is being parsed,
+/// when the window's width has not been decided, so it validates only what the
+/// image itself commits to — a nonzero start and thread pages inside the
+/// child's address ceiling. The window's own bounds are checked where it is
+/// computed, against the reservation actually admitted.
 fn validate_footprint_span(span: &Range<usize>) -> Result<(), ImageError> {
-    thread_mapped_span(span, 1).map(|_| ())
+    thread_mapped_span(span, 1, 0).map(|_| ())
 }
 
 pub(crate) fn admit_thread_count(threads: usize) -> Result<(), VSpaceError> {
@@ -720,22 +753,29 @@ pub(crate) fn admit_thread_count(threads: usize) -> Result<(), VSpaceError> {
     }
 }
 
-/// Bytes of address space one child's private-memory window reserves (C10.1).
-pub const PRIVATE_WINDOW_BYTES: usize = crate::private_memory::MAX_REGION_PAGES * GRANULE_SIZE;
-
 /// Where a child's private-memory window sits, above its image and thread
 /// pages (C10.1).
 ///
-/// Two properties are load-bearing and neither is incidental:
+/// `reservation` is the window's page count, which comes from the admitted
+/// policy rather than from this image: a task the generation gives no window
+/// passes zero and reserves nothing but the guard, and two tasks in one system
+/// may reserve different widths.
+///
+/// Three properties are load-bearing and none is incidental:
 ///
 /// * **A guard granule below.** One granule of unmapped address space separates
 ///   the window from the last thread page, so a write running off the end of
 ///   either faults rather than landing in the other. Above the window nothing
 ///   is ever mapped, which is the upper guard.
-/// * **2 MiB-aligned.** The base is rounded to the reserved span, which is
-///   currently exactly one 2 MiB block on both supported architectures. This
-///   is asserted separately from the window size so a later larger reservation
-///   cannot silently weaken the block-mapping precondition.
+/// * **2 MiB-aligned base.** Aligned to the large-frame size specifically, and
+///   deliberately not to the reservation: the alignment exists so a window's
+///   spans line up with block mappings and with the per-span table ownership
+///   indexed from the base, and a reservation of 257 MiB has no useful
+///   alignment of its own. Rounding to the reservation would also move every
+///   holder's base whenever its policy changed size.
+/// * **Checked throughout.** The base, the window's bytes and its end are each
+///   checked, because a policy number reaches this arithmetic and the result
+///   becomes the address every private page is derived from.
 ///
 /// The window is address space only. Upper translation tables are mapped when
 /// the VSpace is built; the leaf table is lazy because installing it would
@@ -744,16 +784,15 @@ pub const PRIVATE_WINDOW_BYTES: usize = crate::private_memory::MAX_REGION_PAGES 
 pub(crate) fn private_window(
     span: &Range<usize>,
     threads: usize,
+    reservation: usize,
 ) -> Result<Range<usize>, ImageError> {
     let base = thread_pages_end(span, threads)?
         .checked_add(GRANULE_SIZE)
-        .and_then(|addr| addr.checked_next_multiple_of(PRIVATE_WINDOW_BYTES))
+        .and_then(|addr| addr.checked_next_multiple_of(LARGE_FRAME_BYTES))
         .ok_or(ImageError::FootprintOutOfRange)?;
-    if !base.is_multiple_of(LARGE_FRAME_BYTES) {
-        return Err(ImageError::FootprintOutOfRange);
-    }
-    let end = base
-        .checked_add(PRIVATE_WINDOW_BYTES)
+    let end = reservation
+        .checked_mul(GRANULE_SIZE)
+        .and_then(|bytes| base.checked_add(bytes))
         .ok_or(ImageError::FootprintOutOfRange)?;
     Ok(base..end)
 }
@@ -778,11 +817,12 @@ fn statically_mapped_span(
     span: &Range<usize>,
     threads: usize,
     level: usize,
+    reservation: usize,
 ) -> Result<Range<usize>, ImageError> {
     if level + 1 == sel4::vspace_levels::NUM_LEVELS {
         Ok(span.start..thread_pages_end(span, threads)?)
     } else {
-        thread_mapped_span(span, threads)
+        thread_mapped_span(span, threads, reservation)
     }
 }
 
@@ -797,9 +837,16 @@ pub(crate) fn private_leaf_table_type() -> sel4::TranslationTableObjectType {
 /// One range rather than three, because upper-level planning and mapping must
 /// agree exactly. The leaf level uses [`statically_mapped_span`] instead so the
 /// private window stays available for either one block entry or one lazy table.
-fn thread_mapped_span(span: &Range<usize>, threads: usize) -> Result<Range<usize>, ImageError> {
-    let mapped_end = private_window(span, threads)?.end;
-    if mapped_end > CHILD_ADDRESS_CEILING || span.start == 0 {
+fn thread_mapped_span(
+    span: &Range<usize>,
+    threads: usize,
+    reservation: usize,
+) -> Result<Range<usize>, ImageError> {
+    let mapped_end = private_window(span, threads, reservation)?.end;
+    // Strictly below the ceiling, not merely at it: the address above the
+    // window is the upper guard, and a window ending exactly at the last
+    // mappable address has none.
+    if mapped_end >= CHILD_ADDRESS_CEILING || span.start == 0 {
         Err(ImageError::FootprintOutOfRange)
     } else {
         Ok(span.start..mapped_end)
@@ -871,10 +918,17 @@ mod tests {
 
     use super::{
         CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError,
-        LARGE_FRAME_BYTES, MAX_CHILD_IMAGE_PAGES, PRIVATE_WINDOW_BYTES, coarsen, private_window,
+        LARGE_FRAME_BYTES, LARGE_FRAME_PAGES, MAX_CHILD_IMAGE_PAGES, coarsen, private_window,
         reject_writable_executable, round_down, statically_mapped_span, thread_mapped_span,
         validate_footprint_span,
     };
+
+    /// A window wide enough to cross several upper-table spans, in pages.
+    const WIDE_WINDOW_PAGES: usize = 64 * 1024;
+    const WIDE_WINDOW_BYTES: usize = WIDE_WINDOW_PAGES * GRANULE_SIZE;
+    /// A window that is neither a power of two nor a multiple of its own
+    /// alignment beyond one block: 257 MiB.
+    const ODD_WINDOW_PAGES: usize = 257 * 1024 * 1024 / GRANULE_SIZE;
 
     #[test]
     fn coarsening_covers_partial_pages_at_both_ends() {
@@ -906,33 +960,57 @@ mod tests {
     }
 
     #[test]
-    fn loader_headroom_reserves_the_thread_pair_and_the_private_window() {
-        // The mapped span is image + thread pages + a guard granule + the
-        // private-memory window, aligned up to the window's own span (C10.1),
-        // so the headroom below the ceiling is that whole tail rather than the
-        // two granules it was before. An image ending inside the last window
-        // span has nowhere to put the window and is refused.
-        let highest_valid = 0x1000..CHILD_ADDRESS_CEILING - 2 * PRIVATE_WINDOW_BYTES;
+    fn an_image_is_admitted_without_knowing_its_window() {
+        // Parse time is before policy: the image's own span is admitted
+        // against the ceiling and nothing more, so the same image can later be
+        // given any window that fits.
+        let highest_valid = 0x1000..CHILD_ADDRESS_CEILING - 2 * WIDE_WINDOW_BYTES;
         assert_eq!(validate_footprint_span(&highest_valid), Ok(()));
+        assert_eq!(validate_footprint_span(&(0x1000..0x2000)), Ok(()));
 
-        let no_room_for_the_window = 0x1000..CHILD_ADDRESS_CEILING - GRANULE_SIZE;
+        // An image ending at the ceiling leaves no room even for its thread
+        // pages and guard, and an image based at zero is refused outright.
         assert_eq!(
-            validate_footprint_span(&no_room_for_the_window),
+            validate_footprint_span(&(0x1000..CHILD_ADDRESS_CEILING)),
+            Err(ImageError::FootprintOutOfRange)
+        );
+        assert_eq!(
+            validate_footprint_span(&(0..0x2000)),
             Err(ImageError::FootprintOutOfRange)
         );
     }
 
     #[test]
-    fn loader_headroom_covers_every_thread_pair() {
-        let two_threads_fit = 0x1000..CHILD_ADDRESS_CEILING - 2 * PRIVATE_WINDOW_BYTES;
-        assert!(thread_mapped_span(&two_threads_fit, 2).is_ok());
+    fn a_window_that_would_pass_the_ceiling_is_refused_for_every_thread_count() {
+        let fits = 0x1000..CHILD_ADDRESS_CEILING - 2 * WIDE_WINDOW_BYTES;
+        assert!(thread_mapped_span(&fits, 2, WIDE_WINDOW_PAGES).is_ok());
 
-        // One granule short of a whole window span: the second thread's pair
-        // pushes the guard past the alignment boundary, so the window would
-        // start in the final span and end past the ceiling.
-        let one_pair_short = 0x1000..CHILD_ADDRESS_CEILING - PRIVATE_WINDOW_BYTES;
+        // The same image with a window twice as wide has nowhere to put it.
         assert_eq!(
-            thread_mapped_span(&one_pair_short, 2),
+            thread_mapped_span(&fits, 2, 2 * WIDE_WINDOW_PAGES),
+            Err(ImageError::FootprintOutOfRange)
+        );
+        // And a window ending exactly at the ceiling keeps no upper guard.
+        let flush = 0x1000..CHILD_ADDRESS_CEILING - WIDE_WINDOW_BYTES - LARGE_FRAME_BYTES;
+        assert_eq!(
+            private_window(&flush, 1, WIDE_WINDOW_PAGES).unwrap().end,
+            CHILD_ADDRESS_CEILING
+        );
+        assert_eq!(
+            thread_mapped_span(&flush, 1, WIDE_WINDOW_PAGES),
+            Err(ImageError::FootprintOutOfRange)
+        );
+    }
+
+    #[test]
+    fn a_window_that_would_overflow_an_address_is_refused_not_wrapped() {
+        let footprint = 0x1000..0x2000;
+        assert_eq!(
+            private_window(&footprint, 1, usize::MAX / GRANULE_SIZE),
+            Err(ImageError::FootprintOutOfRange)
+        );
+        assert_eq!(
+            private_window(&footprint, 1, usize::MAX),
             Err(ImageError::FootprintOutOfRange)
         );
     }
@@ -941,21 +1019,42 @@ mod tests {
     fn the_private_window_clears_the_thread_pages_by_at_least_one_guard_granule() {
         let footprint = 0x1000..0x1fe000;
         for threads in 1..=super::MAX_CHILD_THREADS {
-            let window = private_window(&footprint, threads).unwrap();
-            let thread_pages_end = footprint.end + threads * 2 * GRANULE_SIZE;
-            assert!(
-                window.start >= thread_pages_end + GRANULE_SIZE,
-                "threads={threads}: the window must not abut the last thread page"
-            );
-            // The current reservation and 2 MiB frame alignment coincide, but
-            // both are asserted: a later larger window must still preserve the
-            // block-mapping precondition.
-            assert_eq!(window.start % PRIVATE_WINDOW_BYTES, 0);
-            assert_eq!(window.start % LARGE_FRAME_BYTES, 0);
-            assert_eq!(window.end - window.start, PRIVATE_WINDOW_BYTES);
+            for reservation in [0, 1, LARGE_FRAME_PAGES, WIDE_WINDOW_PAGES, ODD_WINDOW_PAGES] {
+                let window = private_window(&footprint, threads, reservation).unwrap();
+                let thread_pages_end = footprint.end + threads * 2 * GRANULE_SIZE;
+                assert!(
+                    window.start >= thread_pages_end + GRANULE_SIZE,
+                    "threads={threads}: the window must not abut the last thread page"
+                );
+                // Aligned to the large-frame size whatever the reservation is:
+                // the block-mapping precondition and the per-span ownership
+                // indexed from the base both depend on it, and a 257 MiB
+                // window has no alignment of its own to round to.
+                assert_eq!(window.start % LARGE_FRAME_BYTES, 0);
+                assert_eq!(window.end - window.start, reservation * GRANULE_SIZE);
+                assert_eq!(
+                    thread_mapped_span(&footprint, threads, reservation)
+                        .unwrap()
+                        .end,
+                    window.end
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_window_base_does_not_move_when_the_reservation_changes() {
+        // A holder's pointers stay where they are when its policy grants a
+        // different width: the base is decided by the image and thread pages
+        // below it, never by the window's own size.
+        let footprint = 0x1000..0x1fe000;
+        let base = private_window(&footprint, 2, LARGE_FRAME_PAGES)
+            .unwrap()
+            .start;
+        for reservation in [0, 1, WIDE_WINDOW_PAGES, ODD_WINDOW_PAGES] {
             assert_eq!(
-                thread_mapped_span(&footprint, threads).unwrap().end,
-                window.end
+                private_window(&footprint, 2, reservation).unwrap().start,
+                base
             );
         }
     }
@@ -963,27 +1062,43 @@ mod tests {
     #[test]
     fn the_private_window_leaf_table_is_lazy_but_upper_tables_cover_it() {
         let footprint = 0x1000..0x1fe000;
-        let window = private_window(&footprint, 1).unwrap();
         let leaf = sel4::vspace_levels::NUM_LEVELS - 1;
-        let leaf_span = statically_mapped_span(&footprint, 1, leaf).unwrap();
-        assert!(leaf_span.end <= window.start);
-        let upper = statically_mapped_span(&footprint, 1, leaf - 1).unwrap();
-        assert_eq!(upper.end, window.end);
-        assert_eq!(window.start % LARGE_FRAME_BYTES, 0);
+        for reservation in [1, WIDE_WINDOW_PAGES, ODD_WINDOW_PAGES] {
+            let window = private_window(&footprint, 1, reservation).unwrap();
+            let leaf_span = statically_mapped_span(&footprint, 1, leaf, reservation).unwrap();
+            assert!(leaf_span.end <= window.start);
+            let upper = statically_mapped_span(&footprint, 1, leaf - 1, reservation).unwrap();
+            assert_eq!(
+                upper.end, window.end,
+                "reservation={reservation}: every span of the window needs its upper table"
+            );
+        }
+        // A task with no window gets no private coverage at all, rather than a
+        // hole nothing may map into.
+        let none = private_window(&footprint, 1, 0).unwrap();
+        assert_eq!(none.start, none.end);
+        assert_eq!(
+            statically_mapped_span(&footprint, 1, leaf - 1, 0)
+                .unwrap()
+                .end,
+            none.end
+        );
     }
 
     #[test]
     fn worker_pair_stays_inside_the_target_qualified_window_plan() {
         let footprint = 0x1000..0x1fd000;
-        let one_thread = thread_mapped_span(&footprint, 1).unwrap();
-        let two_threads = thread_mapped_span(&footprint, 2).unwrap();
-        assert_eq!(one_thread.end % PRIVATE_WINDOW_BYTES, 0);
-        assert_eq!(two_threads.end % PRIVATE_WINDOW_BYTES, 0);
+        let one_thread = thread_mapped_span(&footprint, 1, WIDE_WINDOW_PAGES).unwrap();
+        let two_threads = thread_mapped_span(&footprint, 2, WIDE_WINDOW_PAGES).unwrap();
+        assert_eq!(one_thread.end % GRANULE_SIZE, 0);
         assert!(one_thread.end <= two_threads.end);
-        assert!(two_threads.end <= CHILD_ADDRESS_CEILING);
+        assert!(two_threads.end < CHILD_ADDRESS_CEILING);
         assert_eq!(
-            two_threads.end - private_window(&footprint, 2).unwrap().start,
-            PRIVATE_WINDOW_BYTES
+            two_threads.end
+                - private_window(&footprint, 2, WIDE_WINDOW_PAGES)
+                    .unwrap()
+                    .start,
+            WIDE_WINDOW_BYTES
         );
     }
 

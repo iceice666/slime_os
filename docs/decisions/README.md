@@ -27,5 +27,8 @@ readable and link to the decision that replaced them.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
+- [Adaptive memory guarantee reservation](adaptive-memory-guarantee-reservation.md)
+  — proposed; physical reservation ownership, guaranteed mapping, and safe
+  admission before adaptive task publication.
 - [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed;
   target-specific assurance and the required Reply/scheduling-context cutover.

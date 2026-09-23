@@ -188,9 +188,8 @@ Fixed and adaptive declarations/resource objects cannot coexist.
 The v2 resource retains the `SLIMEPM` magic family and changes the version, so
 old v1 readers refuse it rather than treating authority as absent. The current
 root scans the whole resource family, rejects duplicates, validates v2 structure
-and instance ownership, then refuses adaptive activation before task publication.
-Existing fixed v1 bytes, target bounds and full-affordability semantics remain
-unchanged. This is a policy/host-accounting boundary, not an adaptive allocator.
+and instance ownership, and binds each subject to a real task. Existing fixed v1
+bytes, target bounds and full-affordability semantics remain unchanged.
 
 The allocation-free model in `boot-contracts/src/private_memory_policy/ledger.rs`
 charges guarantees once per entitlement, keeps incarnation tokens distinct from
@@ -210,10 +209,49 @@ only elastic-funded table resources; otherwise it remains pending or quarantined
 until cleanup. Quarantined payload remains charged against authorization maxima.
 Payload quotas do not count metadata or unused extent backing as mapped pages;
 all such overhead remains charged to the resource pool, not hidden as free RAM.
-The pure model does not prove kernel placement or discover RAM. Expandable
-CSpace, resource-backed metadata and demand-backed allocation are implemented
-and qualified; dynamic task windows, spawn/admission integration and
-multi-inventory runtime qualification remain separate work.
+The pure model does not prove kernel placement or discover RAM.
+
+## Guarantee reservation and adaptive task windows
+
+A guarantee is physical before it is promised. Admission runs before any task
+exists: `slime-root/src/object_allocator/guarantee_vault.rs` takes concrete
+aligned backing, extent records, allocation descriptors and CSlots for every
+entitlement's guaranteed pages, all entitlements together or none, and removes
+them from ordinary and elastic selection. Only the residual funds the ledger,
+so the same bytes are never offered twice. A composition whose guarantees the
+inventory cannot hold refuses admission and publishes nothing.
+
+Guaranteed payload is mapped through a base-page lane, so a promise never
+depends on an aligned 2 MiB placement surviving fragmentation; elastic payload
+keeps the large-frame selection, and the fixed v1 path is unchanged. Planner,
+acquisition and mapper consume one plan, and the placements the allocator
+actually obtained are certified against their protected sources before any
+retype. A guaranteed page is never served from the common pool: its funding,
+including the descriptors and CSlots its frame and leaf table need, is lent from
+its own entitlement and returned with it.
+
+An adaptive subject's window is its declared address maximum rather than the
+target's per-region capacity, so a policy may declare a window no power of two
+fits; the base is still aligned independently and never moves. Backing arrives
+only on demand, so construction reserves address space and nothing else.
+
+Each incarnation is bound between construction and publication, on the boot path
+and the dynamic spawn path alike: a staged task can neither be dispatched nor
+grow before its binding succeeds, and a subject cannot hold two live
+incarnations. Retirement returns capacity to the originating entitlement only
+after the revoke succeeded; a failed revoke quarantines it instead, and a
+restarted subject rebinds the same entitlement rather than a second one.
+
+Device mappings meet the same window. The adaptive plane's IO holder binds a
+real transport, proves an MMIO map and a device-queue map succeed outside its
+reservation, and is then refused at its own backed page and at a reserved but
+unbacked address inside the same window, on both reference architectures. The
+positive controls use the same capabilities, rights and device epoch, so the
+refusals are the destination's doing rather than absent authority.
+
+What remains unproven is named rather than implied: the multi-inventory
+qualification matrix is still separate work, and every result here is a QEMU
+envelope on two architectures that qualifies no physical machine.
 
 ## Demand-backed acquisition
 
@@ -301,6 +339,24 @@ stage owns.
   pre-workload baseline.
 - `just private_memory_phase3_check` runs all four over the phase-2 surface, so
   one execution binds them to the same code closure and images.
+- `just private_memory_adaptive_check` boots the adaptive composition twice on
+  both QEMU architectures: guarantees are reserved before any task, every
+  declared instance reports the entitlement actually installed on its record,
+  holders are spawned dynamically, a fixed request schedule produces the same
+  grants and refusals on both boots, a faulted subject's replacement rebinds one
+  entitlement rather than two, an IO holder's device and queue mappings are
+  refused inside its window and admitted outside it, and a separate
+  over-guaranteed composition refuses admission before publication.
+- `just private_memory_adaptive_lifecycle_check` boots the same composition
+  from an image whose root carries two compiled-in failures. A construction
+  that fails after its incarnation is bound holds the entitlement until the
+  unwind's revoke succeeds, and the retried spawn binds the next incarnation
+  rather than a second live one. The first adaptive holder to die is then
+  quarantined, refunds nothing, and is returned by exactly one retry, while its
+  peers finish their own schedule.
+- `just private_memory_phase4_check` runs both over the whole phase-3 surface,
+  because adaptive binding changes construction, growth and reclamation for
+  fixed holders too.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

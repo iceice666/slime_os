@@ -6,6 +6,7 @@ use slime_root::shared_buffer;
 mod state;
 use state::*;
 
+pub(super) mod adaptive;
 mod console_runtime;
 pub(super) mod platform;
 
@@ -61,6 +62,39 @@ pub(super) fn launch_instance_graph(
         Some(Ok(budget)) => Some(budget),
         Some(Err(error)) => {
             fatal!("SLIME_MEM FAIL admitted budget will not decode: {error:?}")
+        }
+        None => None,
+    };
+    // Every declared guarantee is made physical here, before the first task
+    // is constructed: backing a later static construction could spend is not
+    // a guarantee. A policy this machine cannot fund stops the boot while
+    // nothing has been published.
+    let mut policy_instances = [boot_contracts::private_memory_policy::Instance {
+        identity: [0; 32],
+        owner: None,
+    }; crate::generation::MAX_ADMITTED_INSTANCES];
+    let mut adaptive = match crate::generation::private_memory_policy_object(generation) {
+        Some(Ok(decoded)) => {
+            let count = match crate::generation::private_memory_instances(
+                generation,
+                &mut policy_instances,
+            ) {
+                Ok(count) => count,
+                Err(error) => fatal!("SLIME_MEM FAIL policy topology rejected: {error:?}"),
+            };
+            match adaptive::AdaptivePolicy::admit(decoded, &policy_instances[..count], allocator) {
+                Ok(policy) => {
+                    policy.report();
+                    Some(policy)
+                }
+                Err(failure) => {
+                    failure.report();
+                    fatal!("SLIME_MEM FAIL adaptive admission refused")
+                }
+            }
+        }
+        Some(Err(error)) => {
+            fatal!("SLIME_MEM FAIL admitted policy will not decode: {error:?}")
         }
         None => None,
     };
@@ -307,6 +341,12 @@ pub(super) fn launch_instance_graph(
             // ceiling whose frames the arena has no room for would be one the
             // task could never reach.
             declared_private_memory_pages(private_budget.as_ref(), instance.name),
+            // The admitted address maximum for a policy subject. Its backing
+            // arrives on demand against the entitlement bound below, so
+            // construction reserves none of it.
+            adaptive
+                .as_ref()
+                .and_then(|policy| policy.maximum_pages(instance.name)),
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -314,6 +354,27 @@ pub(super) fn launch_instance_graph(
                 instance.name
             ),
         };
+        // Bound here, between construction and publication: the task is still
+        // suspended, no dispatcher can see it, and a subject that cannot bind
+        // fails the boot rather than running with an entitlement nobody holds.
+        if let Some(policy) = adaptive.as_mut()
+            && policy.maximum_pages(instance.name).is_some()
+        {
+            match policy.bind(instance.name) {
+                Some(binding) => {
+                    if let Err(error) = tasks.bind_private_memory(id, binding) {
+                        fatal!(
+                            "SLIME_MEM FAIL binding install instance={} error={error:?}",
+                            instance.name
+                        )
+                    }
+                }
+                None => fatal!(
+                    "SLIME_MEM FAIL incarnation refused instance={}",
+                    instance.name
+                ),
+            }
+        }
         let Some(task) = tasks.get(id) else {
             fatal!("SLIME_GRAPH FAIL constructed task {} is missing", id.0)
         };
@@ -1005,8 +1066,34 @@ pub(super) fn launch_instance_graph(
                 .get(launched_instance.task)
                 .map_or(0, |task| task.private_memory.base()),
         );
+        // The adaptive counterpart of the quota line above, read back from
+        // the task record rather than from the policy, and printed for every
+        // constructed task on a policy-carrying plane including one the
+        // policy names no subject for.
+        if let Some(policy) = adaptive.as_ref() {
+            policy.report_task(
+                launched_instance.task,
+                instance.name,
+                tasks
+                    .get(launched_instance.task)
+                    .and_then(|task| task.private_binding),
+                // The address maximum installed on the record, not the pages
+                // committed so far: an adaptive holder starts with none.
+                tasks
+                    .get(launched_instance.task)
+                    .map_or(0, |task| task.private_memory.reservation()),
+                tasks
+                    .get(launched_instance.task)
+                    .map_or(0, |task| task.private_memory.base()),
+            );
+        }
+        // The fixed path's pre-provisioned backing, priced only for a holder
+        // that actually has one. An adaptive holder reserves address space and
+        // no backing, so pricing its whole address maximum as provisioned
+        // frames would refuse a window the machine was never asked to fill.
         let installed = tasks
             .get(launched_instance.task)
+            .filter(|task| task.private_binding.is_none())
             .map_or(0, |task| task.private_memory.quota());
         if installed != 0 {
             let Some(plan) = object_allocator::plan_task_backing(installed) else {
@@ -1092,6 +1179,7 @@ pub(super) fn launch_instance_graph(
         io_authority,
         admission.fabric_capability_slots,
         &mut scopes,
+        adaptive.as_mut(),
         #[cfg(slime_boot_selector)]
         boot_blocks,
         #[cfg(slime_boot_selector)]

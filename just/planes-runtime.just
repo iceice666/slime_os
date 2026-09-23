@@ -52,6 +52,24 @@ private_memory_conservation_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py --arm conservation --platform qemu-arm-virt
     python3 scripts/check/check-sel4-private-memory-plane.py --arm conservation --platform qemu-riscv-virt
 
+# MEM-ADAPTIVE's declared-policy plane. Narrow on purpose: it boots the adaptive
+# composition twice on each reference architecture and compares the grant and
+# refusal sequence the two runs produced, then boots the over-guaranteed
+# negative composition once and requires it to refuse admission before anything
+# is published. Two boots are the arm, not an accident — a single boot cannot
+# state that a repeated request schedule is deterministic.
+[group('planes / runtime')]
+private_memory_adaptive_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm adaptive --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm adaptive --platform qemu-riscv-virt
+
+# The same composition under one compiled-in revoke failure: a live
+# incarnation is quarantined, refunds nothing, and is returned by exactly one
+# retry. Its own image identity, because the injection is in the root.
+[group('runtime')]
+private_memory_adaptive_lifecycle_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm adaptive-lifecycle --platform qemu-arm-virt
+
 # MEM-1G's authority and permission boundary, kept separate from the capacity
 # arm so a 1 GiB working set is never the reason an isolation denial is missed.
 [group('planes / runtime')]

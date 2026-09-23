@@ -37,6 +37,10 @@ pub(super) fn serve_instance_graph(
     // because it also writes the caller's capability table, which this loop
     // writes on `cap_drop` and on a spawn's result (B45).
     scopes: &mut directory::ScopeTable,
+    // The admitted adaptive policy, absent on a plane that declares none.
+    // Growth and spawn both need it: one to charge an entitlement, the other
+    // to bind a child's incarnation before the child is published.
+    mut adaptive: Option<&mut super::adaptive::AdaptivePolicy<'_>>,
     #[cfg(slime_boot_selector)] block_devices: &mut device::BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
@@ -124,7 +128,15 @@ pub(super) fn serve_instance_graph(
                     .map(|task| VSpaceCap(task.vspace.vspace.bits() as usize))
                     .is_some_and(|vspace| reclaim_dead_task(buffers, allocator, id, vspace)),
                 supervision::RetirementPhase::Arena => {
-                    if reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id) {
+                    if reclaim_task_objects(
+                        generation,
+                        launched,
+                        tasks,
+                        allocator,
+                        adaptive.as_deref_mut(),
+                        &mut reclaimed_slots,
+                        id,
+                    ) {
                         windows.release(id);
                         true
                     } else {
@@ -552,6 +564,7 @@ pub(super) fn serve_instance_graph(
                     id,
                     &words,
                     &mut spawns,
+                    adaptive.as_deref_mut(),
                 );
                 if response.result >= 0 {
                     live += 1;
@@ -1085,59 +1098,86 @@ pub(super) fn serve_instance_graph(
             // and `delta = 0` is a pure size query that allocates nothing.
             lifecycle_labels::PRIVATE_MEMORY_GROW => {
                 let delta = words[0] as usize;
-                let response = match tasks.grow_private_memory(allocator, id, delta) {
-                    Ok(previous) => {
-                        // The growth's own record: what the task had, what it
-                        // asked for, where the pages landed, and the root-wide
-                        // total afterwards. A gate reads the base and the
-                        // counts from here rather than from the component's
-                        // self-report, because only the root knows what it
-                        // actually mapped.
-                        let region = tasks
+                // An adaptive holder grows against its bound entitlement:
+                // the guaranteed prefix from its reservation, the rest from
+                // the pool, settled as one ledger transaction. On a plane
+                // that carries a policy, a task the policy names no subject
+                // for is refused on its absent entitlement rather than being
+                // handed to the fixed path, whose window refusal would name
+                // the symptom instead of the reason. Without a policy at all,
+                // the fixed path is unchanged.
+                let adaptive_response = match (adaptive.as_deref_mut(), tasks.private_binding(id)) {
+                    (Some(policy), Some(binding)) => Some(serve_adaptive_growth(
+                        generation, tasks, allocator, policy, binding, id, delta,
+                    )),
+                    (Some(policy), None) if delta != 0 => {
+                        let instance = tasks
                             .get(id)
-                            .map(|task| task.private_memory)
-                            .unwrap_or(private_memory::Region::DENIED);
-                        sel4::debug_println!(
-                            "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
-                            id.0,
-                            region.pages(),
-                            region.base(),
-                            region.quota(),
-                            tasks.private_memory().total_pages(),
-                            region.large_frames(),
-                            region.base_frames(),
-                            region.leaf_tables(),
-                        );
-                        // Primary is the previous page count; auxiliary is the
-                        // window base. The base is answered rather than left
-                        // for the caller to derive: it is the root that chose
-                        // it, and a component recomputing the loader's
-                        // arithmetic is the compile-time coupling B70 removed
-                        // everywhere else. Zero pages means no region, and a
-                        // denied region answers base zero, which is not a
-                        // usable address on any child (`child_vspace` refuses a
-                        // footprint starting at zero).
-                        Response::success(previous as i64, region.base() as sel4::Word)
+                            .and_then(|task| task.instance)
+                            .and_then(|index| generation.instance(index).ok())
+                            .map_or("", |instance| instance.name);
+                        let pages = tasks.get(id).map_or(0, |task| task.private_memory.pages());
+                        policy.refuse_unbound(id, instance, delta, pages);
+                        Some(Response::error(IpcError::TransferFailed))
                     }
-                    Err(task::TaskError::PrivateMemory(error)) => {
-                        // The four causes are distinguished here, in the root's
-                        // own record, and collapsed to one coarse status on the
-                        // wire: a component learns that it cannot grow, not
-                        // which of the root's predicates refused it.
-                        sel4::debug_println!(
-                            "SLIME_MEM refused task={} delta={delta} cause={} detail={error:?}",
-                            id.0,
-                            private_memory_cause(&error),
-                        );
-                        Response::error(IpcError::TransferFailed)
-                    }
-                    Err(error) => {
-                        sel4::debug_println!(
-                            "SLIME_MEM rejected task={} delta={delta} error={error:?}",
-                            id.0
-                        );
-                        Response::error(IpcError::InvalidOperation)
-                    }
+                    _ => None,
+                };
+                let response = match adaptive_response {
+                    Some(response) => response,
+                    None => match tasks.grow_private_memory(allocator, id, delta) {
+                        Ok(previous) => {
+                            // The growth's own record: what the task had, what it
+                            // asked for, where the pages landed, and the root-wide
+                            // total afterwards. A gate reads the base and the
+                            // counts from here rather than from the component's
+                            // self-report, because only the root knows what it
+                            // actually mapped.
+                            let region = tasks
+                                .get(id)
+                                .map(|task| task.private_memory)
+                                .unwrap_or(private_memory::Region::DENIED);
+                            sel4::debug_println!(
+                                "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
+                                id.0,
+                                region.pages(),
+                                region.base(),
+                                region.quota(),
+                                tasks.private_memory().total_pages(),
+                                region.large_frames(),
+                                region.base_frames(),
+                                region.leaf_tables(),
+                            );
+                            // Primary is the previous page count; auxiliary is the
+                            // window base. The base is answered rather than left
+                            // for the caller to derive: it is the root that chose
+                            // it, and a component recomputing the loader's
+                            // arithmetic is the compile-time coupling B70 removed
+                            // everywhere else. Zero pages means no region, and a
+                            // denied region answers base zero, which is not a
+                            // usable address on any child (`child_vspace` refuses a
+                            // footprint starting at zero).
+                            Response::success(previous as i64, region.base() as sel4::Word)
+                        }
+                        Err(task::TaskError::PrivateMemory(error)) => {
+                            // The four causes are distinguished here, in the root's
+                            // own record, and collapsed to one coarse status on the
+                            // wire: a component learns that it cannot grow, not
+                            // which of the root's predicates refused it.
+                            sel4::debug_println!(
+                                "SLIME_MEM refused task={} delta={delta} cause={} detail={error:?}",
+                                id.0,
+                                private_memory_cause(&error),
+                            );
+                            Response::error(IpcError::TransferFailed)
+                        }
+                        Err(error) => {
+                            sel4::debug_println!(
+                                "SLIME_MEM rejected task={} delta={delta} error={error:?}",
+                                id.0
+                            );
+                            Response::error(IpcError::InvalidOperation)
+                        }
+                    },
                 };
                 ipc::reply(response);
             }
@@ -1785,6 +1825,74 @@ use boot_contracts::generation::{
 /// at all — `sel4_transport::spawn` already encoded into a
 /// `MAX_SPAWN_GRANTS * GRANT_RECORD_BYTES` buffer and staged it into a
 /// 4096-byte window; the refusal was entirely on this side.
+/// Serve one adaptive holder's growth against its bound entitlement.
+///
+/// The guaranteed prefix is whatever the entitlement still promises this
+/// incarnation; the remainder is drawn from the pool, and both settle as one
+/// ledger transaction. The record is emitted from the root's own state after
+/// the attempt — the region is read back rather than predicted — so a refusal
+/// reports the holder's unchanged page count rather than the one it asked for.
+/// A zero delta is a pure size query: it allocates nothing and is deliberately
+/// not recorded as a growth.
+fn serve_adaptive_growth(
+    generation: &Generation<'_>,
+    tasks: &mut TaskTable<MAX_TASKS>,
+    allocator: &mut ObjectAllocator,
+    policy: &mut super::adaptive::AdaptivePolicy<'_>,
+    binding: task::PrivateBinding,
+    id: TaskId,
+    delta: usize,
+) -> Response {
+    let instance = tasks
+        .get(id)
+        .and_then(|task| task.instance)
+        .and_then(|index| generation.instance(index).ok())
+        .map_or("", |instance| instance.name);
+    let previous_pages = tasks.get(id).map_or(0, |task| task.private_memory.pages());
+    // What this entitlement still owes the holder, resolved before the
+    // attempt: the split decides which lane the pages are mapped in, so it
+    // must be the same number the transaction is priced against.
+    let redeemable = policy.redeemable(&binding);
+    let guaranteed = delta.min(redeemable);
+    let outcome =
+        tasks.grow_private_memory_adaptive(allocator, policy.ledger_mut(), id, delta, redeemable);
+    let region = tasks
+        .get(id)
+        .map_or(private_memory::Region::DENIED, |task| task.private_memory);
+    if delta > 0 {
+        match &outcome {
+            Ok(previous) => policy.report_growth(
+                id,
+                instance,
+                &binding,
+                delta,
+                *previous,
+                region.pages(),
+                guaranteed,
+                region.base(),
+                Ok(()),
+            ),
+            Err(error) => policy.report_growth(
+                id,
+                instance,
+                &binding,
+                delta,
+                previous_pages,
+                region.pages(),
+                0,
+                region.base(),
+                Err(error),
+            ),
+        }
+    }
+    match outcome {
+        // Primary is the page count before the growth, auxiliary the window
+        // base, exactly as the fixed path answers.
+        Ok(previous) => Response::success(previous as i64, region.base() as sel4::Word),
+        Err(_) => Response::error(IpcError::TransferFailed),
+    }
+}
+
 mod capability;
 pub(super) mod policy;
 pub(super) mod spawn;

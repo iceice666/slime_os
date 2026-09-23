@@ -1520,6 +1520,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                     0
                 }
             },
+            // The fixture path carries no policy, so no adaptive window.
+            None,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),

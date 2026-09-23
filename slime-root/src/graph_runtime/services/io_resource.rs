@@ -340,6 +340,34 @@ fn mapped<T>(outcome: Result<T, ResourceError>, ok: impl FnOnce(T) -> Response) 
     }
 }
 
+/// Refuse an I/O mapping whose caller-chosen destination falls inside that
+/// caller's own private reservation.
+///
+/// MMIO and driver-owned queue pages are the two I/O operations that take a
+/// virtual base from the component and map into that component's VSpace, so
+/// they are subject to the same destination rule as an owned buffer or a loan.
+/// The reservation is excluded whole: an authorized maximum reserves no
+/// physical page, so the kernel finds nothing to collide with in the unbacked
+/// part of the window and the mapping would otherwise succeed there and take
+/// address space the holder is entitled to grow into.
+///
+/// The check belongs here rather than in `DeviceRegion`, `DmaPage` or
+/// `BufferAdapter`: those map into a VSpace capability and hold no task record,
+/// and the same numeric address is a legitimate destination in every other
+/// component. This dispatcher is the one place that has already resolved both
+/// the authenticated caller and its requested destination.
+fn admit_io_destination(
+    tasks: &TaskTable<MAX_TASKS>,
+    task: TaskId,
+    base: usize,
+    length: usize,
+) -> Result<(), Response> {
+    let Some(record) = tasks.get(task) else {
+        return Err(denied());
+    };
+    super::capability::admit_mapping_destination(record, base, length)
+}
+
 /// Install one driver instance's declared hardware budget, bound to the exact
 /// transport its generation names.
 ///
@@ -571,8 +599,15 @@ pub(super) fn serve_io_resource(
                 return denied();
             };
             let region = MmioRegionId(device.0);
-            adapter.requested_base = words[2] as usize;
             let packed = words[3];
+            // At least one granule, because that is what the adapter maps even
+            // when a shorter length is requested; a longer request is checked
+            // over the range the caller actually asked for.
+            let requested = ((packed >> 32) as u32 as usize).max(child_vspace::GRANULE_SIZE);
+            if let Err(response) = admit_io_destination(tasks, task, words[2] as usize, requested) {
+                return response;
+            }
+            adapter.requested_base = words[2] as usize;
             mapped(
                 service.table.map_mmio(
                     &mut adapter,
@@ -657,6 +692,15 @@ pub(super) fn serve_io_resource(
             let Some(device) = service.table.device(driver) else {
                 return denied();
             };
+            // The whole requested span, not just its base: the queue is mapped
+            // page by page, so a base below the window can still walk into it.
+            // An overflowing page count is left to the adapter, which refuses
+            // it as a bad request like every other unsatisfiable size.
+            if let Some(length) = (words[1] as u32 as usize).checked_mul(child_vspace::GRANULE_SIZE)
+                && let Err(response) = admit_io_destination(tasks, task, words[3] as usize, length)
+            {
+                return response;
+            }
             match service.table.map_device_queue(
                 &mut adapter,
                 driver,
