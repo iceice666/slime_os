@@ -1723,6 +1723,196 @@ def adaptive_control_transcript(gate, policy: dict) -> list[str]:
     return lines
 
 
+def matrix_walk_lines(task: int, instance: str, unit: int, served: int, limit: str) -> list[str]:
+    """One holder's exhaustion walk as the root reports it: `served` grants at
+    `unit`, then a halving refusal chain ending at one page with `limit`."""
+    lines = []
+    pages = 0
+    for _ in range(served):
+        lines.append(
+            f"SLIME_MEM adaptive grant task={task} instance={instance} entitlement=0000000000000000 "
+            f"delta={unit} previous={pages} pages={pages + unit} guaranteed=0 elastic={unit} "
+            f"entitlement_committed={pages + unit} pool_bytes=1936 base=0x400000"
+        )
+        pages += unit
+    delta = unit
+    while True:
+        lines.append(
+            f"SLIME_MEM adaptive refused task={task} instance={instance} entitlement=0000000000000000 "
+            f"delta={delta} pages={pages} cause=pool entitlement_committed={pages} pool_bytes=1936"
+        )
+        final = delta == 1
+        lines.append(
+            f"SLIME_MEM adaptive limit task={task} instance={instance} delta={delta} "
+            + (limit if final else "resource=ledger-pool required=0 available=0 ledger_pool=1936 "
+               "inventory_bytes=15204192 inventory_slots=517340 largest_block=0")
+        )
+        if final:
+            return lines
+        delta //= 2
+
+
+def matrix_control_transcript(gate) -> list[str]:
+    """A complete, self-consistent single-row matrix transcript, line by line."""
+    bulk, small = gate.MATRIX_BULK_UNIT, gate.MATRIX_SMALL_UNIT
+    exhausted = (
+        "resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192 "
+        "inventory_slots=517340 largest_block=0"
+    )
+    census = "SLIME_MEM census retired={} free_slots=517340 untyped=5521312 reusable=0 anchors=3"
+    lines = [
+        "SLIME_ROOT ordinary range=0 paddr=0x60000000 bytes=536870912",
+        "SLIME_ROOT ordinary ranges=1 bytes=536870912 end=0x80000000",
+        "SLIME_MEM policy entitlements=2 subjects=3 guarantee_pages=1024 reserved_bytes=8388608 "
+        "reserved_slots=2052 reserved_descriptors=2048 reserved_extents=4 reserved_tables=1024 "
+        "pool_bytes=487864208",
+        "[private-matrix:bulk] verified incarnation=0 base=0x400000 pages=0 pattern=1 refused=0",
+        *matrix_walk_lines(3, "private-matrix-bulk", bulk, 3, exhausted),
+        "[private-matrix] guarantee pressure redeemed=1 beyond_promise_served=0 pages=1024",
+        "[private-matrix] idle maximum subject=private-matrix-small pages=0 refused=1",
+        "[private-matrix:small] end incarnation=0 pages=0 refused=1 kind=exit",
+        "[private-matrix] reserve spawn subject=private-matrix-small incarnation=1 pages=0 refused=1",
+        f"[private-matrix] exhausted schedule=bulk subject=private-matrix-bulk incarnation=0 "
+        f"pages={3 * bulk} served=3 refused=16 final_delta=1",
+        f"[private-matrix] resident schedule=bulk pages={3 * bulk + 1024} "
+        f"bytes={(3 * bulk + 1024) * 4096} guaranteed=1024 bulk={3 * bulk} small=0",
+        f"[private-matrix:bulk] end incarnation=0 pages={3 * bulk} refused=16 kind=exit",
+        *matrix_walk_lines(5, "private-matrix-small", small, 4, exhausted),
+        f"[private-matrix] exhausted schedule=small subject=private-matrix-small incarnation=1 "
+        f"pages={4 * small} served=4 refused=9 final_delta=1",
+        f"[private-matrix] resident schedule=small pages={4 * small + 1024} "
+        f"bytes={(4 * small + 1024) * 4096} guaranteed=1024 bulk=0 small={4 * small}",
+        f"[private-matrix:small] end incarnation=1 pages={4 * small} refused=9 kind=exit",
+        *matrix_walk_lines(6, "private-matrix-bulk", bulk, 2, exhausted),
+        *matrix_walk_lines(7, "private-matrix-small", small, 1, exhausted),
+        f"[private-matrix] exhausted schedule=mixed subject=private-matrix-bulk incarnation=1 "
+        f"pages={2 * bulk} served=2 refused=16 final_delta=1",
+        f"[private-matrix] exhausted schedule=mixed subject=private-matrix-small incarnation=2 "
+        f"pages={small} served=1 refused=9 final_delta=1",
+        f"[private-matrix] resident schedule=mixed pages={2 * bulk + small + 1024} "
+        f"bytes={(2 * bulk + small + 1024) * 4096} guaranteed=1024 bulk={2 * bulk} small={small}",
+        census.format(8),
+        f"[private-matrix] cycles begin count={gate.MATRIX_CYCLES} pages={gate.MATRIX_CYCLE_PAGES}",
+    ]
+    for cycle in range(gate.MATRIX_CYCLES):
+        victim, reuser = ("bulk", "small") if cycle % 2 == 0 else ("small", "bulk")
+        lines += [
+            census.format(9 + 2 * cycle),
+            f"[private-matrix] cycle={cycle} victim=private-matrix-{victim} incarnation={2 + cycle} "
+            f"end={'fault' if cycle % 4 < 2 else 'exit'} reuser=private-matrix-{reuser} "
+            f"incarnation={3 + cycle} pages={gate.MATRIX_CYCLE_PAGES} zeroed=1 peer_pages=1024",
+        ]
+    lines += [
+        "[private-matrix:guaranteed] end incarnation=0 pages=1024 refused=1 kind=exit",
+        f"[private-matrix] complete schedules=3 cycles={gate.MATRIX_CYCLES}",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    return lines
+
+
+def check_private_matrix_controls(gate) -> int:
+    """MEM-ADAPTIVE's inventory matrix: exhaustion, reuse and cross-row claims.
+
+    A still-fitting refusal, an exhaustion that was really a declaration, a
+    refusal with no named cost, a walk that skipped its halving, a holder whose
+    report disagrees with the root, census drift across a reuse cycle, reuse by
+    the dying holder itself, and every cross-row identity and growth claim must
+    each be refused.
+    """
+    reserve = gate.matrix_policy(gate.MATRIX_FIXTURES["qemu-arm-virt"])["reserve"]["bytes"]
+    lines = matrix_control_transcript(gate)
+    transcript = "\n".join(lines)
+    measured = gate.check_matrix_transcript(transcript, reserve, "control: ")
+    final = "delta=1 resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192"
+    bulk = gate.MATRIX_BULK_UNIT
+    mutations = [
+        ("still-fitting refusal", transcript.replace(
+            final, final.replace("inventory_bytes=15204192", f"inventory_bytes={reserve + (1 << 20)}"), 1)),
+        ("invented fit under a counted resource", transcript.replace(
+            final, "delta=1 resource=ordinary-bytes required=4096 available=8192 ledger_pool=0 "
+            "inventory_bytes=15204192", 1)),
+        ("ledger refused a page it could fund", transcript.replace(
+            final, final.replace("ledger_pool=1936", "ledger_pool=8192"), 1)),
+        ("exhaustion was a declaration", transcript.replace(
+            final, final.replace("resource=ledger-pool", "resource=maximum"), 1)),
+        ("refusal with no named cost", "\n".join(
+            line for index, line in enumerate(lines)
+            if not (line.startswith("SLIME_MEM adaptive limit") and "delta=16384 " in line
+                    and "instance=private-matrix-bulk" in line and index < 40))),
+        ("walk skipped its halving", transcript.replace(
+            " delta=16384 pages=", " delta=8192 pages=", 1)),
+        ("grant disagrees with the extent", transcript.replace(
+            f"delta={bulk} previous={bulk} pages={2 * bulk}", f"delta={bulk} previous={bulk} pages={2 * bulk + 1}", 1)),
+        ("holder report disagrees with the root", transcript.replace(
+            f"pages={3 * bulk} served=3 refused=16", f"pages={3 * bulk + 1} served=3 refused=16", 1)),
+        ("resident total is not the holders' sum", transcript.replace(
+            f"resident schedule=bulk pages={3 * bulk + 1024}", f"resident schedule=bulk pages={3 * bulk + 1025}", 1)),
+        ("census drifted across a cycle", transcript.replace(
+            "SLIME_MEM census retired=19 free_slots=517340", "SLIME_MEM census retired=19 free_slots=517339", 1)),
+        ("the dying holder reused its own capacity", transcript.replace(
+            "victim=private-matrix-bulk incarnation=2 end=fault reuser=private-matrix-small",
+            "victim=private-matrix-bulk incarnation=2 end=fault reuser=private-matrix-bulk", 1)),
+        ("a cycle ended by the wrong path", transcript.replace(
+            "incarnation=2 end=fault", "incarnation=2 end=exit", 1)),
+        ("a cycle is missing", "\n".join(line for line in lines if not line.startswith("[private-matrix] cycle=7 "))),
+        ("a reuser was not zeroed", transcript.replace("pages=4095 zeroed=1", "pages=4095 zeroed=0", 1)),
+        ("explicit holder failure", transcript + "\n[private-matrix:small] FAIL a newly served word was not zero"),
+        ("explicit coordinator failure", transcript + "\n[private-matrix] FAIL injected"),
+    ]
+    for description, mutated in mutations:
+        if mutated == transcript:
+            fail(f"matrix control {description}: mutation did not change evidence")
+        require_rejection(description, "control: ",
+                          lambda mutated=mutated: gate.check_matrix_transcript(mutated, reserve, "control: "))
+
+    kernel = [{"start": "0x60000000", "end": "0x80000000", "bytes": 1 << 29}]
+    gate.check_matrix_inventory(transcript, kernel, "control: ")
+    require_rejection("device memory counted as ordinary", "control: ", lambda: gate.check_matrix_inventory(
+        transcript.replace("paddr=0x60000000 bytes=536870912", "paddr=0x08000000 bytes=536870912", 1),
+        kernel, "control: "))
+
+    rows = (1024, 2048, 4096)
+
+    def row(scale: int) -> dict:
+        grown = {name: {"resident": value["resident"] * scale, "walks": value["walks"]}
+                 for name, value in measured["schedules"].items()}
+        return {"ordinary": measured["ordinary"] * scale, "pool": measured["pool"] * scale,
+                "schedules": grown, "cycles": measured["cycles"]}
+
+    def identity(scale: int) -> dict:
+        record = {key: {"sha256": f"{key}-{scale}"} for key in ("kernel", "dtb", "loader", "image")}
+        return {**record, "root": {"sha256": "root"}, "abi": "abi"}
+
+    measurements = {size: row(size // 1024 * 4) for size in rows}
+    identities = {size: identity(size) for size in rows}
+    gate.check_matrix_rows(identities, measurements, rows, 2048)
+    row_mutations = [
+        ("rows share a kernel", {**identities, 4096: {**identities[4096], "kernel": identities[2048]["kernel"]}},
+         measurements, rows, 2048),
+        ("rows booted different roots", {**identities, 1024: {**identities[1024], "root": {"sha256": "other"}}},
+         measurements, rows, 2048),
+        ("rows disagree on the ABI", {**identities, 1024: {**identities[1024], "abi": "other"}},
+         measurements, rows, 2048),
+        ("residency did not grow", identities, {**measurements, 4096: measurements[2048]}, rows, 2048),
+        ("the largest row stayed under 1 GiB", identities, {size: row(1) for size in rows} | {
+            1024: row(1), 2048: {**row(1), "ordinary": row(1)["ordinary"] + 1, "pool": row(1)["pool"] + 1,
+                                 "schedules": {n: {"resident": v["resident"] + 1, "walks": v["walks"]}
+                                               for n, v in row(1)["schedules"].items()}},
+            4096: {**row(1), "ordinary": row(1)["ordinary"] + 2, "pool": row(1)["pool"] + 2,
+                   "schedules": {n: {"resident": v["resident"] + 2, "walks": v["walks"]}
+                                 for n, v in row(1)["schedules"].items()}}}, rows, 2048),
+        ("the pinned row is not bracketed", identities, measurements, rows, 4096),
+    ]
+    for description, ids, measured_rows, row_sizes, product in row_mutations:
+        require_rejection(description, "matrix: ", lambda ids=ids, measured_rows=measured_rows,
+                          row_sizes=row_sizes, product=product: gate.check_matrix_rows(
+                              ids, measured_rows, row_sizes, product))
+    gate.check_matrix_launcher_only(measurements[2048], measurements[2048])
+    require_rejection("a launcher-only boot changed the inventory", "matrix launcher-only: ",
+                      lambda: gate.check_matrix_launcher_only(measurements[4096], measurements[2048]))
+    return len(mutations) + 1 + len(row_mutations) + 1
+
+
 def check_private_adaptive_controls(gate) -> int:
     """MEM-ADAPTIVE's arm: every adjudication, binding and outcome is checked.
 
@@ -2275,6 +2465,7 @@ def check_private_memory_capacity_controls() -> int:
         + check_private_rollback_controls(gate)
         + check_private_conservation_controls(gate)
         + check_private_adaptive_controls(gate)
+        + check_private_matrix_controls(gate)
         + len(fault_mutations)
         + len(ledger_mutations)
         + len(conservation_mutations)
@@ -2300,7 +2491,7 @@ def main() -> None:
         identity_controls = check_image_identity_controls(control_root)
         runtime_controls = check_plane_runtime_controls(control_root)
     print(
-        f"seL4 gate control check: {len(GATES) + 1} gates plus 8 adaptive arms reject "
+        f"seL4 gate control check: {len(GATES) + 1} gates plus 9 adaptive arms reject "
         f"{total} mutated transcripts and layouts; "
         f"{identity_controls} identity cases and {runtime_controls} runtime cases passed"
     )

@@ -1872,17 +1872,20 @@ fn serve_adaptive_growth(
                 region.base(),
                 Ok(()),
             ),
-            Err(error) => policy.report_growth(
-                id,
-                instance,
-                &binding,
-                delta,
-                previous_pages,
-                region.pages(),
-                0,
-                region.base(),
-                Err(error),
-            ),
+            Err(error) => {
+                policy.report_growth(
+                    id,
+                    instance,
+                    &binding,
+                    delta,
+                    previous_pages,
+                    region.pages(),
+                    0,
+                    region.base(),
+                    Err(error),
+                );
+                policy.report_limit(allocator, id, instance, delta, error);
+            }
         }
     }
     match outcome {

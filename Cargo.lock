@@ -1259,6 +1259,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-private-matrix-bulk"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-matrix-coordinator"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-matrix-guaranteed"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-private-matrix-small"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-private-memory-1g-holder-a"
 version = "0.1.0"
 dependencies = [
