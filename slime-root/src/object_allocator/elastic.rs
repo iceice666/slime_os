@@ -331,17 +331,30 @@ impl ObjectAllocator {
     /// BootInfo and are deliberately not subtracted a second time. Descriptor,
     /// slot and extent counts are today's free capacity, not a ceiling: both
     /// grow from this same byte pool, which is why a caller must never add
-    /// them together.
+    /// them together. Root CSlots are the same: the root CSpace grows by
+    /// leaves funded from this byte pool, so today's free slots are a
+    /// watermark and the leaves the pool could still fund are capacity.
     pub fn elastic_inventory(&self) -> ledger::Resources {
+        let bytes = self.untyped_bytes_remaining()
+            + self.preserved_bytes_remaining()
+            + self.reusable_private_extent_bytes();
         ledger::Resources {
-            bytes: (self.untyped_bytes_remaining()
-                + self.preserved_bytes_remaining()
-                + self.reusable_private_extent_bytes()) as u64,
-            slots: self.free_slots() as u64,
+            bytes: bytes as u64,
+            slots: (self.free_slots() + self.fundable_slots(bytes)) as u64,
             descriptors: (self.allocation_descriptors_free() + self.fundable_descriptors()) as u64,
             extents: (self.extent_descriptors_free() + self.fundable_extents()) as u64,
             tables: (self.untyped_bytes_remaining() / GRANULE_BYTES) as u64,
         }
+    }
+
+    /// Root CSlots the expandable root CSpace could still add from `bytes`.
+    ///
+    /// Each leaf is one CNode of `LEAF_SLOTS` slots, retyped from ordinary
+    /// memory. Like the descriptor counts below it is an alternative use of
+    /// the same bytes, never an addition to them.
+    fn fundable_slots(&self, bytes: usize) -> usize {
+        let leaf = 1usize << crate::root_cspace::leaf_blueprint().physical_size_bits();
+        (bytes / leaf).saturating_mul(crate::root_cspace::LEAF_SLOTS)
     }
 
     /// Allocation descriptors the metadata window could still fund.
@@ -770,7 +783,7 @@ impl ObjectAllocator {
             self.live_bytes(),
             self.active_extent_bytes(),
             self.reusable_extent_anchors(),
-            inventory.slots,
+            self.free_slots(),
             inventory.descriptors,
             inventory.extents,
             self.infrastructure_owned_bytes(),

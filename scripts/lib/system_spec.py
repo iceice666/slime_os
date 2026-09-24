@@ -94,6 +94,10 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-private-memory-adaptive": "sel4-private-memory-adaptive.zti",
     "sel4-private-memory-adaptive-rv64": "sel4-private-memory-adaptive-rv64.zti",
     "sel4-private-memory-adaptive-overcommit": "sel4-private-memory-adaptive-overcommit.zti",
+    # The inventory matrix: one pool-relative policy, booted unchanged against
+    # every pinned kernel-visible RAM row by `private_memory_matrix_check`.
+    "sel4-private-memory-matrix": "sel4-private-memory-matrix.zti",
+    "sel4-private-memory-matrix-rv64": "sel4-private-memory-matrix-rv64.zti",
     "sel4-private-memory-cycles": "sel4-private-memory-cycles.zti",
     "sel4-private-memory-1g": "sel4-private-memory-1g.zti",
     "sel4-private-memory-isolation": "sel4-private-memory-isolation.zti",

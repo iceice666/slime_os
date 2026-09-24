@@ -249,9 +249,8 @@ unbacked address inside the same window, on both reference architectures. The
 positive controls use the same capabilities, rights and device epoch, so the
 refusals are the destination's doing rather than absent authority.
 
-What remains unproven is named rather than implied: the multi-inventory
-qualification matrix is still separate work, and every result here is a QEMU
-envelope on two architectures that qualifies no physical machine.
+Every result here is a QEMU envelope on two architectures that qualifies no
+physical machine.
 
 ## Demand-backed acquisition
 
@@ -294,6 +293,61 @@ space before any component is published. That exercises the same allocator,
 ledger, retypes and kernel mappings a component's growth would take, and
 deliberately not the spawn, admission or window-placement path, which the next
 stage owns.
+
+## Device-derived capacity
+
+A pool-relative maximum is the pool admitted at boot, fixed for the root's
+lifetime. A subject bound while a peer holds most of that pool still receives
+a window of the whole pool, so capacity the peer later returns stays reachable;
+sizing the window from what happened to be free at bind time would strand a
+late holder forever. Admission subtracts each guarantee from the pool exactly
+once: the allocator reserves its backing first, and the ledger is admitted
+against that residual with the reserved envelopes restored, so its own
+subtraction is the only one.
+
+Root CSlots are priced like allocation and extent descriptors. The root
+CSpace grows by leaves retyped from ordinary memory, so the inventory counts
+the slots the byte pool could still fund, as an alternative use of those
+bytes and never in addition to them. The allocator, not the ledger, refuses a
+leaf it cannot fund. Record tables likewise grow past their inline page
+directory through directory pages funded on demand
+(`object_allocator/segmented.rs`), so the number of base pages a machine can
+track follows its memory rather than a compile-time table size.
+
+Returned capacity is reusable at any size. A task's extents come back at the
+size they were taken; once ordinary tails are spent, a smaller request splits
+the smallest larger free extent in halves (`object_allocator/extent_buddy.rs`)
+until a child fits, and two free siblings merge back when their parent's
+revoke succeeds. A split parent is neither free nor active, and every kernel
+operation precedes its metadata change, so a failed retype or revoke leaves
+every capability owned and the operation retryable. Infrastructure, which
+funds metadata pages and CSpace leaves, adopts a whole returned extent when no
+ordinary tail can fund it, holding it for the root's lifetime like every other
+infrastructure source. Without both, a machine whose ordinary tails a bulk
+holder had consumed could not serve base-page growth, or the metadata it
+needs, from capacity that holder returned.
+
+Every refused adaptive growth is followed by a `SLIME_MEM adaptive limit` line
+naming the resource that refused, the ledger's residual, the allocator's
+residual and the largest placeable block, and by an elastic census of that
+residual by owner. Exhaustion is therefore reconcilable: a refused single page
+whose allocator residual exceeds the operational reserve is a request that
+fitted and was refused.
+
+### Inventory rows
+
+seL4 compiles the device tree's memory ranges into the kernel and its loader,
+so a larger `-m` alone cannot enlarge what root is handed. Each emulated
+platform in `sel4/pins.toml` pins `inventory_memory_mib`: a constrained row,
+its product envelope and a larger row. `build-sel4.py::inventory_row` builds
+and installs a kernel, device tree, platform description and loader per row;
+`package_inventory_image` then packages one root task, byte for byte, with
+each row, refusing when the row's installed libsel4 differs from the pinned
+envelope's or its kernel memory does not end where the row declares. QEMU's
+dumped device tree is normalized by deleting RISC-V's runtime `rng-seed` and
+re-emitting the blob through `dtc`; RISC-V dumps otherwise differ in bytes no
+property names. Every build dumps twice and refuses unless both normalized
+dumps are identical.
 
 ## Verification
 
@@ -354,6 +408,15 @@ stage owns.
   rather than a second live one. The first adaptive holder to die is then
   quarantined, refunds nothing, and is returned by exactly one retry, while its
   peers finish their own schedule.
+- `just private_memory_matrix_check` boots one root and component set against
+  every pinned inventory row on both QEMU architectures. Pool-relative bulk,
+  all-small and mixed holders each walk to a refused single page whose
+  allocator residual is no more than the operational reserve; an idle maximum
+  takes nothing from a peer's walk; a guarantee is redeemed at exhaustion and a
+  spawn under pressure is funded by the reserve; twenty coordinated deaths are
+  each followed by a different holder's zeroed reuse with an unchanged census;
+  verified residency grows with the row; and a launcher-only boot of the
+  pinned row's kernel with the largest row's RAM changes nothing root sees.
 - `just private_memory_phase4_check` runs both over the whole phase-3 surface,
   because adaptive binding changes construction, growth and reclamation for
   fixed holders too.

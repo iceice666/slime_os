@@ -16,6 +16,7 @@ mod leaf_spans;
 pub(crate) use leaf_spans::LeafSpanBits;
 #[cfg(test)]
 pub(crate) use leaf_spans::host::{bits as host_leaf_spans, release as host_release_leaf_spans};
+mod extent_buddy;
 mod mapping_tables;
 mod preserved;
 mod qualification;
@@ -399,6 +400,23 @@ pub enum AllocError {
         base: usize,
         reservation: usize,
     },
+}
+
+impl AllocError {
+    /// The allocator resource this error names, in a refusal report's words.
+    pub const fn resource(self) -> &'static str {
+        match self {
+            Self::NoKernelUntyped | Self::UntypedExhausted { .. } => "ordinary-layout",
+            Self::UntypedTableFull { .. } => "retained-prefix-records",
+            Self::SlotsExhausted { .. } | Self::SlotRangeTooLarge { .. } => "root-cslots",
+            Self::Retype { .. } => "retype",
+            Self::ArenaTableFull { .. } => "extent-records",
+            Self::ArenaSlotTableFull { .. } => "allocation-descriptors",
+            Self::ArenaTooSmall { .. } => "arena-extent",
+            Self::ArenaCleanup { .. } => "cleanup",
+            _ => "acquisition",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1094,6 +1112,9 @@ enum ExtentKind {
     PrivateData,
     PrivateTables,
     MappingTables,
+    /// A returned extent adopted whole as an infrastructure source. Held for
+    /// the root's lifetime, like every other infrastructure source.
+    Infrastructure,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1124,6 +1145,12 @@ struct ExtentRecord {
     /// back in the reservation it was taken from rather than in common
     /// capacity, and a failed revoke leaves it owned and unavailable.
     origin: u32,
+    /// Two half-size children now own this record's bytes; see
+    /// [`extent_buddy`]. A split record is neither free nor active until both
+    /// children are free again and its revoke merges them.
+    split: bool,
+    /// The two children of a split record, or [`extent_buddy::NO_EXTENT`].
+    children: [u32; 2],
 }
 
 impl ExtentRecord {
@@ -1141,6 +1168,8 @@ impl ExtentRecord {
             objects: 0,
             bytes: 0,
             origin: guarantee_vault::RESERVATION_NONE,
+            split: false,
+            children: [extent_buddy::NO_EXTENT; 2],
         }
     }
 
@@ -1208,7 +1237,7 @@ impl ExtentRecord {
     /// Whether this record is capacity the next ordinary or elastic request
     /// may take: no live arena holds it and no reservation owns it.
     const fn is_common_free(&self) -> bool {
-        !self.active && self.origin == guarantee_vault::RESERVATION_NONE
+        !self.active && !self.split && self.origin == guarantee_vault::RESERVATION_NONE
     }
 
     const fn belongs_to(&self, id: TaskArenaId) -> bool {
@@ -1637,7 +1666,7 @@ impl ObjectAllocator {
         if !self.infrastructure.needs_source(bytes) {
             return Ok(());
         }
-        let (index, source) = self.untypeds[..self.untyped_len]
+        let found = self.untypeds[..self.untyped_len]
             .iter()
             .enumerate()
             .filter_map(|(index, source)| {
@@ -1645,11 +1674,16 @@ impl ObjectAllocator {
                     .filter(|source| source.remaining() >= bytes)
                     .map(|source| (index, source))
             })
-            .min_by_key(|(_, source)| source.remaining())
-            .ok_or(AllocError::UntypedExhausted {
+            .min_by_key(|(_, source)| source.remaining());
+        let Some((index, source)) = found else {
+            // No ordinary tail can fund it, but returned capacity may. The
+            // original refusal stands if no free extent is large enough.
+            let refusal = AllocError::UntypedExhausted {
                 size_bits: 12,
                 remaining: self.untyped_bytes_remaining(),
-            })?;
+            };
+            return self.adopt_returned_extent(bytes).map_err(|_| refusal);
+        };
         self.infrastructure.adopt_pinned_source(source)?;
         self.untypeds[index]
             .as_mut()
@@ -2055,6 +2089,13 @@ impl ObjectAllocator {
             }
             let words = crate::root_cspace::LEAF_SLOTS.div_ceil(usize::BITS as usize);
             while self.slots.metadata_free() < words {
+                if self.slots.words.needs_directory_page() {
+                    let page = self.map_metadata_page()?;
+                    // SAFETY: the ledger retains this fresh page exclusively
+                    // as the slot table's next directory page.
+                    unsafe { self.slots.words.add_directory_page(page) }
+                        .map_err(|()| AllocError::NoKernelUntyped)?;
+                }
                 let page = self.map_metadata_page()?;
                 // SAFETY: the infrastructure ledger retains this fresh mapping
                 // exclusively for slot occupancy and planning scratch.
@@ -2589,10 +2630,7 @@ impl ObjectAllocator {
     /// Reuse selects only common free capacity, so a record a reservation owns
     /// is never re-served to a task arena or an elastic transaction.
     fn acquire_extent_record(&mut self, size_bits: usize) -> Result<usize, AllocError> {
-        let reusable = self.extents.iter().position(|entry| {
-            entry.is_some_and(|extent| extent.is_common_free() && extent.size_bits == size_bits)
-        });
-        if let Some(index) = reusable {
+        if let Some(index) = self.reusable_extent(size_bits) {
             self.extents_reused += 1;
             return Ok(index);
         }
@@ -2608,6 +2646,19 @@ impl ObjectAllocator {
         let blueprint = sel4::ObjectBlueprint::Untyped { size_bits };
         if let Err(error) = self.allocate_from_global(blueprint, parent_slot) {
             self.slots.release(parent_slot);
+            // Ordinary tails cannot place it, but returned capacity may: a
+            // larger free extent is split rather than left unreachable to a
+            // smaller request. The original refusal stands if none exists.
+            // Host tests have no kernel to split with, and exercise the split
+            // through `extent_buddy`'s injected operations instead.
+            #[cfg(not(test))]
+            return self.acquire_split_extent(size_bits).map_err(|split| {
+                sel4::debug_println!(
+                    "SLIME_MEM extent split refused size_bits={size_bits} error={split:?}"
+                );
+                error
+            });
+            #[cfg(test)]
             return Err(error);
         }
         let parent =
@@ -2868,6 +2919,13 @@ impl ObjectAllocator {
             {
                 return Err(Self::private_record_error());
             }
+            if self.allocations.needs_directory_page() {
+                let page = self.map_metadata_page()?;
+                // SAFETY: the ledger retains this fresh page exclusively as the
+                // allocation table's next directory page.
+                unsafe { self.allocations.add_directory_page(page) }
+                    .map_err(|()| Self::private_record_error())?;
+            }
             let page = self.map_metadata_page()?;
             // SAFETY: page ownership is retained by the metadata ledger and no
             // other record table references this freshly mapped page.
@@ -3008,6 +3066,13 @@ impl ObjectAllocator {
                 return Err(AllocError::ArenaTableFull {
                     limit: self.extents.len(),
                 });
+            }
+            if self.extents.needs_directory_page() {
+                let page = self.map_metadata_page()?;
+                // SAFETY: the ledger retains this fresh page exclusively as the
+                // extent table's next directory page.
+                unsafe { self.extents.add_directory_page(page) }
+                    .map_err(|()| AllocError::NoKernelUntyped)?;
             }
             let page = self.map_metadata_page()?;
             // SAFETY: the metadata ledger retains this fresh page exclusively
@@ -4472,6 +4537,8 @@ mod tests {
             objects: 1,
             bytes: 4096,
             origin: super::guarantee_vault::RESERVATION_NONE,
+            split: false,
+            children: [super::extent_buddy::NO_EXTENT; 2],
         };
         assert_eq!(
             task_static_backing_from_records(

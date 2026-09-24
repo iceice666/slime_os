@@ -158,6 +158,12 @@ The boot sequence is:
    binding each incarnation before that task is published.
 3. Publish/activate only after every required binding succeeds.
 
+The ownership partition subtracts each guarantee once. The ledger is admitted
+against the inventory left after reservation, with each reserved envelope
+restored before the ledger's own guarantee subtraction; subtracting an
+envelope from a residual that no longer contains it would strand that memory
+in neither the elastic pool nor any guarantee.
+
 Reservation precedes construction deliberately: a guarantee that static task
 construction can defeat is not a guarantee. The cost is that construction may
 now fail for want of residual memory, which fails the boot closed rather than

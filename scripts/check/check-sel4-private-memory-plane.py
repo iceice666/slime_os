@@ -828,6 +828,8 @@ def boot(
     qemu_binary: str,
     image: Path,
     additional_arguments: tuple[str, ...] = (),
+    memory_mib: int | None = None,
+    timeout: int = TIMEOUT,
 ) -> str:
     qemu = shutil.which(qemu_binary)
     if qemu is None:
@@ -841,7 +843,7 @@ def boot(
         "-smp",
         str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
+        f"size={memory_mib or profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
@@ -864,7 +866,7 @@ def boot(
         )
     except OSError as error:
         fail(f"cannot run QEMU: {error}")
-    watchdog = threading.Timer(TIMEOUT, process.kill)
+    watchdog = threading.Timer(timeout, process.kill)
     watchdog.start()
     lines: list[str] = []
     # `SLIME_ROOT READY` as well as the graph's terminal: the rollback case
@@ -874,6 +876,7 @@ def boot(
         r"SLIME_GRAPH HEALTHY|SLIME_ROOT READY|SLIME_ROOT FATAL|private memory plane fail"
         r"|\[private-memory-probe\] FAIL|\[private-heap-probe:(?:granted|denied|both)\] FAIL"
         r"|\[private-memory-1g\] FAIL|\[private-heap-probe:stress\] FAIL"
+        r"|\[private-matrix(?::[a-z]+)?\] FAIL"
     )
     try:
         assert process.stdout is not None
@@ -1976,6 +1979,8 @@ def check_backing_ledger(transcript: str) -> None:
     snapshots: dict[str, dict[str, list[dict[str, int | str]]]] = {}
     census: dict[str, int] | None = None
     completed: list[str] = []
+    # Task extents a buddy split currently divides: parent slot -> children.
+    split_extents: dict[int, list[int]] = {}
 
     def fields(line: str) -> dict[str, int | str]:
         result: dict[str, int | str] = {}
@@ -2081,7 +2086,7 @@ def check_backing_ledger(transcript: str) -> None:
                 fail(prefix + "unsplit shared parent has children")
         # All event leaves and remaining tails must partition the initial
         # BootInfo inventory exactly. Parent/child ancestry is never summed.
-        leaves = [(start, size) for _, start, size in consumed]
+        leaves = [(start, size) for slot, start, size in consumed if slot not in split_extents]
         leaves += [(integer(node, "paddr") + integer(node, "used"), integer(node, "bytes") - integer(node, "used"))
                    for node in nodes.values() if integer(node, "used") < integer(node, "bytes")]
         leaves.sort()
@@ -2169,6 +2174,31 @@ def check_backing_ledger(transcript: str) -> None:
                 fail(prefix + "split is not a buddy half")
             consume_range(parent, start, size)
             nodes[child] = {"kind": "preserved", "paddr": start, "bytes": size, "used": 0}
+        elif kind == "extent_split":
+            exact(row, "parent child paddr bytes")
+            parent, child, start, size = (integer(row, key) for key in ("parent", "child", "paddr", "bytes"))
+            base, length = allocation(parent, size * 2)
+            halves = split_extents.setdefault(parent, [])
+            if len(halves) >= 2 or start != base + len(halves) * size or any(slot == child for slot, _, _ in consumed):
+                fail(prefix + "extent split child is not the next buddy half of its parent")
+            halves.append(child)
+            consumed.append((child, start, size))
+        elif kind == "infrastructure_extent":
+            # A returned extent adopted whole: it stays one owned leaf, now
+            # held by infrastructure, so the partition does not change.
+            exact(row, "parent paddr bytes")
+            parent, start, size = (integer(row, key) for key in ("parent", "paddr", "bytes"))
+            if parent in split_extents or allocation(parent, size) != (start, size):
+                fail(prefix + "infrastructure adopted an extent it does not own whole")
+        elif kind == "extent_merge":
+            exact(row, "parent paddr bytes")
+            parent, start, size = (integer(row, key) for key in ("parent", "paddr", "bytes"))
+            if allocation(parent, size) != (start, size) or len(split_extents.get(parent, [])) != 2:
+                fail(prefix + "merge of an extent that was not split in two")
+            if any(child in split_extents for child in split_extents[parent]):
+                fail(prefix + "merge of an extent whose child is still split")
+            children = set(split_extents.pop(parent))
+            consumed[:] = [entry for entry in consumed if entry[0] not in children]
         elif kind == "consume":
             exact(row, "source parent slot paddr bytes count")
             parent, slot, start, size, count = (integer(row, key) for key in ("parent", "slot", "paddr", "bytes", "count"))
@@ -2952,14 +2982,8 @@ def entitlement_identity(name: str) -> str:
     return hashlib.sha256(ADAPTIVE_ENTITLEMENT_DOMAIN + name.encode()).hexdigest()[:16]
 
 
-def declared_policy(fixture: Path) -> dict:
-    """The adaptive policy this arm's own composition declares.
-
-    Read from the derived manifest rather than restated, for the same reason
-    `declared_quotas` is: the gate asserts that the declaration is what the root
-    reserved and enforced, and a second copy of the numbers here would compare
-    this file against itself.
-    """
+def decoded_manifest(fixture: Path) -> dict:
+    """A derived composition manifest, decoded by the pinned Zutai tool."""
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
@@ -2973,7 +2997,18 @@ def declared_policy(fixture: Path) -> dict:
     )
     if process.returncode != 0:
         fail(f"could not decode {fixture.name}: {process.stdout.strip()}")
-    manifest = json.loads(process.stdout)
+    return json.loads(process.stdout)
+
+
+def declared_policy(fixture: Path) -> dict:
+    """The adaptive policy this arm's own composition declares.
+
+    Read from the derived manifest rather than restated, for the same reason
+    `declared_quotas` is: the gate asserts that the declaration is what the root
+    reserved and enforced, and a second copy of the numbers here would compare
+    this file against itself.
+    """
+    manifest = decoded_manifest(fixture)
     policy = manifest.get("privateMemoryPolicy")
     if policy is None:
         fail(f"{fixture.name} declares no adaptive policy, so the arm asserts nothing")
@@ -3887,6 +3922,546 @@ def run_capacity_arm(platform: str, *, isolation: bool = False) -> None:
     print(f"private-memory capacity workload finished on {platform}")
 
 
+# MEM-ADAPTIVE's inventory matrix. One closure per architecture supplies the
+# root and every component; each pinned inventory row repackages that exact
+# root with its own kernel, device tree and loader.
+MATRIX_FIXTURES = {
+    "qemu-arm-virt": GENERATION_COMPOSITIONS / "sel4-private-memory-matrix.zti",
+    "qemu-riscv-virt": GENERATION_COMPOSITIONS / "sel4-private-memory-matrix-rv64.zti",
+}
+# Emulated time for the largest row's all-small walk dominates; the bound is a
+# hang detector, not a performance claim.
+MATRIX_TIMEOUT = 3600
+MATRIX_GUARANTEE = 1024
+MATRIX_BULK_UNIT = 64 * 512
+MATRIX_SMALL_UNIT = 511
+MATRIX_SCHEDULES = (
+    ("bulk", (("private-matrix-bulk", 0, MATRIX_BULK_UNIT),)),
+    ("small", (("private-matrix-small", 1, MATRIX_SMALL_UNIT),)),
+    (
+        "mixed",
+        (
+            ("private-matrix-bulk", 1, MATRIX_BULK_UNIT),
+            ("private-matrix-small", 2, MATRIX_SMALL_UNIT),
+        ),
+    ),
+)
+MATRIX_CYCLES = 20
+MATRIX_CYCLE_PAGES = 4095
+# Where each schedule's requests begin and end in the transcript. A schedule's
+# adjudications are only attributable to it between these two markers.
+MATRIX_SEGMENTS = {
+    "bulk": (
+        r"^\[private-matrix:bulk\] verified incarnation=0 base=0x[0-9a-f]+ pages=0 ",
+        r"^\[private-matrix\] exhausted schedule=bulk ",
+    ),
+    "small": (
+        r"^\[private-matrix:bulk\] end incarnation=0 ",
+        r"^\[private-matrix\] exhausted schedule=small ",
+    ),
+    "mixed": (
+        r"^\[private-matrix:small\] end incarnation=1 ",
+        r"^\[private-matrix\] exhausted schedule=mixed ",
+    ),
+}
+MATRIX_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "matrix bulk schedule, idle maximum and guarantee under pressure",
+        (
+            r"SLIME_MEM policy entitlements=2 subjects=3 guarantee_pages=1024 .*",
+            r"\[private-matrix\] guarantee pressure redeemed=1 beyond_promise_served=0 pages=1024",
+            r"\[private-matrix\] idle maximum subject=private-matrix-small pages=0 refused=1",
+            r"\[private-matrix:small\] end incarnation=0 pages=0 refused=1 kind=exit",
+            r"\[private-matrix\] reserve spawn subject=private-matrix-small incarnation=1 pages=0 "
+            r"refused=1",
+            r"\[private-matrix\] exhausted schedule=bulk subject=private-matrix-bulk incarnation=0 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] resident schedule=bulk pages=\d+ bytes=\d+ guaranteed=1024 "
+            r"bulk=\d+ small=0",
+            r"\[private-matrix:bulk\] end incarnation=0 pages=\d+ refused=\d+ kind=exit",
+        ),
+    ),
+    (
+        "matrix all-small schedule",
+        (
+            r"\[private-matrix\] exhausted schedule=small subject=private-matrix-small incarnation=1 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] resident schedule=small pages=\d+ bytes=\d+ guaranteed=1024 "
+            r"bulk=0 small=\d+",
+            r"\[private-matrix:small\] end incarnation=1 pages=\d+ refused=\d+ kind=exit",
+        ),
+    ),
+    (
+        "matrix mixed simultaneous schedule and reuse cycles",
+        (
+            r"\[private-matrix\] exhausted schedule=mixed subject=private-matrix-bulk incarnation=1 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] exhausted schedule=mixed subject=private-matrix-small incarnation=2 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] resident schedule=mixed pages=\d+ bytes=\d+ guaranteed=1024 "
+            r"bulk=\d+ small=\d+",
+            r"\[private-matrix\] cycles begin count=20 pages=4095",
+            r"\[private-matrix\] cycle=19 victim=private-matrix-small incarnation=\d+ end=exit "
+            r"reuser=private-matrix-bulk incarnation=\d+ pages=4095 zeroed=1 peer_pages=1024",
+            r"\[private-matrix:guaranteed\] end incarnation=0 pages=1024 refused=1 kind=exit",
+            r"\[private-matrix\] complete schedules=3 cycles=20",
+            HEALTHY_MARKER,
+        ),
+    ),
+)
+MATRIX_FAILURES: tuple[str, ...] = (
+    r"SLIME_ROOT FATAL",
+    r"SLIME_MEM FAIL",
+    r"\[private-matrix\] FAIL",
+    r"\[private-matrix:[a-z]+\] FAIL",
+    r"SLIME_GRAPH task reclaim incomplete task=\d+",
+)
+# Resources whose shortfall is a count running out. A refusal naming one must
+# report more required than available, or it refused a request that fit.
+MATRIX_COUNTED = ("ordinary-bytes", "extent-records", "transaction-extents")
+
+
+def matrix_policy(fixture: Path) -> dict:
+    """The matrix composition's policy, which must declare no capacity.
+
+    The arm's claim is that one declaration reaches different capacities on
+    different inventories. That holds only if the capacity-bearing subjects
+    are pool-relative and the guaranteed one is the only fixed number, so the
+    declaration is checked for exactly that shape rather than trusted.
+    """
+    manifest = decoded_manifest(fixture)
+    policy = manifest.get("privateMemoryPolicy")
+    if policy is None or manifest.get("privateMemoryBudget"):
+        fail(f"{fixture.name}: the matrix needs an adaptive policy and no fixed budget")
+    entitlements = {entry["name"]: entry for entry in policy["entitlements"]}
+    subjects = {entry["instance"]: entry for entry in policy["subjects"]}
+    for instance in ("private-matrix-bulk", "private-matrix-small"):
+        subject = subjects.get(instance)
+        if (
+            subject is None
+            or subject["maximumMode"] != "pool"
+            or entitlements[subject["entitlement"]]["maximumMode"] != "pool"
+            or entitlements[subject["entitlement"]]["guaranteePages"] != 0
+        ):
+            fail(f"{fixture.name}: {instance} is not an unguaranteed pool-relative subject")
+    if subjects["private-matrix-bulk"]["entitlement"] != subjects["private-matrix-small"]["entitlement"]:
+        fail(f"{fixture.name}: the bulk and small subjects must contend for one entitlement")
+    guaranteed = subjects.get("private-matrix-guaranteed")
+    if (
+        guaranteed is None
+        or entitlements[guaranteed["entitlement"]]["guaranteePages"] != MATRIX_GUARANTEE
+        or guaranteed["maximumPages"] <= MATRIX_GUARANTEE
+    ):
+        fail(f"{fixture.name}: the guaranteed subject does not declare its promise below its maximum")
+    return policy
+
+
+def matrix_segment(transcript: str, schedule: str, prefix: str) -> str:
+    start, end = MATRIX_SEGMENTS[schedule]
+    opening = re.search(start, transcript, re.MULTILINE)
+    closing = re.search(end, transcript, re.MULTILINE)
+    if opening is None or closing is None or closing.start() < opening.end():
+        fail(prefix + f"the {schedule} schedule has no bounded transcript segment")
+    return transcript[opening.end() : closing.start()]
+
+
+def matrix_walk(segment: str, instance: str, unit: int, prefix: str) -> dict[str, int | str]:
+    """One holder's exhaustion walk, reconstructed from the root's own lines.
+
+    The walk's shape is the claim: a refused request is followed by one of
+    half the size, a served one by the same size, and the walk ends at a
+    refused single page whose limit line names the resource that ran out.
+    """
+    lines = [
+        match
+        for match in re.finditer(
+            r"^SLIME_MEM adaptive (grant|refused|limit) task=\d+ instance=(\S+) (.*)$",
+            segment,
+            re.MULTILINE,
+        )
+        if match.group(2) == instance
+    ]
+    delta = unit
+    pages = 0
+    served = refused = 0
+    limit: dict[str, int | str] | None = None
+    pending_limit = False
+    for match in lines:
+        kind, fields = match.group(1), match.group(3)
+        values = dict(re.findall(r"(\w+)=(\S+)", fields))
+        if kind == "limit":
+            if not pending_limit or int(values["delta"]) != delta:
+                fail(prefix + f"{instance}: a limit line follows no refusal of its delta")
+            pending_limit = False
+            limit = {
+                key: (value if key == "resource" else int(value))
+                for key, value in values.items()
+            }
+            if delta != 1:
+                delta //= 2
+            continue
+        if pending_limit:
+            fail(prefix + f"{instance}: a refusal carries no limit line")
+        if limit is not None and limit["delta"] == 1:
+            fail(prefix + f"{instance}: a request followed the one-page refusal")
+        if int(values["delta"]) != delta:
+            fail(
+                prefix + f"{instance}: requested {values['delta']} pages where the walk "
+                f"required {delta}"
+            )
+        if kind == "grant":
+            if int(values["previous"]) != pages or int(values["pages"]) != pages + delta:
+                fail(prefix + f"{instance}: a grant disagrees with the extent it grew")
+            pages += delta
+            served += 1
+        else:
+            if int(values["pages"]) != pages:
+                fail(prefix + f"{instance}: a refusal changed the extent")
+            refused += 1
+            pending_limit = True
+    if limit is None or limit["delta"] != 1 or pending_limit:
+        fail(prefix + f"{instance}: the walk did not end at a refused single page")
+    return {"pages": pages, "served": served, "refused": refused, **limit}
+
+
+def check_matrix_limit(walk: dict, instance: str, reserve: int, prefix: str) -> None:
+    """The one-page refusal must be a real shortfall, not an invented one.
+
+    Whatever named it, a refused single page is only exhaustion if nothing
+    beyond the operational reserve is left: the allocator's residual may hold
+    the reserve (less what constructions since admission drew from it) and at
+    most one page and its table of ledger dust. More than that is ordinary
+    memory a fitting request could not reach.
+    """
+    resource = walk["resource"]
+    if walk["inventory_bytes"] > reserve + 2 * 4096:
+        fail(
+            prefix + f"{instance}: refused one page for {resource} while the allocator held "
+            f"{walk['inventory_bytes']} bytes against a {reserve}-byte reserve"
+        )
+    if resource in ("maximum", "reservation", "entitlement"):
+        fail(prefix + f"{instance}: exhaustion was a declaration ({resource}), not the inventory")
+    if resource in MATRIX_COUNTED and walk["required"] <= walk["available"]:
+        fail(
+            prefix + f"{instance}: refused one page for {resource} with {walk['available']} "
+            f"available and {walk['required']} required"
+        )
+    if resource == "ledger-pool" and walk["ledger_pool"] >= 2 * 4096:
+        fail(prefix + f"{instance}: the ledger refused a page while holding {walk['ledger_pool']} bytes")
+
+
+# Census fields that name free or reusable capacity, compared across cycles.
+# `retired` counts reclamations and legitimately rises every cycle.
+MATRIX_CENSUS_EXEMPT = frozenset({"retired"})
+
+
+def matrix_census(line: str) -> dict[str, int]:
+    return {
+        key: int(value)
+        for key, value in re.findall(r"(\w+)=(\d+)", line)
+        if key not in MATRIX_CENSUS_EXEMPT
+    }
+
+
+def check_matrix_cycles(transcript: str, prefix: str) -> dict[str, int]:
+    """Twenty deaths, each followed by another holder's zeroed reuse, without drift.
+
+    The holder lines prove the bytes: a reuser that read a non-zero served word
+    or a peer whose pattern moved emits a failure marker instead of its cycle
+    line. This proves the accounting: the root's census after each cycle's
+    last reclamation must equal the census before the first cycle, field for
+    field, so no slot, descriptor, extent, anchor or byte leaks per cycle.
+    """
+    begin = re.search(r"^\[private-matrix\] cycles begin ", transcript, re.MULTILINE)
+    assert begin is not None
+    censuses = [
+        (match.start(), matrix_census(match.group(0)))
+        for match in re.finditer(r"^SLIME_MEM census .*$", transcript, re.MULTILINE)
+    ]
+    before = [census for position, census in censuses if position < begin.start()]
+    if not before:
+        fail(prefix + "no census precedes the reuse cycles")
+    baseline = before[-1]
+    cycles = list(
+        re.finditer(
+            r"^\[private-matrix\] cycle=(\d+) victim=(\S+) incarnation=(\d+) end=(fault|exit) "
+            r"reuser=(\S+) incarnation=(\d+) pages=(\d+) zeroed=1 peer_pages=(\d+)$",
+            transcript,
+            re.MULTILINE,
+        )
+    )
+    if [int(match.group(1)) for match in cycles] != list(range(MATRIX_CYCLES)):
+        fail(prefix + "the reuse cycles did not run exactly once each, in order")
+    faults = 0
+    for match in cycles:
+        cycle = int(match.group(1))
+        victim, end, reuser = match.group(2), match.group(4), match.group(5)
+        expected = ("private-matrix-bulk", "private-matrix-small")
+        if (victim, reuser) != (expected if cycle % 2 == 0 else expected[::-1]):
+            fail(prefix + f"cycle {cycle}: capacity was not reused by a different holder")
+        if end != ("fault" if cycle % 4 < 2 else "exit"):
+            fail(prefix + f"cycle {cycle}: the victim did not end by its scheduled path")
+        faults += end == "fault"
+        if int(match.group(7)) != MATRIX_CYCLE_PAGES or int(match.group(8)) != MATRIX_GUARANTEE:
+            fail(prefix + f"cycle {cycle}: a holder or the peer reported the wrong extent")
+        after = [census for position, census in censuses if position < match.start()]
+        drift = {
+            key: (baseline.get(key), after[-1].get(key))
+            for key in sorted(set(baseline) | set(after[-1]))
+            if baseline.get(key) != after[-1].get(key)
+        }
+        if drift:
+            fail(prefix + f"cycle {cycle}: the census drifted from its pre-cycle baseline: {drift}")
+    return {"cycles": len(cycles), "faults": faults}
+
+
+def check_matrix_inventory(transcript: str, kernel_memory: list[dict], prefix: str) -> None:
+    """Every ordinary range root admitted lies inside the kernel's compiled memory.
+
+    The kernel's memory ranges exclude every device region of the device tree,
+    so a range outside them would be device memory counted as ordinary.
+    """
+    ranges = [
+        (int(start, 16), int(size))
+        for start, size in re.findall(
+            r"^SLIME_ROOT ordinary range=\d+ paddr=(0x[0-9a-f]+) bytes=(\d+)$",
+            transcript,
+            re.MULTILINE,
+        )
+    ]
+    memory = [(int(entry["start"], 16), int(entry["end"], 16)) for entry in kernel_memory]
+    if not ranges:
+        fail(prefix + "the root reported no ordinary ranges")
+    for start, size in ranges:
+        if not any(low <= start and start + size <= high for low, high in memory):
+            fail(prefix + f"ordinary range {start:#x}+{size} lies outside the kernel's memory")
+
+
+def check_matrix_transcript(transcript: str, reserve: int, prefix: str) -> dict[str, object]:
+    """Validate one inventory row's boot and return what it measured."""
+    check_adaptive_markers(transcript, MATRIX_CHAINS, prefix)
+    for pattern in MATRIX_FAILURES:
+        if re.search(pattern, transcript) is not None:
+            fail(prefix + f"failure marker {pattern!r}")
+    ordinary = re.search(r"^SLIME_ROOT ordinary ranges=\d+ bytes=(\d+) ", transcript, re.MULTILINE)
+    policy = re.search(r"^SLIME_MEM policy .* pool_bytes=(\d+)$", transcript, re.MULTILINE)
+    if ordinary is None or policy is None:
+        fail(prefix + "the root reported no ordinary inventory or no admitted pool")
+    result: dict[str, object] = {
+        "ordinary": int(ordinary.group(1)),
+        "pool": int(policy.group(1)),
+        "schedules": {},
+    }
+    for schedule, walkers in MATRIX_SCHEDULES:
+        segment = matrix_segment(transcript, schedule, prefix)
+        walks = {}
+        for instance, incarnation, unit in walkers:
+            walk = matrix_walk(segment, instance, unit, prefix + f"{schedule}: ")
+            check_matrix_limit(walk, instance, reserve, prefix + f"{schedule}: ")
+            reported = re.search(
+                rf"^\[private-matrix\] exhausted schedule={schedule} subject={instance} "
+                rf"incarnation={incarnation} pages=(\d+) served=(\d+) refused=(\d+) ",
+                transcript,
+                re.MULTILINE,
+            )
+            if reported is None or tuple(int(value) for value in reported.groups()) != (
+                walk["pages"],
+                walk["served"],
+                walk["refused"],
+            ):
+                fail(prefix + f"{schedule}: {instance}'s own report disagrees with the root's")
+            walks[instance] = walk
+        resident = re.search(
+            rf"^\[private-matrix\] resident schedule={schedule} pages=(\d+) bytes=(\d+) "
+            rf"guaranteed=(\d+) bulk=(\d+) small=(\d+)$",
+            transcript,
+            re.MULTILINE,
+        )
+        assert resident is not None
+        pages, byte_count, guaranteed, bulk, small = (int(value) for value in resident.groups())
+        if pages != guaranteed + bulk + small or byte_count != pages * 4096:
+            fail(prefix + f"{schedule}: the resident total is not its holders' sum")
+        held = {
+            "private-matrix-bulk": bulk,
+            "private-matrix-small": small,
+        }
+        for instance, walk in walks.items():
+            if held[instance] != walk["pages"]:
+                fail(prefix + f"{schedule}: {instance} verified an extent it was not granted")
+        result["schedules"][schedule] = {"resident": pages, "walks": walks}
+    result["cycles"] = check_matrix_cycles(transcript, prefix)
+    return result
+
+
+def load_sel4_builder():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("matrix_sel4_builder", BUILD_SCRIPT)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load {BUILD_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["matrix_sel4_builder"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_matrix_arm(platform: str, only: int | None = None) -> None:
+    """MEM-ADAPTIVE's inventory matrix on one architecture.
+
+    The root and components are built once, through the closure, and every row
+    boots those exact bytes. What varies is only what seL4 compiles the memory
+    map into, so a capacity difference between rows is the inventory's doing.
+    A launcher-only control then boots the pinned row's image with the largest
+    row's RAM, and must observe the pinned row's inventory unchanged.
+    """
+    section, qemu_binary = PLATFORMS[platform]
+    profile = load_qemu_profile(fail, PINS, section)
+    suffix = "-rv64" if platform == "qemu-riscv-virt" else ""
+    variant = f"sel4-private-memory-matrix{suffix}"
+    reserve = matrix_policy(MATRIX_FIXTURES[platform])["reserve"]["bytes"]
+    try:
+        built = build_closure_image(variant)
+    except ClosureImageError as error:
+        fail(str(error))
+    if (
+        built.build_result.get("platform") != platform
+        or built.build_result.get("targetProfile") != TARGET_PROFILES[platform]
+    ):
+        fail("matrix image: closure target differs from requested platform")
+    root_digest = sha256_file(built.root, fail)
+    builder = load_sel4_builder()
+    target = builder.PLATFORMS[platform]
+    pins = builder.load_pins()
+    product = builder.platform_memory_mib(target)
+    rows = builder.inventory_rows(target)
+    identities: dict[int, dict] = {}
+    measured: dict[int, dict] = {}
+    for row in rows:
+        if only is not None and row != only:
+            continue
+        output = ROOT / "build" / "inventory" / variant / f"mem{row}"
+        if output.exists():
+            shutil.rmtree(output)
+        identity = builder.package_inventory_image(
+            pins, target, row, root_elf=built.root, output=output
+        )
+        if identity["root"]["sha256"] != root_digest:
+            fail(f"matrix {row} MiB: packaged a root other than the closure's")
+        if row == product and identity["image"]["sha256"] != built.digest():
+            fail(
+                f"matrix {row} MiB: the pinned row's repackaged image differs from the "
+                "closure's, so the row is not the image the closure built"
+            )
+        image = output / "image.elf"
+        print(
+            f"[matrix identity] platform={platform} memory_mib={row} "
+            f"image={identity['image']['sha256']} kernel={identity['kernel']['sha256']} "
+            f"dtb={identity['dtb']['sha256']} loader={identity['loader']['sha256']} "
+            f"root={root_digest} abi={identity['abi']}",
+            flush=True,
+        )
+        transcript = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=image,
+            memory_mib=row,
+            timeout=MATRIX_TIMEOUT,
+        )
+        if sha256_file(image, fail) != identity["image"]["sha256"]:
+            fail(f"matrix {row} MiB: packaged bytes changed during execution")
+        log = ROOT / "build" / f"{variant}-mem{row}.log"
+        log.write_text(transcript + "\n", encoding="utf-8")
+        print(f"[matrix transcript] memory_mib={row} sha256={sha256_file(log, fail)}", flush=True)
+        measured[row] = check_matrix_transcript(transcript, reserve, f"matrix {row} MiB: ")
+        check_matrix_inventory(transcript, identity["kernelMemory"], f"matrix {row} MiB: ")
+        identities[row] = identity
+        schedules = measured[row]["schedules"]
+        print(
+            f"[matrix row] platform={platform} memory_mib={row} "
+            f"ordinary={measured[row]['ordinary']} pool={measured[row]['pool']} "
+            + " ".join(
+                f"{name}_resident={value['resident']}" for name, value in schedules.items()
+            )
+            + " "
+            + " ".join(
+                f"{name}:{instance}:limit={walk['resource']}"
+                for name, value in schedules.items()
+                for instance, walk in value["walks"].items()
+            ),
+            flush=True,
+        )
+    if only is not None:
+        fail(f"matrix: only the {only} MiB row ran; a partial matrix qualifies nothing")
+    check_matrix_rows(identities, measured, rows, product)
+
+    # Launcher-only control: more emulated RAM, the pinned row's kernel.
+    pinned = ROOT / "build" / "inventory" / variant / f"mem{product}" / "image.elf"
+    control = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image=pinned,
+        memory_mib=rows[-1],
+        timeout=MATRIX_TIMEOUT,
+    )
+    (ROOT / "build" / f"{variant}-launcher-only.log").write_text(control + "\n", encoding="utf-8")
+    observed = check_matrix_transcript(control, reserve, "matrix launcher-only: ")
+    check_matrix_inventory(control, identities[product]["kernelMemory"], "matrix launcher-only: ")
+    check_matrix_launcher_only(observed, measured[product])
+    largest = measured[rows[-1]]["schedules"]["bulk"]["resident"] * 4096
+    print(
+        f"private-memory matrix finished on {platform}: {len(rows)} inventories "
+        f"({', '.join(f'{row} MiB' for row in rows)}) booted one root {root_digest[:16]} "
+        "and one component set; verified bulk residency "
+        + " < ".join(
+            str(measured[row]["schedules"]["bulk"]["resident"]) for row in rows
+        )
+        + f" pages, {largest} bytes on the largest row; a launcher-only "
+        f"{rows[-1]} MiB boot of the {product} MiB kernel kept its inventory"
+    )
+
+
+def check_matrix_rows(
+    identities: dict[int, dict], measured: dict[int, dict], rows: tuple[int, ...], product: int
+) -> None:
+    prefix = "matrix: "
+    if len(rows) < 3 or rows[0] >= product or rows[-1] <= product:
+        fail(prefix + "the rows do not bracket the pinned inventory")
+    for key in ("kernel", "dtb", "loader", "image"):
+        digests = [identities[row][key]["sha256"] for row in rows]
+        if len(set(digests)) != len(rows):
+            fail(prefix + f"two rows share a {key}, so they are not distinct inventories")
+    for key in ("abi",):
+        if len({identities[row][key] for row in rows}) != 1:
+            fail(prefix + "rows disagree on the userspace ABI")
+    if len({identities[row]["root"]["sha256"] for row in rows}) != 1:
+        fail(prefix + "rows booted different roots")
+    for field in ("ordinary", "pool"):
+        values = [measured[row][field] for row in rows]
+        if values != sorted(set(values)):
+            fail(prefix + f"{field} does not strictly increase with the inventory: {values}")
+    for schedule, _ in MATRIX_SCHEDULES:
+        values = [measured[row]["schedules"][schedule]["resident"] for row in rows]
+        if values != sorted(set(values)):
+            fail(prefix + f"{schedule} residency does not grow with the inventory: {values}")
+    if max(measured[rows[-1]]["schedules"][name]["resident"] for name, _ in MATRIX_SCHEDULES) * 4096 <= 1 << 30:
+        fail(prefix + "the largest row verified no more than 1 GiB resident")
+
+
+def check_matrix_launcher_only(observed: dict, pinned: dict) -> None:
+    """More launcher RAM under the same kernel must change nothing root sees."""
+    if observed["ordinary"] != pinned["ordinary"] or observed["pool"] != pinned["pool"]:
+        fail(
+            "matrix launcher-only: a larger emulator changed the root's inventory "
+            f"({observed['ordinary']}/{observed['pool']} against "
+            f"{pinned['ordinary']}/{pinned['pool']})"
+        )
+    for schedule, _ in MATRIX_SCHEDULES:
+        if observed["schedules"][schedule]["resident"] != pinned["schedules"][schedule]["resident"]:
+            fail(f"matrix launcher-only: {schedule} residency moved without a kernel change")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
     parser.add_argument(
@@ -3894,7 +4469,7 @@ def main() -> None:
         choices=(
             "ceiling", "cycles", "capacity", "isolation", "stress", "cspace", "metadata",
             "bootstrap", "elastic", "fragmentation", "rollback", "conservation", "adaptive",
-            "adaptive-lifecycle",
+            "adaptive-lifecycle", "matrix",
         ),
         default="ceiling",
         help="which qualification to run: the declared ceiling or MEM-64M's reuse cycles",
@@ -3905,12 +4480,20 @@ def main() -> None:
         default="qemu-arm-virt",
         help="the pinned QEMU profile and image to build and boot",
     )
+    parser.add_argument(
+        "--matrix-row",
+        type=int,
+        help="development only: boot one inventory row of the matrix arm; the run then fails",
+    )
     arguments = parser.parse_args()
     if arguments.arm == "adaptive":
         run_adaptive_plane_arm(arguments.platform)
         return
     if arguments.arm == "adaptive-lifecycle":
         run_adaptive_lifecycle_arm(arguments.platform)
+        return
+    if arguments.arm == "matrix":
+        run_matrix_arm(arguments.platform, arguments.matrix_row)
         return
     if arguments.arm in (
         "cspace", "metadata", "bootstrap", "elastic", "fragmentation", "rollback", "conservation",

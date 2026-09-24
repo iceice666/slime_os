@@ -1,0 +1,250 @@
+{
+  formatVersion = 2;
+  name = "sel4-private-memory-matrix-rv64";
+  systemSpec = {
+    path = "contracts/system-spec/v1/systems/sel4-private-memory-matrix-rv64.zti";
+    kind = "file";
+    identity = "d67aba146b733fd0df6ec198f571949cc8b0eb9bb8f7417607264004781dbfcc";
+  };
+  systemIdentity = "a4123e1151d7bc21ba1fc0a62eb7865f5df933d6ba1399f0344f40fd79bdc7cf";
+  implementations = [
+    {
+      component = "init";
+      provider = "workspace";
+      artifact = {
+        path = "components/system/init";
+        kind = "tree";
+        identity = "0012a63510b70507948056b6e1147e370a2d0f468e747b7f6acc0c14353f1750";
+      };
+      identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      buildProfile = "default";
+    };
+    {
+      component = "private-matrix-bulk";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-matrix-bulk";
+        kind = "tree";
+        identity = "9e7c754fb056147435e823e0f3b0dfa39be4309f48042b380f105750471dd721";
+      };
+      identity = "2cf3b4b90c206f27d7621bf4072a9c08e0da6ec22fab481a7917320f765a25e6";
+      buildProfile = "default";
+    };
+    {
+      component = "private-matrix-coordinator";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-matrix-coordinator";
+        kind = "tree";
+        identity = "eb19a2bcc3758ec2e4dd94618ee10b0be8ee0717184fabf246812776cf8bdf06";
+      };
+      identity = "e0f017776cdedb6c67cdf819b6f20cc4751df9e696ba3dbab67ed9013b7bbe9a";
+      buildProfile = "default";
+    };
+    {
+      component = "private-matrix-guaranteed";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-matrix-guaranteed";
+        kind = "tree";
+        identity = "3119ca9d6c0a1e9b07c9ce5cbbd8dcd63fbcd55d63d7a124eb2707cca7252f35";
+      };
+      identity = "94c97db2d5971d033125f181771c0b6e7c44546811aa4699e9d8679dab77b668";
+      buildProfile = "default";
+    };
+    {
+      component = "private-matrix-small";
+      provider = "workspace";
+      artifact = {
+        path = "components/testkit/private-matrix-small";
+        kind = "tree";
+        identity = "df2bd0f7e9c8583de2ef27d5d5f9ac034f892644efe77677fc7c1afdf993ec29";
+      };
+      identity = "f3c0e4a63cb638011b4571d833980f503bb3a87305d08f79e3546252a64c6512";
+      buildProfile = "default";
+    };
+  ];
+  target = {
+    profile = "riscv64-sel4-qemu-virt";
+    platform = "qemu-riscv-virt";
+    prefix = {
+      path = "contracts/system-image-closure/v2/inputs/sel4-riscv64-prefix";
+      kind = "tree";
+      identity = "d761730c251508d4734a09f8df4b71c2b9a6f4ceaa687fc4f1956cfc0695f621";
+    };
+    toolchain = "nightly-2026-04-04";
+    rustSel4Commit = "14d98403c1dd95fd97109919e13466f0ecb37c01";
+  };
+  root = {
+    role = "embedded-generation";
+    implementation = {
+      path = "slime-root";
+      kind = "tree";
+      identity = "87cc15c843933142e54d6bf655dd358280366c04232f97d4f87a4d3efec42178";
+    };
+    parameters = [];
+  };
+  loader = {
+    role = "kernel-loader";
+    implementation = {
+      path = "deps/rust-sel4";
+      kind = "tree";
+      identity = "e0afd3db4fbd868e4361a38f0612fe0e8b889897a0d0ad51c4db9ee98cf81a57";
+    };
+    parameters = [];
+  };
+  releaseInputs = [
+    {
+      name = "boot-contracts";
+      artifact = {
+        path = "boot-contracts";
+        kind = "tree";
+        identity = "79a412ab3454b1174570b3912e863665b9eb932e26acd26dcb463f21811b08ff";
+      };
+    };
+    {
+      name = "cargo-lock";
+      artifact = {
+        path = "Cargo.lock";
+        kind = "file";
+        identity = "b4995759e69419900fac7eb0436eb066a92fea6c7ee33c0a595d289e4ffea986";
+      };
+    };
+    {
+      name = "component-build-support";
+      artifact = {
+        path = "components/build-support";
+        kind = "tree";
+        identity = "ade1add7f95734e26ea9e7250c31c795f940e9876b587e023c23a76f11ba75fb";
+      };
+    };
+    {
+      name = "component-cargo-config";
+      artifact = {
+        path = "components/.cargo/config.toml";
+        kind = "file";
+        identity = "72d96fb55bcebb410801048015a47bbbc5993267819b9d6ebc9eccfdfd1dd34e";
+      };
+    };
+    {
+      name = "component-library";
+      artifact = {
+        path = "components/lib";
+        kind = "tree";
+        identity = "32fdac22480f65059a318d39c02668e8bc7a82dab18daf9a951f2555a7d9329d";
+      };
+    };
+    {
+      name = "component-proto";
+      artifact = {
+        path = "components/proto";
+        kind = "tree";
+        identity = "c499080408074471f1fd71c6484fe070b668ab0d2d092e16ea3e53b10b030b30";
+      };
+    };
+    {
+      name = "component-runtime";
+      artifact = {
+        path = "components/runtime";
+        kind = "tree";
+        identity = "b456e3f56089a43793853fd31806f249282f0a6c0f1225d62b7baca06b94b4df";
+      };
+    };
+    {
+      name = "component-spec-contract";
+      artifact = {
+        path = "contracts/component-spec/v1";
+        kind = "tree";
+        identity = "5d5786158e9525a41f3a047b1f093d6ef6d5372bd6e07a407fae379700af1691";
+      };
+    };
+    {
+      name = "elf-delivery";
+      artifact = {
+        path = "scripts/lib/elf_delivery.py";
+        kind = "file";
+        identity = "643f701cea23c2b2e38e6b7edade7363d715d60f31268de46fca79da46e50d11";
+      };
+    };
+    {
+      name = "generation-builder";
+      artifact = {
+        path = "scripts/build/build-generation.py";
+        kind = "file";
+        identity = "ee046a87ec82e88dafa4eb13aa443ed4cf80fc6c964f4f7a5e7cb43c9012c296";
+      };
+    };
+    {
+      name = "image-builder";
+      artifact = {
+        path = "scripts/build/build-sel4.py";
+        kind = "file";
+        identity = "dfe1a12c1a649d60bfa83d5676e7fca5c8c00d2dfec6c8d41260fe22d06a2b42";
+      };
+    };
+    {
+      name = "interface-schema-contract";
+      artifact = {
+        path = "contracts/interface-schema/v1";
+        kind = "tree";
+        identity = "d46bc39a3520c42be851354de67cc7e8551a15ac140bd4ee27632d72fad48324";
+      };
+    };
+    {
+      name = "just-recipes";
+      artifact = {
+        path = "just";
+        kind = "tree";
+        identity = "1448dfe051d24508310ae9aef4d5119f21bcb5ee3a989b10290a0dd6d9929fed";
+      };
+    };
+    {
+      name = "justfile";
+      artifact = {
+        path = "Justfile";
+        kind = "file";
+        identity = "901c66d9e205a1a61eeb2fccdd36ef3fa50f0c9e2ebc9b6e3f7d10e6049f20e2";
+      };
+    };
+    {
+      name = "root-child";
+      artifact = {
+        path = "slime-root/child";
+        kind = "tree";
+        identity = "09275336c6927a14cfd0d423340109373dc6685e0998367c2415a3595ba0a421";
+      };
+    };
+    {
+      name = "root-target";
+      artifact = {
+        path = "deps/rust-sel4/support/targets/riscv64imac-sel4-roottask-minimal.json";
+        kind = "file";
+        identity = "1ba7236f7df19f49777dc2f3bc189ea06ce30d7af1e3746c0183fe94467f64c9";
+      };
+    };
+    {
+      name = "target-spec";
+      artifact = {
+        path = "deps/rust-sel4/support/targets/riscv64imac-sel4-minimal.json";
+        kind = "file";
+        identity = "85e4e62fcc84c35895e43b31fcbd1ba07eecb9f139b5d8bf5198fa439ef7e791";
+      };
+    };
+    {
+      name = "workspace-manifest";
+      artifact = {
+        path = "Cargo.toml";
+        kind = "file";
+        identity = "b04855191386cc9e919be220f7b4ecf4ff26ae84721983e88a5d346d3c1222ec";
+      };
+    };
+  ];
+  buildParameters = [];
+  expectedOutputs = [
+    "generation";
+    "root";
+    "loader";
+    "image";
+    "identity-manifest";
+  ];
+}

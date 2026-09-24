@@ -82,8 +82,26 @@ impl Infrastructure {
     /// already pinned by retained descendants. The caller must stop allocating
     /// from that tail; prior descendants retain their independent ownership.
     pub fn adopt_pinned_source(&mut self, source: UntypedRegion) -> Result<(), AllocError> {
+        if source.watermark == 0 {
+            return Err(AllocError::NoKernelUntyped);
+        }
+        self.adopt_source(source)
+    }
+
+    /// Transfer a whole returned extent, whose kernel cursor restarts at zero.
+    ///
+    /// No cursor pin is needed: nothing retyped from an infrastructure source
+    /// is ever deleted, so its first object pins the cursor for the source's
+    /// lifetime, exactly as the retained descendants of an ordinary tail do.
+    pub fn adopt_extent_source(&mut self, source: UntypedRegion) -> Result<(), AllocError> {
+        if source.watermark != 0 {
+            return Err(AllocError::NoKernelUntyped);
+        }
+        self.adopt_source(source)
+    }
+
+    fn adopt_source(&mut self, source: UntypedRegion) -> Result<(), AllocError> {
         if !self.pinned
-            || source.watermark == 0
             || source.remaining() == 0
             || self.retired_len == self.retired_sources.len()
             || self.source.is_some_and(|current| current.cap == source.cap)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -99,6 +100,10 @@ class Platform:
     # `sel4/pins.toml` instead. Exactly one of the two is set.
     child_target_name: str | None = None
     child_target_key: str | None = None
+    # A qualification inventory row: the kernel-visible RAM this build's device
+    # tree declares when it differs from the pinned product envelope. Only an
+    # emulated device-tree platform has one; see `inventory_row`.
+    inventory_mib: int | None = None
 
 
 QEMU_ARM_VIRT = Platform(
@@ -759,7 +764,14 @@ QEMU_DTB_PARAMETERS = {
 
 
 def dump_device_tree(platform: Platform) -> Path:
-    """Dump the platform device tree once, deterministically.
+    """Dump the platform device tree, deterministically, and prove it.
+
+    The dump runs twice and both normalized results must be byte-identical, so
+    a nondeterministic emulator output is a build refusal rather than a
+    different kernel. Normalization deletes RISC-V's runtime `rng-seed` and then
+    re-emits the blob through `dtc`: QEMU's RISC-V dump also varies in bytes no
+    property covers, while its rendered source does not, and a canonical
+    re-emission is what makes the file a function of its content.
 
     Only for platforms whose description does not exist until an emulator is
     asked for it (`Platform.qemu_dtb`). A real board ships its device tree in
@@ -767,43 +779,108 @@ def dump_device_tree(platform: Platform) -> Path:
     board's own memory map, interrupt controller, and console with a machine
     that is not the target.
 
-    Memory size is the profile's pinned product envelope. The installed DTB is
-    the kernel's physical-memory authority, so it must match the RAM size the
-    corresponding product and capacity gates boot; changing either is a pinned
-    platform change, never a harness-only knob.
+    Memory size is the profile's pinned product envelope, or an inventory
+    row's declared size. The installed DTB is the kernel's physical-memory
+    authority, so it must match the RAM size the corresponding gates boot;
+    changing either is a pinned platform change, never a harness-only knob.
     """
     dtb = platform.build_dir / f"slime-{platform.name}.dtb"
     dtb.parent.mkdir(parents=True, exist_ok=True)
     qemu, machine, cpu = QEMU_DTB_PARAMETERS[platform.name]
-    run(
-        [
-            require_tool(qemu),
-            "-machine",
-            f"{machine},dumpdtb={dtb}",
-            "-cpu",
-            cpu,
-            "-smp",
-            "1",
-            "-m",
-            str(
-                integer(
-                    table(load_pins(), platform.pins_section), "memory_mib", platform.pins_section
-                )
-            ),
-            "-nographic",
-            *(["-bios", "none"] if platform.architecture == "riscv64" else []),
-        ],
-        description="dump platform device tree",
-    )
-    if platform.architecture == "riscv64":
-        # RISC-V `virt` has no `dtb-randomness` machine property. It injects
-        # only `/chosen/rng-seed`; delete that runtime entropy from the build
-        # input after dumping rather than pinning a different DTB each build.
+    memory_mib = platform_memory_mib(platform)
+    normalized: list[bytes] = []
+    for attempt in (0, 1):
+        raw = platform.build_dir / f"slime-{platform.name}.raw{attempt}.dtb"
         run(
-            [require_tool("fdtput"), "-d", str(dtb), "/chosen", "rng-seed"],
-            description="normalize RISC-V platform device tree",
+            [
+                require_tool(qemu),
+                "-machine",
+                f"{machine},dumpdtb={raw}",
+                "-cpu",
+                cpu,
+                "-smp",
+                "1",
+                "-m",
+                str(memory_mib),
+                "-nographic",
+                *(["-bios", "none"] if platform.architecture == "riscv64" else []),
+            ],
+            description="dump platform device tree",
         )
-    return require_file(dtb, "dumped platform device tree")
+        if platform.architecture == "riscv64":
+            # RISC-V `virt` has no `dtb-randomness` machine property. It injects
+            # `/chosen/rng-seed`; delete that runtime entropy from the input.
+            run(
+                [require_tool("fdtput"), "-d", str(raw), "/chosen", "rng-seed"],
+                description="remove RISC-V runtime entropy from the device tree",
+            )
+        run(
+            [require_tool("dtc"), "-q", "-I", "dtb", "-O", "dtb", "-o", str(dtb), str(raw)],
+            description="re-emit the platform device tree canonically",
+        )
+        raw.unlink()
+        normalized.append(require_file(dtb, "dumped platform device tree").read_bytes())
+    if normalized[0] != normalized[1]:
+        fail(
+            f"{platform.name}: two dumps of the {memory_mib} MiB device tree normalize to "
+            "different bytes; the kernel's memory authority is not reproducible"
+        )
+    return dtb
+
+
+def platform_memory_mib(platform: Platform) -> int:
+    """The kernel-visible RAM this platform build declares, in MiB."""
+    if platform.inventory_mib is not None:
+        return platform.inventory_mib
+    return integer(table(load_pins(), platform.pins_section), "memory_mib", platform.pins_section)
+
+
+def inventory_rows(platform: Platform) -> tuple[int, ...]:
+    """The pinned qualification inventories of one emulated platform, in MiB.
+
+    Each row is a separately configured kernel: seL4 compiles the device tree's
+    memory ranges into the kernel and loader, so a launcher-only `-m` change
+    cannot enlarge what root is handed. The pinned product envelope must be one
+    of the rows, so the product kernel is a qualified inventory, not an extra.
+    """
+    section = table(load_pins(), platform.pins_section)
+    rows = section.get("inventory_memory_mib")
+    if (
+        not isinstance(rows, list)
+        or len(rows) < 3
+        or any(not isinstance(row, int) or isinstance(row, bool) or row <= 0 for row in rows)
+        or rows != sorted(set(rows))
+    ):
+        fail(
+            f"{platform.pins_section}.inventory_memory_mib must list at least three "
+            "strictly increasing positive sizes"
+        )
+    if integer(section, "memory_mib", platform.pins_section) not in rows:
+        fail(f"{platform.pins_section}.memory_mib is not one of its inventory rows")
+    return tuple(rows)
+
+
+def inventory_row(platform: Platform, memory_mib: int) -> Platform:
+    """The same platform with a different kernel-visible RAM inventory.
+
+    Only the kernel, device tree, platform description and loader differ: the
+    configuration, target profile and toolchain are the platform's own, which is
+    what lets one root and one component set boot every row. The pinned
+    envelope's row is the platform itself, so its kernel stays the one
+    `sel4/pins.toml` observes.
+    """
+    if not (platform.emulated and platform.qemu_dtb):
+        fail(f"{platform.name} has no emulator-dumped device tree to size")
+    if memory_mib not in inventory_rows(platform):
+        fail(f"{platform.name} pins no {memory_mib} MiB inventory row")
+    if memory_mib == platform_memory_mib(platform):
+        return platform
+    return dataclasses.replace(
+        platform,
+        build_dir=platform.build_dir.with_name(f"{platform.build_dir.name}-mem{memory_mib}"),
+        prefix_dir=platform.prefix_dir.with_name(f"{platform.prefix_dir.name}-mem{memory_mib}"),
+        inventory_mib=memory_mib,
+    )
 
 
 def configure_and_install_sel4(platform: Platform) -> None:
@@ -1234,7 +1311,11 @@ def build_loader(
     environment = cargo_environment(toolchain, platform)
     loader_source = platform.loader_source
 
-    loader_target_dir = CARGO_BUILD / platform.name / "loader"
+    # The loader embeds the installed platform description, so an inventory
+    # row's loader is a different binary and must not share a target directory.
+    loader_target_dir = CARGO_BUILD / platform.name / (
+        "loader" if platform.inventory_mib is None else f"loader-mem{platform.inventory_mib}"
+    )
     cargo_build(
         manifest=loader_source / "Cargo.toml",
         package="sel4-kernel-loader",
@@ -1289,6 +1370,137 @@ def package_image(
         description="package seL4 image",
     )
     require_file(image, "packaged seL4 image")
+
+
+def kernel_memory_ranges(prefix: Path) -> list[tuple[int, int]]:
+    """The ordinary-memory ranges an installed kernel was compiled with.
+
+    Read from `support/platform_gen.yaml`, which the kernel build derives from
+    the same device tree it compiles in: this is the inventory the kernel can
+    hand root, as opposed to what a launcher was asked to emulate.
+    """
+    text_value = require_file(
+        prefix / "support" / "platform_gen.yaml", "installed platform metadata"
+    ).read_text(encoding="utf-8")
+    memory = text_value.split("memory:", 1)
+    if len(memory) != 2:
+        fail(f"{prefix}: platform metadata lists no memory")
+    ranges = [
+        (int(start, 16), int(end, 16))
+        for end, start in re.findall(
+            r"^- end: (0x[0-9a-f]+)\n  start: (0x[0-9a-f]+)$", memory[1], re.MULTILINE
+        )
+    ]
+    if not ranges or any(start >= end for start, end in ranges):
+        fail(f"{prefix}: platform metadata lists malformed memory ranges")
+    return ranges
+
+
+def abi_digest(platform: Platform) -> str:
+    """Digest of everything a root or component build reads from a prefix.
+
+    Userspace compiles against libsel4's headers and generated configuration
+    only. Two prefixes with equal digests present one ABI, which is the
+    condition for booting byte-identical userspace on both. The file set is
+    the one this configuration's install wrote, from CMake's install manifest,
+    so a header an older configuration left in the prefix is not mistaken for
+    part of this ABI.
+    """
+    libsel4 = platform.prefix_dir / "libsel4"
+    manifest = require_file(
+        platform.build_dir / "install_manifest.txt", "seL4 install manifest"
+    ).read_text(encoding="utf-8")
+    installed = sorted(
+        Path(line) for line in manifest.splitlines() if Path(line).is_relative_to(libsel4)
+    )
+    if not installed:
+        fail(f"{platform.name}: the install manifest lists no libsel4 file")
+    digest = hashlib.sha256()
+    for path in installed:
+        digest.update(str(path.relative_to(libsel4)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(sha256_file(require_file(path, "installed libsel4 file"))))
+    return digest.hexdigest()
+
+
+def package_inventory_image(
+    pins: dict[str, object],
+    platform: Platform,
+    memory_mib: int,
+    *,
+    root_elf: Path,
+    output: Path,
+    toolchain: str | None = None,
+) -> dict[str, object]:
+    """Package one already built root task for one inventory row.
+
+    The root ELF is reused byte for byte: the row changes only the kernel, its
+    device tree and platform description, and the loader that embeds them. That
+    reuse is admitted only when the row's userspace ABI equals the pinned
+    envelope's, so a memory size can never silently change what userspace was
+    compiled against. Returns the identity record, also written to
+    `output/image.identity.json`.
+    """
+    if platform.boot_route != "kernel-loader":
+        fail(f"{platform.name} has no packaged image to size")
+    row = inventory_row(platform, memory_mib)
+    configure_and_install_sel4(platform)
+    if row is not platform:
+        configure_and_install_sel4(row)
+    if abi_digest(row) != abi_digest(platform):
+        fail(
+            f"{platform.name} {memory_mib} MiB: the row's libsel4 differs from the pinned "
+            "envelope's, so its userspace cannot be the same binary"
+        )
+    output.mkdir(parents=True, exist_ok=True)
+    loader, payload_tool = build_loader(
+        pins,
+        row,
+        toolchain=toolchain,
+        loader_target=text(table(pins, "rust_sel4"), row.loader_target_key, "rust_sel4"),
+    )
+    image = output / "image.elf"
+    package_image(payload_tool, loader, require_file(root_elf, "root task"), image, row)
+    dram_base = int(text(table(pins, platform.pins_section), "dram_base", platform.pins_section), 16)
+    dram_end = dram_base + memory_mib * 1024 * 1024
+    ranges = kernel_memory_ranges(row.prefix_dir)
+    if max(end for _, end in ranges) != dram_end or min(start for start, _ in ranges) < dram_base:
+        fail(
+            f"{platform.name} {memory_mib} MiB: the kernel was compiled with memory "
+            f"{[(hex(start), hex(end)) for start, end in ranges]}, not a range ending at "
+            f"{dram_end:#x}"
+        )
+    prefix = row.prefix_dir
+    identity: dict[str, object] = {
+        "schema": 1,
+        "kind": "slime-sel4-inventory-image",
+        "platform": platform.name,
+        "targetProfile": platform.target_profile,
+        "memoryMib": memory_mib,
+        "kernelMemory": [
+            {"start": f"{start:#x}", "end": f"{end:#x}", "bytes": end - start}
+            for start, end in ranges
+        ],
+        "abi": abi_digest(row),
+        "kernel": file_record(require_file(prefix / "bin" / "kernel.elf", "installed kernel")),
+        "kernelConfig": file_record(
+            require_file(
+                prefix / "libsel4" / "include" / "kernel" / "gen_config.json", "kernel config"
+            )
+        ),
+        "dtb": file_record(require_file(prefix / "support" / "kernel.dtb", "installed DTB")),
+        "platformInfo": file_record(prefix / "support" / "platform_gen.yaml"),
+        "loader": file_record(loader),
+        "root": file_record(root_elf),
+        "image": file_record(image),
+    }
+    for record in identity.values():
+        if isinstance(record, dict):
+            record.pop("path", None)
+    (output / "image.identity.json").write_text(
+        json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return identity
 
 
 def media_tree(variant: str, platform: Platform, arguments: argparse.Namespace) -> Path:

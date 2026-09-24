@@ -63,6 +63,15 @@ private_memory_adaptive_check: sel4_pin_check
     python3 scripts/check/check-sel4-private-memory-plane.py --arm adaptive --platform qemu-arm-virt
     python3 scripts/check/check-sel4-private-memory-plane.py --arm adaptive --platform qemu-riscv-virt
 
+# MEM-ADAPTIVE's inventory matrix: one root and component set, one pool-relative
+# policy, packaged with each pinned kernel-visible RAM row's own kernel, device
+# tree and loader. Every row drives bulk, all-small and mixed holders to an exact
+# one-page refusal; verified residency must grow with the row.
+[group('planes / runtime')]
+private_memory_matrix_check: sel4_pin_check
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm matrix --platform qemu-arm-virt
+    python3 scripts/check/check-sel4-private-memory-plane.py --arm matrix --platform qemu-riscv-virt
+
 # The same composition under one compiled-in revoke failure: a live
 # incarnation is quarantined, refunds nothing, and is returned by exactly one
 # retry. Its own image identity, because the injection is in the root.

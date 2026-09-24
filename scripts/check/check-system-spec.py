@@ -212,6 +212,8 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-private-memory-adaptive",
     "sel4-private-memory-adaptive-rv64",
     "sel4-private-memory-adaptive-overcommit",
+    "sel4-private-memory-matrix",
+    "sel4-private-memory-matrix-rv64",
 })
 
 
