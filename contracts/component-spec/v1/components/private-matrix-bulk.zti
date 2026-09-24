@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-matrix-coordinator";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-matrix-bulk";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-matrix-bulk";
+  owner = "private-matrix-coordinator";
+  provides = [];
+  purpose = "A pool-relative subject that grows in maximal large-frame transactions until one page is refused.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "Its idle maximum reserves nothing and its walk ends at an exact one-page refusal.";
+    passFailCriteria = "[private-matrix:bulk] end incarnation=";
+    requiredTestEnvironment = "private_memory_matrix_check";
+    testCondition = "Spawned by the matrix coordinator against each pinned inventory row.";
+  };
+  version = "1.0.0";
+}

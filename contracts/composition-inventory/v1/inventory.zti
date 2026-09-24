@@ -266,6 +266,22 @@
     };
     {
       baseline = "";
+      composition = "sel4-private-memory-matrix";
+      deferralReason = "";
+      owningGate = "private_memory_matrix_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-matrix.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-private-memory-matrix-rv64";
+      deferralReason = "";
+      owningGate = "private_memory_matrix_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-private-memory-matrix-rv64.zti";
+    };
+    {
+      baseline = "";
       composition = "sel4-private-memory-stress";
       deferralReason = "";
       owningGate = "private_memory_stress_check";

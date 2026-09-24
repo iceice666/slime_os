@@ -31,6 +31,13 @@ private_memory_phase3_check: private_memory_elastic_check private_memory_fragmen
 [group('quality')]
 private_memory_phase4_check: private_memory_adaptive_check private_memory_adaptive_lifecycle_check private_memory_phase3_check
 
+# MEM-ADAPTIVE's qualification: the inventory matrix on both reference
+# architectures over the whole phase-4 surface. The matrix changes how
+# returned extents, metadata and CSlots are funded for every holder, so the
+# fixed, demand-backed and adaptive evidence is re-run rather than inherited.
+[group('quality')]
+private_memory_phase5_check: private_memory_matrix_check private_memory_phase4_check
+
 [group('quality')]
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py

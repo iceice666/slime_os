@@ -320,6 +320,26 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-private-matrix-bulk]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-matrix-coordinator]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-matrix-guaranteed]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-private-matrix-small]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-private-heap-probe]
 opt-level = "s"
 codegen-units = 1
