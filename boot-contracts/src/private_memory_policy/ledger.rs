@@ -520,6 +520,15 @@ impl<'a> Ledger<'a> {
     pub fn available(&self) -> Resources {
         self.free
     }
+    /// The pool-relative maximum, fixed at admission.
+    ///
+    /// A pool-relative subject's permission is the admitted pool, never the
+    /// share of it free at the moment the subject binds: a holder bound while
+    /// a peer holds most of the pool must still be able to grow into capacity
+    /// that peer later returns.
+    pub fn pool_pages(&self) -> u64 {
+        self.pool_pages
+    }
     pub fn guaranteed_available(&self, identity: &[u8; 32]) -> Result<Resources, Error> {
         Ok(self.guarantee_free[self
             .policy

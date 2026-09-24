@@ -1419,10 +1419,16 @@ fn adaptive_private_memory_activation(
 ///
 /// Nothing is physically provisioned here. The ledger records what is
 /// reserved so a later growth cannot spend another holder's guarantee.
+///
+/// `residual` is the inventory left *after* every guarantee was reserved. The
+/// ledger subtracts each guarantee's envelope itself, so the envelopes are
+/// added back first: subtracting them from a residual that no longer contains
+/// them would strand that much ordinary memory in neither the pool nor any
+/// guarantee.
 pub fn admit_private_memory_ledger<'a>(
     policy: PrivateMemoryPolicy<'a>,
     instances: &[private_memory_policy::Instance],
-    available: private_memory_policy::ledger::Resources,
+    residual: private_memory_policy::ledger::Resources,
 ) -> Result<private_memory_policy::ledger::Ledger<'a>, private_memory_policy::ledger::Error> {
     use private_memory_policy::ledger::{Error, Resources};
     let mut guarantees = [Resources::ZERO; private_memory_policy::MAX_ENTITLEMENTS];
@@ -1430,9 +1436,11 @@ pub fn admit_private_memory_ledger<'a>(
     if count > guarantees.len() {
         return Err(Error::Guarantee);
     }
+    let mut available = residual;
     for (index, slot) in guarantees.iter_mut().enumerate().take(count) {
         let entitlement = policy.entitlement(index).ok_or(Error::Guarantee)?;
         *slot = guarantee_reservation_resources(entitlement.guarantee_pages)?;
+        available = available.checked_add(*slot)?;
     }
     private_memory_policy::ledger::Ledger::admit(policy, instances, available, &guarantees[..count])
 }
@@ -3221,6 +3229,55 @@ mod adaptive_policy_tests {
             adaptive_private_memory_activation(&invalid, &[]),
             Err(GenerationError::MalformedPrivateMemoryPolicy)
         );
+    }
+
+    /// The residual after reservation already excludes each guarantee, so the
+    /// admitted pool must be exactly that residual less the operational
+    /// reserve: a second subtraction would strand the guarantee's envelope.
+    #[test]
+    fn a_reserved_guarantee_is_subtracted_from_the_pool_once() {
+        use private_memory_policy::ledger::Resources;
+        let entitlement = private_memory_policy::Entitlement {
+            identity: private_memory_policy::entitlement_identity("promised"),
+            subtree_root: [0; 32],
+            guarantee_pages: 64,
+            maximum_pages: 0,
+            maximum_mode: private_memory_policy::POOL,
+            reserved: 0,
+        };
+        let subject = private_memory_policy::Subject {
+            identity: private_memory_policy::subject_identity("holder"),
+            entitlement: entitlement.identity,
+            maximum_pages: 0,
+            maximum_mode: private_memory_policy::POOL,
+            reserved: 0,
+        };
+        let mut bytes = deny_all_policy();
+        let mut header = private_memory_policy::Header::decode(&bytes).expect("header");
+        header.entitlement_count = 1;
+        header.subject_count = 1;
+        header.total_len = (private_memory_policy::HEADER_BYTES
+            + private_memory_policy::ENTITLEMENT_BYTES
+            + private_memory_policy::SUBJECT_BYTES) as u32;
+        header.reserve_bytes = 4096;
+        bytes = header.encode().to_vec();
+        bytes.extend(entitlement.encode());
+        bytes.extend(subject.encode());
+        let policy = PrivateMemoryPolicy::decode(&bytes).expect("policy");
+        let instances = [private_memory_policy::Instance {
+            identity: subject.identity,
+            owner: None,
+        }];
+        let residual = Resources {
+            bytes: 1 << 24,
+            slots: 4096,
+            descriptors: 4096,
+            extents: 64,
+            tables: 4096,
+        };
+        let ledger = admit_private_memory_ledger(policy, &instances, residual).expect("admitted");
+        assert_eq!(ledger.available().bytes, residual.bytes - 4096);
+        assert_eq!(ledger.available().slots, residual.slots);
     }
 
     #[test]

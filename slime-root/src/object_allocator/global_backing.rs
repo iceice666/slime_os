@@ -42,7 +42,8 @@ impl ObjectAllocator {
                 region.watermark,
             );
         }
-        for extent in self.extents.iter().flatten() {
+        // A split record's bytes are its two children's, which are listed.
+        for extent in self.extents.iter().flatten().filter(|extent| !extent.split) {
             sel4::debug_println!(
                 "SLIME_BACKING task_extent parent={} bytes={} active={}",
                 extent.parent.bits(),

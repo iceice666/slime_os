@@ -149,7 +149,7 @@ impl<'a> AdaptivePolicy<'a> {
         let maximum = if subject.maximum_mode == policy::FIXED {
             subject.maximum_pages
         } else {
-            self.ledger.available().bytes / policy::PAGE_BYTES
+            self.ledger.pool_pages()
         };
         Some(usize::try_from(maximum).unwrap_or(usize::MAX))
     }
@@ -310,6 +310,41 @@ impl<'a> AdaptivePolicy<'a> {
                 pool,
             ),
         }
+    }
+
+    /// Name the resource behind one refused growth and the pool beside it.
+    ///
+    /// Follows the refusal line it explains. An exhaustion claim is only
+    /// reconcilable if the limiting resource, the ledger's residual and the
+    /// allocator's residual are reported separately, at the moment of refusal:
+    /// ordinary bytes the ledger withholds as a reserve, bytes metadata already
+    /// funded, and bytes no aligned extent can place are three different
+    /// reasons a page was not served. The census line after it breaks the
+    /// allocator residual down by owner.
+    pub fn report_limit(
+        &self,
+        allocator: &ObjectAllocator,
+        id: TaskId,
+        instance: &str,
+        delta: usize,
+        error: &crate::private_memory::elastic::ElasticGrowError,
+    ) {
+        let (resource, required, available) = error.limit();
+        let inventory = allocator.elastic_inventory();
+        sel4::debug_println!(
+            "SLIME_MEM adaptive limit task={} instance={} delta={} resource={} required={} available={} ledger_pool={} inventory_bytes={} inventory_slots={} largest_block={}",
+            id.0,
+            instance,
+            delta,
+            resource,
+            required,
+            available,
+            self.ledger.available().bytes,
+            inventory.bytes,
+            inventory.slots,
+            allocator.largest_aligned_ordinary_block(),
+        );
+        allocator.report_elastic_census("limit");
     }
 
     /// Refuse a growth asked for by a task the policy names no subject for.

@@ -175,6 +175,31 @@ fn binding_reports_fixed_and_pool_address_maxima_and_quarantines_duplicates() {
 }
 
 #[test]
+fn a_pool_relative_maximum_is_the_admitted_pool_not_the_free_share() {
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![subject("a", "shared"), subject("b", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[Resources::ZERO]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger.begin(a, 6, plan(6)).unwrap();
+    ledger.commit(a).unwrap();
+    assert!(ledger.available().bytes < 8 * PAGE_BYTES);
+
+    // Bound while a peer holds most of the pool: the permission is still the
+    // whole admitted pool, so capacity the peer returns stays reachable.
+    let b = ledger.bind_with_maximum(&subject_identity("b")).unwrap();
+    assert_eq!(b.maximum_pages, 8);
+    assert_eq!(ledger.pool_pages(), 8);
+    ledger.retire(a, true).unwrap();
+    ledger.begin(b.token, 8, plan(8)).unwrap();
+    ledger.commit(b.token).unwrap();
+}
+
+#[test]
 fn shared_guarantee_and_operational_reserve_survive_elastic_contention_and_restart() {
     let data = bytes(
         std::vec![entitlement("shared", 0), entitlement("reserved", 2)],

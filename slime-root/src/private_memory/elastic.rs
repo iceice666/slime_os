@@ -71,6 +71,28 @@ impl ElasticGrowError {
             Self::Reservation { .. } => "reservation",
         }
     }
+
+    /// The resource that refused, with its shortfall in that resource's unit.
+    ///
+    /// `(resource, required, available)`. A refusal the allocator priced
+    /// reports its own numbers; any other refusal names its cause with zero
+    /// quantities, because it was not a count running out.
+    pub const fn limit(self) -> (&'static str, u64, u64) {
+        match self {
+            Self::Demand(ElasticRefusal::Exhausted {
+                resource,
+                required,
+                available,
+            }) => (resource, required, available),
+            Self::Demand(ElasticRefusal::Transaction { extents, limit }) => {
+                ("transaction-extents", extents as u64, limit as u64)
+            }
+            Self::Policy(ledger::Error::Unavailable) => ("ledger-pool", 0, 0),
+            Self::Policy(ledger::Error::Maximum) => ("maximum", 0, 0),
+            Self::Acquire(error) => (error.resource(), 0, 0),
+            other => (other.cause(), 0, 0),
+        }
+    }
 }
 
 /// How one growth's pages resolve into mappings.
