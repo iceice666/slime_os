@@ -228,7 +228,11 @@ acquisition and mapper consume one plan, and the placements the allocator
 actually obtained are certified against their protected sources before any
 retype. A guaranteed page is never served from the common pool: its funding,
 including the descriptors and CSlots its frame and leaf table need, is lent from
-its own entitlement and returned with it.
+its own entitlement and returned with it. A leaf table belongs to the half
+whose page first needs it, so a growth whose guarantee ends at a span boundary
+takes the next span's table from the pool with that span's pages. A growth
+that fails after the ledger opened its transaction returns the lent funding as
+soon as its abort settles, since the abort charged the entitlement nothing.
 
 An adaptive subject's window is its declared address maximum rather than the
 target's per-region capacity, so a policy may declare a window no power of two

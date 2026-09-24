@@ -141,7 +141,19 @@ impl Region {
     /// The lane resolved here is the lane the mapper is given, so a price and
     /// a mapping cannot disagree about whether a span took a large frame.
     pub fn shape_in(self, delta: usize, lane: Lane) -> Shape {
+        self.shape_split(delta, lane, 0).0
+    }
+
+    /// [`Region::shape_in`], also counting the leaf tables opened by pages
+    /// before offset `prefix`.
+    ///
+    /// The mapper takes a page's leaf table from that page's own source, so a
+    /// guaranteed prefix owns exactly the tables its pages open and the pooled
+    /// remainder owns the rest. Charging every table to either half leaves the
+    /// other asking a source for a table it never acquired.
+    pub fn shape_split(self, delta: usize, lane: Lane, prefix: usize) -> (Shape, usize) {
         let mut shape = Shape::default();
+        let mut prefix_tables = 0;
         let previous = self.pages();
         let mut page = previous;
         let end = previous.saturating_add(delta);
@@ -165,12 +177,15 @@ impl Region {
             }
             if !leaf_available {
                 shape.tables += 1;
+                if page - previous < prefix {
+                    prefix_tables += 1;
+                }
                 leaf_available = true;
             }
             shape.base_pages += 1;
             page += 1;
         }
-        shape
+        (shape, prefix_tables)
     }
 }
 
@@ -216,18 +231,14 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
     // One resolution, consumed three times: the demand below prices exactly
     // this shape, the ledger judges exactly that demand's placements, and the
     // mapper below is given the same plan that produced it.
-    let shape = region.shape_in(delta, growth.lane);
     // The guaranteed prefix is served from the entitlement's own reservation
     // and the remainder from the pool, in one transaction the ledger settles
     // as a whole. Tables follow their pages: a guaranteed page's leaf table
     // is guaranteed too, because a table the pool could refuse would make the
-    // page it maps unreachable.
+    // page it maps unreachable, and a pooled page's table is pooled.
+    let (shape, _) = region.shape_split(delta, growth.lane, 0);
     let guaranteed_pages = growth.guaranteed_pages.min(shape.base_pages);
-    let guaranteed_tables = if guaranteed_pages == 0 {
-        0
-    } else {
-        shape.tables
-    };
+    let (_, guaranteed_tables) = region.shape_split(delta, growth.lane, guaranteed_pages);
     let guaranteed = match growth.reservation {
         Some(id) if guaranteed_pages != 0 => {
             match allocator.acquire_guaranteed(id, arena, guaranteed_pages, guaranteed_tables) {
@@ -302,7 +313,7 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
     match map_growth(allocator, arena, vspace, region, delta, growth, kernel) {
         Ok(outcome) => {
             if let Err(error) = allocator.commit_private_transaction(arena) {
-                return Err(settle_failure(
+                let failure = settle_failure(
                     allocator,
                     ledger,
                     token,
@@ -311,6 +322,13 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
                         allocated: outcome.pages_backed,
                         error,
                     },
+                );
+                return Err(settle_lent(
+                    allocator,
+                    growth.reservation,
+                    guaranteed.as_ref(),
+                    lent,
+                    failure,
                 ));
             }
             if let Err(error) = ledger.commit(token) {
@@ -325,26 +343,25 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
             table.record_growth(region, delta, outcome.large_frames, outcome.base_frames);
             Ok(previous)
         }
-        Err(GrowError::Frames { allocated, error }) => Err(settle_failure(
-            allocator,
-            ledger,
-            token,
-            &acquisition,
-            ElasticGrowError::Frames { allocated, error },
-        )),
-        Err(other) => Err(settle_failure(
-            allocator,
-            ledger,
-            token,
-            &acquisition,
-            ElasticGrowError::Frames {
-                allocated: 0,
-                error: match other {
-                    GrowError::Frames { error, .. } => error,
-                    _ => AllocError::NoKernelUntyped,
+        Err(other) => {
+            let failure = match other {
+                GrowError::Frames { allocated, error } => {
+                    ElasticGrowError::Frames { allocated, error }
+                }
+                _ => ElasticGrowError::Frames {
+                    allocated: 0,
+                    error: AllocError::NoKernelUntyped,
                 },
-            },
-        )),
+            };
+            let failure = settle_failure(allocator, ledger, token, &acquisition, failure);
+            Err(settle_lent(
+                allocator,
+                growth.reservation,
+                guaranteed.as_ref(),
+                lent,
+                failure,
+            ))
+        }
     }
 }
 
@@ -464,6 +481,25 @@ fn unwind_guaranteed(
         allocator.restore_reserved_resources(id, lent, lent);
     }
     settle_guaranteed(allocator, guaranteed);
+}
+
+/// Return a failed guaranteed growth's lent funding once the ledger has settled.
+///
+/// A completed abort charged the entitlement nothing, so the lend returns here;
+/// retirement restores only what the ledger holds. A quarantined or unsettled
+/// abort still holds the guaranteed charge, and returning the lend as well would
+/// restore it twice when that incarnation retires.
+fn settle_lent(
+    allocator: &mut ObjectAllocator,
+    reservation: Option<crate::object_allocator::guarantee_vault::ReservationId>,
+    guaranteed: Option<&GuaranteedAcquisition>,
+    lent: usize,
+    failure: ElasticGrowError,
+) -> ElasticGrowError {
+    if matches!(failure, ElasticGrowError::Frames { .. }) {
+        unwind_guaranteed(allocator, reservation, guaranteed, lent);
+    }
+    failure
 }
 
 /// Return an acquisition the ledger refused, before any mapping existed.
