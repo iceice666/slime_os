@@ -1376,12 +1376,11 @@ pub struct ObjectAllocator {
     mapping_tables: mapping_tables::MappingTables,
     /// Reservation identities owning backing extents outside common capacity.
     reservations: guarantee_vault::ReservationTable,
-    /// One failed elastic rollback, still owned and still retryable.
+    /// Each arena's failed elastic rollbacks, still owned and still retryable.
     ///
-    /// Root serializes growth, so at most one transaction can be unsettled.
-    /// Holding the record here rather than in the caller is what keeps the
-    /// resources named after the caller that took them has returned.
-    elastic_quarantine: Option<elastic::ElasticAcquisition>,
+    /// Per arena, so one holder's failure never overwrites another's record;
+    /// the arena's own revoke at retirement recovers whatever is still named.
+    elastic_quarantine: [elastic::Quarantine; MAX_TASK_ARENAS],
     #[cfg(test)]
     private_visits: PrivateRecordVisits,
 }
@@ -1422,7 +1421,7 @@ impl ObjectAllocator {
             shared_backing: shared_backing::BuddyBacking::new(),
             mapping_tables: mapping_tables::MappingTables::new(),
             reservations: guarantee_vault::ReservationTable::new(),
-            elastic_quarantine: None,
+            elastic_quarantine: [elastic::Quarantine::EMPTY; MAX_TASK_ARENAS],
             #[cfg(test)]
             private_visits: PrivateRecordVisits {
                 reusable: 0,
@@ -3591,6 +3590,7 @@ impl ObjectAllocator {
             }
         }
         self.mapping_tables.forget(id);
+        self.elastic_quarantine[id.index()] = elastic::Quarantine::EMPTY;
         self.arenas[id.index()] = ArenaRecord::empty();
         Ok(released)
     }

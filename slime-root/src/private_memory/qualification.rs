@@ -1090,7 +1090,7 @@ pub fn exercise_failure_rollback(
             allocator.untyped_bytes_remaining(),
             holder.region.leaf_tables() - tables_before,
             u8::from(intact),
-            u8::from(allocator.elastic_quarantined()),
+            u8::from(allocator.elastic_quarantined(holder.arena)),
         );
         if holder.region.pages() != committed || !intact {
             return Err(QualificationError::Unmet(
@@ -1127,21 +1127,21 @@ pub fn exercise_failure_rollback(
     else {
         return Err(QualificationError::Unmet("the cleanup stage did not fail"));
     };
-    let owned = allocator.elastic_quarantined();
+    let owned = allocator.elastic_quarantined(holder.arena);
     let refused = holder.grow(&mut table, allocator, &mut ledger, 1).is_err();
     let pool_held = ledger.available().bytes;
-    let released = allocator.retry_elastic_quarantine();
+    let released = allocator.retry_elastic_quarantine(holder.arena);
     sel4::debug_println!(
         "SLIME_MEM elastic quarantine stage=cleanup cause={} owned={} refused={} released={} remaining={} pool_held={} pool_after={}",
         quarantine.cause(),
         u8::from(owned),
         u8::from(refused),
         u8::from(released.is_ok()),
-        u8::from(allocator.elastic_quarantined()),
+        u8::from(allocator.elastic_quarantined(holder.arena)),
         pool_held,
         ledger.available().bytes,
     );
-    if !owned || !refused || released.is_err() || allocator.elastic_quarantined() {
+    if !owned || !refused || released.is_err() || allocator.elastic_quarantined(holder.arena) {
         return Err(QualificationError::Unmet(
             "a failed cleanup was not retryable exactly once",
         ));

@@ -227,6 +227,15 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
     if delta == 0 {
         return Ok(previous);
     }
+    // A quarantined holder's next request retries the return its failed
+    // rollback could not complete, and is refused: the ledger keeps the charge
+    // until the incarnation retires, so a retry never refunds twice.
+    if allocator.elastic_quarantined(arena) {
+        return Err(match allocator.retry_elastic_quarantine(arena) {
+            Ok(_) => ElasticGrowError::Policy(ledger::Error::Cleanup),
+            Err(error) => ElasticGrowError::Quarantined { error },
+        });
+    }
 
     // One resolution, consumed three times: the demand below prices exactly
     // this shape, the ledger judges exactly that demand's placements, and the
@@ -286,7 +295,9 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
             })
     {
         allocator.restore_reserved_resources(id, lent, lent);
-        let _ = allocator.release_elastic(&acquisition, false);
+        if allocator.release_elastic(&acquisition, false).is_err() {
+            let _ = ledger.quarantine(token);
+        }
         settle_guaranteed(allocator, guaranteed.as_ref());
         return Err(ElasticGrowError::Reservation { error });
     }
@@ -298,12 +309,24 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
         Ok(plan) => plan,
         Err(error) => {
             unwind_guaranteed(allocator, growth.reservation, guaranteed.as_ref(), lent);
-            return Err(settle_refusal(allocator, &acquisition, error));
+            return Err(settle_refusal(
+                allocator,
+                ledger,
+                token,
+                &acquisition,
+                error,
+            ));
         }
     };
     if let Err(error) = ledger.begin(token, delta as u64, plan) {
         unwind_guaranteed(allocator, growth.reservation, guaranteed.as_ref(), lent);
-        return Err(settle_refusal(allocator, &acquisition, error));
+        return Err(settle_refusal(
+            allocator,
+            ledger,
+            token,
+            &acquisition,
+            error,
+        ));
     }
 
     let growth = GrowthPlan {
@@ -508,12 +531,19 @@ fn settle_lent(
 /// where it was, and the pool has every byte back.
 fn settle_refusal(
     allocator: &mut ObjectAllocator,
+    ledger: &mut Ledger<'_>,
+    token: Incarnation,
     acquisition: &crate::object_allocator::elastic::ElasticAcquisition,
     error: ledger::Error,
 ) -> ElasticGrowError {
     match allocator.release_elastic(acquisition, false) {
         Ok(_) => ElasticGrowError::Policy(error),
-        Err(error) => ElasticGrowError::Quarantined { error },
+        Err(error) => {
+            // The allocator still holds extents for this arena, so the ledger
+            // member is quarantined with it rather than left growable.
+            let _ = ledger.quarantine(token);
+            ElasticGrowError::Quarantined { error }
+        }
     }
 }
 

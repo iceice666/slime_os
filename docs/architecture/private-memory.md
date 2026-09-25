@@ -286,8 +286,11 @@ stays allocated while the ledger counts none; the allocator's own record
 capacity, not the ledger's, is what refuses a demand that cannot be stored.
 
 A cleanup that does not complete is quarantined rather than lost: the
-acquisition record stays in the allocator, the holder keeps ownership, its next
-request is refused, and exactly one retry returns the resources. Guarantees are
+unreturned extents stay named in their arena's record, the holder keeps
+ownership, and the ledger member is quarantined on every failure path. Each
+later request retries the return and is refused; the ledger keeps the charge
+until the incarnation retires, and the arena's revoke at retirement recovers
+anything a retry could not. Guarantees are
 reserved in the ledger at admission rather than pre-provisioned physically, so
 an exhausted elastic pool refuses elastic transactions while a guaranteed
 holder's first growth still finds its bytes.
