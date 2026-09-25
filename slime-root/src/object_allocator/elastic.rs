@@ -294,7 +294,45 @@ pub struct ElasticAcquisition {
     resources: ledger::Resources,
 }
 
+/// Extents a failed rollback could not return, named by their arena.
+///
+/// Every failure adds to the arena's record rather than replacing it, so a
+/// second failure cannot orphan the first.
+#[derive(Clone, Copy)]
+pub struct Quarantine {
+    serial: u32,
+    extents: [u32; MAX_ELASTIC_EXTENTS],
+    len: usize,
+}
+
+impl Quarantine {
+    pub const EMPTY: Self = Self {
+        serial: 0,
+        extents: [0; MAX_ELASTIC_EXTENTS],
+        len: 0,
+    };
+}
+
 impl ElasticAcquisition {
+    const fn empty(arena: TaskArenaId) -> Self {
+        Self {
+            arena,
+            extents: [0; MAX_ELASTIC_EXTENTS],
+            placements: [ledger::Placement {
+                start: 0,
+                size_bits: 0,
+            }; MAX_ELASTIC_EXTENTS],
+            sources: [ledger::Range {
+                start: 0,
+                bytes: 0,
+                class: ledger::Class::OrdinaryTail,
+            }; MAX_ELASTIC_EXTENTS],
+            len: 0,
+            descriptors: 0,
+            resources: ledger::Resources::ZERO,
+        }
+    }
+
     pub const fn resources(&self) -> ledger::Resources {
         self.resources
     }
@@ -432,20 +470,8 @@ impl ObjectAllocator {
     ) -> Result<ElasticAcquisition, AllocError> {
         self.private_arena(id)?;
         let mut acquisition = ElasticAcquisition {
-            arena: id,
-            extents: [0; MAX_ELASTIC_EXTENTS],
-            placements: [ledger::Placement {
-                start: 0,
-                size_bits: 0,
-            }; MAX_ELASTIC_EXTENTS],
-            sources: [ledger::Range {
-                start: 0,
-                bytes: 0,
-                class: ledger::Class::OrdinaryTail,
-            }; MAX_ELASTIC_EXTENTS],
-            len: 0,
-            descriptors: 0,
             resources: demand.resources,
+            ..ElasticAcquisition::empty(id)
         };
         for spec in &demand.extents[..demand.extent_len] {
             #[cfg(slime_private_rollback)]
@@ -598,31 +624,61 @@ impl ObjectAllocator {
         self.drain_private_empty_records(id)?;
         match failure {
             Some(error) => {
-                // Ownership stays with this holder and the record stays
-                // retryable. Storing it here is what makes "quarantined"
-                // different from "leaked": the resources are still named, and
-                // exactly one later retry can return them.
-                self.elastic_quarantine = Some(*acquisition);
+                // Ownership stays with this holder and the extents stay named
+                // in its arena's record, so a retry — or the arena's revoke at
+                // retirement — can still return them.
+                self.quarantine_extents(id, &acquisition.extents[..acquisition.len]);
                 Err(error)
             }
             None => Ok(retained),
         }
     }
 
-    /// Whether a rollback left resources owned but unreturned.
-    pub fn elastic_quarantined(&self) -> bool {
-        self.elastic_quarantine.is_some()
+    /// Add unreturned extents to their arena's quarantine record.
+    fn quarantine_extents(&mut self, id: TaskArenaId, extents: &[u32]) {
+        let record = &mut self.elastic_quarantine[id.index()];
+        if record.serial != id.serial {
+            *record = Quarantine::EMPTY;
+            record.serial = id.serial;
+        }
+        for &index in extents {
+            let owned = self.extents[index as usize]
+                .is_some_and(|extent| extent.belongs_to(id) && !extent.revoked);
+            if owned && !record.extents[..record.len].contains(&index) {
+                // Bounded by the arena's live extents; an extent past the
+                // record's capacity is still owned and returned by the arena
+                // revoke.
+                if let Some(slot) = record.extents.get_mut(record.len) {
+                    *slot = index;
+                    record.len += 1;
+                }
+            }
+        }
     }
 
-    /// Retry the return a failed cleanup could not complete.
+    /// Whether a rollback left resources owned but unreturned in `id`.
+    pub fn elastic_quarantined(&self, id: TaskArenaId) -> bool {
+        let record = &self.elastic_quarantine[id.index()];
+        record.serial == id.serial && record.len != 0
+    }
+
+    /// Retry the return a failed cleanup could not complete in `id`.
     ///
-    /// Exactly once: the record is consumed before the retry and restored only
-    /// if the retry fails again, and an extent already returned is skipped
-    /// because it no longer belongs to the holder.
-    pub fn retry_elastic_quarantine(&mut self) -> Result<ledger::Resources, AllocError> {
-        let Some(pending) = self.elastic_quarantine.take() else {
+    /// The record is consumed before the retry and whatever fails again is
+    /// recorded anew, and an extent already returned is skipped because it no
+    /// longer belongs to the holder.
+    pub fn retry_elastic_quarantine(
+        &mut self,
+        id: TaskArenaId,
+    ) -> Result<ledger::Resources, AllocError> {
+        if !self.elastic_quarantined(id) {
             return Ok(ledger::Resources::ZERO);
-        };
+        }
+        let record =
+            core::mem::replace(&mut self.elastic_quarantine[id.index()], Quarantine::EMPTY);
+        let mut pending = ElasticAcquisition::empty(id);
+        pending.extents[..record.len].copy_from_slice(&record.extents[..record.len]);
+        pending.len = record.len;
         self.release_elastic(&pending, true)
     }
 
@@ -794,6 +850,47 @@ impl ObjectAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A second failed rollback adds to its arena's record instead of
+    /// replacing it, peers keep their own records, and a reused arena index
+    /// never inherits a retired arena's record.
+    #[test]
+    fn failed_rollbacks_accumulate_per_arena() {
+        extern crate std;
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = ObjectAllocator::empty();
+                allocator.slots.initialize(10..64).unwrap();
+                allocator.ensure_extent_descriptors(8).unwrap();
+                let a = TaskArenaId::from_raw(2, 7);
+                let b = TaskArenaId::from_raw(3, 7);
+                let owned = |owner: TaskArenaId| {
+                    let mut extent =
+                        super::super::ExtentRecord::new(sel4::cap::Untyped::from_bits(1), 12);
+                    extent.assign(owner.index(), owner.serial, ExtentKind::PrivateData);
+                    Some(extent)
+                };
+                allocator.extents[0] = owned(a);
+                allocator.extents[1] = owned(a);
+                allocator.extents[2] = owned(b);
+                allocator.quarantine_extents(a, &[0]);
+                allocator.quarantine_extents(a, &[1, 0]);
+                allocator.quarantine_extents(b, &[2]);
+                let record = allocator.elastic_quarantine[a.index()];
+                assert_eq!(&record.extents[..record.len], &[0, 1]);
+                assert!(allocator.elastic_quarantined(a));
+                assert!(allocator.elastic_quarantined(b));
+                assert!(!allocator.elastic_quarantined(TaskArenaId::from_raw(2, 8)));
+                // An extent that no longer belongs to the arena is not named.
+                allocator.quarantine_extents(b, &[0]);
+                let record = allocator.elastic_quarantine[b.index()];
+                assert_eq!(&record.extents[..record.len], &[2]);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     /// The extent sizes a demand resolved to, in acquisition order.
     fn sizes<const N: usize>(demand: &ElasticDemand) -> [usize; N] {

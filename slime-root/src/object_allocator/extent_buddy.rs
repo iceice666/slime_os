@@ -118,6 +118,10 @@ impl ObjectAllocator {
     /// asked for only pre-funds infrastructure growth that already outlives
     /// every task. The record stays active under no task arena, so its bytes
     /// are reported as held and are never offered again.
+    ///
+    /// An adopted split child pins its parent split for the root's lifetime,
+    /// so its buddy never re-forms the larger block. That costs about as much
+    /// as adopting a whole extent one size up, and candidates are ranked so.
     pub(super) fn adopt_returned_extent(&mut self, bytes: usize) -> Result<(), AllocError> {
         let index = self
             .extents
@@ -126,9 +130,12 @@ impl ObjectAllocator {
             .filter_map(|(index, entry)| {
                 entry
                     .filter(|extent| extent.is_common_free() && 1usize << extent.size_bits >= bytes)
-                    .map(|extent| (index, extent.size_bits))
+                    .map(|extent| {
+                        let child = usize::from(self.is_split_child(index));
+                        (index, (extent.size_bits + child, child))
+                    })
             })
-            .min_by_key(|(_, bits)| *bits)
+            .min_by_key(|(_, cost)| *cost)
             .map(|(index, _)| index)
             .ok_or(AllocError::NoKernelUntyped)?;
         let extent = self.extent(index);
@@ -259,6 +266,13 @@ impl ObjectAllocator {
         Ok(())
     }
 
+    fn is_split_child(&self, index: usize) -> bool {
+        self.extents
+            .iter()
+            .flatten()
+            .any(|extent| extent.split && extent.children.contains(&(index as u32)))
+    }
+
     fn mergeable_extent(&self) -> Option<usize> {
         self.extents.iter().enumerate().find_map(|(index, entry)| {
             let extent = entry.as_ref()?;
@@ -341,6 +355,62 @@ mod tests {
             assert_eq!(allocator.free_slots(), free);
             assert_eq!(allocator.live_objects, 1);
             assert!(allocator.extents[child].is_none());
+        });
+    }
+
+    /// Infrastructure takes an extent for the root's lifetime. Counting it
+    /// both as infrastructure and as active backing would report capacity the
+    /// machine does not have; and taking a split child when a whole extent of
+    /// the same size is free would keep its buddy from ever merging.
+    #[test]
+    fn an_adopted_extent_is_counted_once_and_does_not_strand_its_buddy() {
+        with_allocator(|allocator| {
+            let root = allocator.take_slot().unwrap();
+            allocator.extents[0] = Some(free_extent(root, 0x200000, 21));
+            // The children land in lower records than the whole extent, so a
+            // size-only choice would take a child.
+            allocator.split_extent_with(0, |_, _, _| Ok(())).unwrap();
+            let whole_index = allocator.extents.iter().position(Option::is_none).unwrap();
+            let whole = allocator.take_slot().unwrap();
+            allocator.extents[whole_index] = Some(free_extent(whole, 0x800000, 20));
+            let pinned = allocator.take_slot().unwrap();
+            allocator
+                .infrastructure
+                .pin_for_test(super::super::UntypedRegion {
+                    cap: sel4::cap::Untyped::from_bits(pinned as _),
+                    paddr: 0x4000000,
+                    size_bits: 16,
+                    watermark: 0,
+                });
+            let census = |allocator: &ObjectAllocator| {
+                allocator.reusable_extent_bytes()
+                    + allocator.active_extent_bytes()
+                    + allocator.infrastructure_owned_bytes()
+            };
+            let before = census(allocator);
+            let owned = allocator.infrastructure_owned_bytes();
+            assert_eq!(before, (1 << 21) + (1 << 20) + owned);
+
+            allocator.adopt_returned_extent(1 << 20).unwrap();
+            // The whole 1 MiB extent was taken rather than a 1 MiB child.
+            assert_eq!(
+                allocator.extent(whole_index).kind,
+                super::super::ExtentKind::Infrastructure
+            );
+            assert_eq!(census(allocator), before);
+            assert_eq!(allocator.active_extent_bytes(), 0);
+            assert_eq!(allocator.infrastructure_owned_bytes(), owned + (1 << 20));
+
+            // Both children are still free, so the 2 MiB block re-forms.
+            allocator.coalesce_extents_with(|_| Ok(())).unwrap();
+            assert!(allocator.extent(0).is_common_free());
+            assert_eq!(allocator.reusable_extent(21), Some(0));
+
+            // With only children left, one is still taken rather than refusing.
+            allocator.split_extent_with(0, |_, _, _| Ok(())).unwrap();
+            allocator.adopt_returned_extent(1 << 20).unwrap();
+            assert_eq!(census(allocator), before);
+            assert_eq!(allocator.reusable_extent_bytes(), 1 << 20);
         });
     }
 

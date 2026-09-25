@@ -20,6 +20,7 @@ use boot_contracts::private_memory_policy::{
 
 use crate::generation::{self, GuaranteeReservations};
 use crate::object_allocator::ObjectAllocator;
+use crate::private_memory::{MAX_WINDOW_PAGES, window_pages};
 use crate::task::{PrivateBinding, TaskId};
 
 /// A root-derivable name for an entitlement.
@@ -89,6 +90,17 @@ impl<'a> AdaptivePolicy<'a> {
         instances: &[policy::Instance],
         allocator: &mut ObjectAllocator,
     ) -> Result<Self, AdmissionFailure> {
+        if let Some(pages) = (0..policy.subject_count())
+            .filter_map(|index| policy.subject(index))
+            .filter(|subject| subject.maximum_mode == policy::FIXED)
+            .map(|subject| subject.maximum_pages)
+            .find(|pages| window_pages(*pages, false).is_none())
+        {
+            return Err(AdmissionFailure::Window {
+                pages,
+                limit: MAX_WINDOW_PAGES as u64,
+            });
+        }
         let available = allocator.elastic_inventory();
         let required = (0..policy.entitlement_count())
             .filter_map(|index| policy.entitlement(index))
@@ -146,12 +158,12 @@ impl<'a> AdaptivePolicy<'a> {
             .policy
             .subject_index(&policy::subject_identity(instance))?;
         let subject = self.policy.subject(index)?;
-        let maximum = if subject.maximum_mode == policy::FIXED {
-            subject.maximum_pages
+        if subject.maximum_mode == policy::FIXED {
+            // Admission refused every fixed maximum no window can reserve.
+            window_pages(subject.maximum_pages, false)
         } else {
-            self.ledger.pool_pages()
-        };
-        Some(usize::try_from(maximum).unwrap_or(usize::MAX))
+            window_pages(self.ledger.pool_pages(), true)
+        }
     }
 
     /// Bind one constructed task's incarnation before it is published.
@@ -420,7 +432,15 @@ impl<'a> AdaptivePolicy<'a> {
 pub enum AdmissionFailure {
     Malformed,
     Overflow,
-    Unfundable { required: u64, available: u64 },
+    Unfundable {
+        required: u64,
+        available: u64,
+    },
+    /// A fixed maximum no window can reserve.
+    Window {
+        pages: u64,
+        limit: u64,
+    },
 }
 
 impl AdmissionFailure {
@@ -434,6 +454,9 @@ impl AdmissionFailure {
                 available,
             } => sel4::debug_println!(
                 "SLIME_MEM FAIL adaptive guarantee exceeds inventory required={required} available={available} published=0"
+            ),
+            Self::Window { pages, limit } => sel4::debug_println!(
+                "SLIME_MEM FAIL adaptive maximum exceeds window pages={pages} limit={limit} published=0"
             ),
             other => sel4::debug_println!(
                 "SLIME_MEM FAIL adaptive guarantee exceeds inventory required=0 available=0 published=0 detail={other:?}"
