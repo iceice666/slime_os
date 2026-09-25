@@ -1759,7 +1759,11 @@ def matrix_control_transcript(gate) -> list[str]:
         "resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192 "
         "inventory_slots=517340 largest_block=0"
     )
-    census = "SLIME_MEM census retired={} free_slots=517340 untyped=5521312 reusable=0 anchors=3"
+    census = (
+        "SLIME_MEM census retired={} free_slots=517340 untyped=5521312 reusable=0 anchors=3 "
+        "mapped_pages=0 allocations_free=10 shared_reusable=0 shared_anchors=0 "
+        "active_extent_bytes=0 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=65536"
+    )
     lines = [
         "SLIME_ROOT ordinary range=0 paddr=0x60000000 bytes=536870912",
         "SLIME_ROOT ordinary ranges=1 bytes=536870912 end=0x80000000",
@@ -1792,6 +1796,7 @@ def matrix_control_transcript(gate) -> list[str]:
         f"[private-matrix] resident schedule=mixed pages={2 * bulk + small + 1024} "
         f"bytes={(2 * bulk + small + 1024) * 4096} guaranteed=1024 bulk={2 * bulk} small={small}",
         census.format(8),
+        "SLIME_ALLOC preserved parent=1 slot=2 paddr=4096 bytes=4096",
         f"[private-matrix] cycles begin count={gate.MATRIX_CYCLES} pages={gate.MATRIX_CYCLE_PAGES}",
     ]
     for cycle in range(gate.MATRIX_CYCLES):
@@ -1805,6 +1810,7 @@ def matrix_control_transcript(gate) -> list[str]:
     lines += [
         "[private-matrix:guaranteed] end incarnation=0 pages=1024 refused=1 kind=exit",
         f"[private-matrix] complete schedules=3 cycles={gate.MATRIX_CYCLES}",
+        census.format(9 + 2 * gate.MATRIX_CYCLES),
         "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
     ]
     return lines
@@ -1858,6 +1864,13 @@ def check_private_matrix_controls(gate) -> int:
         ("a reuser was not zeroed", transcript.replace("pages=4095 zeroed=1", "pages=4095 zeroed=0", 1)),
         ("explicit holder failure", transcript + "\n[private-matrix:small] FAIL a newly served word was not zero"),
         ("explicit coordinator failure", transcript + "\n[private-matrix] FAIL injected"),
+        ("adopted backing counted twice", transcript.replace(
+            f"retired={9 + 2 * gate.MATRIX_CYCLES} free_slots=517340 untyped=5521312",
+            f"retired={9 + 2 * gate.MATRIX_CYCLES} free_slots=517340 untyped=5455776", 1).replace(
+            "active_extent_bytes=0 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=65536\n"
+            "SLIME_GRAPH",
+            "active_extent_bytes=65536 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=131072\n"
+            "SLIME_GRAPH", 1)),
     ]
     for description, mutated in mutations:
         if mutated == transcript:
@@ -2107,12 +2120,16 @@ def check_adaptive_construction_controls(gate) -> int:
         )
 
     injected = f"SLIME_MEM adaptive injected kind=construction task=4 instance={holder}"
+    quarantined = (
+        f"SLIME_MEM adaptive retired task=4 instance={holder} entitlement={identity} "
+        "returned_pages=0 entitlement_committed=0 quarantined=1"
+    )
     unwound = (
         f"SLIME_MEM adaptive retired task=4 instance={holder} entitlement={identity} "
         "returned_pages=0 entitlement_committed=0 quarantined=0"
     )
     retrying = "[private-adaptive:io-supervisor] spawn refused, retrying"
-    lines = [bound(4, 0), injected, unwound, retrying, bound(5, 1)]
+    lines = [bound(4, 0), injected, quarantined, retrying, unwound, bound(5, 1)]
     baseline = "\n".join(lines)
     gate.check_adaptive_construction_failure(baseline)
     count = 0
@@ -2123,12 +2140,17 @@ def check_adaptive_construction_controls(gate) -> int:
             "the failed incarnation was released while quarantined",
             baseline.replace("returned_pages=0 entitlement_committed=0 quarantined=0", "returned_pages=0 entitlement_committed=0 quarantined=1"),
         ),
+        ("the unwind's failed revoke was never quarantined", baseline.replace(quarantined + "\n", "")),
+        (
+            "the incarnation was released before its quarantine",
+            "\n".join([bound(4, 0), injected, unwound, quarantined, retrying, bound(5, 1)]),
+        ),
         ("the retry was never bound", baseline.replace("\n" + bound(5, 1), "")),
         ("the retry reused the failed task", baseline.replace(bound(5, 1), bound(4, 1))),
         ("the retry did not advance the incarnation", baseline.replace(bound(5, 1), bound(5, 0))),
         (
             "the retry bound before the failure was released",
-            "\n".join([bound(4, 0), injected, bound(5, 1), unwound, retrying]),
+            "\n".join([bound(4, 0), injected, quarantined, retrying, bound(5, 1), unwound]),
         ),
         ("the spawner never saw the refusal", baseline.replace(retrying + "\n", "")),
     ):

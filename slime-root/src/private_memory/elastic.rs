@@ -141,7 +141,19 @@ impl Region {
     /// The lane resolved here is the lane the mapper is given, so a price and
     /// a mapping cannot disagree about whether a span took a large frame.
     pub fn shape_in(self, delta: usize, lane: Lane) -> Shape {
+        self.shape_split(delta, lane, 0).0
+    }
+
+    /// [`Region::shape_in`], also counting the leaf tables opened by pages
+    /// before offset `prefix`.
+    ///
+    /// The mapper takes a page's leaf table from that page's own source, so a
+    /// guaranteed prefix owns exactly the tables its pages open and the pooled
+    /// remainder owns the rest. Charging every table to either half leaves the
+    /// other asking a source for a table it never acquired.
+    pub fn shape_split(self, delta: usize, lane: Lane, prefix: usize) -> (Shape, usize) {
         let mut shape = Shape::default();
+        let mut prefix_tables = 0;
         let previous = self.pages();
         let mut page = previous;
         let end = previous.saturating_add(delta);
@@ -165,12 +177,15 @@ impl Region {
             }
             if !leaf_available {
                 shape.tables += 1;
+                if page - previous < prefix {
+                    prefix_tables += 1;
+                }
                 leaf_available = true;
             }
             shape.base_pages += 1;
             page += 1;
         }
-        shape
+        (shape, prefix_tables)
     }
 }
 
@@ -212,22 +227,27 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
     if delta == 0 {
         return Ok(previous);
     }
+    // A quarantined holder's next request retries the return its failed
+    // rollback could not complete, and is refused: the ledger keeps the charge
+    // until the incarnation retires, so a retry never refunds twice.
+    if allocator.elastic_quarantined(arena) {
+        return Err(match allocator.retry_elastic_quarantine(arena) {
+            Ok(_) => ElasticGrowError::Policy(ledger::Error::Cleanup),
+            Err(error) => ElasticGrowError::Quarantined { error },
+        });
+    }
 
     // One resolution, consumed three times: the demand below prices exactly
     // this shape, the ledger judges exactly that demand's placements, and the
     // mapper below is given the same plan that produced it.
-    let shape = region.shape_in(delta, growth.lane);
     // The guaranteed prefix is served from the entitlement's own reservation
     // and the remainder from the pool, in one transaction the ledger settles
     // as a whole. Tables follow their pages: a guaranteed page's leaf table
     // is guaranteed too, because a table the pool could refuse would make the
-    // page it maps unreachable.
+    // page it maps unreachable, and a pooled page's table is pooled.
+    let (shape, _) = region.shape_split(delta, growth.lane, 0);
     let guaranteed_pages = growth.guaranteed_pages.min(shape.base_pages);
-    let guaranteed_tables = if guaranteed_pages == 0 {
-        0
-    } else {
-        shape.tables
-    };
+    let (_, guaranteed_tables) = region.shape_split(delta, growth.lane, guaranteed_pages);
     let guaranteed = match growth.reservation {
         Some(id) if guaranteed_pages != 0 => {
             match allocator.acquire_guaranteed(id, arena, guaranteed_pages, guaranteed_tables) {
@@ -275,7 +295,9 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
             })
     {
         allocator.restore_reserved_resources(id, lent, lent);
-        let _ = allocator.release_elastic(&acquisition, false);
+        if allocator.release_elastic(&acquisition, false).is_err() {
+            let _ = ledger.quarantine(token);
+        }
         settle_guaranteed(allocator, guaranteed.as_ref());
         return Err(ElasticGrowError::Reservation { error });
     }
@@ -287,12 +309,24 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
         Ok(plan) => plan,
         Err(error) => {
             unwind_guaranteed(allocator, growth.reservation, guaranteed.as_ref(), lent);
-            return Err(settle_refusal(allocator, &acquisition, error));
+            return Err(settle_refusal(
+                allocator,
+                ledger,
+                token,
+                &acquisition,
+                error,
+            ));
         }
     };
     if let Err(error) = ledger.begin(token, delta as u64, plan) {
         unwind_guaranteed(allocator, growth.reservation, guaranteed.as_ref(), lent);
-        return Err(settle_refusal(allocator, &acquisition, error));
+        return Err(settle_refusal(
+            allocator,
+            ledger,
+            token,
+            &acquisition,
+            error,
+        ));
     }
 
     let growth = GrowthPlan {
@@ -302,7 +336,7 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
     match map_growth(allocator, arena, vspace, region, delta, growth, kernel) {
         Ok(outcome) => {
             if let Err(error) = allocator.commit_private_transaction(arena) {
-                return Err(settle_failure(
+                let failure = settle_failure(
                     allocator,
                     ledger,
                     token,
@@ -311,6 +345,13 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
                         allocated: outcome.pages_backed,
                         error,
                     },
+                );
+                return Err(settle_lent(
+                    allocator,
+                    growth.reservation,
+                    guaranteed.as_ref(),
+                    lent,
+                    failure,
                 ));
             }
             if let Err(error) = ledger.commit(token) {
@@ -325,26 +366,25 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
             table.record_growth(region, delta, outcome.large_frames, outcome.base_frames);
             Ok(previous)
         }
-        Err(GrowError::Frames { allocated, error }) => Err(settle_failure(
-            allocator,
-            ledger,
-            token,
-            &acquisition,
-            ElasticGrowError::Frames { allocated, error },
-        )),
-        Err(other) => Err(settle_failure(
-            allocator,
-            ledger,
-            token,
-            &acquisition,
-            ElasticGrowError::Frames {
-                allocated: 0,
-                error: match other {
-                    GrowError::Frames { error, .. } => error,
-                    _ => AllocError::NoKernelUntyped,
+        Err(other) => {
+            let failure = match other {
+                GrowError::Frames { allocated, error } => {
+                    ElasticGrowError::Frames { allocated, error }
+                }
+                _ => ElasticGrowError::Frames {
+                    allocated: 0,
+                    error: AllocError::NoKernelUntyped,
                 },
-            },
-        )),
+            };
+            let failure = settle_failure(allocator, ledger, token, &acquisition, failure);
+            Err(settle_lent(
+                allocator,
+                growth.reservation,
+                guaranteed.as_ref(),
+                lent,
+                failure,
+            ))
+        }
     }
 }
 
@@ -466,18 +506,44 @@ fn unwind_guaranteed(
     settle_guaranteed(allocator, guaranteed);
 }
 
+/// Return a failed guaranteed growth's lent funding once the ledger has settled.
+///
+/// A completed abort charged the entitlement nothing, so the lend returns here;
+/// retirement restores only what the ledger holds. A quarantined or unsettled
+/// abort still holds the guaranteed charge, and returning the lend as well would
+/// restore it twice when that incarnation retires.
+fn settle_lent(
+    allocator: &mut ObjectAllocator,
+    reservation: Option<crate::object_allocator::guarantee_vault::ReservationId>,
+    guaranteed: Option<&GuaranteedAcquisition>,
+    lent: usize,
+    failure: ElasticGrowError,
+) -> ElasticGrowError {
+    if matches!(failure, ElasticGrowError::Frames { .. }) {
+        unwind_guaranteed(allocator, reservation, guaranteed, lent);
+    }
+    failure
+}
+
 /// Return an acquisition the ledger refused, before any mapping existed.
 ///
 /// No transaction was opened, so nothing is settled: the holder is exactly
 /// where it was, and the pool has every byte back.
 fn settle_refusal(
     allocator: &mut ObjectAllocator,
+    ledger: &mut Ledger<'_>,
+    token: Incarnation,
     acquisition: &crate::object_allocator::elastic::ElasticAcquisition,
     error: ledger::Error,
 ) -> ElasticGrowError {
     match allocator.release_elastic(acquisition, false) {
         Ok(_) => ElasticGrowError::Policy(error),
-        Err(error) => ElasticGrowError::Quarantined { error },
+        Err(error) => {
+            // The allocator still holds extents for this arena, so the ledger
+            // member is quarantined with it rather than left growable.
+            let _ = ledger.quarantine(token);
+            ElasticGrowError::Quarantined { error }
+        }
     }
 }
 
@@ -496,10 +562,29 @@ fn settle_failure(
     acquisition: &crate::object_allocator::elastic::ElasticAcquisition,
     failure: ElasticGrowError,
 ) -> ElasticGrowError {
-    match allocator.release_elastic(acquisition, true) {
+    let released = allocator.release_elastic(acquisition, true);
+    settle_abort(ledger, token, released, failure)
+}
+
+/// Close a failed growth's ledger transaction whatever its cleanup reported.
+///
+/// The transaction never stays pending: a pending transaction refuses every
+/// later growth of every subject. A settlement the ledger refuses, like a
+/// cleanup that did not complete, closes as a quarantine that keeps the whole
+/// charge until the holder retires.
+fn settle_abort(
+    ledger: &mut Ledger<'_>,
+    token: Incarnation,
+    released: Result<ledger::Resources, AllocError>,
+    failure: ElasticGrowError,
+) -> ElasticGrowError {
+    match released {
         Ok(retained) => match ledger.abort(token, retained, true) {
             Ok(()) => failure,
-            Err(error) => ElasticGrowError::Policy(error),
+            Err(error) => {
+                let _ = ledger.abort(token, ledger::Resources::ZERO, false);
+                ElasticGrowError::Policy(error)
+            }
         },
         Err(error) => {
             let _ = ledger.abort(token, ledger::Resources::ZERO, false);
@@ -554,6 +639,124 @@ mod tests {
 
     fn region_of(base: usize, reservation: usize) -> Region {
         Region::reserve_for_test(base, reservation, reservation, true).expect("host test window")
+    }
+
+    /// A settlement the ledger refuses still closes the transaction, as a
+    /// quarantine: other subjects keep growing and the holder can retire.
+    #[test]
+    fn a_refused_settlement_never_leaves_a_transaction_pending() {
+        use boot_contracts::private_memory_policy::{
+            self as policy, Entitlement, Header, Instance, Subject,
+        };
+        let entitlement = Entitlement {
+            identity: policy::entitlement_identity("shared"),
+            subtree_root: [0; 32],
+            guarantee_pages: 0,
+            maximum_pages: 0,
+            maximum_mode: policy::POOL,
+            reserved: 0,
+        };
+        let mut subjects =
+            [policy::subject_identity("a"), policy::subject_identity("b")].map(|identity| {
+                Subject {
+                    identity,
+                    entitlement: entitlement.identity,
+                    maximum_pages: 1,
+                    maximum_mode: policy::FIXED,
+                    reserved: 0,
+                }
+            });
+        subjects.sort_by_key(|subject| subject.identity);
+        let header = Header {
+            magic: policy::MAGIC,
+            format_version: policy::FORMAT_VERSION,
+            header_size: policy::HEADER_BYTES as u32,
+            required_flags: 0,
+            entitlement_count: 1,
+            subject_count: 2,
+            total_len: (policy::HEADER_BYTES
+                + policy::ENTITLEMENT_BYTES
+                + 2 * policy::SUBJECT_BYTES) as u32,
+            reserved: 0,
+            reserve_bytes: 0,
+            reserve_slots: 0,
+            reserve_descriptors: 0,
+            reserve_extents: 0,
+            reserve_tables: 0,
+        };
+        let mut bytes = header.encode().to_vec();
+        bytes.extend(entitlement.encode());
+        for subject in subjects {
+            bytes.extend(subject.encode());
+        }
+        let decoded = policy::Policy::decode(&bytes).unwrap();
+        let instances = subjects.map(|subject| Instance {
+            identity: subject.identity,
+            owner: None,
+        });
+        let page = ledger::Resources {
+            bytes: policy::PAGE_BYTES,
+            slots: 1,
+            descriptors: 1,
+            extents: 1,
+            tables: 1,
+        };
+        let plan = || {
+            ledger::Plan::validate(
+                &[ledger::Range {
+                    start: 0,
+                    bytes: policy::PAGE_BYTES,
+                    class: ledger::Class::OrdinaryTail,
+                }],
+                &[ledger::Placement {
+                    start: 0,
+                    size_bits: 12,
+                }],
+                page,
+            )
+            .unwrap()
+        };
+        let pool = ledger::Resources {
+            bytes: 16 * policy::PAGE_BYTES,
+            slots: 16,
+            descriptors: 16,
+            extents: 16,
+            tables: 16,
+        };
+        let mut ledger =
+            Ledger::admit(decoded, &instances, pool, &[ledger::Resources::ZERO]).unwrap();
+        let a = ledger.bind(&policy::subject_identity("a")).unwrap();
+        let b = ledger.bind(&policy::subject_identity("b")).unwrap();
+        let failure = ElasticGrowError::Frames {
+            allocated: 0,
+            error: AllocError::NoKernelUntyped,
+        };
+        // A one-page window has one span: retaining two tables is refused.
+        let two_tables = ledger::Resources {
+            bytes: 2 * policy::PAGE_BYTES,
+            slots: 2,
+            descriptors: 2,
+            extents: 0,
+            tables: 2,
+        };
+        ledger.begin(a, 1, plan()).unwrap();
+        assert!(matches!(
+            settle_abort(&mut ledger, a, Ok(two_tables), failure),
+            ElasticGrowError::Policy(ledger::Error::Cleanup)
+        ));
+        // Nothing is pending: a peer grows, and the holder stays quarantined.
+        ledger.begin(b, 1, plan()).unwrap();
+        ledger.commit(b).unwrap();
+        assert_eq!(ledger.begin(a, 1, plan()), Err(ledger::Error::Cleanup));
+        // A cleanup that did not complete closes the same way.
+        ledger.retire(b, true).unwrap();
+        let b = ledger.bind(&policy::subject_identity("b")).unwrap();
+        ledger.begin(b, 1, plan()).unwrap();
+        assert!(matches!(
+            settle_abort(&mut ledger, b, Err(AllocError::NoKernelUntyped), failure),
+            ElasticGrowError::Quarantined { .. }
+        ));
+        assert_eq!(ledger.begin(b, 1, plan()), Err(ledger::Error::Cleanup));
     }
 
     #[test]

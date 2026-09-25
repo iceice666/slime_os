@@ -543,6 +543,7 @@ pub(super) fn serve_instance_graph(
             // `launch_context::CONTEXT_SLOT` read 0.
             spawn_labels::SPAWN => {
                 let response = serve_spawn(
+                    &mut retirements,
                     generation,
                     launched,
                     tasks,

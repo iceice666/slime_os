@@ -1379,7 +1379,6 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             guaranteed_pages,
             reservation: binding.reservation,
         };
-        let before = allocator.reserved_descriptors();
         let previous = crate::private_memory::elastic::grow_native(
             &mut self.private,
             allocator,
@@ -1391,7 +1390,6 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             delta,
             growth,
         )?;
-        let _ = before;
         Ok(previous)
     }
 

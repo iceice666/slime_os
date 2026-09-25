@@ -64,6 +64,14 @@ fn resources(pages: u64) -> Resources {
         tables: pages,
     }
 }
+/// `pages` of guaranteed payload with no leaf tables, the shape a witness
+/// may redeem page for page.
+fn payload(pages: u64) -> Resources {
+    Resources {
+        tables: 0,
+        ..resources(pages)
+    }
+}
 fn plan(pages: u64) -> Plan {
     let placements: Vec<_> = (0..pages)
         .map(|page| Placement {
@@ -625,7 +633,10 @@ fn repeated_rollback_cannot_accumulate_tables_beyond_the_attempted_window() {
     ledger.begin(a, 1, plan(1)).unwrap();
     ledger.abort(a, table, true).unwrap();
     ledger.begin(a, 1, plan(1)).unwrap();
+    // A one-page window has one span, so a second retained table is refused,
+    // and the refusal leaves the transaction open for a settling abort.
     assert_eq!(ledger.abort(a, table, true), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.begin(a, 1, plan(1)), Err(ledger::Error::Transaction));
     ledger.abort(a, Resources::ZERO, true).unwrap();
     ledger.retire(a, true).unwrap();
     assert_eq!(ledger.available(), resources(4));
@@ -657,7 +668,9 @@ fn a_protected_placement_is_certified_only_by_a_matching_witness() {
             size_bits: 12,
         })
         .collect();
-    let charged = resources(2);
+    // Payload only: a guaranteed table would be protected bytes that no
+    // redeemed page may claim.
+    let charged = payload(2);
 
     // Reservation-owned backing is not free memory, and pointing a placement
     // at it does not make it so.
@@ -679,7 +692,7 @@ fn a_protected_placement_is_certified_only_by_a_matching_witness() {
     // more redeemed pages than its own bytes hold, are both refused.
     for overstated in [
         ledger::Witness {
-            guaranteed: resources(3),
+            guaranteed: payload(3),
             guarantee_pages: 2,
         },
         ledger::Witness {
@@ -724,16 +737,13 @@ fn a_protected_placement_is_certified_only_by_a_matching_witness() {
         &mixed,
         charged,
         ledger::Witness {
-            guaranteed: resources(1),
+            guaranteed: payload(1),
             guarantee_pages: 1,
         },
     )
     .unwrap();
-    assert_eq!(plan.guaranteed(), resources(1));
-    assert_eq!(
-        plan.resources().subtract(plan.guaranteed()),
-        Ok(resources(1))
-    );
+    assert_eq!(plan.guaranteed(), payload(1));
+    assert_eq!(plan.resources().subtract(plan.guaranteed()), Ok(payload(1)));
 }
 
 /// A certified protected transaction is charged to its entitlement rather
@@ -765,17 +775,18 @@ fn a_certified_guarantee_is_charged_to_its_entitlement_and_not_to_the_pool() {
         })
         .collect();
     let witness = ledger::Witness {
-        guaranteed: resources(2),
+        guaranteed: payload(2),
         guarantee_pages: 2,
     };
-    let plan = Plan::validate_reserved(&sources, &placements, resources(2), witness).unwrap();
+    let plan = Plan::validate_reserved(&sources, &placements, payload(2), witness).unwrap();
     ledger.begin(a, 2, plan).unwrap();
     // The pool is untouched: every byte came from the entitlement's own
     // protected backing.
     assert_eq!(ledger.available(), pool);
+    // Only the unspent table envelope is left.
     assert_eq!(
         ledger.guaranteed_available(&entitlement_identity("shared")),
-        Ok(Resources::ZERO)
+        resources(2).subtract(payload(2))
     );
     ledger.commit(a).unwrap();
     assert_eq!(ledger.pages(a), Ok(2));
@@ -785,12 +796,198 @@ fn a_certified_guarantee_is_charged_to_its_entitlement_and_not_to_the_pool() {
     let plan = Plan::validate_reserved(
         &sources[..],
         &placements[..1],
-        resources(1),
+        payload(1),
         ledger::Witness {
-            guaranteed: resources(1),
+            guaranteed: payload(1),
             guarantee_pages: 1,
         },
     )
     .unwrap();
     assert_eq!(ledger.begin(a, 1, plan), Err(ledger::Error::Guarantee));
+}
+
+/// A leaf table serves a 2 MiB span, not a payload page, so a failed growth
+/// may keep a table for a span past every committed page. Two such rollbacks in
+/// distinct spans are both legal and must both settle: a refusal would leave
+/// the transaction pending and refuse every later growth of every subject.
+#[test]
+fn rollback_retains_one_table_per_touched_span_not_per_page() {
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![subject("a", "shared"), subject("b", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger = Ledger::admit(
+        policy,
+        &instances(policy),
+        resources(2048),
+        &[Resources::ZERO],
+    )
+    .unwrap();
+    let initial = ledger.available();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    let b = ledger.bind(&subject_identity("b")).unwrap();
+    let table = Resources {
+        bytes: PAGE_BYTES,
+        slots: 1,
+        descriptors: 1,
+        extents: 0,
+        tables: 1,
+    };
+    // A large frame, then one base page and its table in the next span.
+    let large_and_page = Plan::validate(
+        &[Range {
+            start: 0,
+            bytes: 4 << 20,
+            class: Class::OrdinaryTail,
+        }],
+        &[
+            Placement {
+                start: 0,
+                size_bits: 21,
+            },
+            Placement {
+                start: 2 << 20,
+                size_bits: 12,
+            },
+            Placement {
+                start: (2 << 20) + PAGE_BYTES,
+                size_bits: 12,
+            },
+        ],
+        Resources {
+            bytes: 514 * PAGE_BYTES,
+            slots: 6,
+            descriptors: 3,
+            extents: 3,
+            tables: 1,
+        },
+    )
+    .unwrap();
+    ledger.begin(a, 513, large_and_page).unwrap();
+    ledger.abort(a, table, true).unwrap();
+    // One base page and its table in the first span.
+    let page_and_table = Plan::validate(
+        &[Range {
+            start: 0,
+            bytes: 1 << 20,
+            class: Class::OrdinaryTail,
+        }],
+        &[
+            Placement {
+                start: 0,
+                size_bits: 12,
+            },
+            Placement {
+                start: PAGE_BYTES,
+                size_bits: 12,
+            },
+        ],
+        Resources {
+            bytes: 2 * PAGE_BYTES,
+            slots: 4,
+            descriptors: 2,
+            extents: 2,
+            tables: 1,
+        },
+    )
+    .unwrap();
+    ledger.begin(a, 1, page_and_table).unwrap();
+    assert_eq!(ledger.abort(a, table, true), Ok(()));
+    assert_eq!(ledger.pages(a), Ok(0));
+    // Both tables stay charged to their holder, and nothing is pending.
+    assert_eq!(
+        ledger.available(),
+        initial.subtract(table).unwrap().subtract(table).unwrap()
+    );
+    ledger.begin(b, 1, plan(1)).unwrap();
+    ledger.commit(b).unwrap();
+    ledger.retire(a, true).unwrap();
+    ledger.retire(b, true).unwrap();
+    assert_eq!(ledger.available(), initial);
+}
+
+/// Quarantine taken while a transaction is open survives its abort and
+/// refuses its commit: a member whose cleanup is in doubt never gains pages.
+#[test]
+fn quarantine_is_sticky_across_an_open_transaction() {
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![subject("a", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[Resources::ZERO]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+
+    ledger.begin(a, 1, plan(1)).unwrap();
+    ledger.quarantine(a).unwrap();
+    assert_eq!(ledger.commit(a), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.pages(a), Ok(0));
+    ledger.abort(a, Resources::ZERO, true).unwrap();
+    assert_eq!(ledger.begin(a, 1, plan(1)), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.available(), resources(8));
+}
+
+/// A guaranteed leaf table is protected backing but never a redeemed page:
+/// a witness may not count table bytes as guarantee pages.
+#[test]
+fn a_witness_cannot_redeem_its_table_bytes_as_pages() {
+    const PROTECTED: u64 = 1 << 40;
+    let sources = [
+        Range {
+            start: PROTECTED,
+            bytes: 2 * PAGE_BYTES,
+            class: Class::Guaranteed,
+        },
+        Range {
+            start: 0,
+            bytes: PAGE_BYTES,
+            class: Class::OrdinaryTail,
+        },
+    ];
+    let runs = [
+        ledger::Run {
+            start: PROTECTED,
+            size_bits: 12,
+            count: 2,
+        },
+        ledger::Run {
+            start: 0,
+            size_bits: 12,
+            count: 1,
+        },
+    ];
+    // One guaranteed page and its guaranteed table, one pooled page.
+    let guaranteed = Resources {
+        bytes: 2 * PAGE_BYTES,
+        slots: 2,
+        descriptors: 2,
+        extents: 0,
+        tables: 1,
+    };
+    let total = guaranteed
+        .checked_add(Resources {
+            bytes: PAGE_BYTES,
+            slots: 2,
+            descriptors: 1,
+            extents: 1,
+            tables: 0,
+        })
+        .unwrap();
+    let certify = |guarantee_pages| {
+        Plan::validate_runs(
+            &sources,
+            &runs,
+            total,
+            ledger::Witness {
+                guaranteed,
+                guarantee_pages,
+            },
+        )
+    };
+    assert_eq!(certify(2), Err(ledger::Error::Guarantee));
+    assert_eq!(certify(1).map(Plan::guarantee_pages), Ok(1));
 }

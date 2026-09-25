@@ -13,9 +13,9 @@ mod global_backing;
 pub mod guarantee_vault;
 mod infrastructure;
 mod leaf_spans;
-pub(crate) use leaf_spans::LeafSpanBits;
 #[cfg(test)]
 pub(crate) use leaf_spans::host::{bits as host_leaf_spans, release as host_release_leaf_spans};
+pub(crate) use leaf_spans::{LeafSpanBits, MAX_WINDOW_SPANS};
 mod extent_buddy;
 mod mapping_tables;
 mod preserved;
@@ -1376,12 +1376,11 @@ pub struct ObjectAllocator {
     mapping_tables: mapping_tables::MappingTables,
     /// Reservation identities owning backing extents outside common capacity.
     reservations: guarantee_vault::ReservationTable,
-    /// One failed elastic rollback, still owned and still retryable.
+    /// Each arena's failed elastic rollbacks, still owned and still retryable.
     ///
-    /// Root serializes growth, so at most one transaction can be unsettled.
-    /// Holding the record here rather than in the caller is what keeps the
-    /// resources named after the caller that took them has returned.
-    elastic_quarantine: Option<elastic::ElasticAcquisition>,
+    /// Per arena, so one holder's failure never overwrites another's record;
+    /// the arena's own revoke at retirement recovers whatever is still named.
+    elastic_quarantine: [elastic::Quarantine; MAX_TASK_ARENAS],
     #[cfg(test)]
     private_visits: PrivateRecordVisits,
 }
@@ -1422,7 +1421,7 @@ impl ObjectAllocator {
             shared_backing: shared_backing::BuddyBacking::new(),
             mapping_tables: mapping_tables::MappingTables::new(),
             reservations: guarantee_vault::ReservationTable::new(),
-            elastic_quarantine: None,
+            elastic_quarantine: [elastic::Quarantine::EMPTY; MAX_TASK_ARENAS],
             #[cfg(test)]
             private_visits: PrivateRecordVisits {
                 reusable: 0,
@@ -1878,11 +1877,15 @@ impl ObjectAllocator {
             .count()
     }
 
+    /// Bytes task arenas and reservations hold in extents.
+    ///
+    /// An extent adopted for infrastructure is counted by
+    /// [`Self::infrastructure_owned_bytes`] alone.
     pub fn active_extent_bytes(&self) -> usize {
         self.extents
             .iter()
             .flatten()
-            .filter(|extent| extent.active)
+            .filter(|extent| extent.active && extent.kind != ExtentKind::Infrastructure)
             .map(|extent| 1usize << extent.size_bits)
             .sum()
     }
@@ -3587,6 +3590,7 @@ impl ObjectAllocator {
             }
         }
         self.mapping_tables.forget(id);
+        self.elastic_quarantine[id.index()] = elastic::Quarantine::EMPTY;
         self.arenas[id.index()] = ArenaRecord::empty();
         Ok(released)
     }
@@ -6851,6 +6855,273 @@ mod tests {
                 assert_eq!(
                     allocator.borrow_reserved(stale, arena, ReservedKind::Data, LARGE_EXTENT_BITS),
                     Err(ReservationError::UnknownReservation(stale))
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// One-entitlement policy whose single subject may redeem `guarantee`
+    /// pages and grow into the pool beyond them.
+    fn guaranteed_policy(guarantee: u64) -> Vec<u8> {
+        use boot_contracts::private_memory_policy::{self as policy, Entitlement, Header, Subject};
+        let entitlement = Entitlement {
+            identity: policy::entitlement_identity("guaranteed"),
+            subtree_root: [0; 32],
+            guarantee_pages: guarantee,
+            maximum_pages: 0,
+            maximum_mode: policy::POOL,
+            reserved: 0,
+        };
+        let subject = Subject {
+            identity: policy::subject_identity("holder"),
+            entitlement: entitlement.identity,
+            maximum_pages: 0,
+            maximum_mode: policy::POOL,
+            reserved: 0,
+        };
+        let header = Header {
+            magic: policy::MAGIC,
+            format_version: policy::FORMAT_VERSION,
+            header_size: policy::HEADER_BYTES as u32,
+            required_flags: 0,
+            entitlement_count: 1,
+            subject_count: 1,
+            total_len: (policy::HEADER_BYTES + policy::ENTITLEMENT_BYTES + policy::SUBJECT_BYTES)
+                as u32,
+            reserved: 0,
+            reserve_bytes: 0,
+            reserve_slots: 0,
+            reserve_descriptors: 0,
+            reserve_extents: 0,
+            reserve_tables: 0,
+        };
+        let mut bytes = header.encode().to_vec();
+        bytes.extend(entitlement.encode());
+        bytes.extend(subject.encode());
+        bytes
+    }
+
+    fn guaranteed_ledger(
+        policy: &[u8],
+        guarantee: u64,
+    ) -> (
+        boot_contracts::private_memory_policy::ledger::Ledger<'_>,
+        boot_contracts::private_memory_policy::ledger::Incarnation,
+    ) {
+        use boot_contracts::private_memory_policy::{self as policy, Instance, ledger};
+        let decoded = policy::Policy::decode(policy).unwrap();
+        let instances = [Instance {
+            identity: policy::subject_identity("holder"),
+            owner: None,
+        }];
+        let envelope = ledger::Resources {
+            bytes: 2 * guarantee * policy::PAGE_BYTES,
+            slots: 2 * guarantee,
+            descriptors: 2 * guarantee,
+            extents: if guarantee == 0 { 0 } else { 2 },
+            tables: guarantee,
+        };
+        let available = ledger::Resources {
+            bytes: 1 << 30,
+            slots: 1 << 20,
+            descriptors: 1 << 20,
+            extents: 1 << 16,
+            tables: 1 << 16,
+        }
+        .checked_add(envelope)
+        .unwrap();
+        let mut ledger =
+            ledger::Ledger::admit(decoded, &instances, available, &[envelope]).unwrap();
+        let token = ledger.bind(&policy::subject_identity("holder")).unwrap();
+        (ledger, token)
+    }
+
+    /// A guarantee that ends exactly at a span boundary funds that span's
+    /// table only; the next span's table is pooled, like the page it maps.
+    /// Charging every table to the guarantee left the pooled page asking the
+    /// pool for a table no source had acquired, and the growth failed after
+    /// mapping the whole guarantee.
+    #[test]
+    fn a_guarantee_ending_at_a_span_boundary_leaves_the_next_table_pooled() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                const GUARANTEE: usize = MAX_PRIVATE_EXTENT_PAGES;
+                let mut allocator = reservation_fixture();
+                // Pooled backing for one page and one table, and nothing more:
+                // a pooled half priced with no table would still fail to map.
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateTables,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 1).unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, GUARANTEE + 1, GUARANTEE + 1)
+                    .unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let policy = guaranteed_policy(GUARANTEE as u64);
+                let (mut ledger, token) = guaranteed_ledger(&policy, GUARANTEE as u64);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    true,
+                )
+                .expect("host test window");
+                let (_, prefix_tables) = region.shape_split(
+                    GUARANTEE + 1,
+                    crate::private_memory::Lane::BasePage,
+                    GUARANTEE,
+                );
+                assert_eq!(prefix_tables, 1);
+
+                let mut table = Table::new();
+                let mut kernel = RecordingPrivateKernel::default();
+                let previous = crate::private_memory::elastic::grow(
+                    &mut table,
+                    &mut allocator,
+                    &mut ledger,
+                    token,
+                    arena,
+                    sel4::cap::VSpace::from_bits(7),
+                    &mut region,
+                    GUARANTEE + 1,
+                    crate::private_memory::GrowthPlan {
+                        lane: crate::private_memory::Lane::BasePage,
+                        guaranteed_pages: GUARANTEE,
+                        reservation: Some(reservation),
+                    },
+                    &mut kernel,
+                )
+                .expect("the guarantee and one pooled page and table are all present");
+                assert_eq!(previous, 0);
+                assert_eq!((region.pages(), region.leaf_tables()), (GUARANTEE + 1, 2));
+                assert_eq!(ledger.pages(token), Ok(GUARANTEE as u64 + 1));
+                // Exactly one table was charged to the guarantee.
+                assert_eq!(ledger.guaranteed_held(token).unwrap().tables, 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A guaranteed growth that fails after the ledger opened its transaction
+    /// hands back every descriptor and CSlot it borrowed from its
+    /// entitlement. The abort charged the entitlement nothing and retirement
+    /// restores only what a commit charged, so a lend kept here would be gone
+    /// for good, and after a few failures no guaranteed page could be funded.
+    #[test]
+    fn a_failed_guaranteed_growth_returns_its_lent_funding() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                const PAGES: usize = 4;
+                const FUNDING: usize = PAGES + 1;
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 1).unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, FUNDING, FUNDING)
+                    .unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let policy = guaranteed_policy(PAGES as u64);
+                let (mut ledger, token) = guaranteed_ledger(&policy, PAGES as u64);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    true,
+                )
+                .expect("host test window");
+                let plan = crate::private_memory::GrowthPlan {
+                    lane: crate::private_memory::Lane::BasePage,
+                    guaranteed_pages: PAGES,
+                    reservation: Some(reservation),
+                };
+                let floor = (allocator.reserved_descriptors(), allocator.reserved_slots());
+                let backing = allocator.reservation_backing(reservation).unwrap();
+                let mut table = Table::new();
+
+                // Every attempt fails on its second frame, after the ledger
+                // began. More attempts than the funding could survive once.
+                for _ in 0..3 * FUNDING {
+                    let mut kernel = RecordingPrivateKernel {
+                        fail_map_frame_at: Some(2),
+                        ..RecordingPrivateKernel::default()
+                    };
+                    assert!(matches!(
+                        crate::private_memory::elastic::grow(
+                            &mut table,
+                            &mut allocator,
+                            &mut ledger,
+                            token,
+                            arena,
+                            sel4::cap::VSpace::from_bits(7),
+                            &mut region,
+                            PAGES,
+                            plan,
+                            &mut kernel,
+                        ),
+                        Err(crate::private_memory::elastic::ElasticGrowError::Frames {
+                            allocated: 1,
+                            ..
+                        })
+                    ));
+                    assert_eq!(region.pages(), 0);
+                    assert_eq!(
+                        (allocator.reserved_descriptors(), allocator.reserved_slots()),
+                        floor
+                    );
+                    assert_eq!(ledger.redeemable_guarantee(token), Ok(PAGES as u64));
+                }
+
+                // The guarantee is still whole and still fundable.
+                let mut kernel = RecordingPrivateKernel::default();
+                crate::private_memory::elastic::grow(
+                    &mut table,
+                    &mut allocator,
+                    &mut ledger,
+                    token,
+                    arena,
+                    sel4::cap::VSpace::from_bits(7),
+                    &mut region,
+                    PAGES,
+                    plan,
+                    &mut kernel,
+                )
+                .expect("the guarantee survives its failed attempts");
+                assert_eq!(region.pages(), PAGES);
+                assert_eq!(ledger.redeemable_guarantee(token), Ok(0));
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap().extents,
+                    backing.extents
                 );
             })
             .unwrap()

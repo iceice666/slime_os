@@ -228,7 +228,11 @@ acquisition and mapper consume one plan, and the placements the allocator
 actually obtained are certified against their protected sources before any
 retype. A guaranteed page is never served from the common pool: its funding,
 including the descriptors and CSlots its frame and leaf table need, is lent from
-its own entitlement and returned with it.
+its own entitlement and returned with it. A leaf table belongs to the half
+whose page first needs it, so a growth whose guarantee ends at a span boundary
+takes the next span's table from the pool with that span's pages. A growth
+that fails after the ledger opened its transaction returns the lent funding as
+soon as its abort settles, since the abort charged the entitlement nothing.
 
 An adaptive subject's window is its declared address maximum rather than the
 target's per-region capacity, so a policy may declare a window no power of two
@@ -282,8 +286,11 @@ stays allocated while the ledger counts none; the allocator's own record
 capacity, not the ledger's, is what refuses a demand that cannot be stored.
 
 A cleanup that does not complete is quarantined rather than lost: the
-acquisition record stays in the allocator, the holder keeps ownership, its next
-request is refused, and exactly one retry returns the resources. Guarantees are
+unreturned extents stay named in their arena's record, the holder keeps
+ownership, and the ledger member is quarantined on every failure path. Each
+later request retries the return and is refused; the ledger keeps the charge
+until the incarnation retires, and the arena's revoke at retirement recovers
+anything a retry could not. Guarantees are
 reserved in the ledger at admission rather than pre-provisioned physically, so
 an exhausted elastic pool refuses elastic transactions while a guaranteed
 holder's first growth still finds its bytes.
@@ -300,7 +307,10 @@ A pool-relative maximum is the pool admitted at boot, fixed for the root's
 lifetime. A subject bound while a peer holds most of that pool still receives
 a window of the whole pool, so capacity the peer later returns stays reachable;
 sizing the window from what happened to be free at bind time would strand a
-late holder forever. Admission subtracts each guarantee from the pool exactly
+late holder forever. One window reserves at most 4096 spans of 2 MiB (8 GiB),
+the spans one leaf-span record tracks: a pool-relative maximum is clamped to
+that limit, and admission refuses a fixed maximum above it before anything is
+published. Admission subtracts each guarantee from the pool exactly
 once: the allocator reserves its backing first, and the ledger is admitted
 against that residual with the reserved envelopes restored, so its own
 subtraction is the only one.

@@ -69,6 +69,25 @@ const IMAGE_CAPACITY: (usize, usize) =
 /// Pages one task's private region may ever hold in this target-qualified image.
 pub const MAX_REGION_PAGES: usize = IMAGE_CAPACITY.0;
 
+/// Pages one adaptive window may reserve: the spans one leaf-span record
+/// tracks. A pool-relative maximum is clamped to it and a fixed maximum above
+/// it is refused at admission, so no inventory size makes a window unplaceable.
+pub const MAX_WINDOW_PAGES: usize =
+    crate::object_allocator::MAX_WINDOW_SPANS * crate::child_vspace::LARGE_FRAME_PAGES;
+
+/// The window a subject's admitted maximum reserves, or `None` when no
+/// window can: a pool-relative maximum is clamped to [`MAX_WINDOW_PAGES`], a
+/// fixed one above it is refused.
+pub const fn window_pages(maximum: u64, pooled: bool) -> Option<usize> {
+    if maximum <= MAX_WINDOW_PAGES as u64 {
+        Some(maximum as usize)
+    } else if pooled {
+        Some(MAX_WINDOW_PAGES)
+    } else {
+        None
+    }
+}
+
 /// Pages every live private region may hold together in this image.
 pub const MAX_TOTAL_PAGES: usize = IMAGE_CAPACITY.1;
 
@@ -182,8 +201,9 @@ impl Region {
     /// `quota` is clamped by the reservation rather than refused: the
     /// reservation is the address space the window physically holds and the
     /// quota is policy, so a policy asking for more than the window can hold is
-    /// honoured up to the window. Admission refuses such a budget before any
-    /// component launches; this clamp is the mechanism side of the same rule.
+    /// honoured up to the window. Admission refuses a fixed maximum above
+    /// [`MAX_WINDOW_PAGES`] and clamps a pool-relative one; this clamp is the
+    /// mechanism side of the same rule.
     ///
     /// Three refusals, all deny-by-default, because each would otherwise fail
     /// later with pages already committed:
@@ -1060,6 +1080,39 @@ fn back_large<K: PrivateMemoryKernel>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window limit is exactly what the span record admits: the largest
+    /// window reserves, one span more is refused, a pool-relative maximum past
+    /// it is clamped and a fixed one is refused.
+    #[test]
+    fn a_maximum_beyond_one_window_is_clamped_when_pooled_and_refused_when_fixed() {
+        extern crate std;
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = crate::object_allocator::ObjectAllocator::empty();
+                let limit = MAX_WINDOW_PAGES;
+                assert!(Region::reserve(&mut allocator, 0x40_0000, limit, limit, true).is_ok());
+                assert!(matches!(
+                    Region::reserve(
+                        &mut allocator,
+                        0x40_0000,
+                        limit + LARGE_FRAME_PAGES,
+                        limit,
+                        true
+                    ),
+                    Err(AllocError::PrivateRegionSpans { .. })
+                ));
+                let pool = 64u64 << 30 >> 12;
+                assert_eq!(window_pages(pool, true), Some(limit));
+                assert_eq!(window_pages(pool, false), None);
+                assert_eq!(window_pages(limit as u64, false), Some(limit));
+                assert_eq!(window_pages(4096, true), Some(4096));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     /// A window of the compiled per-region capacity with an 8-page quota, so
     /// the quota bound and the reservation bound stay distinguishable.

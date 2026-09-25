@@ -194,10 +194,35 @@ pub struct Placement {
 /// in protected ranges must be exactly `guaranteed.bytes`, so neither pool
 /// backing relabelled as redeemed guarantee nor a guarantee spent without
 /// being declared can pass.
+/// Payload pages one leaf table maps: a 2 MiB span on every reference
+/// architecture.
+pub const PAGES_PER_LEAF_TABLE: u64 = 512;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Witness {
     pub guaranteed: Resources,
     pub guarantee_pages: u64,
+}
+
+impl Witness {
+    /// Whether the redeemed pages fit in the protected bytes left after its
+    /// leaf tables: a table is guaranteed backing but never a redeemed page.
+    fn payload_fits(self) -> Result<bool, Error> {
+        let tables = self
+            .guaranteed
+            .tables
+            .checked_mul(PAGE_BYTES)
+            .ok_or(Error::Overflow)?;
+        let pages = self
+            .guarantee_pages
+            .checked_mul(PAGE_BYTES)
+            .ok_or(Error::Overflow)?;
+        Ok(self
+            .guaranteed
+            .bytes
+            .checked_sub(tables)
+            .is_some_and(|payload| pages <= payload))
+    }
 }
 
 /// A consecutive run of equal-sized placements taken from one source.
@@ -299,11 +324,7 @@ impl Plan {
                 // must not claim more redeemed pages than its own bytes hold.
                 if witness.guaranteed.bytes != guaranteed_bytes
                     || resources.subtract(witness.guaranteed).is_err()
-                    || witness
-                        .guarantee_pages
-                        .checked_mul(PAGE_BYTES)
-                        .ok_or(Error::Overflow)?
-                        > witness.guaranteed.bytes
+                    || !witness.payload_fits()?
                 {
                     return Err(Error::Guarantee);
                 }
@@ -372,11 +393,7 @@ impl Plan {
         }
         if witness.guaranteed.bytes != guaranteed_bytes
             || resources.subtract(witness.guaranteed).is_err()
-            || witness
-                .guarantee_pages
-                .checked_mul(PAGE_BYTES)
-                .ok_or(Error::Overflow)?
-                > witness.guaranteed.bytes
+            || !witness.payload_fits()?
         {
             return Err(Error::Guarantee);
         }
@@ -642,6 +659,17 @@ impl<'a> Ledger<'a> {
         Ok(self.entitlement(token))
     }
 
+    /// The payload pages one subject may hold: its fixed maximum, or the
+    /// admitted pool.
+    fn page_limit(&self, token: Incarnation) -> u64 {
+        let subject = self.policy.subject(token.subject).unwrap();
+        if subject.maximum_mode == FIXED {
+            subject.maximum_pages
+        } else {
+            self.pool_pages
+        }
+    }
+
     pub fn begin(&mut self, token: Incarnation, pages: u64, plan: Plan) -> Result<(), Error> {
         if self.pending.is_some() {
             return Err(Error::Transaction);
@@ -650,7 +678,6 @@ impl<'a> Ledger<'a> {
         if member.quarantined {
             return Err(Error::Cleanup);
         }
-        let subject = self.policy.subject(token.subject).unwrap();
         let index = self.entitlement(token);
         let entitlement = self.policy.entitlement(index).unwrap();
         let requested = member
@@ -658,11 +685,7 @@ impl<'a> Ledger<'a> {
             .checked_add(member.held_payload_pages)
             .and_then(|held| held.checked_add(pages))
             .ok_or(Error::Overflow)?;
-        let subject_limit = if subject.maximum_mode == FIXED {
-            subject.maximum_pages
-        } else {
-            self.pool_pages
-        };
+        let subject_limit = self.page_limit(token);
         let entitlement_limit = if entitlement.maximum_mode == FIXED {
             entitlement.maximum_pages
         } else {
@@ -736,6 +759,11 @@ impl<'a> Ledger<'a> {
             .filter(|pending| pending.member == token)
             .ok_or(Error::Transaction)?;
         let old = self.member(token)?;
+        // A member quarantined while its transaction was open must not gain
+        // pages; the transaction stays pending for an abort to settle.
+        if old.quarantined {
+            return Err(Error::Cleanup);
+        }
         let guaranteed = old.guaranteed.checked_add(pending.guaranteed)?;
         let elastic = old.elastic.checked_add(pending.elastic)?;
         let pages = old
@@ -781,10 +809,11 @@ impl<'a> Ledger<'a> {
             {
                 return Err(Error::Cleanup);
             }
-            let table_bound = old
-                .pages
-                .checked_add(pending.pages)
-                .ok_or(Error::Overflow)?;
+            // A leaf table serves a span rather than a page, so a failed growth
+            // may keep one mapped past the committed frontier. Retention is
+            // bounded by the spans the member's span-aligned maximum window can
+            // touch, so repeated rollback cannot accumulate tables without limit.
+            let table_bound = self.page_limit(token).div_ceil(PAGES_PER_LEAF_TABLE);
             let retained_tables = old
                 .guaranteed
                 .tables
@@ -826,7 +855,7 @@ impl<'a> Ledger<'a> {
         self.free = free;
         self.members[token.subject].guaranteed = guaranteed;
         self.members[token.subject].elastic = elastic;
-        self.members[token.subject].quarantined = !cleanup_succeeded;
+        self.members[token.subject].quarantined = old.quarantined || !cleanup_succeeded;
         self.members[token.subject].held_payload_pages = held_payload_pages;
         self.members[token.subject].guarantee_pages = guarantee_pages;
         self.pending = None;
