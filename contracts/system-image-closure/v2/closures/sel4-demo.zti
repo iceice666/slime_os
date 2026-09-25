@@ -168,7 +168,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "be2d3f6db0c0e234a664184ee2d0e6a4a9acc73aec2fc80174aba1039f99d4ca";
+      identity = "c9383f4b2178ffb64bba9febc95b5263c329a1088c84b2c01324b2ad1b87fa34";
     };
     parameters = [];
   };
@@ -187,7 +187,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "79a412ab3454b1174570b3912e863665b9eb932e26acd26dcb463f21811b08ff";
+        identity = "fa1346c24ce4e1c7b95bd244bc7d215d5213580a7a5bf42bd865cf3dec368668";
       };
     };
     {
@@ -283,7 +283,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "1d168f560dde3d03e7d63c04a8c4aa3f9cbb1fcaa11880c042bf2a8988c8d70c";
+        identity = "5176eb7901c6d4b190a9d95a30562db49d87ff29dcd401cc8bb595a217f42d67";
       };
     };
     {
