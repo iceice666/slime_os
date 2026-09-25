@@ -532,10 +532,29 @@ fn settle_failure(
     acquisition: &crate::object_allocator::elastic::ElasticAcquisition,
     failure: ElasticGrowError,
 ) -> ElasticGrowError {
-    match allocator.release_elastic(acquisition, true) {
+    let released = allocator.release_elastic(acquisition, true);
+    settle_abort(ledger, token, released, failure)
+}
+
+/// Close a failed growth's ledger transaction whatever its cleanup reported.
+///
+/// The transaction never stays pending: a pending transaction refuses every
+/// later growth of every subject. A settlement the ledger refuses, like a
+/// cleanup that did not complete, closes as a quarantine that keeps the whole
+/// charge until the holder retires.
+fn settle_abort(
+    ledger: &mut Ledger<'_>,
+    token: Incarnation,
+    released: Result<ledger::Resources, AllocError>,
+    failure: ElasticGrowError,
+) -> ElasticGrowError {
+    match released {
         Ok(retained) => match ledger.abort(token, retained, true) {
             Ok(()) => failure,
-            Err(error) => ElasticGrowError::Policy(error),
+            Err(error) => {
+                let _ = ledger.abort(token, ledger::Resources::ZERO, false);
+                ElasticGrowError::Policy(error)
+            }
         },
         Err(error) => {
             let _ = ledger.abort(token, ledger::Resources::ZERO, false);
@@ -590,6 +609,124 @@ mod tests {
 
     fn region_of(base: usize, reservation: usize) -> Region {
         Region::reserve_for_test(base, reservation, reservation, true).expect("host test window")
+    }
+
+    /// A settlement the ledger refuses still closes the transaction, as a
+    /// quarantine: other subjects keep growing and the holder can retire.
+    #[test]
+    fn a_refused_settlement_never_leaves_a_transaction_pending() {
+        use boot_contracts::private_memory_policy::{
+            self as policy, Entitlement, Header, Instance, Subject,
+        };
+        let entitlement = Entitlement {
+            identity: policy::entitlement_identity("shared"),
+            subtree_root: [0; 32],
+            guarantee_pages: 0,
+            maximum_pages: 0,
+            maximum_mode: policy::POOL,
+            reserved: 0,
+        };
+        let mut subjects =
+            [policy::subject_identity("a"), policy::subject_identity("b")].map(|identity| {
+                Subject {
+                    identity,
+                    entitlement: entitlement.identity,
+                    maximum_pages: 1,
+                    maximum_mode: policy::FIXED,
+                    reserved: 0,
+                }
+            });
+        subjects.sort_by_key(|subject| subject.identity);
+        let header = Header {
+            magic: policy::MAGIC,
+            format_version: policy::FORMAT_VERSION,
+            header_size: policy::HEADER_BYTES as u32,
+            required_flags: 0,
+            entitlement_count: 1,
+            subject_count: 2,
+            total_len: (policy::HEADER_BYTES
+                + policy::ENTITLEMENT_BYTES
+                + 2 * policy::SUBJECT_BYTES) as u32,
+            reserved: 0,
+            reserve_bytes: 0,
+            reserve_slots: 0,
+            reserve_descriptors: 0,
+            reserve_extents: 0,
+            reserve_tables: 0,
+        };
+        let mut bytes = header.encode().to_vec();
+        bytes.extend(entitlement.encode());
+        for subject in subjects {
+            bytes.extend(subject.encode());
+        }
+        let decoded = policy::Policy::decode(&bytes).unwrap();
+        let instances = subjects.map(|subject| Instance {
+            identity: subject.identity,
+            owner: None,
+        });
+        let page = ledger::Resources {
+            bytes: policy::PAGE_BYTES,
+            slots: 1,
+            descriptors: 1,
+            extents: 1,
+            tables: 1,
+        };
+        let plan = || {
+            ledger::Plan::validate(
+                &[ledger::Range {
+                    start: 0,
+                    bytes: policy::PAGE_BYTES,
+                    class: ledger::Class::OrdinaryTail,
+                }],
+                &[ledger::Placement {
+                    start: 0,
+                    size_bits: 12,
+                }],
+                page,
+            )
+            .unwrap()
+        };
+        let pool = ledger::Resources {
+            bytes: 16 * policy::PAGE_BYTES,
+            slots: 16,
+            descriptors: 16,
+            extents: 16,
+            tables: 16,
+        };
+        let mut ledger =
+            Ledger::admit(decoded, &instances, pool, &[ledger::Resources::ZERO]).unwrap();
+        let a = ledger.bind(&policy::subject_identity("a")).unwrap();
+        let b = ledger.bind(&policy::subject_identity("b")).unwrap();
+        let failure = ElasticGrowError::Frames {
+            allocated: 0,
+            error: AllocError::NoKernelUntyped,
+        };
+        // A one-page window has one span: retaining two tables is refused.
+        let two_tables = ledger::Resources {
+            bytes: 2 * policy::PAGE_BYTES,
+            slots: 2,
+            descriptors: 2,
+            extents: 0,
+            tables: 2,
+        };
+        ledger.begin(a, 1, plan()).unwrap();
+        assert!(matches!(
+            settle_abort(&mut ledger, a, Ok(two_tables), failure),
+            ElasticGrowError::Policy(ledger::Error::Cleanup)
+        ));
+        // Nothing is pending: a peer grows, and the holder stays quarantined.
+        ledger.begin(b, 1, plan()).unwrap();
+        ledger.commit(b).unwrap();
+        assert_eq!(ledger.begin(a, 1, plan()), Err(ledger::Error::Cleanup));
+        // A cleanup that did not complete closes the same way.
+        ledger.retire(b, true).unwrap();
+        let b = ledger.bind(&policy::subject_identity("b")).unwrap();
+        ledger.begin(b, 1, plan()).unwrap();
+        assert!(matches!(
+            settle_abort(&mut ledger, b, Err(AllocError::NoKernelUntyped), failure),
+            ElasticGrowError::Quarantined { .. }
+        ));
+        assert_eq!(ledger.begin(b, 1, plan()), Err(ledger::Error::Cleanup));
     }
 
     #[test]
