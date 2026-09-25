@@ -22,7 +22,8 @@
 //!   returned capacity in requests that never cover an aligned 2 MiB span, so
 //!   every page is a base page with its own slot and descriptor.
 //! * **mixed** — replacement bulk and small incarnations alternate against
-//!   one pool until both are refused a single page.
+//!   one pool until both are refused a single page. An independently declared,
+//!   unentitled probe then runs and exits before any resident holder releases.
 //!
 //! Twenty coordinated cycles follow: a holder grows, dies by fault or exit,
 //! and the other subject is served the same capacity and must read it zeroed,
@@ -114,10 +115,33 @@ pub fn run(_: u32) {
     if slime_rt::resolve_binding(Role::Bulk.executable()).is_ok() {
         coordinate()
     }
-    let role = Role::ALL
+    let Some(role) = Role::ALL
         .into_iter()
         .find(|role| slime_rt::resolve_binding(role.control()).is_ok())
-        .unwrap_or_else(|| fail("holder", "no control endpoint resolved"));
+    else {
+        // The independently declared probe has neither a holder endpoint nor
+        // private authority; it must execute without borrowing either.
+        let initial = slime_rt::private_memory_grow(0)
+            .unwrap_or_else(|_| fail("probe", "extent query refused"));
+        if initial.base != 0
+            || initial.pages != 0
+            || !matches!(
+                slime_rt::private_memory_grow(1),
+                Err(slime_rt::ERR_OUT_OF_MEMORY)
+            )
+        {
+            fail("probe", "unentitled growth was not denied");
+        }
+        let after = slime_rt::private_memory_grow(0)
+            .unwrap_or_else(|_| fail("probe", "post-refusal extent query"));
+        if after.base != 0 || after.pages != 0 {
+            fail("probe", "refusal changed the extent");
+        }
+        trace(format_args!(
+            "[private-matrix:probe] ran pages=0 base=0x0 refused=1"
+        ));
+        slime_rt::exit(0)
+    };
     let endpoint = slime_rt::resolve_binding(role.control())
         .unwrap_or_else(|_| fail(role.label(), "control endpoint"));
     hold(role, endpoint)
@@ -265,6 +289,20 @@ fn coordinate() -> ! {
         &[(Role::Bulk, walks[0]), (Role::Small, walks[1])],
         resident,
     );
+    // All three holders retain their complete contents until construction,
+    // execution and cleanup have finished and their patterns are rechecked.
+    let executable = slime_rt::resolve_binding(b"matrix-probe-executable")
+        .unwrap_or_else(|_| fail("coordinator", "probe spawn authority"));
+    trace(format_args!("[private-matrix] mixed probe begin"));
+    let probe = slime_rt::spawn(executable, &[])
+        .unwrap_or_else(|_| fail("coordinator", "mixed probe construction refused"));
+    await_end(probe.supervision_slot, false);
+    if verify_all(&mut subjects) != resident {
+        fail("coordinator", "mixed probe changed resident contents");
+    }
+    trace(format_args!(
+        "[private-matrix] mixed probe complete resident={resident} preserved=1"
+    ));
     for role in [Role::Bulk, Role::Small] {
         finish(&mut subjects, role);
     }

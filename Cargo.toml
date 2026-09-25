@@ -335,6 +335,11 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-private-matrix-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-private-matrix-small]
 opt-level = "s"
 codegen-units = 1

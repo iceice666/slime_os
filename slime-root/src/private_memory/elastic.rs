@@ -89,6 +89,11 @@ impl ElasticGrowError {
             }
             Self::Policy(ledger::Error::Unavailable) => ("ledger-pool", 0, 0),
             Self::Policy(ledger::Error::Maximum) => ("maximum", 0, 0),
+            Self::Acquire(AllocError::AdaptiveFunding {
+                resource,
+                required,
+                available,
+            }) => (resource, required, available),
             Self::Acquire(error) => (error.resource(), 0, 0),
             other => (other.cause(), 0, 0),
         }
@@ -237,6 +242,10 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
         });
     }
 
+    ledger
+        .ensure_growable(token)
+        .map_err(ElasticGrowError::Policy)?;
+
     // One resolution, consumed three times: the demand below prices exactly
     // this shape, the ledger judges exactly that demand's placements, and the
     // mapper below is given the same plan that produced it.
@@ -270,37 +279,88 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
         settle_guaranteed(allocator, guaranteed.as_ref());
         return Err(ElasticGrowError::Demand(error));
     }
-    let acquisition = match allocator.acquire_elastic(arena, &demand) {
-        Ok(acquisition) => acquisition,
-        Err(error) => {
+    ledger
+        .can_fund_common(demand.resources())
+        .map_err(|error| {
             settle_guaranteed(allocator, guaranteed.as_ref());
-            return Err(ElasticGrowError::Acquire(error));
-        }
+            ElasticGrowError::Policy(error)
+        })?;
+    let inventory = allocator.elastic_inventory().bytes;
+    let floor = ledger.remaining_operational_reserve().bytes;
+    let root_allowance = ledger
+        .available()
+        .bytes
+        .checked_sub(demand.resources().bytes)
+        .ok_or_else(|| {
+            settle_guaranteed(allocator, guaranteed.as_ref());
+            ElasticGrowError::Policy(ledger::Error::Unavailable)
+        })?
+        .min(
+            inventory
+                .saturating_sub(floor)
+                .saturating_sub(demand.resources().bytes),
+        );
+    let funding = ledger::Resources {
+        bytes: root_allowance,
+        ..ledger::Resources::ZERO
     };
-    // The guaranteed half needs a descriptor and a CSlot for every frame and
-    // leaf table it is about to retype, exactly as the pooled half does. Its
-    // funding comes from the entitlement's own withheld counts rather than
-    // from the pool, so a guaranteed page stays fundable after the pool is
-    // exhausted — which is the whole promise.
+    ledger.reserve_root(funding).map_err(|error| {
+        settle_guaranteed(allocator, guaranteed.as_ref());
+        ElasticGrowError::Policy(error)
+    })?;
+    if let Err(error) =
+        allocator.begin_adaptive_funding(floor, demand.resources().bytes, root_allowance)
+    {
+        ledger
+            .settle_root(ledger::Resources::ZERO)
+            .map_err(ElasticGrowError::Policy)?;
+        settle_guaranteed(allocator, guaranteed.as_ref());
+        return Err(ElasticGrowError::Acquire(error));
+    }
     let lent = guaranteed
         .as_ref()
         .map_or(0, |acquired| acquired.pages() + acquired.tables());
-    if let Some(id) = growth.reservation.filter(|_| lent != 0)
-        && let Err(error) = allocator
-            .lend_reserved_resources(id, lent, lent)
-            .and_then(|()| {
-                allocator
-                    .provision_private_slots(arena, lent)
-                    .map_err(ReservationError::Backing)
-            })
-    {
-        allocator.restore_reserved_resources(id, lent, lent);
-        if allocator.release_elastic(&acquisition, false).is_err() {
-            let _ = ledger.quarantine(token);
+    let acquired = (|| {
+        let acquisition = allocator
+            .acquire_elastic(arena, &demand)
+            .map_err(ElasticGrowError::Acquire)?;
+        if let Some(id) = growth.reservation.filter(|_| lent != 0)
+            && let Err(error) = allocator
+                .lend_reserved_resources(id, lent, lent)
+                .and_then(|()| {
+                    allocator
+                        .provision_private_slots(arena, lent)
+                        .map_err(ReservationError::Backing)
+                })
+        {
+            allocator.restore_reserved_resources(id, lent, lent);
+            let _ = allocator.release_elastic(&acquisition, false);
+            return Err(ElasticGrowError::Reservation { error });
         }
-        settle_guaranteed(allocator, guaranteed.as_ref());
-        return Err(ElasticGrowError::Reservation { error });
-    }
+        Ok(acquisition)
+    })();
+    let root_owned = allocator.finish_adaptive_funding();
+    ledger
+        .settle_root(ledger::Resources {
+            bytes: root_owned,
+            ..ledger::Resources::ZERO
+        })
+        .map_err(ElasticGrowError::Policy)?;
+    let acquisition = match acquired {
+        Ok(acquisition) => acquisition,
+        Err(error) => {
+            settle_guaranteed(allocator, guaranteed.as_ref());
+            if allocator.elastic_quarantined(arena) {
+                ledger
+                    .retain_unbegun(token, allocator.elastic_quarantine_resources(arena))
+                    .map_err(ElasticGrowError::Policy)?;
+                return Err(ElasticGrowError::Quarantined {
+                    error: AllocError::NoKernelUntyped,
+                });
+            }
+            return Err(error);
+        }
+    };
 
     // The plan is built from the placements acquisition actually obtained, so
     // the ledger judges physical fit rather than a byte sum. Both refusals
@@ -313,6 +373,7 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
                 allocator,
                 ledger,
                 token,
+                arena,
                 &acquisition,
                 error,
             ));
@@ -324,6 +385,7 @@ pub(crate) fn grow<K: PrivateMemoryKernel>(
             allocator,
             ledger,
             token,
+            arena,
             &acquisition,
             error,
         ));
@@ -533,15 +595,18 @@ fn settle_refusal(
     allocator: &mut ObjectAllocator,
     ledger: &mut Ledger<'_>,
     token: Incarnation,
+    arena: TaskArenaId,
     acquisition: &crate::object_allocator::elastic::ElasticAcquisition,
     error: ledger::Error,
 ) -> ElasticGrowError {
     match allocator.release_elastic(acquisition, false) {
         Ok(_) => ElasticGrowError::Policy(error),
         Err(error) => {
-            // The allocator still holds extents for this arena, so the ledger
-            // member is quarantined with it rather than left growable.
-            let _ = ledger.quarantine(token);
+            if let Err(accounting) =
+                ledger.retain_unbegun(token, allocator.elastic_quarantine_resources(arena))
+            {
+                return ElasticGrowError::Policy(accounting);
+            }
             ElasticGrowError::Quarantined { error }
         }
     }

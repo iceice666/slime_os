@@ -467,11 +467,16 @@ struct Pending {
     elastic: Resources,
 }
 
-/// One service-order transaction at a time, matching root's serialized grow
-/// boundary. Incarnation tokens prevent a late cleanup from charging a restart.
+/// One holder transaction at a time, matching root's serialized grow boundary.
+/// Independent root funding may coexist with it for metadata acquired during
+/// mapping. Incarnation tokens prevent a late cleanup from charging a restart.
 pub struct Ledger<'a> {
     policy: Policy<'a>,
     free: Resources,
+    root_owned: Resources,
+    system_owned: Resources,
+    operational_spent: Resources,
+    root_pending: Option<Resources>,
     pool_pages: u64,
     guarantee_total: [Resources; MAX_ENTITLEMENTS],
     guarantee_free: [Resources; MAX_ENTITLEMENTS],
@@ -526,6 +531,10 @@ impl<'a> Ledger<'a> {
         Ok(Self {
             policy,
             free,
+            root_owned: Resources::ZERO,
+            system_owned: Resources::ZERO,
+            operational_spent: Resources::ZERO,
+            root_pending: None,
             pool_pages,
             guarantee_total: total,
             guarantee_free: total,
@@ -536,6 +545,149 @@ impl<'a> Ledger<'a> {
 
     pub fn available(&self) -> Resources {
         self.free
+    }
+
+    /// Check the full common-pool tuple before pre-transaction acquisition.
+    /// This does not reserve it: the serialized caller must leave this tuple
+    /// available through acquisition, including any separate root funding.
+    pub fn can_fund_common(&self, resources: Resources) -> Result<(), Error> {
+        self.free.subtract(resources).map(|_| ())
+    }
+
+    /// Charge unmapped common backing whose cleanup failed before `begin`.
+    /// The caller supplies actual still-owned resources, bounded by a full-tuple
+    /// preflight preserved across allocator effects. This grants no payload or
+    /// guarantee redemption and must not be used after a transaction has begun.
+    pub fn retain_unbegun(
+        &mut self,
+        token: Incarnation,
+        resources: Resources,
+    ) -> Result<(), Error> {
+        if self.pending.is_some() {
+            return Err(Error::Transaction);
+        }
+        let old = self.member(token)?;
+        if old.quarantined {
+            return Err(Error::Cleanup);
+        }
+        let free = self.free.subtract(resources)?;
+        let elastic = old.elastic.checked_add(resources)?;
+        self.free = free;
+        self.members[token.subject].elastic = elastic;
+        self.members[token.subject].quarantined = true;
+        Ok(())
+    }
+
+    pub fn operational_reserve(&self) -> Resources {
+        self.policy.reserve()
+    }
+
+    pub fn remaining_operational_reserve(&self) -> Resources {
+        self.policy
+            .reserve()
+            .subtract(self.operational_spent)
+            .expect("operational debt exceeds reserve")
+    }
+
+    pub fn operational_spent(&self) -> Resources {
+        self.operational_spent
+    }
+
+    /// Common refunds restore operational capacity before becoming spendable.
+    /// Compute both results before the caller mutates any ownership.
+    fn refund_common(&self, resources: Resources) -> Result<(Resources, Resources), Error> {
+        let repaid = resources.minimum(self.operational_spent);
+        Ok((
+            self.free.checked_add(resources.subtract(repaid)?)?,
+            self.operational_spent.subtract(repaid)?,
+        ))
+    }
+
+    /// Settled root-lifetime ownership, never refunded by holder retirement.
+    pub fn root_owned(&self) -> Resources {
+        self.root_owned
+    }
+
+    /// Current explicit system commitments, separate from permanent root ownership.
+    pub fn system_owned(&self) -> Resources {
+        self.system_owned
+    }
+
+    /// Replace system commitments without changing the permanent root census.
+    pub fn reconcile_system(&mut self, resources: Resources) -> Result<(), Error> {
+        self.reconcile_ownership(self.root_owned, resources)
+    }
+
+    /// Reconcile independent absolute root and system censuses atomically.
+    /// The caller is the semantic authority: censuses must be disjoint from each
+    /// other and holder charges, never inferred as inventory-balancing residuals.
+    /// This is not a pre-effect guard; callers must prefund physical operations.
+    /// Root ownership cannot decrease and neither funding kind may be pending.
+    pub fn reconcile_ownership(&mut self, root: Resources, system: Resources) -> Result<(), Error> {
+        if self.root_pending.is_some() || self.pending.is_some() {
+            return Err(Error::Transaction);
+        }
+        root.subtract(self.root_owned)?;
+        let reserve = self.policy.reserve();
+        let total = self
+            .free
+            .checked_add(self.root_owned)?
+            .checked_add(self.system_owned)?
+            .checked_add(reserve.subtract(self.operational_spent)?)?;
+        let left = total.subtract(root)?.subtract(system)?;
+        let remaining = reserve.minimum(left);
+        let free = left.subtract(remaining)?;
+        let operational_spent = reserve.subtract(remaining)?;
+        self.free = free;
+        self.operational_spent = operational_spent;
+        self.root_owned = root;
+        self.system_owned = system;
+        Ok(())
+    }
+
+    /// Outstanding holder charges against the common pool, including pending
+    /// funding, retained rollback tables and quarantined allocations. Protected
+    /// guarantees, root funding and system commitments are excluded.
+    pub fn common_held(&self) -> Resources {
+        // Every elastic charge came from free inventory, so their disjoint sum
+        // cannot exceed the admitted tuple. Held payload is already in elastic.
+        self.members
+            .iter()
+            .map(|member| member.elastic)
+            .chain(self.pending.iter().map(|pending| pending.elastic))
+            .fold(Resources::ZERO, |held, resources| {
+                held.checked_add(resources)
+                    .expect("common pool charges exceed admitted inventory")
+            })
+    }
+
+    /// Fund new root ownership before its allocator effects. Protected reserve
+    /// and guarantees are not available here. The allocator separately certifies
+    /// ownership changes; reuse of already charged backing needs no new funding.
+    pub fn reserve_root(&mut self, resources: Resources) -> Result<(), Error> {
+        if self.root_pending.is_some() {
+            return Err(Error::Transaction);
+        }
+        let free = self.free.subtract(resources)?;
+        self.root_owned.checked_add(resources)?;
+        self.free = free;
+        self.root_pending = Some(resources);
+        Ok(())
+    }
+
+    /// Retain actual root ownership and refund only unused funding. `used` must
+    /// include backing still owned after failure; zero cancels an unused reserve.
+    /// Invalid settlement leaves all funding pending and charged.
+    pub fn settle_root(&mut self, used: Resources) -> Result<(), Error> {
+        let reserved = self.root_pending.ok_or(Error::Transaction)?;
+        let unused = reserved.subtract(used)?;
+        let root_owned = self.root_owned.checked_add(used)?;
+        let (free, operational_spent) = self.refund_common(unused)?;
+        self.root_owned = root_owned;
+        self.free = free;
+        self.operational_spent = operational_spent;
+        self.root_pending = None;
+        Ok(())
     }
     /// The pool-relative maximum, fixed at admission.
     ///
@@ -577,6 +729,14 @@ impl<'a> Ledger<'a> {
             },
             maximum_pages,
         })
+    }
+
+    /// Allocator cleanup retries do not clear ledger quarantine.
+    pub fn ensure_growable(&self, token: Incarnation) -> Result<(), Error> {
+        if self.member(token)?.quarantined {
+            return Err(Error::Cleanup);
+        }
+        Ok(())
     }
 
     /// Quarantine a live incarnation whose physical cleanup did not complete.
@@ -834,9 +994,8 @@ impl<'a> Ledger<'a> {
         let index = self.entitlement(token);
         let guarantee_free =
             self.guarantee_free[index].checked_add(pending.guaranteed.subtract(kept_guarantee)?)?;
-        let free = self
-            .free
-            .checked_add(pending.elastic.subtract(kept_elastic)?)?;
+        let (free, operational_spent) =
+            self.refund_common(pending.elastic.subtract(kept_elastic)?)?;
         let guaranteed = old.guaranteed.checked_add(kept_guarantee)?;
         let elastic = old.elastic.checked_add(kept_elastic)?;
         let held_payload_pages = old
@@ -853,6 +1012,7 @@ impl<'a> Ledger<'a> {
             .ok_or(Error::Overflow)?;
         self.guarantee_free[index] = guarantee_free;
         self.free = free;
+        self.operational_spent = operational_spent;
         self.members[token.subject].guaranteed = guaranteed;
         self.members[token.subject].elastic = elastic;
         self.members[token.subject].quarantined = old.quarantined || !cleanup_succeeded;
@@ -874,9 +1034,10 @@ impl<'a> Ledger<'a> {
         let index = self.entitlement(token);
         let guaranteed = self.guarantee_free[index].checked_add(old.guaranteed)?;
         self.guarantee_total[index].subtract(guaranteed)?;
-        let free = self.free.checked_add(old.elastic)?;
+        let (free, operational_spent) = self.refund_common(old.elastic)?;
         self.guarantee_free[index] = guaranteed;
         self.free = free;
+        self.operational_spent = operational_spent;
         self.members[token.subject] = Member {
             epoch: old.epoch,
             ..Member::default()

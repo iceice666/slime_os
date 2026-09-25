@@ -42,7 +42,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
     # 54 existing markers plus 6 cspace, 12 metadata and 14 bootstrap markers,
-    # 12 elastic, 12 fragmentation, 11 rollback and 7 conservation markers, one
+    # 12 elastic, 12 fragmentation, 13 rollback and 7 conservation markers, one
     # order-independent marker, and MEM-ADAPTIVE's 31: 4 reserve-first policy and
     # binding markers, 5 denial/duplicate-incarnation markers, 6 schedule
     # markers, 6 restart markers, 4 omitted-subject markers and 6 survival and
@@ -50,7 +50,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # deliberately *not* counted here: its terminal is a `SLIME_MEM FAIL` line
     # that every other arm vetoes, so a synthetic transcript carrying both would
     # contradict itself. It is controlled by `check_private_adaptive_controls`.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 159),
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 161),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -1423,6 +1423,11 @@ def check_private_rollback_controls(gate) -> int:
         "SLIME_MEM elastic retry stage=all committed=12 charged=16384 clean=16384 doubled=0",
         "SLIME_MEM elastic quarantine stage=cleanup cause=cleanup owned=1 refused=1 released=1 "
         "remaining=0 pool_held=33443840 pool_after=33443840",
+        *(f"SLIME_MEM elastic acquisition_quarantine stage={stage} committed=4 peer=8 "
+          "sentinels=1 retained=4096 charged=4096 retry_refund=0 pre_acquire_refused=1 "
+          "refund=24576 pool_held=33000000 pool_after=33024576 root_before=8192 "
+          "root_after=8192 retired_once=1"
+          for stage in ("extent-revoke", "descriptors-revoke")),
         "SLIME_MEM elastic complete case=failure-rollback stages=7 granted=20 reclaimed=20",
         "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
     ]
@@ -1442,6 +1447,18 @@ def check_private_rollback_controls(gate) -> int:
         ("the quarantine was not retryable", transcript.replace("released=1 remaining=0", "released=0 remaining=0")),
         ("the retry left resources owned", transcript.replace("remaining=0", "remaining=1")),
         ("the cleanup case preceded its stages", "\n".join([lines[0], lines[8]] + lines[1:8] + lines[9:])),
+        ("acquisition quarantine missing", transcript.replace(lines[9], "")),
+        ("acquisition quarantine duplicated", transcript.replace(lines[9], lines[9] + "\n" + lines[9])),
+        ("acquisition quarantine order", "\n".join(lines[:9] + [lines[10], lines[9]] + lines[11:])),
+        ("acquisition quarantine uncharged", transcript.replace("charged=4096", "charged=0")),
+        ("acquisition quarantine empty", transcript.replace("retained=4096 charged=4096", "retained=0 charged=0")),
+        ("acquisition retry refunded", transcript.replace("retry_refund=0", "retry_refund=1")),
+        ("acquisition after quarantine retry", transcript.replace("pre_acquire_refused=1", "pre_acquire_refused=0")),
+        ("acquisition committed pages changed", transcript.replace("committed=4 peer=8", "committed=5 peer=8")),
+        ("acquisition peer damaged", transcript.replace("peer=8 sentinels=1", "peer=8 sentinels=0")),
+        ("acquisition retirement refund wrong", transcript.replace("pool_after=33024576", "pool_after=33024577")),
+        ("acquisition retirement refunded root", transcript.replace("root_after=8192", "root_after=0")),
+        ("acquisition retirement doubled", transcript.replace("retired_once=1", "retired_once=0")),
     ]
     return check_adaptive_control_mutations(
         gate.check_failure_rollback, "elastic rollback:", lines, mutations
@@ -1723,6 +1740,9 @@ def adaptive_control_transcript(gate, policy: dict) -> list[str]:
     return lines
 
 
+MATRIX_CONTROL_POOL = 487864208
+
+
 def matrix_walk_lines(task: int, instance: str, unit: int, served: int, limit: str) -> list[str]:
     """One holder's exhaustion walk as the root reports it: `served` grants at
     `unit`, then a halving refusal chain ending at one page with `limit`."""
@@ -1732,20 +1752,27 @@ def matrix_walk_lines(task: int, instance: str, unit: int, served: int, limit: s
         lines.append(
             f"SLIME_MEM adaptive grant task={task} instance={instance} entitlement=0000000000000000 "
             f"delta={unit} previous={pages} pages={pages + unit} guaranteed=0 elastic={unit} "
-            f"entitlement_committed={pages + unit} pool_bytes=1936 base=0x400000"
+            f"entitlement_committed={pages + unit} pool_bytes=0 base=0x400000"
         )
         pages += unit
     delta = unit
     while True:
         lines.append(
             f"SLIME_MEM adaptive refused task={task} instance={instance} entitlement=0000000000000000 "
-            f"delta={delta} pages={pages} cause=pool entitlement_committed={pages} pool_bytes=1936"
+            f"delta={delta} pages={pages} cause=pool entitlement_committed={pages} pool_bytes=0"
         )
         final = delta == 1
         lines.append(
             f"SLIME_MEM adaptive limit task={task} instance={instance} delta={delta} "
-            + (limit if final else "resource=ledger-pool required=0 available=0 ledger_pool=1936 "
-               "inventory_bytes=15204192 inventory_slots=517340 largest_block=0")
+            + (limit if final else "resource=ledger-pool required=0 available=0 ledger_pool=0 "
+               "inventory_bytes=16777216 inventory_slots=517340 largest_block=0")
+        )
+        inventory = re.search(r"inventory_bytes=(\d+)", lines[-1]).group(1)
+        ledger = int(re.search(r"ledger_pool=(\d+)", lines[-1]).group(1))
+        # Synthetic accounting witnesses the equations, not physical frame charges.
+        lines.append(
+            "SLIME_MEM funding reserve=16777216 root_owned=0 system_owned=0 "
+            f"common_held={MATRIX_CONTROL_POOL - ledger} inventory_bytes={inventory}"
         )
         if final:
             return lines
@@ -1756,7 +1783,7 @@ def matrix_control_transcript(gate) -> list[str]:
     """A complete, self-consistent single-row matrix transcript, line by line."""
     bulk, small = gate.MATRIX_BULK_UNIT, gate.MATRIX_SMALL_UNIT
     exhausted = (
-        "resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192 "
+        "resource=ledger-pool required=0 available=0 ledger_pool=0 inventory_bytes=16777216 "
         "inventory_slots=517340 largest_block=0"
     )
     census = (
@@ -1769,7 +1796,8 @@ def matrix_control_transcript(gate) -> list[str]:
         "SLIME_ROOT ordinary ranges=1 bytes=536870912 end=0x80000000",
         "SLIME_MEM policy entitlements=2 subjects=3 guarantee_pages=1024 reserved_bytes=8388608 "
         "reserved_slots=2052 reserved_descriptors=2048 reserved_extents=4 reserved_tables=1024 "
-        "pool_bytes=487864208",
+        f"pool_bytes={MATRIX_CONTROL_POOL}",
+        "SLIME_MEM entitlement task=2 instance=private-matrix-guaranteed entitlement=0000000000000000 incarnation=0 guarantee=1024 maximum=2048 mode=fixed installed=2048 base=0x400000",
         "[private-matrix:bulk] verified incarnation=0 base=0x400000 pages=0 pattern=1 refused=0",
         *matrix_walk_lines(3, "private-matrix-bulk", bulk, 3, exhausted),
         "[private-matrix] guarantee pressure redeemed=1 beyond_promise_served=0 pages=1024",
@@ -1795,6 +1823,19 @@ def matrix_control_transcript(gate) -> list[str]:
         f"pages={small} served=1 refused=9 final_delta=1",
         f"[private-matrix] resident schedule=mixed pages={2 * bulk + small + 1024} "
         f"bytes={(2 * bulk + small + 1024) * 4096} guaranteed=1024 bulk={2 * bulk} small={small}",
+        "[private-matrix] mixed probe begin",
+        "SLIME_MEM entitlement task=8 instance=private-matrix-probe entitlement=none incarnation=0 guarantee=0 maximum=0 mode=none installed=0 base=0x0",
+        "SLIME_GRAPH spawned task=1 child=8 component=private-matrix-probe grants=0 endpoints=0 notifications=0 handle=1 supervision_grants=0 buffer_factory_grants=0",
+        "SLIME_MEM adaptive refused task=8 instance=private-matrix-probe entitlement=none delta=1 pages=0 cause=entitlement entitlement_committed=0 pool_bytes=0",
+        "[private-matrix:probe] ran pages=0 base=0x0 refused=1",
+        "SLIME_GRAPH component exit task=8 status=0",
+        "SLIME_ROOT reclaim census task=8 slots=0 bytes=0 live_objects=0 extent_reuses=0",
+        "[private-matrix:guaranteed] verified incarnation=0 base=0x400000 pages=1024 pattern=1 refused=1",
+        f"[private-matrix:bulk] verified incarnation=1 base=0x400000 pages={2 * bulk} pattern=1 refused=16",
+        f"[private-matrix:small] verified incarnation=2 base=0x400000 pages={small} pattern=1 refused=9",
+        f"[private-matrix] mixed probe complete resident={2 * bulk + small + 1024} preserved=1",
+        f"[private-matrix:bulk] end incarnation=1 pages={2 * bulk} refused=16 kind=exit",
+        f"[private-matrix:small] end incarnation=2 pages={small} refused=9 kind=exit",
         census.format(8),
         "SLIME_ALLOC preserved parent=1 slot=2 paddr=4096 bytes=4096",
         f"[private-matrix] cycles begin count={gate.MATRIX_CYCLES} pages={gate.MATRIX_CYCLE_PAGES}",
@@ -1829,16 +1870,41 @@ def check_private_matrix_controls(gate) -> int:
     lines = matrix_control_transcript(gate)
     transcript = "\n".join(lines)
     measured = gate.check_matrix_transcript(transcript, reserve, "control: ")
-    final = "delta=1 resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192"
+    for schedule in measured["schedules"].values():
+        for instance, walk in schedule["walks"].items():
+            if any(walk.get(key) != value for key, value in {
+                "reserve": reserve, "root_owned": 0, "system_owned": 0,
+                "common_held": MATRIX_CONTROL_POOL,
+            }.items()):
+                fail("matrix control: final funding fields were not exposed")
+            boundary = {**walk, "ledger_pool": 8192, "inventory_bytes": reserve + 8192,
+                        "common_held": MATRIX_CONTROL_POOL - 8192}
+            gate.check_matrix_limit({**boundary, "resource": "ordinary-layout"}, instance, reserve, "control: ")
+            require_rejection("ledger refused a page at its exact funding boundary", "control: ",
+                              lambda boundary=boundary, instance=instance: gate.check_matrix_limit(
+                                  boundary, instance, reserve, "control: "))
+            for resource in gate.MATRIX_EXHAUSTION_RESOURCES:
+                gate.check_matrix_limit({**walk, "resource": resource, "required": 1,
+                                         "available": 0}, instance, reserve, "control: ")
+            require_rejection("final funding reserve differs from declaration", "control: ",
+                              lambda walk=walk, instance=instance: gate.check_matrix_limit(
+                                  {**walk, "reserve": reserve + 1}, instance, reserve, "control: "))
+    final = "delta=1 resource=ledger-pool required=0 available=0 ledger_pool=0 inventory_bytes=16777216"
     bulk = gate.MATRIX_BULK_UNIT
     mutations = [
+        ("probe received hidden grants", transcript.replace(
+            "component=private-matrix-probe grants=0", "component=private-matrix-probe grants=1", 1)),
+        ("probe received buffer authority", transcript.replace(
+            "supervision_grants=0 buffer_factory_grants=0", "supervision_grants=0 buffer_factory_grants=1", 1)),
+        ("admitted pool does not conserve final funding", transcript.replace(
+            f"pool_bytes={MATRIX_CONTROL_POOL}", f"pool_bytes={MATRIX_CONTROL_POOL + 1}", 1)),
         ("still-fitting refusal", transcript.replace(
-            final, final.replace("inventory_bytes=15204192", f"inventory_bytes={reserve + (1 << 20)}"), 1)),
+            final, final.replace("inventory_bytes=16777216", f"inventory_bytes={reserve + (1 << 20)}"), 1)),
         ("invented fit under a counted resource", transcript.replace(
             final, "delta=1 resource=ordinary-bytes required=4096 available=8192 ledger_pool=0 "
-            "inventory_bytes=15204192", 1)),
+            "inventory_bytes=16777216", 1)),
         ("ledger refused a page it could fund", transcript.replace(
-            final, final.replace("ledger_pool=1936", "ledger_pool=8192"), 1)),
+            final, final.replace("ledger_pool=0", "ledger_pool=8192"), 1)),
         ("exhaustion was a declaration", transcript.replace(
             final, final.replace("resource=ledger-pool", "resource=maximum"), 1)),
         ("refusal with no named cost", "\n".join(
@@ -1853,6 +1919,8 @@ def check_private_matrix_controls(gate) -> int:
             f"pages={3 * bulk} served=3 refused=16", f"pages={3 * bulk + 1} served=3 refused=16", 1)),
         ("resident total is not the holders' sum", transcript.replace(
             f"resident schedule=bulk pages={3 * bulk + 1024}", f"resident schedule=bulk pages={3 * bulk + 1025}", 1)),
+        ("missing per-cycle census", "\n".join(
+            line for line in lines if not line.startswith("SLIME_MEM census retired=19 "))),
         ("census drifted across a cycle", transcript.replace(
             "SLIME_MEM census retired=19 free_slots=517340", "SLIME_MEM census retired=19 free_slots=517339", 1)),
         ("the dying holder reused its own capacity", transcript.replace(
@@ -1872,6 +1940,86 @@ def check_private_matrix_controls(gate) -> int:
             "active_extent_bytes=65536 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=131072\n"
             "SLIME_GRAPH", 1)),
     ]
+    for index, line in enumerate(lines):
+        if not line.startswith("SLIME_MEM adaptive limit"):
+            continue
+        funding = lines[index + 1]
+        mutations.append((f"limit {index} missing funding", "\n".join(
+            lines[:index + 1] + lines[index + 2:]
+        )))
+        mutations.append((f"limit {index} wrong declared reserve", "\n".join(
+            lines[:index + 1] + [funding.replace(f"reserve={reserve}", f"reserve={reserve + 1}")]
+            + lines[index + 2:]
+        )))
+        if " delta=1 " not in line:
+            continue
+        for resource in ("unknown", "arithmetic", "payload-funding", "cleanup", "transaction-extents"):
+            mutations.append((f"final refusal {index} invalid resource {resource}", "\n".join(
+                lines[:index] + [line.replace("resource=ledger-pool", f"resource={resource}")]
+                + lines[index + 1:]
+            )))
+        for resource in ("root-funding", "operational-reserve"):
+            mutations.append((f"final refusal {index} {resource} required equals available", "\n".join(
+                lines[:index] + [line.replace("resource=ledger-pool required=0 available=0",
+                                             f"resource={resource} required=4096 available=4096")]
+                + lines[index + 1:]
+            )))
+        for field in ("root_owned", "system_owned", "common_held"):
+            value = int(re.search(rf"{field}=(\d+)", funding).group(1))
+            mutations.append((f"final funding {index} hidden {field} charge", "\n".join(
+                lines[:index + 1] + [funding.replace(f"{field}={value}", f"{field}={value + 1}")]
+                + lines[index + 2:]
+            )))
+        for residual in (reserve + 1, reserve + 8192):
+            mutations.append((f"final funding {index} ledger and residual disagree", "\n".join(
+                lines[:index] + [re.sub(r"inventory_bytes=\d+", f"inventory_bytes={residual}", record)
+                                 for record in (line, funding)] + lines[index + 2:]
+            )))
+        mutations.append((f"final funding {index} ledger changes without conserved pool", "\n".join(
+            lines[:index] + [line.replace("ledger_pool=0", "ledger_pool=1").replace(
+                f"inventory_bytes={reserve}", f"inventory_bytes={reserve + 1}"),
+                funding.replace(f"inventory_bytes={reserve}", f"inventory_bytes={reserve + 1}")]
+            + lines[index + 2:]
+        )))
+        for field in ("reserve", "root_owned", "system_owned", "common_held", "inventory_bytes"):
+            mutations.append((f"final funding {index} missing {field}", "\n".join(
+                lines[:index + 1] + [re.sub(rf" {field}=\d+", "", funding)] + lines[index + 2:]
+            )))
+        mutations.append((f"final funding {index} mismatched inventory", "\n".join(
+            lines[:index + 1] + [re.sub(r"inventory_bytes=\d+", f"inventory_bytes={reserve + 1}", funding)]
+            + lines[index + 2:]
+        )))
+        mutations.append((f"final funding {index} not immediate", "\n".join(
+            lines[:index + 1] + ["SLIME_ROOT unrelated record", funding] + lines[index + 2:]
+        )))
+        for residual in (reserve - 1, reserve + 8193):
+            mutations.append((f"final refusal {index} residual {residual} outside reserve bound", "\n".join(
+                lines[:index] + [re.sub(r"inventory_bytes=\d+", f"inventory_bytes={residual}", record)
+                                 for record in (line, funding)] + lines[index + 2:]
+            )))
+    probe_begin = lines.index("[private-matrix] mixed probe begin")
+    probe_end = next(index for index, line in enumerate(lines) if line.startswith("[private-matrix] mixed probe complete"))
+    for index in range(probe_begin, probe_end + 1):
+        mutations.append((f"probe evidence {index} missing", "\n".join(lines[:index] + lines[index + 1:])))
+    # Keep every record, but move construction before the last holder's final
+    # refusal or after either holder's release; presence alone cannot qualify it.
+    block = lines[probe_begin:probe_end + 1]
+    without = lines[:probe_begin] + lines[probe_end + 1:]
+    early = next(index for index, line in enumerate(without) if "limit task=7 " in line and " delta=1 " in line)
+    mutations.append(("probe before both holders exhausted", "\n".join(without[:early] + block + without[early:])))
+    for role in ("bulk", "small"):
+        release = next(index for index, line in enumerate(without) if line.startswith(f"[private-matrix:{role}] end incarnation={1 if role == 'bulk' else 2} "))
+        mutations.append((f"probe after {role} release", "\n".join(without[:release + 1] + block + without[release + 1:])))
+    for task in (2, 6, 7):
+        mutations.append((f"root retires holder {task} before probe", transcript.replace(
+            "[private-matrix] mixed probe begin", f"SLIME_GRAPH component exit task={task} status=0\n[private-matrix] mixed probe begin", 1)))
+    for index in range(probe_begin + 1, probe_end):
+        reordered = lines.copy()
+        reordered[index], reordered[index + 1] = reordered[index + 1], reordered[index]
+        # The three peer verification records have no ordering requirement.
+        if " verified " in lines[index] and " verified " in lines[index + 1]:
+            continue
+        mutations.append((f"probe records {index} transposed", "\n".join(reordered)))
     for description, mutated in mutations:
         if mutated == transcript:
             fail(f"matrix control {description}: mutation did not change evidence")
@@ -1923,7 +2071,7 @@ def check_private_matrix_controls(gate) -> int:
     gate.check_matrix_launcher_only(measurements[2048], measurements[2048])
     require_rejection("a launcher-only boot changed the inventory", "matrix launcher-only: ",
                       lambda: gate.check_matrix_launcher_only(measurements[4096], measurements[2048]))
-    return len(mutations) + 1 + len(row_mutations) + 1
+    return len(mutations) + 4 + 1 + len(row_mutations) + 1
 
 
 def check_private_adaptive_controls(gate) -> int:

@@ -102,7 +102,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "d3ce3d3c467bab69b34898c38d7c1e36f409da214ebe6819f5defcac768e7fcd";
+      identity = "0c032b5e32b4c5b9d44790b7bb87c96bc59ae2dea6909627421f7b7363cf719a";
     };
     parameters = [];
   };
@@ -121,7 +121,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "fa1346c24ce4e1c7b95bd244bc7d215d5213580a7a5bf42bd865cf3dec368668";
+        identity = "38bb47a376f9927afadcde2928461a120d3f7db6b2da20e09e5d75c2c3349d42";
       };
     };
     {
@@ -129,7 +129,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "b4995759e69419900fac7eb0436eb066a92fea6c7ee33c0a595d289e4ffea986";
+        identity = "9a113091a30148d6232c89bc5f4290913823ae8d6e5028a7ce1047a0799ef6ea";
       };
     };
     {
@@ -153,7 +153,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "32fdac22480f65059a318d39c02668e8bc7a82dab18daf9a951f2555a7d9329d";
+        identity = "4adfb929af0c54ad3a72ff91f3b39a628bab9a94de16d8a0296dc698843fd16c";
       };
     };
     {
@@ -177,7 +177,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "5d5786158e9525a41f3a047b1f093d6ef6d5372bd6e07a407fae379700af1691";
+        identity = "d0172c3e37ffba64f145fc7d6e82bcaa3c4b9808166bec995a2ec0b339884ec1";
       };
     };
     {
@@ -217,7 +217,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "c7700a90558a12fc6cdfd74b0d4e059d89478563e4684363e7c209f32333dbe2";
+        identity = "e1e711967466dd665b6b7cc9b3ec3aa9aabbea43369124ad37bf01e969894961";
       };
     };
     {
@@ -257,7 +257,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "b04855191386cc9e919be220f7b4ecf4ff26ae84721983e88a5d346d3c1222ec";
+        identity = "b10344246c9bfb51bd826467eee2155fc1c05a9297ca5694f8630f3850105293";
       };
     };
   ];

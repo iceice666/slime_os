@@ -112,9 +112,16 @@ impl Infrastructure {
         {
             return Err(AllocError::NoKernelUntyped);
         }
+        let owned_bytes = self.owned_bytes.checked_add(source.remaining()).ok_or(
+            AllocError::AdaptiveFunding {
+                resource: "arithmetic",
+                required: 0,
+                available: 0,
+            },
+        )?;
         self.retired_sources[self.retired_len] = self.source;
         self.retired_len += 1;
-        self.owned_bytes += source.remaining();
+        self.owned_bytes = owned_bytes;
         self.source = Some(source);
         Ok(())
     }

@@ -32,6 +32,13 @@
     };
     {
       commandProfile = [];
+      name = "private-matrix-probe";
+      object = "sha256:private-matrix-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
       name = "private-matrix-small";
       object = "sha256:private-matrix-small";
       role = "application";
@@ -83,6 +90,17 @@
       ];
       source = "private-matrix-coordinator";
       target = "private-matrix-guaranteed";
+      transferable = false;
+    };
+    {
+      name = "matrix-probe-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-matrix-coordinator";
+      target = "private-matrix-probe";
       transferable = false;
     };
     {
@@ -156,6 +174,9 @@
           grant = "matrix-guaranteed-executable";
         };
         {
+          grant = "matrix-probe-executable";
+        };
+        {
           grant = "matrix-small-control";
         };
         {
@@ -183,6 +204,17 @@
       executable = "private-matrix-guaranteed";
       health = "optional";
       name = "private-matrix-guaranteed";
+      owner = "private-matrix-coordinator";
+    };
+    {
+      autostart = false;
+      bindings = [];
+      dependencies = [
+        "private-matrix-coordinator";
+      ];
+      executable = "private-matrix-probe";
+      health = "optional";
+      name = "private-matrix-probe";
       owner = "private-matrix-coordinator";
     };
     {
@@ -231,6 +263,11 @@
     };
     {
       id = "sha256:private-matrix-guaranteed";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:private-matrix-probe";
       kind = "component";
       size = 65536;
     };
