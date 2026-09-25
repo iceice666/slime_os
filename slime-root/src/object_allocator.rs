@@ -1878,11 +1878,15 @@ impl ObjectAllocator {
             .count()
     }
 
+    /// Bytes task arenas and reservations hold in extents.
+    ///
+    /// An extent adopted for infrastructure is counted by
+    /// [`Self::infrastructure_owned_bytes`] alone.
     pub fn active_extent_bytes(&self) -> usize {
         self.extents
             .iter()
             .flatten()
-            .filter(|extent| extent.active)
+            .filter(|extent| extent.active && extent.kind != ExtentKind::Infrastructure)
             .map(|extent| 1usize << extent.size_bits)
             .sum()
     }
@@ -6916,7 +6920,7 @@ mod tests {
             bytes: 2 * guarantee * policy::PAGE_BYTES,
             slots: 2 * guarantee,
             descriptors: 2 * guarantee,
-            extents: 2,
+            extents: if guarantee == 0 { 0 } else { 2 },
             tables: guarantee,
         };
         let available = ledger::Resources {

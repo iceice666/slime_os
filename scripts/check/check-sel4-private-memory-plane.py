@@ -1938,11 +1938,11 @@ def run_cycles_arm(platform: str) -> None:
     )
 
 
-def check_capacity_conservation(transcript: str) -> None:
+def check_capacity_conservation(transcript: str, prefix: str = "") -> None:
     matches = list(re.finditer(r"^SLIME_MEM census (.*)$", transcript, re.MULTILINE))
     rows = [match.group(1) for match in matches]
     if len(rows) < 2:
-        fail("capacity conservation: missing initial or final census")
+        fail(prefix + "capacity conservation: missing initial or final census")
     parsed = [dict((key, int(value)) for key, value in re.findall(r"(\w+)=(\d+)", row)) for row in rows]
     initial, final = parsed[0], parsed[-1]
     required = {
@@ -1951,22 +1951,22 @@ def check_capacity_conservation(transcript: str) -> None:
         "shared_anchors", "preserved_anchors", "allocations_free", "infrastructure_owned",
     }
     if any(not required <= row.keys() for row in (initial, final)):
-        fail("capacity conservation: incomplete resource ledger")
+        fail(prefix + "capacity conservation: incomplete resource ledger")
     if initial["mapped_pages"] != 0 or final["mapped_pages"] != 0 or final["active_extent_bytes"] != 0:
-        fail("capacity conservation: workload did not return private mappings and active backing")
+        fail(prefix + "capacity conservation: workload did not return private mappings and active backing")
     available = ("untyped", "reusable", "shared_reusable", "preserved_bytes", "infrastructure_owned")
     expected = sum(initial[key] for key in available) + initial["active_extent_bytes"]
     observed = sum(final[key] for key in available)
     if observed != expected:
-        fail(f"capacity conservation: available backing {observed}, expected {expected}")
+        fail(prefix + f"capacity conservation: available backing {observed}, expected {expected}")
     slots = ("free_slots", "anchors", "shared_anchors", "preserved_anchors")
     if sum(final[key] for key in slots) < sum(initial[key] for key in slots):
-        fail("capacity conservation: root slots lost beyond explicitly retained anchors")
+        fail(prefix + "capacity conservation: root slots lost beyond explicitly retained anchors")
     if final["allocations_free"] < initial["allocations_free"]:
-        fail("capacity conservation: allocation descriptors lost")
+        fail(prefix + "capacity conservation: allocation descriptors lost")
     interval = transcript[matches[0].end():matches[-1].start()]
     if not re.search(r"^SLIME_ALLOC preserved parent=\d+ slot=\d+ paddr=\d+ bytes=\d+$", interval, re.MULTILINE):
-        fail("capacity conservation: preserved backing was never allocated")
+        fail(prefix + "capacity conservation: preserved backing was never allocated")
 
 
 def check_backing_ledger(transcript: str) -> None:
@@ -4290,6 +4290,9 @@ def check_matrix_transcript(transcript: str, reserve: int, prefix: str) -> dict[
                 fail(prefix + f"{schedule}: {instance} verified an extent it was not granted")
         result["schedules"][schedule] = {"resident": pages, "walks": walks}
     result["cycles"] = check_matrix_cycles(transcript, prefix)
+    # Returned extents adopted for infrastructure must stay in one census
+    # category, or conservation cannot close once every holder retired.
+    check_capacity_conservation(transcript, prefix)
     return result
 
 
