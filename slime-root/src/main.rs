@@ -879,9 +879,10 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         "SLIME_ROOT ordinary ranges={ordinary_ranges} bytes={ordinary_bytes} end={:#x}",
         allocator.ordinary_physical_end(),
     );
-    // Only QEMU ARM has a superseded ordinary-memory window to exceed.
-    // Other target profiles still probe their highest ordinary granule without
-    // asserting that their RAM reaches a QEMU-specific physical address.
+    // Only QEMU ARM has a superseded ordinary-memory window to exceed. Whether
+    // the probe passed it is reported, never enforced: capacity is whatever the
+    // booted kernel hands root, and a smaller qualified inventory is not a
+    // fault. The pinned product image's gate asserts `beyond_legacy=1`.
     let legacy_platform_ram_end = match TARGET_PROFILE {
         "aarch64-sel4-qemu-virt" => Some(0x8000_0000),
         _ => None,
@@ -898,17 +899,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Some(paddr) => paddr,
         None => fatal!("ordinary memory probe lost physical provenance"),
     };
-    let beyond_legacy = match legacy_platform_ram_end {
-        Some(legacy_end) => {
-            if probe_paddr < legacy_end {
-                fatal!(
-                    "ordinary memory probe did not reach added RAM: paddr={probe_paddr:#x} legacy_end={legacy_end:#x}"
-                )
-            }
-            1
-        }
-        None => 0,
-    };
+    let beyond_legacy =
+        u8::from(legacy_platform_ram_end.is_some_and(|legacy_end| probe_paddr >= legacy_end));
     let probe_frame = probe_slot.cap();
     if let Err(error) = probe_frame.frame_map(
         sel4::init_thread::slot::VSPACE.cap(),
@@ -1520,6 +1512,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                     0
                 }
             },
+            // The fixture path carries no policy, so no adaptive window.
+            None,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),

@@ -102,7 +102,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "1d8da0dbfe991cf0272161a3c4557d826393943559df790c73469d71e4dc9e16";
+      identity = "d3ce3d3c467bab69b34898c38d7c1e36f409da214ebe6819f5defcac768e7fcd";
     };
     parameters = [];
   };
@@ -121,7 +121,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "013d9fad2ec297bdafd430d8468a53d6eb28b0ead44e3566673bd1ed3806a18b";
+        identity = "fa1346c24ce4e1c7b95bd244bc7d215d5213580a7a5bf42bd865cf3dec368668";
       };
     };
     {
@@ -129,7 +129,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "3c0a5fbb87ac0de8f9009557223b8f98d409ca206f5490903197dae69b805de8";
+        identity = "b4995759e69419900fac7eb0436eb066a92fea6c7ee33c0a595d289e4ffea986";
       };
     };
     {
@@ -153,7 +153,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "a84cd2c06a8721caf4f87330d3b09e5a54ae01d25117b930e7f9395c23c1882e";
+        identity = "32fdac22480f65059a318d39c02668e8bc7a82dab18daf9a951f2555a7d9329d";
       };
     };
     {
@@ -177,7 +177,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "de193c60d2f48740f9ece53fc88956843bfaeef2c2bc6a80c7d44534720ce33d";
+        identity = "5d5786158e9525a41f3a047b1f093d6ef6d5372bd6e07a407fae379700af1691";
       };
     };
     {
@@ -201,7 +201,7 @@
       artifact = {
         path = "scripts/build/build-sel4.py";
         kind = "file";
-        identity = "456584c32b4725ec5387a983ffe974b1e61bb51aa2634e48a6ee4ba451395fbf";
+        identity = "dfe1a12c1a649d60bfa83d5676e7fca5c8c00d2dfec6c8d41260fe22d06a2b42";
       };
     };
     {
@@ -217,7 +217,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "c67ab1e192614d4efc73eb49be1e5bb610f7d1494a05a5953ca56ee6c383de72";
+        identity = "c7700a90558a12fc6cdfd74b0d4e059d89478563e4684363e7c209f32333dbe2";
       };
     };
     {
@@ -257,7 +257,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "e0471ee0ee21878bbae37aaf61f586d14ecfe0aaaac4df717c77f790400647a5";
+        identity = "b04855191386cc9e919be220f7b4ecf4ff26ae84721983e88a5d346d3c1222ec";
       };
     };
   ];

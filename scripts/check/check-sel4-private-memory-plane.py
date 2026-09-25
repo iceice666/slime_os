@@ -38,6 +38,7 @@ entirely.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -87,6 +88,34 @@ RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-qemu-riscv-virt.elf"
 # re-targets the same composition through the legacy plane flag, exactly as the
 # ceiling arm's RV64 case does, because a closure's platform follows its system
 # spec's `targetRequirement` and every spec declares aarch64.
+# MEM-ADAPTIVE's declared-policy compositions. The arm reads each one's policy
+# out of its own derived manifest rather than restating it here: the gate's
+# claim is that the *declaration* is what the root reserved, bound, and
+# adjudicated against, and a copy of the numbers in this file would make that a
+# comparison against itself.
+ADAPTIVE_FIXTURES = {
+    "qemu-arm-virt": GENERATION_COMPOSITIONS / "sel4-private-memory-adaptive.zti",
+    "qemu-riscv-virt": GENERATION_COMPOSITIONS / "sel4-private-memory-adaptive-rv64.zti",
+}
+ADAPTIVE_OVERCOMMIT_FIXTURE = (
+    GENERATION_COMPOSITIONS / "sel4-private-memory-adaptive-overcommit.zti"
+)
+ADAPTIVE_COORDINATOR = "private-adaptive-coordinator"
+# The schedule's length, which the coordinator also prints. Pinned because a
+# composition that shortened the schedule would otherwise pass with fewer
+# boundaries exercised; the individual deltas are read from the transcript and
+# checked against the declared maxima instead of being restated.
+ADAPTIVE_STEPS = 18
+# Steps whose refusal follows from the declaration alone: one page past a
+# subject maximum, and one page past the guaranteed subject's maximum. Their
+# cause must be `maximum`, never an inventory accident.
+ADAPTIVE_DECLARED_REFUSALS = (13, 14)
+# The step whose request is inside its declared maximum but beyond any
+# inventory. It must be refused, and for a resource reason rather than the
+# declaration, or the two boundaries are not distinguishable.
+ADAPTIVE_POOL_REFUSAL = 12
+ADAPTIVE_ENTITLEMENT_DOMAIN = b"slime-private-memory-entitlement-v2\0"
+
 CYCLES_CLOSURE = "sel4-private-memory-cycles"
 CYCLES_RV64_IMAGE = ROOT / "build" / "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf"
 CYCLES_FIXTURE = GENERATION_COMPOSITIONS / "sel4-private-memory-cycles.zti"
@@ -488,6 +517,170 @@ CONSERVATION_CHAINS = (
     )),
 )
 
+# MEM-ADAPTIVE. Every numeric policy field is a capture rather than a literal:
+# `check_adaptive_plane` resolves it against the composition's own declaration,
+# so a plane whose maxima changed fails there instead of quietly qualifying a
+# different policy. The entitlement column is a 16-hex identity prefix because
+# the root cannot invert the identity hash; the validator recomputes
+# `sha256("slime-private-memory-entitlement-v2\0" || name)` from the declared
+# name and requires the transcript's prefix to be that one.
+ADAPTIVE_BINDING = (
+    r"entitlement=[0-9a-f]{16} incarnation=(\d+) guarantee=(\d+) maximum=(\d+) "
+    r"mode=fixed installed=(\d+) base=0x[0-9a-f]+"
+)
+# Deny-by-default is spelled out rather than captured: every field of an
+# unbound instance's line is a constant, so a root that bound something to an
+# instance the policy never names cannot satisfy it.
+ADAPTIVE_UNBOUND = (
+    r"entitlement=none incarnation=0 guarantee=0 maximum=0 mode=none installed=0 base=0x0"
+)
+ADAPTIVE_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        # Reserve-first: the guarantees are physically reserved and reported
+        # before any task exists, and each task's binding is then printed
+        # during that task's own construction. `init` and the coordinator are
+        # declared instances the policy does not name, so their lines are the
+        # deny-by-default half; without a line per instance a denied holder is
+        # indistinguishable from an absent one.
+        "the declared policy is reserved before any task is constructed",
+        (
+            r"SLIME_MEM policy entitlements=(\d+) subjects=(\d+) guarantee_pages=(\d+) "
+            r"reserved_bytes=(\d+) reserved_slots=(\d+) reserved_descriptors=(\d+) "
+            r"reserved_extents=(\d+) reserved_tables=(\d+) pool_bytes=(\d+)",
+            r"SLIME_MEM entitlement task=\d+ instance=init " + ADAPTIVE_UNBOUND,
+            r"SLIME_MEM entitlement task=\d+ instance=private-adaptive-coordinator "
+            + ADAPTIVE_UNBOUND,
+            r"SLIME_MEM entitlement task=\d+ instance=private-adaptive-pool-b "
+            + ADAPTIVE_BINDING,
+        ),
+    ),
+    (
+        # The coordinator reports its own refusal before it spawns anything, so
+        # deny-by-default is observed by a live task rather than inferred from
+        # an absent grant. Both dynamically spawned subjects then bind on the
+        # spawn path, and a second live incarnation of one of them must not
+        # acquire the entitlement again.
+        #
+        # The duplicate is refused by `class=instance-live`, before a task
+        # exists and therefore before any entitlement is bound. That is the
+        # stronger of the two possible refusals and it is the one the root
+        # actually makes: an earlier revision expected the ledger's duplicate
+        # arm instead, which can only be reached by constructing a second task
+        # for a live instance and unwinding it. The claim — one live
+        # incarnation per subject, never two — is asserted directly over the
+        # binding and retirement record by `check_adaptive_incarnations`.
+        "a task with no entitlement is refused, and a bound one is not bound twice",
+        (
+            r"\[private-adaptive\] coordinator subject=private-adaptive-coordinator "
+            r"entitlement=none base=0x0 pages=0 refused=1",
+            r"SLIME_MEM entitlement task=\d+ instance=private-adaptive-guaranteed "
+            + ADAPTIVE_BINDING,
+            r"SLIME_MEM entitlement task=\d+ instance=private-adaptive-pool-a "
+            + ADAPTIVE_BINDING,
+            r"SLIME_GRAPH spawn refused task=\d+ child=private-adaptive-guaranteed "
+            r"class=instance-live",
+            r"\[private-adaptive\] duplicate subject=private-adaptive-guaranteed "
+            r"refused=1 live_base=0x[0-9a-f]+",
+        ),
+    ),
+    (
+        # The schedule's own order, which is the claim. Only the boundaries and
+        # the terminals are pinned positionally; `check_adaptive_schedule` reads
+        # every step and joins it to the root's adjudication of the same
+        # request.
+        "the repeated request schedule reaches each declared boundary and recovers",
+        (
+            r"\[private-adaptive\] step=0 subject=private-adaptive-pool-b delta=(\d+) "
+            r"served=1 pages=(\d+) base=0x[0-9a-f]+",
+            r"\[private-adaptive\] step=12 subject=private-adaptive-pool-a delta=(\d+) "
+            r"served=0 pages=(\d+) base=0x[0-9a-f]+",
+            r"\[private-adaptive\] step=13 subject=private-adaptive-pool-b delta=(\d+) "
+            r"served=0 pages=(\d+) base=0x[0-9a-f]+",
+            r"\[private-adaptive\] step=14 subject=private-adaptive-guaranteed delta=(\d+) "
+            r"served=0 pages=(\d+) base=0x[0-9a-f]+",
+            r"\[private-adaptive\] step=17 subject=private-adaptive-guaranteed delta=(\d+) "
+            r"served=1 pages=(\d+) base=0x[0-9a-f]+",
+            r"\[private-adaptive\] schedule steps=18 served=(\d+) refused=(\d+) "
+            r"digest=0x[0-9a-f]{16}",
+        ),
+    ),
+    (
+        # A deliberate fault, the backing it returns to its own entitlement, and
+        # a replacement that binds that entitlement once. `entitlement_committed=0`
+        # after retirement is the half that says a dead incarnation's charge did
+        # not survive it; `same_base=1` is the half that says the replacement got
+        # the same declared window rather than a new one.
+        "a faulted incarnation returns its backing and its replacement rebinds once",
+        (
+            r"\[private-adaptive\] restart subject=private-adaptive-restart incarnation=0 "
+            r"base=0x[0-9a-f]+ pages=(\d+) end=fault",
+            r"\[private-adaptive:restart\] end incarnation=0 pages=(\d+) refused=0 kind=fault",
+            r"SLIME_MEM adaptive retired task=\d+ instance=private-adaptive-restart "
+            r"entitlement=[0-9a-f]{16} returned_pages=(\d+) entitlement_committed=0 "
+            r"quarantined=0",
+            r"SLIME_MEM entitlement task=\d+ instance=private-adaptive-restart "
+            + ADAPTIVE_BINDING,
+            r"\[private-adaptive\] restart subject=private-adaptive-restart incarnation=1 "
+            r"base=0x[0-9a-f]+ pages=(\d+) same_base=1 end=exit",
+            r"\[private-adaptive:restart\] end incarnation=1 pages=(\d+) refused=0 kind=exit",
+        ),
+    ),
+    (
+        # Omission denies. The refusal names `cause=entitlement`, which is a
+        # stronger statement than a zero maximum: the task carries no window at
+        # all, so it is refused before any maximum arithmetic is reached.
+        "an omitted subject holds no window, is refused, and still exits cleanly",
+        (
+            r"SLIME_MEM entitlement task=\d+ instance=private-adaptive-denied "
+            + ADAPTIVE_UNBOUND,
+            r"SLIME_MEM adaptive refused task=\d+ instance=private-adaptive-denied "
+            r"entitlement=none delta=1 pages=0 cause=entitlement entitlement_committed=0 "
+            r"pool_bytes=(\d+)",
+            r"\[private-adaptive\] denied subject=private-adaptive-denied pages=0 base=0x0 "
+            r"refused=1 end=exit",
+            r"\[private-adaptive:denied\] end incarnation=0 pages=0 refused=1 kind=exit",
+        ),
+    ),
+    (
+        "every surviving subject kept its window and its bytes, then returned them",
+        (
+            r"\[private-adaptive\] stable subjects=3 guaranteed_pages=(\d+) "
+            r"pool_a_pages=(\d+) pool_b_pages=(\d+)",
+            r"\[private-adaptive:guaranteed\] end incarnation=0 pages=(\d+) refused=(\d+) "
+            r"kind=exit",
+            r"\[private-adaptive:pool-a\] end incarnation=0 pages=(\d+) refused=(\d+) kind=exit",
+            r"\[private-adaptive:pool-b\] end incarnation=0 pages=(\d+) refused=(\d+) kind=exit",
+            r"\[private-adaptive\] complete steps=18 served=(\d+) refused=(\d+) restarts=1 "
+            r"duplicates=1 denied=1 exits=5 digest=0x[0-9a-f]{16}",
+            HEALTHY_MARKER,
+        ),
+    ),
+)
+
+# The over-guaranteed negative composition, kept out of `CHAINS` on purpose: its
+# terminal is a `SLIME_MEM FAIL` line, which every other arm vetoes, so a
+# synthetic transcript carrying both would be self-contradictory. It has its own
+# validator and its own controls.
+ADAPTIVE_REFUSAL_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "a guarantee no inventory can fund is refused before anything is published",
+        (
+            r"SLIME_MEM FAIL adaptive guarantee exceeds inventory required=(\d+) "
+            r"available=(\d+) published=0",
+        ),
+    ),
+)
+ADAPTIVE_REFUSAL_FORBIDDEN: tuple[str, ...] = (
+    r"SLIME_GRAPH staged ",
+    r"SLIME_GRAPH staged task=",
+    r"SLIME_GRAPH spawned ",
+    r"SLIME_GRAPH activated ",
+    r"SLIME_MEM policy entitlements=",
+    r"SLIME_MEM entitlement task=",
+    r"\[private-adaptive\] ",
+    HEALTHY_MARKER,
+)
+
 # The union, for `sel4_gate_control_check`'s coverage count only. Each arm
 # matches its own chains; a transcript from one arm does not carry the other's
 # markers, so matching the union would fail every run.
@@ -495,6 +688,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     CEILING_CHAINS + CYCLE_CHAINS + CAPACITY_CHAINS + ISOLATION_CHAINS
     + CSPACE_CHAINS + METADATA_CHAINS + BOOTSTRAP_CHAINS
     + ELASTIC_CHAINS + FRAGMENTATION_CHAINS + ROLLBACK_CHAINS + CONSERVATION_CHAINS
+    + ADAPTIVE_CHAINS
 )
 
 EXPECTED_UNORDERED: tuple[str, ...] = (
@@ -532,6 +726,18 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[init\] private memory cycles plane fail",
     r"SLIME_GRAPH task reclaim incomplete task=\d+",
     r"SLIME_GRAPH holder reclaim incomplete task=\d+",
+    # MEM-ADAPTIVE. The coordinator's and each holder's own diagnostics: a
+    # holder that measured a moved base, a charged refusal, or a non-zero page
+    # it was just served says so on one line, which is more informative than
+    # the missing report that would otherwise be the only evidence. The two
+    # spellings are separate patterns rather than one optional group so the
+    # meta-gate can instantiate both.
+    r"\[private-adaptive\] FAIL",
+    r"\[private-adaptive:[a-z-]+\] FAIL",
+    # A subject the adaptive policy does not name must never receive a window;
+    # a base on a denied line is the whole deny-by-default clause failing
+    # silently, so it is vetoed rather than left to a missing marker.
+    r"\[private-adaptive\] denied subject=\S+ pages=[1-9]",
 )
 
 
@@ -621,6 +827,9 @@ def boot(
     section: str,
     qemu_binary: str,
     image: Path,
+    additional_arguments: tuple[str, ...] = (),
+    memory_mib: int | None = None,
+    timeout: int = TIMEOUT,
 ) -> str:
     qemu = shutil.which(qemu_binary)
     if qemu is None:
@@ -634,11 +843,15 @@ def boot(
         "-smp",
         str(profile_integer(profile, "cpus", fail, section)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib', fail, section)}M",
+        f"size={memory_mib or profile_integer(profile, 'memory_mib', fail, section)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
         *qemu_kernel_arguments(qemu_binary, image, fail),
+        # An arm whose holder drives a device needs one attached: the root
+        # probes the platform's stable device order, and an unattached plane
+        # would admit an IO budget naming a transport that is not there.
+        *additional_arguments,
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
     try:
@@ -653,7 +866,7 @@ def boot(
         )
     except OSError as error:
         fail(f"cannot run QEMU: {error}")
-    watchdog = threading.Timer(TIMEOUT, process.kill)
+    watchdog = threading.Timer(timeout, process.kill)
     watchdog.start()
     lines: list[str] = []
     # `SLIME_ROOT READY` as well as the graph's terminal: the rollback case
@@ -663,6 +876,7 @@ def boot(
         r"SLIME_GRAPH HEALTHY|SLIME_ROOT READY|SLIME_ROOT FATAL|private memory plane fail"
         r"|\[private-memory-probe\] FAIL|\[private-heap-probe:(?:granted|denied|both)\] FAIL"
         r"|\[private-memory-1g\] FAIL|\[private-heap-probe:stress\] FAIL"
+        r"|\[private-matrix(?::[a-z]+)?\] FAIL"
     )
     try:
         assert process.stdout is not None
@@ -1724,11 +1938,11 @@ def run_cycles_arm(platform: str) -> None:
     )
 
 
-def check_capacity_conservation(transcript: str) -> None:
+def check_capacity_conservation(transcript: str, prefix: str = "") -> None:
     matches = list(re.finditer(r"^SLIME_MEM census (.*)$", transcript, re.MULTILINE))
     rows = [match.group(1) for match in matches]
     if len(rows) < 2:
-        fail("capacity conservation: missing initial or final census")
+        fail(prefix + "capacity conservation: missing initial or final census")
     parsed = [dict((key, int(value)) for key, value in re.findall(r"(\w+)=(\d+)", row)) for row in rows]
     initial, final = parsed[0], parsed[-1]
     required = {
@@ -1737,22 +1951,22 @@ def check_capacity_conservation(transcript: str) -> None:
         "shared_anchors", "preserved_anchors", "allocations_free", "infrastructure_owned",
     }
     if any(not required <= row.keys() for row in (initial, final)):
-        fail("capacity conservation: incomplete resource ledger")
+        fail(prefix + "capacity conservation: incomplete resource ledger")
     if initial["mapped_pages"] != 0 or final["mapped_pages"] != 0 or final["active_extent_bytes"] != 0:
-        fail("capacity conservation: workload did not return private mappings and active backing")
+        fail(prefix + "capacity conservation: workload did not return private mappings and active backing")
     available = ("untyped", "reusable", "shared_reusable", "preserved_bytes", "infrastructure_owned")
     expected = sum(initial[key] for key in available) + initial["active_extent_bytes"]
     observed = sum(final[key] for key in available)
     if observed != expected:
-        fail(f"capacity conservation: available backing {observed}, expected {expected}")
+        fail(prefix + f"capacity conservation: available backing {observed}, expected {expected}")
     slots = ("free_slots", "anchors", "shared_anchors", "preserved_anchors")
     if sum(final[key] for key in slots) < sum(initial[key] for key in slots):
-        fail("capacity conservation: root slots lost beyond explicitly retained anchors")
+        fail(prefix + "capacity conservation: root slots lost beyond explicitly retained anchors")
     if final["allocations_free"] < initial["allocations_free"]:
-        fail("capacity conservation: allocation descriptors lost")
+        fail(prefix + "capacity conservation: allocation descriptors lost")
     interval = transcript[matches[0].end():matches[-1].start()]
     if not re.search(r"^SLIME_ALLOC preserved parent=\d+ slot=\d+ paddr=\d+ bytes=\d+$", interval, re.MULTILINE):
-        fail("capacity conservation: preserved backing was never allocated")
+        fail(prefix + "capacity conservation: preserved backing was never allocated")
 
 
 def check_backing_ledger(transcript: str) -> None:
@@ -1765,6 +1979,8 @@ def check_backing_ledger(transcript: str) -> None:
     snapshots: dict[str, dict[str, list[dict[str, int | str]]]] = {}
     census: dict[str, int] | None = None
     completed: list[str] = []
+    # Task extents a buddy split currently divides: parent slot -> children.
+    split_extents: dict[int, list[int]] = {}
 
     def fields(line: str) -> dict[str, int | str]:
         result: dict[str, int | str] = {}
@@ -1870,7 +2086,7 @@ def check_backing_ledger(transcript: str) -> None:
                 fail(prefix + "unsplit shared parent has children")
         # All event leaves and remaining tails must partition the initial
         # BootInfo inventory exactly. Parent/child ancestry is never summed.
-        leaves = [(start, size) for _, start, size in consumed]
+        leaves = [(start, size) for slot, start, size in consumed if slot not in split_extents]
         leaves += [(integer(node, "paddr") + integer(node, "used"), integer(node, "bytes") - integer(node, "used"))
                    for node in nodes.values() if integer(node, "used") < integer(node, "bytes")]
         leaves.sort()
@@ -1958,6 +2174,31 @@ def check_backing_ledger(transcript: str) -> None:
                 fail(prefix + "split is not a buddy half")
             consume_range(parent, start, size)
             nodes[child] = {"kind": "preserved", "paddr": start, "bytes": size, "used": 0}
+        elif kind == "extent_split":
+            exact(row, "parent child paddr bytes")
+            parent, child, start, size = (integer(row, key) for key in ("parent", "child", "paddr", "bytes"))
+            base, length = allocation(parent, size * 2)
+            halves = split_extents.setdefault(parent, [])
+            if len(halves) >= 2 or start != base + len(halves) * size or any(slot == child for slot, _, _ in consumed):
+                fail(prefix + "extent split child is not the next buddy half of its parent")
+            halves.append(child)
+            consumed.append((child, start, size))
+        elif kind == "infrastructure_extent":
+            # A returned extent adopted whole: it stays one owned leaf, now
+            # held by infrastructure, so the partition does not change.
+            exact(row, "parent paddr bytes")
+            parent, start, size = (integer(row, key) for key in ("parent", "paddr", "bytes"))
+            if parent in split_extents or allocation(parent, size) != (start, size):
+                fail(prefix + "infrastructure adopted an extent it does not own whole")
+        elif kind == "extent_merge":
+            exact(row, "parent paddr bytes")
+            parent, start, size = (integer(row, key) for key in ("parent", "paddr", "bytes"))
+            if allocation(parent, size) != (start, size) or len(split_extents.get(parent, [])) != 2:
+                fail(prefix + "merge of an extent that was not split in two")
+            if any(child in split_extents for child in split_extents[parent]):
+                fail(prefix + "merge of an extent whose child is still split")
+            children = set(split_extents.pop(parent))
+            consumed[:] = [entry for entry in consumed if entry[0] not in children]
         elif kind == "consume":
             exact(row, "source parent slot paddr bytes count")
             parent, slot, start, size, count = (integer(row, key) for key in ("parent", "slot", "paddr", "bytes", "count"))
@@ -2730,6 +2971,870 @@ def check_cross_holder_conservation(transcript: str) -> None:
         fail(prefix + "no root CSlots survived the workload")
 
 
+def entitlement_identity(name: str) -> str:
+    """The 16-hex prefix the root prints for the entitlement named `name`.
+
+    The root holds only the hashed identity — the policy's wire form carries no
+    names — so it cannot print one. Recomputing the hash here from the *spec's*
+    declared name is what keeps the marker a measurement: a root that bound a
+    different entitlement prints a prefix this does not produce.
+    """
+    return hashlib.sha256(ADAPTIVE_ENTITLEMENT_DOMAIN + name.encode()).hexdigest()[:16]
+
+
+def decoded_manifest(fixture: Path) -> dict:
+    """A derived composition manifest, decoded by the pinned Zutai tool."""
+    environment = os.environ.copy()
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    process = subprocess.run(
+        [str(binary()), "json", str(fixture)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if process.returncode != 0:
+        fail(f"could not decode {fixture.name}: {process.stdout.strip()}")
+    return json.loads(process.stdout)
+
+
+def declared_policy(fixture: Path) -> dict:
+    """The adaptive policy this arm's own composition declares.
+
+    Read from the derived manifest rather than restated, for the same reason
+    `declared_quotas` is: the gate asserts that the declaration is what the root
+    reserved and enforced, and a second copy of the numbers here would compare
+    this file against itself.
+    """
+    manifest = decoded_manifest(fixture)
+    policy = manifest.get("privateMemoryPolicy")
+    if policy is None:
+        fail(f"{fixture.name} declares no adaptive policy, so the arm asserts nothing")
+    if manifest.get("privateMemoryBudget"):
+        fail(f"{fixture.name} carries a fixed budget beside its adaptive policy")
+    instances = {entry["name"]: entry for entry in manifest["instances"]}
+    entitlements = {entry["name"]: entry for entry in policy["entitlements"]}
+    subjects = {entry["instance"]: entry for entry in policy["subjects"]}
+    unknown = sorted(set(subjects) - set(instances))
+    if unknown:
+        fail(f"{fixture.name}: the policy names undeclared instance(s): {unknown}")
+    if ADAPTIVE_COORDINATOR in subjects:
+        fail(f"{fixture.name}: the coordinator is a subject, so it cannot prove denial")
+    shared = [
+        name
+        for name, entry in entitlements.items()
+        if sum(1 for subject in subjects.values() if subject["entitlement"] == name) > 1
+    ]
+    if not shared:
+        fail(f"{fixture.name}: no entitlement is shared, so cohort accounting is untested")
+    owners = {name for entry in subjects for name in (instances[entry]["owner"],)}
+    if len(owners) < 2:
+        fail(f"{fixture.name}: every subject has one owner, so the shared cohort is trivial")
+    return {
+        "entitlements": entitlements,
+        "subjects": subjects,
+        "instances": instances,
+        "reserve": policy["reserve"],
+        "shared": shared,
+    }
+
+
+def adaptive_bindings(transcript: str) -> dict[str, tuple[str, ...]]:
+    """Every `SLIME_MEM entitlement` line, keyed by instance.
+
+    A tuple per instance rather than one record: the restartable subject binds
+    twice, and collapsing its two incarnations would hide exactly the
+    multiplication this arm exists to refuse.
+    """
+    prefix = "SLIME_MEM entitlement"
+    rows = adaptive_rows(
+        transcript,
+        prefix,
+        prefix + r" task=(\d+) instance=(\S+) entitlement=(\S+) incarnation=(\d+) "
+        r"guarantee=(\d+) maximum=(\d+) mode=(\S+) installed=(\d+) base=(0x[0-9a-f]+)",
+        "adaptive plane: ",
+    )
+    bindings: dict[str, list[tuple[str, ...]]] = {}
+    for row in rows:
+        bindings.setdefault(row.group(2), []).append(row.groups())
+    return {name: tuple(entries) for name, entries in bindings.items()}
+
+
+def check_adaptive_bindings(transcript: str, policy: dict) -> None:
+    """Every declared instance bound exactly what its composition declares.
+
+    Both directions are checked, because only one of them is deny-by-default: a
+    subject must receive its declared guarantee and maximum, and an instance the
+    policy does not name must receive no window at all.
+    """
+    prefix = "adaptive plane: "
+    bindings = adaptive_bindings(transcript)
+    missing = sorted(set(policy["instances"]) - set(bindings))
+    if missing:
+        fail(prefix + f"no entitlement decision was reported for {missing}")
+    reserved = re.search(
+        r"^SLIME_MEM policy entitlements=(\d+) subjects=(\d+) guarantee_pages=(\d+) "
+        r"reserved_bytes=(\d+) reserved_slots=(\d+) reserved_descriptors=(\d+) "
+        r"reserved_extents=(\d+) reserved_tables=(\d+) pool_bytes=(\d+)$",
+        transcript,
+        re.MULTILINE,
+    )
+    if reserved is None:
+        fail(prefix + "no policy reservation was reported")
+    counts = tuple(int(value) for value in reserved.groups())
+    if counts[0] != len(policy["entitlements"]) or counts[1] != len(policy["subjects"]):
+        fail(prefix + "the reserved policy is not the declared one")
+    promised = sum(entry["guaranteePages"] for entry in policy["entitlements"].values())
+    if counts[2] != promised:
+        fail(prefix + f"reserved {counts[2]} guaranteed page(s), declared {promised}")
+    # The sum of elastic maxima is a permission, never a promise. If admission
+    # had reserved it, this plane's 1537 MiB subjects alone would exceed either
+    # reference machine's RAM.
+    permitted = sum(entry["maximumPages"] for entry in policy["subjects"].values())
+    if counts[2] >= permitted:
+        fail(prefix + "admission reserved the sum of elastic maxima as a guarantee")
+    # `reserved_*` describe the guarantee reservations the allocator
+    # materialized; the policy's `reserve` record is the operational headroom
+    # the ledger subtracts from the pool before them. They are different
+    # quantities over different owners, so comparing one against the other
+    # says nothing: a guarantee served from coarse aligned parents needs two
+    # dozen extents where the operational reserve asks for a hundred of
+    # headroom, and neither number bounds the other.
+    #
+    # What is checkable here is that the reservation covers the promise at its
+    # worst placement: every guaranteed page can need its own payload granule,
+    # its own leaf table, and a descriptor and CSlot for each. Extents are
+    # deliberately only bounded below by one per promising entitlement,
+    # because how many extents a guarantee needs is the reservation's
+    # granularity rather than its page count.
+    #
+    # That the operational reserve is subtracted at all is *not* observable
+    # from this transcript, which reports the residual pool and not the
+    # inventory it was computed from. It is covered by the ledger's own tests
+    # (`guarantees_and_reserves_are_simultaneously_affordable_or_admission_fails`),
+    # which refuse an admission whose reserve and guarantees together exceed
+    # what is available.
+    page_bytes = 4096
+    if counts[3] < promised * page_bytes:
+        fail(prefix + "the reservation is smaller than the payload it promises")
+    for index, field in ((4, "slots"), (5, "descriptors"), (7, "tables")):
+        if counts[index] < promised:
+            fail(prefix + f"the reservation funds fewer {field} than it promises pages")
+    promising = sum(
+        1 for entry in policy["entitlements"].values() if entry["guaranteePages"] > 0
+    )
+    if counts[6] < promising:
+        fail(prefix + "an entitlement promising pages reserved no backing extent")
+    if counts[8] == 0:
+        fail(prefix + "reservation consumed the whole ordinary pool")
+    # Reserve-first: the reservation is reported before any task is constructed.
+    first_task = re.search(
+        r"^SLIME_(?:MEM entitlement task=|GRAPH (?:staged|spawned|activated))",
+        transcript,
+        re.MULTILINE,
+    )
+    if first_task is None or first_task.start() < reserved.end():
+        fail(prefix + "a task was constructed before the guarantees were reserved")
+
+    for name, entries in bindings.items():
+        subject = policy["subjects"].get(name)
+        for task, _instance, identity, incarnation, guarantee, maximum, mode, installed, base in entries:
+            if subject is None:
+                if (identity, incarnation, guarantee, maximum, mode, installed, base) != (
+                    "none",
+                    "0",
+                    "0",
+                    "0",
+                    "none",
+                    "0",
+                    "0x0",
+                ):
+                    fail(prefix + f"{name} is not a declared subject but was bound something")
+                continue
+            entitlement = policy["entitlements"][subject["entitlement"]]
+            expected = entitlement_identity(subject["entitlement"])
+            if identity != expected:
+                fail(prefix + f"{name} bound entitlement {identity}, declared {expected}")
+            if mode != subject["maximumMode"]:
+                fail(prefix + f"{name} bound maximum mode {mode!r}")
+            if int(maximum) != subject["maximumPages"] or int(installed) != subject["maximumPages"]:
+                fail(prefix + f"{name}'s installed address maximum is not its declared one")
+            if int(guarantee) != entitlement["guaranteePages"]:
+                fail(prefix + f"{name} bound a guarantee its entitlement does not declare")
+            if base == "0x0" or task == "0":
+                fail(prefix + f"{name} is a declared subject but received no window")
+    # A cohort's guarantee is one promise, however many subjects share it. Each
+    # subject binding its entitlement's full guarantee is how the marker reads;
+    # what must not happen is the *reservation* carrying it once per subject.
+    for name in policy["shared"]:
+        members = [
+            instance
+            for instance, subject in policy["subjects"].items()
+            if subject["entitlement"] == name
+        ]
+        identity = entitlement_identity(name)
+        bound = {
+            entry[2]
+            for instance in members
+            for entry in bindings.get(instance, ())
+        }
+        if bound != {identity}:
+            fail(prefix + f"the shared entitlement {name} was not one identity across {members}")
+
+
+def adaptive_adjudications(transcript: str) -> list[tuple[str, dict[str, str]]]:
+    """The root's grant/refusal lines, in the order it emitted them."""
+    pattern = re.compile(
+        r"^SLIME_MEM adaptive (grant|refused) task=\d+ instance=(?P<instance>\S+) "
+        r"entitlement=(?P<entitlement>\S+) delta=(?P<delta>\d+) "
+        r"(?:previous=(?P<previous>\d+) )?pages=(?P<pages>\d+) "
+        r"(?:guaranteed=(?P<guaranteed>\d+) elastic=(?P<elastic>\d+) )?"
+        r"(?:cause=(?P<cause>\S+) )?"
+        r"entitlement_committed=(?P<committed>\d+) pool_bytes=(?P<pool>\d+)",
+        re.MULTILINE,
+    )
+    declared = len(re.findall(r"^SLIME_MEM adaptive (?:grant|refused) ", transcript, re.MULTILINE))
+    rows = [(match.group(1), match.groupdict()) for match in pattern.finditer(transcript)]
+    if len(rows) != declared:
+        fail("adaptive plane: malformed SLIME_MEM adaptive grant/refused line")
+    return rows
+
+
+def adaptive_steps(transcript: str) -> list[tuple[int, str, int, bool, int, str]]:
+    """Every schedule step the coordinator reported, in its own order."""
+    prefix = "adaptive plane: "
+    # Counted directly rather than through `adaptive_rows`: that helper keys its
+    # population check on a marker followed by a space, and this marker's first
+    # field is attached to it.
+    declared = len(re.findall(r"^\[private-adaptive\] step=", transcript, re.MULTILINE))
+    rows = list(
+        re.finditer(
+            r"^\[private-adaptive\] step=(\d+) subject=(\S+) delta=(\d+) served=([01]) "
+            r"pages=(\d+) base=(0x[0-9a-f]+)$",
+            transcript,
+            re.MULTILINE,
+        )
+    )
+    if len(rows) != declared:
+        fail(prefix + "malformed schedule step report")
+    steps = [
+        (
+            int(row.group(1)),
+            row.group(2),
+            int(row.group(3)),
+            row.group(4) == "1",
+            int(row.group(5)),
+            row.group(6),
+        )
+        for row in rows
+    ]
+    if [entry[0] for entry in steps] != list(range(ADAPTIVE_STEPS)):
+        fail(prefix + "the schedule did not run every step exactly once, in order")
+    return steps
+
+
+def check_adaptive_schedule(transcript: str, policy: dict) -> list[tuple]:
+    """Join each request the coordinator issued to the root's own adjudication.
+
+    Neither side is authoritative alone. The coordinator reports what the holder
+    measured; the root reports what it decided. A root that answered a different
+    request, charged a refused one, or served a subject past its declared
+    maximum disagrees with the holder here.
+    """
+    prefix = "adaptive plane: "
+    steps = adaptive_steps(transcript)
+    adjudications = adaptive_adjudications(transcript)
+    subjects = {entry[1] for entry in steps}
+    scheduled = [entry for entry in adjudications if entry[1]["instance"] in subjects]
+    if len(scheduled) < len(steps):
+        fail(prefix + "the root adjudicated fewer requests than the schedule issued")
+    # Receipt order: the coordinator's calls are synchronous, so the root's
+    # decisions for the scheduled subjects must appear in the schedule's order.
+    for step, (kind, row) in zip(steps, scheduled[: len(steps)], strict=True):
+        number, instance, delta, served, pages, base = step
+        if row["instance"] != instance or int(row["delta"]) != delta:
+            fail(prefix + f"step {number} was adjudicated as a different request")
+        if (kind == "grant") != served:
+            fail(prefix + f"step {number}: the root and the holder disagree on the outcome")
+        if int(row["pages"]) != pages:
+            fail(prefix + f"step {number}: the root and the holder disagree on the extent")
+        subject = policy["subjects"][instance]
+        if pages > subject["maximumPages"]:
+            fail(prefix + f"step {number}: {instance} holds more than its declared maximum")
+        if served:
+            if int(row["guaranteed"] or 0) + int(row["elastic"] or 0) != delta:
+                fail(prefix + f"step {number}: the served sources do not sum to the request")
+        elif row["cause"] is None:
+            fail(prefix + f"step {number}: a refusal named no cause")
+        if int(row["pool"]) == 0:
+            fail(prefix + f"step {number}: the ordinary pool was reported empty")
+    # A refused request must charge nothing: the entitlement's committed total
+    # is unchanged against the previous decision for that entitlement.
+    committed: dict[str, int] = {}
+    for kind, row in scheduled:
+        identity = row["entitlement"]
+        current = int(row["committed"])
+        if kind == "refused" and identity in committed and committed[identity] != current:
+            fail(prefix + "a refused request changed its entitlement's committed total")
+        committed[identity] = current
+    # The two declaration-derived refusals, and the one inventory-derived one,
+    # must be distinguishable. The first pair asks one page past a declared
+    # maximum, so a root that refused them for lack of memory would be right by
+    # accident.
+    by_step = {step[0]: (kind, row) for step, (kind, row) in zip(steps, scheduled[: len(steps)], strict=True)}
+    for number in ADAPTIVE_DECLARED_REFUSALS:
+        kind, row = by_step[number]
+        subject = policy["subjects"][row["instance"]]
+        if int(row["delta"]) + int(row["pages"]) != subject["maximumPages"] + 1:
+            fail(prefix + f"step {number} is not one page past {row['instance']}'s maximum")
+        if kind != "refused" or row["cause"] != "maximum":
+            fail(prefix + f"step {number} was not refused on its declared maximum")
+    kind, row = by_step[ADAPTIVE_POOL_REFUSAL]
+    subject = policy["subjects"][row["instance"]]
+    if int(row["delta"]) + int(row["pages"]) != subject["maximumPages"]:
+        fail(prefix + "the pool-exhaustion step does not reach exactly its declared maximum")
+    if kind != "refused" or row["cause"] not in ("pool", "resource", "reservation"):
+        fail(prefix + "a request inside its permission was not refused for a resource reason")
+    # An idle maximum reserves nothing: the subject that never reached its
+    # maximum still let its cohort peer be served after it was refused.
+    if not any(served for _, instance, _, served, _, _ in steps[ADAPTIVE_POOL_REFUSAL + 1 :]):
+        fail(prefix + "no fitting request was served after the refusals")
+    for name in policy["shared"]:
+        members = {
+            instance
+            for instance, subject in policy["subjects"].items()
+            if subject["entitlement"] == name
+        }
+        if len({entry[1] for entry in steps} & members) < 2:
+            fail(prefix + f"only one member of the shared entitlement {name} issued requests")
+    return steps
+
+
+def check_adaptive_holder_reports(transcript: str, steps: list[tuple]) -> None:
+    """Each holder's own measurement of the request the coordinator issued to it.
+
+    A third independent report, and the one the other two cannot fake: the
+    coordinator prints what came back over the endpoint and the root prints what
+    it decided, while this line is what the holder read out of its own address
+    space. `zeroed=1` on exactly the served requests is the no-stale-bytes half;
+    `stable=1` is the claim that a refusal left the earlier stamps intact.
+    """
+    prefix = "adaptive plane: "
+    labels = {
+        "private-adaptive-guaranteed": "guaranteed",
+        "private-adaptive-pool-a": "pool-a",
+        "private-adaptive-pool-b": "pool-b",
+    }
+    pattern = re.compile(
+        r"^\[private-adaptive:([a-z-]+)\] request incarnation=(\d+) delta=(\d+) "
+        r"served=([01]) pages=(\d+) base=(0x[0-9a-f]+) zeroed=([01]) stable=([01])$",
+        re.MULTILINE,
+    )
+    declared = len(
+        re.findall(r"^\[private-adaptive:[a-z-]+\] request ", transcript, re.MULTILINE)
+    )
+    rows = list(pattern.finditer(transcript))
+    if len(rows) != declared:
+        fail(prefix + "malformed holder request report")
+    reported: dict[str, list[tuple[int, bool, int]]] = {}
+    for row in rows:
+        label, _incarnation, delta, served, pages, _base, zeroed, stable = row.groups()
+        if stable != "1":
+            fail(prefix + f"{label} lost an earlier stamp across a request")
+        if (zeroed == "1") != (served == "1"):
+            fail(prefix + f"{label} reported zeroing that does not follow its outcome")
+        reported.setdefault(label, []).append((int(delta), served == "1", int(pages)))
+    for instance, label in labels.items():
+        expected = [
+            (delta, served, pages)
+            for _number, subject, delta, served, pages, _base in steps
+            if subject == instance
+        ]
+        if reported.get(label) != expected:
+            fail(prefix + f"{label}'s own measurements differ from the schedule's report")
+
+
+def check_adaptive_lifecycle(transcript: str, policy: dict) -> None:
+    """The restartable subject, the omitted one, and the surviving three."""
+    prefix = "adaptive plane: "
+    restart = "private-adaptive-restart"
+    bindings = adaptive_bindings(transcript)
+    incarnations = [entry[3] for entry in bindings.get(restart, ())]
+    if incarnations != ["0", "1"]:
+        fail(prefix + "the restartable subject did not bind exactly two incarnations")
+    identities = {entry[2] for entry in bindings[restart]}
+    if identities != {entitlement_identity(policy["subjects"][restart]["entitlement"])}:
+        fail(prefix + "a replacement bound a different entitlement than its predecessor")
+    bases = {entry[8] for entry in bindings[restart]}
+    if len(bases) != 1:
+        fail(prefix + "a replacement received a different declared window")
+    retired = adaptive_rows(
+        transcript,
+        "SLIME_MEM adaptive retired",
+        r"SLIME_MEM adaptive retired task=\d+ instance=(\S+) entitlement=(\S+) "
+        r"returned_pages=(\d+) entitlement_committed=(\d+) quarantined=(\d+)",
+        prefix,
+    )
+    restarts = [row for row in retired if row.group(1) == restart]
+    if not restarts:
+        fail(prefix + "a faulted incarnation returned nothing to its entitlement")
+    if any(row.group(5) != "0" for row in retired):
+        fail(prefix + "reclamation quarantined backing, so its capacity is not proven returned")
+    guarantee = policy["entitlements"][policy["subjects"][restart]["entitlement"]]["guaranteePages"]
+    if int(restarts[0].group(3)) != guarantee or restarts[0].group(4) != "0":
+        fail(prefix + "a dead incarnation's charge outlived it")
+    # An incarnation is not a second entitlement. Both lives are served the same
+    # promise from the same reservation, and the cohort total after the
+    # replacement is one guarantee rather than two.
+    served = [
+        row
+        for kind, row in adaptive_adjudications(transcript)
+        if kind == "grant" and row["instance"] == restart
+    ]
+    if len(served) != 2:
+        fail(prefix + "the restartable subject was not served once per incarnation")
+    for row in served:
+        if int(row["pages"]) != guarantee or int(row["guaranteed"] or 0) != guarantee:
+            fail(prefix + "an incarnation's guarantee was not served from its reservation")
+    if [int(row["committed"]) for row in served] != [guarantee, guarantee]:
+        fail(prefix + "a replacement multiplied its entitlement's committed total")
+    denied = sorted(set(policy["instances"]) - set(policy["subjects"]))
+    for name in denied:
+        for entry in bindings.get(name, ()):
+            if entry[2] != "none":
+                fail(prefix + f"{name} is omitted from the policy but was bound {entry[2]}")
+    refusals = [row for kind, row in adaptive_adjudications(transcript) if kind == "refused"]
+    if not any(
+        row["instance"] in denied and row["cause"] == "entitlement" for row in refusals
+    ):
+        fail(prefix + "no omitted instance was refused on its absent entitlement")
+
+
+def check_adaptive_incarnations(transcript: str, policy: dict) -> None:
+    """No subject ever holds two live incarnations of its entitlement.
+
+    Asserted over the whole record rather than over one refusal, so it holds
+    however the root refuses a duplicate: for each subject, admitted bindings
+    and retirements must alternate, starting with a binding. Two admissions
+    without a retirement between them would be one subject holding its
+    entitlement twice, which is exactly what a cohort guarantee cannot survive.
+    """
+    prefix = "adaptive plane: "
+    events: dict[str, list[tuple[int, str]]] = {}
+    for match in re.finditer(
+        r"^SLIME_MEM adaptive incarnation instance=(\S+) entitlement=(\S+) "
+        r"live=(\d+) admitted=([01]) cause=(\S+)$",
+        transcript,
+        re.MULTILINE,
+    ):
+        if match.group(4) == "1":
+            events.setdefault(match.group(1), []).append((match.start(), "bind"))
+    for match in re.finditer(
+        r"^SLIME_MEM adaptive retired task=\d+ instance=(\S+) entitlement=\S+ "
+        r"returned_pages=\d+ entitlement_committed=\d+ quarantined=0$",
+        transcript,
+        re.MULTILINE,
+    ):
+        events.setdefault(match.group(1), []).append((match.start(), "retire"))
+    for name, ordered in events.items():
+        live = 0
+        for _, kind in sorted(ordered):
+            live += 1 if kind == "bind" else -1
+            if live > 1:
+                fail(prefix + f"{name} held two live incarnations of its entitlement")
+            if live < 0:
+                fail(prefix + f"{name} retired an incarnation it had not bound")
+    for name in policy["subjects"]:
+        if name not in events:
+            fail(prefix + f"{name} is a declared subject but never bound an incarnation")
+    # Every task that reports an entitlement must have had an admitted
+    # incarnation to report: a task holding a binding the record never admits
+    # would be an entitlement acquired outside the ledger.
+    bound = adaptive_bindings(transcript)
+    for name in policy["subjects"]:
+        admitted = sum(1 for _, kind in events.get(name, ()) if kind == "bind")
+        if admitted != len(bound.get(name, ())):
+            fail(
+                prefix
+                + f"{name} reported {len(bound.get(name, ()))} bound task(s) "
+                + f"against {admitted} admitted incarnation(s)"
+            )
+
+
+def check_adaptive_io_window(transcript: str) -> None:
+    """Device mappings meet the same private window every other path does.
+
+    Checked as its own ordered group rather than as a marker chain, because the
+    IO holder is an independent instance: its work is concurrent with the
+    coordinator's schedule, and pinning the two together in one global order
+    would assert a scheduling accident rather than the claim.
+
+    The claim is that the *destination* is what refuses. The positive controls
+    run first with the same capabilities, rights and device epoch, so a
+    refusal below cannot be missing authority; the root's own marker names the
+    window each refused range fell inside.
+    """
+    prefix = "adaptive plane: "
+    ordered = (
+        r"SLIME_MEM entitlement task=(\d+) instance=private-adaptive-io-holder "
+        r"entitlement=[0-9a-f]{16} incarnation=0 guarantee=\d+ maximum=(\d+) mode=fixed "
+        r"installed=(\d+) base=0x([0-9a-f]+)",
+        r"\[private-adaptive:io-supervisor\] holder spawned",
+        r"\[private-adaptive:io\] outside_window mmio=1 queue=1",
+        r"\[private-adaptive:io\] mmio_backed_refused=1",
+        r"\[private-adaptive:io\] mmio_unbacked_refused=1",
+        r"\[private-adaptive:io\] queue_backed_refused=1",
+        r"\[private-adaptive:io\] queue_unbacked_refused=1",
+        r"\[private-adaptive:io\] pages=1",
+        r"\[private-adaptive:io\] device mappings excluded from the private window",
+    )
+    position = 0
+    binding = None
+    for pattern in ordered:
+        found = re.compile(pattern, re.MULTILINE).search(transcript, position)
+        if found is None:
+            fail(prefix + f"missing or out-of-order device-window marker: {pattern}")
+        if binding is None:
+            binding = found
+        position = found.end()
+    task, maximum, installed, base = binding.groups()
+    if installed != maximum:
+        fail(prefix + "the IO holder's installed window is not its declared maximum")
+    window_start = int(base, 16)
+    window_end = window_start + int(installed) * 4096
+    refusals = [
+        match
+        for match in re.finditer(
+            r"^SLIME_MEM mapping refused task=(\d+) base=0x([0-9a-f]+) end=0x([0-9a-f]+) "
+            r"window=0x([0-9a-f]+)\.\.0x([0-9a-f]+)$",
+            transcript,
+            re.MULTILINE,
+        )
+        if match.group(1) == task
+    ]
+    if len(refusals) != 4:
+        fail(
+            prefix
+            + f"the IO holder produced {len(refusals)} window refusals rather than four"
+        )
+    backed = 0
+    for refusal in refusals:
+        start, end = int(refusal.group(2), 16), int(refusal.group(3), 16)
+        if refusal.group(4) != base or int(refusal.group(5), 16) != window_end:
+            fail(prefix + "a refusal named a window other than the holder's own")
+        if start < window_start or end > window_end:
+            fail(prefix + "a refused range fell outside the window it was refused for")
+        backed += int(start == window_start)
+    # Two of the four are the holder's own backed page and two are reserved but
+    # unbacked: a window defended only where it is backed would leave the rest
+    # of the reservation open to a device mapping.
+    if backed != 2:
+        fail(prefix + "backed and unbacked destinations were not both refused")
+
+
+def check_adaptive_quarantine(transcript: str) -> None:
+    """A failed revoke retains an incarnation's charge until a retry lands.
+
+    The injected failure hits the first adaptive holder that dies, so the two
+    retirement records below are the same incarnation's: the first recovers
+    nothing and refunds nothing, and exactly one retry returns the pages the
+    holder actually held. A refund on the failed attempt would be capacity the
+    machine never recovered.
+    """
+    prefix = "adaptive lifecycle: "
+    injected = re.search(
+        r"^SLIME_MEM adaptive injected kind=revoke task=(\d+) instance=(\S+)$",
+        transcript,
+        re.MULTILINE,
+    )
+    if injected is None:
+        fail(prefix + "no revoke failure was injected, so nothing was proven")
+    task, instance = injected.groups()
+    retirements = [
+        match
+        for match in re.finditer(
+            r"^SLIME_MEM adaptive retired task=(\d+) instance=(\S+) entitlement=(\S+) "
+            r"returned_pages=(\d+) entitlement_committed=(\d+) quarantined=([01])$",
+            transcript,
+            re.MULTILINE,
+        )
+        if match.group(1) == task
+    ]
+    if len(retirements) < 2:
+        fail(prefix + "the quarantined incarnation was never retried")
+    first, second = retirements[0], retirements[1]
+    if first.group(6) != "1" or first.group(4) != "0":
+        fail(prefix + "a failed revoke returned capacity it had not recovered")
+    if second.group(6) != "0" or int(second.group(4)) == 0:
+        fail(prefix + "the retry did not return the incarnation's pages")
+    if second.group(2) != instance or second.group(3) != first.group(3):
+        fail(prefix + "the retry settled a different incarnation than it quarantined")
+    if any(row.group(6) == "1" for row in retirements[2:]):
+        fail(prefix + "the incarnation was quarantined more than once")
+    # The peers are untouched by one holder's failed cleanup: the plane still
+    # reaches its own terminal rather than stalling on the quarantine.
+    if not re.search(r"^\[private-adaptive\] complete steps=\d+ ", transcript, re.MULTILINE):
+        fail(prefix + "the plane did not complete after the quarantine was settled")
+
+
+def check_adaptive_construction_failure(transcript: str) -> None:
+    """A construction that fails after binding releases its incarnation once.
+
+    The injected failure lands after the incarnation is bound and before the
+    task is published. The entitlement must be held until the unwind's revoke
+    succeeds and then returned, so the retried spawn binds the *next*
+    incarnation of the same subject and completes its work, rather than a
+    second live incarnation beside a leaked one.
+    """
+    prefix = "adaptive lifecycle: "
+    injected = re.search(
+        r"^SLIME_MEM adaptive injected kind=construction task=(\d+) instance=(\S+)$",
+        transcript,
+        re.MULTILINE,
+    )
+    if injected is None:
+        fail(prefix + "no construction failure was injected, so nothing was proven")
+    task, instance = injected.groups()
+    after = transcript[injected.end():]
+    # The unwind's own revoke is injected to fail as well: the unpublished task
+    # is quarantined, and only the retirement retry may release it.
+    quarantined = re.search(
+        rf"^SLIME_MEM adaptive retired task={task} instance={re.escape(instance)} "
+        r"entitlement=(\S+) returned_pages=0 entitlement_committed=\d+ quarantined=1$",
+        after,
+        re.MULTILINE,
+    )
+    if quarantined is None:
+        fail(prefix + "the unwind's failed revoke did not quarantine its incarnation")
+    unwound = re.search(
+        rf"^SLIME_MEM adaptive retired task={task} instance={re.escape(instance)} "
+        r"entitlement=(\S+) returned_pages=0 entitlement_committed=\d+ quarantined=0$",
+        after,
+        re.MULTILINE,
+    )
+    if unwound is None or unwound.start() < quarantined.end():
+        fail(prefix + "the failed construction did not return its bound incarnation")
+    bindings = [
+        match
+        for match in re.finditer(
+            rf"^SLIME_MEM entitlement task=(\d+) instance={re.escape(instance)} "
+            r"entitlement=(\S+) incarnation=(\d+) ",
+            transcript,
+            re.MULTILINE,
+        )
+    ]
+    if len(bindings) != 2:
+        fail(prefix + "the subject was not bound exactly once per construction attempt")
+    failed, retried = bindings
+    if failed.group(1) != task or retried.group(1) == task:
+        fail(prefix + "the retried construction reused the failed task")
+    if failed.group(2) != retried.group(2):
+        fail(prefix + "the retry bound a different entitlement")
+    if int(retried.group(3)) != int(failed.group(3)) + 1:
+        fail(prefix + "the retry did not bind the next incarnation")
+    if retried.start() < injected.end() + unwound.end():
+        fail(prefix + "the retry bound before the failed incarnation was released")
+    if not re.search(
+        r"^\[private-adaptive:io-supervisor\] spawn refused, retrying$", after, re.MULTILINE
+    ):
+        fail(prefix + "the spawner never observed the refused construction")
+
+
+def check_adaptive_plane(transcript: str, policy: dict) -> list[tuple]:
+    check_adaptive_markers(transcript, ADAPTIVE_CHAINS, "adaptive plane: ")
+    check_adaptive_bindings(transcript, policy)
+    check_adaptive_incarnations(transcript, policy)
+    check_adaptive_io_window(transcript)
+    steps = check_adaptive_schedule(transcript, policy)
+    check_adaptive_holder_reports(transcript, steps)
+    check_adaptive_lifecycle(transcript, policy)
+    return steps
+
+
+def check_adaptive_determinism(first: str, second: str, steps: list[tuple]) -> None:
+    """The same schedule, on two boots of one image, answered the same way.
+
+    This is the arm's whole determinism claim and it cannot be made by one boot.
+    Compared semantically rather than as whole transcripts: task identities and
+    timer diagnostics legitimately differ between runs, while a step's subject,
+    delta, outcome, extent and window base may not.
+    """
+    prefix = "adaptive plane: "
+    replay = adaptive_steps(second)
+    if replay != steps:
+        for left, right in zip(steps, replay, strict=False):
+            if left != right:
+                fail(prefix + f"two boots answered step {left[0]} differently: {left} vs {right}")
+        fail(prefix + "two boots ran different schedules")
+    digests = [
+        re.findall(r"^\[private-adaptive\] schedule steps=\d+ served=\d+ refused=\d+ "
+                   r"digest=(0x[0-9a-f]{16})$", text, re.MULTILINE)
+        for text in (first, second)
+    ]
+    if len(digests[0]) != 1 or digests[0] != digests[1]:
+        fail(prefix + "the schedule digest is missing or differs between boots")
+
+
+def check_adaptive_refusal(transcript: str) -> None:
+    """The over-guaranteed composition must fail closed, before publication.
+
+    A late failure is not equivalent: the decision record's whole claim is that
+    a guarantee is funded before anything observes the graph, so this arm
+    refuses a transcript that staged, spawned, activated, or reported any task
+    at all.
+    """
+    prefix = "adaptive refusal: "
+    match_marker_contract(
+        transcript,
+        tuple(
+            (label, tuple("(?m)^" + pattern + "$" for pattern in patterns))
+            for label, patterns in ADAPTIVE_REFUSAL_CHAINS
+        ),
+        (),
+        lambda message: fail(prefix + message),
+    )
+    for pattern in ADAPTIVE_REFUSAL_FORBIDDEN:
+        found = re.search(pattern, transcript)
+        if found is not None:
+            fail(prefix + f"a refused admission still published {found.group(0)!r}")
+    refusal = re.search(
+        r"^SLIME_MEM FAIL adaptive guarantee exceeds inventory required=(\d+) "
+        r"available=(\d+) published=0$",
+        transcript,
+        re.MULTILINE,
+    )
+    if refusal is None:
+        fail(prefix + "no fail-closed refusal was reported")
+    required, available = (int(value) for value in refusal.groups())
+    if required <= available:
+        fail(prefix + "admission refused a guarantee its own inventory could fund")
+
+
+# The adaptive plane attaches one real transport, because its IO holder binds a
+# device and maps its MMIO: a plane with none would prove the window excluded a
+# mapping nobody could have made.
+ADAPTIVE_DEVICE_ARGUMENTS: tuple[str, ...] = (
+    "-drive",
+    "if=none,file=/dev/zero,format=raw,id=d0",
+    "-device",
+    "virtio-blk-device,drive=d0",
+)
+
+
+def run_adaptive_plane_arm(platform: str) -> None:
+    """MEM-ADAPTIVE: two boots of the declared-policy plane, then the negative.
+
+    Two boots rather than one, because the acceptance is about a *repeated*
+    request schedule producing the same grant/refusal sequence. One boot can
+    only show that a schedule ran.
+    """
+    section, qemu_binary = PLATFORMS[platform]
+    profile = load_qemu_profile(fail, PINS, section)
+    suffix = "-rv64" if platform == "qemu-riscv-virt" else ""
+    variant = f"sel4-private-memory-adaptive{suffix}"
+    policy = declared_policy(ADAPTIVE_FIXTURES[platform])
+    try:
+        built = build_closure_image(variant)
+    except ClosureImageError as error:
+        fail(str(error))
+    if (
+        built.build_result.get("platform") != platform
+        or built.build_result.get("targetProfile") != TARGET_PROFILES[platform]
+    ):
+        fail("adaptive image: closure target differs from requested platform")
+    digest = sha256_file(built.image, fail)
+    if digest != built.digest():
+        fail("adaptive image: packaged digest differs from build result")
+    transcripts = []
+    for boot_number in (0, 1):
+        transcript = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=built.image,
+            additional_arguments=ADAPTIVE_DEVICE_ARGUMENTS,
+        )
+        if sha256_file(built.image, fail) != digest:
+            fail("adaptive image: packaged bytes changed during execution")
+        (ROOT / "build" / f"{variant}-boot{boot_number}.log").write_text(
+            transcript + "\n", encoding="utf-8"
+        )
+        transcripts.append(transcript)
+    steps = check_adaptive_plane(transcripts[0], policy)
+    check_adaptive_plane(transcripts[1], policy)
+    check_adaptive_determinism(transcripts[0], transcripts[1], steps)
+
+    # The negative composition builds only for the reference architecture its
+    # spec declares; the RV64 arm inherits the same refusal through the same
+    # admission path and does not restate it.
+    refused_cases = 0
+    if platform == CLOSURE_PLATFORM:
+        declared_policy(ADAPTIVE_OVERCOMMIT_FIXTURE)
+        try:
+            negative = build_closure_image("sel4-private-memory-adaptive-overcommit")
+        except ClosureImageError as error:
+            fail(str(error))
+        refusal = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=negative.image,
+            additional_arguments=ADAPTIVE_DEVICE_ARGUMENTS,
+        )
+        (ROOT / "build" / "sel4-private-memory-adaptive-overcommit.log").write_text(
+            refusal + "\n", encoding="utf-8"
+        )
+        check_adaptive_refusal(refusal)
+        refused_cases = 1
+    served = sum(1 for entry in steps if entry[3])
+    print(
+        f"private-memory adaptive workload finished: {variant} image={digest}; "
+        f"{ADAPTIVE_STEPS} scheduled requests over {len(policy['subjects'])} declared "
+        f"subject(s) and {len(policy['entitlements'])} entitlement(s) produced the same "
+        f"{served} grant(s) and {ADAPTIVE_STEPS - served} refusal(s) on two boots, and "
+        f"{refused_cases} over-guaranteed composition(s) refused admission before publication"
+    )
+
+
+def run_adaptive_lifecycle_arm(platform: str) -> None:
+    """The adaptive plane under one injected revoke failure.
+
+    Its own closure rather than a case of the ordinary arm: the injection is
+    compiled into the root, so the image that carries it is a different build
+    key and must not be mistaken for the plane's ordinary evidence.
+    """
+    section, qemu_binary = PLATFORMS[platform]
+    profile = load_qemu_profile(fail, PINS, section)
+    variant = "sel4-private-memory-adaptive-lifecycle"
+    policy = declared_policy(ADAPTIVE_FIXTURES[platform])
+    try:
+        built = build_closure_image(variant)
+    except ClosureImageError as error:
+        fail(str(error))
+    digest = sha256_file(built.image, fail)
+    if digest != built.digest():
+        fail("adaptive lifecycle image: packaged digest differs from build result")
+    transcript = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image=built.image,
+        additional_arguments=ADAPTIVE_DEVICE_ARGUMENTS,
+    )
+    (ROOT / "build" / f"{variant}.log").write_text(transcript + "\n", encoding="utf-8")
+    check_adaptive_construction_failure(transcript)
+    check_adaptive_quarantine(transcript)
+    check_adaptive_incarnations(transcript, policy)
+    print(
+        f"private-memory adaptive lifecycle finished: {variant} image={digest}; "
+        "one construction failure after binding released its incarnation to a retried "
+        "spawn, and one injected revoke failure quarantined a live incarnation, "
+        "refunded nothing, and exactly one retry returned its pages"
+    )
+
+
 def run_adaptive_arm(platform: str, arm: str) -> None:
     section, qemu_binary = PLATFORMS[platform]
     profile = load_qemu_profile(fail, PINS, section)
@@ -2827,13 +3932,557 @@ def run_capacity_arm(platform: str, *, isolation: bool = False) -> None:
     print(f"private-memory capacity workload finished on {platform}")
 
 
+# MEM-ADAPTIVE's inventory matrix. One closure per architecture supplies the
+# root and every component; each pinned inventory row repackages that exact
+# root with its own kernel, device tree and loader.
+MATRIX_FIXTURES = {
+    "qemu-arm-virt": GENERATION_COMPOSITIONS / "sel4-private-memory-matrix.zti",
+    "qemu-riscv-virt": GENERATION_COMPOSITIONS / "sel4-private-memory-matrix-rv64.zti",
+}
+# Emulated time for the largest row's all-small walk dominates; the bound is a
+# hang detector, not a performance claim.
+MATRIX_TIMEOUT = 3600
+MATRIX_GUARANTEE = 1024
+MATRIX_BULK_UNIT = 64 * 512
+MATRIX_SMALL_UNIT = 511
+MATRIX_SCHEDULES = (
+    ("bulk", (("private-matrix-bulk", 0, MATRIX_BULK_UNIT),)),
+    ("small", (("private-matrix-small", 1, MATRIX_SMALL_UNIT),)),
+    (
+        "mixed",
+        (
+            ("private-matrix-bulk", 1, MATRIX_BULK_UNIT),
+            ("private-matrix-small", 2, MATRIX_SMALL_UNIT),
+        ),
+    ),
+)
+MATRIX_CYCLES = 20
+MATRIX_CYCLE_PAGES = 4095
+# Where each schedule's requests begin and end in the transcript. A schedule's
+# adjudications are only attributable to it between these two markers.
+MATRIX_SEGMENTS = {
+    "bulk": (
+        r"^\[private-matrix:bulk\] verified incarnation=0 base=0x[0-9a-f]+ pages=0 ",
+        r"^\[private-matrix\] exhausted schedule=bulk ",
+    ),
+    "small": (
+        r"^\[private-matrix:bulk\] end incarnation=0 ",
+        r"^\[private-matrix\] exhausted schedule=small ",
+    ),
+    "mixed": (
+        r"^\[private-matrix:small\] end incarnation=1 ",
+        r"^\[private-matrix\] exhausted schedule=mixed ",
+    ),
+}
+MATRIX_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "matrix bulk schedule, idle maximum and guarantee under pressure",
+        (
+            r"SLIME_MEM policy entitlements=2 subjects=3 guarantee_pages=1024 .*",
+            r"\[private-matrix\] guarantee pressure redeemed=1 beyond_promise_served=0 pages=1024",
+            r"\[private-matrix\] idle maximum subject=private-matrix-small pages=0 refused=1",
+            r"\[private-matrix:small\] end incarnation=0 pages=0 refused=1 kind=exit",
+            r"\[private-matrix\] reserve spawn subject=private-matrix-small incarnation=1 pages=0 "
+            r"refused=1",
+            r"\[private-matrix\] exhausted schedule=bulk subject=private-matrix-bulk incarnation=0 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] resident schedule=bulk pages=\d+ bytes=\d+ guaranteed=1024 "
+            r"bulk=\d+ small=0",
+            r"\[private-matrix:bulk\] end incarnation=0 pages=\d+ refused=\d+ kind=exit",
+        ),
+    ),
+    (
+        "matrix all-small schedule",
+        (
+            r"\[private-matrix\] exhausted schedule=small subject=private-matrix-small incarnation=1 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] resident schedule=small pages=\d+ bytes=\d+ guaranteed=1024 "
+            r"bulk=0 small=\d+",
+            r"\[private-matrix:small\] end incarnation=1 pages=\d+ refused=\d+ kind=exit",
+        ),
+    ),
+    (
+        "matrix mixed simultaneous schedule and reuse cycles",
+        (
+            r"\[private-matrix\] exhausted schedule=mixed subject=private-matrix-bulk incarnation=1 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] exhausted schedule=mixed subject=private-matrix-small incarnation=2 "
+            r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
+            r"\[private-matrix\] resident schedule=mixed pages=\d+ bytes=\d+ guaranteed=1024 "
+            r"bulk=\d+ small=\d+",
+            r"\[private-matrix\] cycles begin count=20 pages=4095",
+            r"\[private-matrix\] cycle=19 victim=private-matrix-small incarnation=\d+ end=exit "
+            r"reuser=private-matrix-bulk incarnation=\d+ pages=4095 zeroed=1 peer_pages=1024",
+            r"\[private-matrix:guaranteed\] end incarnation=0 pages=1024 refused=1 kind=exit",
+            r"\[private-matrix\] complete schedules=3 cycles=20",
+            HEALTHY_MARKER,
+        ),
+    ),
+)
+MATRIX_FAILURES: tuple[str, ...] = (
+    r"SLIME_ROOT FATAL",
+    r"SLIME_MEM FAIL",
+    r"\[private-matrix\] FAIL",
+    r"\[private-matrix:[a-z]+\] FAIL",
+    r"SLIME_GRAPH task reclaim incomplete task=\d+",
+)
+# Resources whose shortfall is a count running out. A refusal naming one must
+# report more required than available, or it refused a request that fit.
+MATRIX_COUNTED = ("ordinary-bytes", "extent-records", "transaction-extents")
+
+
+def matrix_policy(fixture: Path) -> dict:
+    """The matrix composition's policy, which must declare no capacity.
+
+    The arm's claim is that one declaration reaches different capacities on
+    different inventories. That holds only if the capacity-bearing subjects
+    are pool-relative and the guaranteed one is the only fixed number, so the
+    declaration is checked for exactly that shape rather than trusted.
+    """
+    manifest = decoded_manifest(fixture)
+    policy = manifest.get("privateMemoryPolicy")
+    if policy is None or manifest.get("privateMemoryBudget"):
+        fail(f"{fixture.name}: the matrix needs an adaptive policy and no fixed budget")
+    entitlements = {entry["name"]: entry for entry in policy["entitlements"]}
+    subjects = {entry["instance"]: entry for entry in policy["subjects"]}
+    for instance in ("private-matrix-bulk", "private-matrix-small"):
+        subject = subjects.get(instance)
+        if (
+            subject is None
+            or subject["maximumMode"] != "pool"
+            or entitlements[subject["entitlement"]]["maximumMode"] != "pool"
+            or entitlements[subject["entitlement"]]["guaranteePages"] != 0
+        ):
+            fail(f"{fixture.name}: {instance} is not an unguaranteed pool-relative subject")
+    if subjects["private-matrix-bulk"]["entitlement"] != subjects["private-matrix-small"]["entitlement"]:
+        fail(f"{fixture.name}: the bulk and small subjects must contend for one entitlement")
+    guaranteed = subjects.get("private-matrix-guaranteed")
+    if (
+        guaranteed is None
+        or entitlements[guaranteed["entitlement"]]["guaranteePages"] != MATRIX_GUARANTEE
+        or guaranteed["maximumPages"] <= MATRIX_GUARANTEE
+    ):
+        fail(f"{fixture.name}: the guaranteed subject does not declare its promise below its maximum")
+    return policy
+
+
+def matrix_segment(transcript: str, schedule: str, prefix: str) -> str:
+    start, end = MATRIX_SEGMENTS[schedule]
+    opening = re.search(start, transcript, re.MULTILINE)
+    closing = re.search(end, transcript, re.MULTILINE)
+    if opening is None or closing is None or closing.start() < opening.end():
+        fail(prefix + f"the {schedule} schedule has no bounded transcript segment")
+    return transcript[opening.end() : closing.start()]
+
+
+def matrix_walk(segment: str, instance: str, unit: int, prefix: str) -> dict[str, int | str]:
+    """One holder's exhaustion walk, reconstructed from the root's own lines.
+
+    The walk's shape is the claim: a refused request is followed by one of
+    half the size, a served one by the same size, and the walk ends at a
+    refused single page whose limit line names the resource that ran out.
+    """
+    lines = [
+        match
+        for match in re.finditer(
+            r"^SLIME_MEM adaptive (grant|refused|limit) task=\d+ instance=(\S+) (.*)$",
+            segment,
+            re.MULTILINE,
+        )
+        if match.group(2) == instance
+    ]
+    delta = unit
+    pages = 0
+    served = refused = 0
+    limit: dict[str, int | str] | None = None
+    pending_limit = False
+    for match in lines:
+        kind, fields = match.group(1), match.group(3)
+        values = dict(re.findall(r"(\w+)=(\S+)", fields))
+        if kind == "limit":
+            if not pending_limit or int(values["delta"]) != delta:
+                fail(prefix + f"{instance}: a limit line follows no refusal of its delta")
+            pending_limit = False
+            limit = {
+                key: (value if key == "resource" else int(value))
+                for key, value in values.items()
+            }
+            if delta != 1:
+                delta //= 2
+            continue
+        if pending_limit:
+            fail(prefix + f"{instance}: a refusal carries no limit line")
+        if limit is not None and limit["delta"] == 1:
+            fail(prefix + f"{instance}: a request followed the one-page refusal")
+        if int(values["delta"]) != delta:
+            fail(
+                prefix + f"{instance}: requested {values['delta']} pages where the walk "
+                f"required {delta}"
+            )
+        if kind == "grant":
+            if int(values["previous"]) != pages or int(values["pages"]) != pages + delta:
+                fail(prefix + f"{instance}: a grant disagrees with the extent it grew")
+            pages += delta
+            served += 1
+        else:
+            if int(values["pages"]) != pages:
+                fail(prefix + f"{instance}: a refusal changed the extent")
+            refused += 1
+            pending_limit = True
+    if limit is None or limit["delta"] != 1 or pending_limit:
+        fail(prefix + f"{instance}: the walk did not end at a refused single page")
+    return {"pages": pages, "served": served, "refused": refused, **limit}
+
+
+def check_matrix_limit(walk: dict, instance: str, reserve: int, prefix: str) -> None:
+    """The one-page refusal must be a real shortfall, not an invented one.
+
+    Whatever named it, a refused single page is only exhaustion if nothing
+    beyond the operational reserve is left: the allocator's residual may hold
+    the reserve (less what constructions since admission drew from it) and at
+    most one page and its table of ledger dust. More than that is ordinary
+    memory a fitting request could not reach.
+    """
+    resource = walk["resource"]
+    if walk["inventory_bytes"] > reserve + 2 * 4096:
+        fail(
+            prefix + f"{instance}: refused one page for {resource} while the allocator held "
+            f"{walk['inventory_bytes']} bytes against a {reserve}-byte reserve"
+        )
+    if resource in ("maximum", "reservation", "entitlement"):
+        fail(prefix + f"{instance}: exhaustion was a declaration ({resource}), not the inventory")
+    if resource in MATRIX_COUNTED and walk["required"] <= walk["available"]:
+        fail(
+            prefix + f"{instance}: refused one page for {resource} with {walk['available']} "
+            f"available and {walk['required']} required"
+        )
+    if resource == "ledger-pool" and walk["ledger_pool"] >= 2 * 4096:
+        fail(prefix + f"{instance}: the ledger refused a page while holding {walk['ledger_pool']} bytes")
+
+
+# Census fields that name free or reusable capacity, compared across cycles.
+# `retired` counts reclamations and legitimately rises every cycle.
+MATRIX_CENSUS_EXEMPT = frozenset({"retired"})
+
+
+def matrix_census(line: str) -> dict[str, int]:
+    return {
+        key: int(value)
+        for key, value in re.findall(r"(\w+)=(\d+)", line)
+        if key not in MATRIX_CENSUS_EXEMPT
+    }
+
+
+def check_matrix_cycles(transcript: str, prefix: str) -> dict[str, int]:
+    """Twenty deaths, each followed by another holder's zeroed reuse, without drift.
+
+    The holder lines prove the bytes: a reuser that read a non-zero served word
+    or a peer whose pattern moved emits a failure marker instead of its cycle
+    line. This proves the accounting: the root's census after each cycle's
+    last reclamation must equal the census before the first cycle, field for
+    field, so no slot, descriptor, extent, anchor or byte leaks per cycle.
+    """
+    begin = re.search(r"^\[private-matrix\] cycles begin ", transcript, re.MULTILINE)
+    assert begin is not None
+    censuses = [
+        (match.start(), matrix_census(match.group(0)))
+        for match in re.finditer(r"^SLIME_MEM census .*$", transcript, re.MULTILINE)
+    ]
+    before = [census for position, census in censuses if position < begin.start()]
+    if not before:
+        fail(prefix + "no census precedes the reuse cycles")
+    baseline = before[-1]
+    cycles = list(
+        re.finditer(
+            r"^\[private-matrix\] cycle=(\d+) victim=(\S+) incarnation=(\d+) end=(fault|exit) "
+            r"reuser=(\S+) incarnation=(\d+) pages=(\d+) zeroed=1 peer_pages=(\d+)$",
+            transcript,
+            re.MULTILINE,
+        )
+    )
+    if [int(match.group(1)) for match in cycles] != list(range(MATRIX_CYCLES)):
+        fail(prefix + "the reuse cycles did not run exactly once each, in order")
+    faults = 0
+    for match in cycles:
+        cycle = int(match.group(1))
+        victim, end, reuser = match.group(2), match.group(4), match.group(5)
+        expected = ("private-matrix-bulk", "private-matrix-small")
+        if (victim, reuser) != (expected if cycle % 2 == 0 else expected[::-1]):
+            fail(prefix + f"cycle {cycle}: capacity was not reused by a different holder")
+        if end != ("fault" if cycle % 4 < 2 else "exit"):
+            fail(prefix + f"cycle {cycle}: the victim did not end by its scheduled path")
+        faults += end == "fault"
+        if int(match.group(7)) != MATRIX_CYCLE_PAGES or int(match.group(8)) != MATRIX_GUARANTEE:
+            fail(prefix + f"cycle {cycle}: a holder or the peer reported the wrong extent")
+        after = [census for position, census in censuses if position < match.start()]
+        drift = {
+            key: (baseline.get(key), after[-1].get(key))
+            for key in sorted(set(baseline) | set(after[-1]))
+            if baseline.get(key) != after[-1].get(key)
+        }
+        if drift:
+            fail(prefix + f"cycle {cycle}: the census drifted from its pre-cycle baseline: {drift}")
+    return {"cycles": len(cycles), "faults": faults}
+
+
+def check_matrix_inventory(transcript: str, kernel_memory: list[dict], prefix: str) -> None:
+    """Every ordinary range root admitted lies inside the kernel's compiled memory.
+
+    The kernel's memory ranges exclude every device region of the device tree,
+    so a range outside them would be device memory counted as ordinary.
+    """
+    ranges = [
+        (int(start, 16), int(size))
+        for start, size in re.findall(
+            r"^SLIME_ROOT ordinary range=\d+ paddr=(0x[0-9a-f]+) bytes=(\d+)$",
+            transcript,
+            re.MULTILINE,
+        )
+    ]
+    memory = [(int(entry["start"], 16), int(entry["end"], 16)) for entry in kernel_memory]
+    if not ranges:
+        fail(prefix + "the root reported no ordinary ranges")
+    for start, size in ranges:
+        if not any(low <= start and start + size <= high for low, high in memory):
+            fail(prefix + f"ordinary range {start:#x}+{size} lies outside the kernel's memory")
+
+
+def check_matrix_transcript(transcript: str, reserve: int, prefix: str) -> dict[str, object]:
+    """Validate one inventory row's boot and return what it measured."""
+    check_adaptive_markers(transcript, MATRIX_CHAINS, prefix)
+    for pattern in MATRIX_FAILURES:
+        if re.search(pattern, transcript) is not None:
+            fail(prefix + f"failure marker {pattern!r}")
+    ordinary = re.search(r"^SLIME_ROOT ordinary ranges=\d+ bytes=(\d+) ", transcript, re.MULTILINE)
+    policy = re.search(r"^SLIME_MEM policy .* pool_bytes=(\d+)$", transcript, re.MULTILINE)
+    if ordinary is None or policy is None:
+        fail(prefix + "the root reported no ordinary inventory or no admitted pool")
+    result: dict[str, object] = {
+        "ordinary": int(ordinary.group(1)),
+        "pool": int(policy.group(1)),
+        "schedules": {},
+    }
+    for schedule, walkers in MATRIX_SCHEDULES:
+        segment = matrix_segment(transcript, schedule, prefix)
+        walks = {}
+        for instance, incarnation, unit in walkers:
+            walk = matrix_walk(segment, instance, unit, prefix + f"{schedule}: ")
+            check_matrix_limit(walk, instance, reserve, prefix + f"{schedule}: ")
+            reported = re.search(
+                rf"^\[private-matrix\] exhausted schedule={schedule} subject={instance} "
+                rf"incarnation={incarnation} pages=(\d+) served=(\d+) refused=(\d+) ",
+                transcript,
+                re.MULTILINE,
+            )
+            if reported is None or tuple(int(value) for value in reported.groups()) != (
+                walk["pages"],
+                walk["served"],
+                walk["refused"],
+            ):
+                fail(prefix + f"{schedule}: {instance}'s own report disagrees with the root's")
+            walks[instance] = walk
+        resident = re.search(
+            rf"^\[private-matrix\] resident schedule={schedule} pages=(\d+) bytes=(\d+) "
+            rf"guaranteed=(\d+) bulk=(\d+) small=(\d+)$",
+            transcript,
+            re.MULTILINE,
+        )
+        assert resident is not None
+        pages, byte_count, guaranteed, bulk, small = (int(value) for value in resident.groups())
+        if pages != guaranteed + bulk + small or byte_count != pages * 4096:
+            fail(prefix + f"{schedule}: the resident total is not its holders' sum")
+        held = {
+            "private-matrix-bulk": bulk,
+            "private-matrix-small": small,
+        }
+        for instance, walk in walks.items():
+            if held[instance] != walk["pages"]:
+                fail(prefix + f"{schedule}: {instance} verified an extent it was not granted")
+        result["schedules"][schedule] = {"resident": pages, "walks": walks}
+    result["cycles"] = check_matrix_cycles(transcript, prefix)
+    # Returned extents adopted for infrastructure must stay in one census
+    # category, or conservation cannot close once every holder retired.
+    check_capacity_conservation(transcript, prefix)
+    return result
+
+
+def load_sel4_builder():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("matrix_sel4_builder", BUILD_SCRIPT)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load {BUILD_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["matrix_sel4_builder"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_matrix_arm(platform: str, only: int | None = None) -> None:
+    """MEM-ADAPTIVE's inventory matrix on one architecture.
+
+    The root and components are built once, through the closure, and every row
+    boots those exact bytes. What varies is only what seL4 compiles the memory
+    map into, so a capacity difference between rows is the inventory's doing.
+    A launcher-only control then boots the pinned row's image with the largest
+    row's RAM, and must observe the pinned row's inventory unchanged.
+    """
+    section, qemu_binary = PLATFORMS[platform]
+    profile = load_qemu_profile(fail, PINS, section)
+    suffix = "-rv64" if platform == "qemu-riscv-virt" else ""
+    variant = f"sel4-private-memory-matrix{suffix}"
+    reserve = matrix_policy(MATRIX_FIXTURES[platform])["reserve"]["bytes"]
+    try:
+        built = build_closure_image(variant)
+    except ClosureImageError as error:
+        fail(str(error))
+    if (
+        built.build_result.get("platform") != platform
+        or built.build_result.get("targetProfile") != TARGET_PROFILES[platform]
+    ):
+        fail("matrix image: closure target differs from requested platform")
+    root_digest = sha256_file(built.root, fail)
+    builder = load_sel4_builder()
+    target = builder.PLATFORMS[platform]
+    pins = builder.load_pins()
+    product = builder.platform_memory_mib(target)
+    rows = builder.inventory_rows(target)
+    identities: dict[int, dict] = {}
+    measured: dict[int, dict] = {}
+    for row in rows:
+        if only is not None and row != only:
+            continue
+        output = ROOT / "build" / "inventory" / variant / f"mem{row}"
+        if output.exists():
+            shutil.rmtree(output)
+        identity = builder.package_inventory_image(
+            pins, target, row, root_elf=built.root, output=output
+        )
+        if identity["root"]["sha256"] != root_digest:
+            fail(f"matrix {row} MiB: packaged a root other than the closure's")
+        if row == product and identity["image"]["sha256"] != built.digest():
+            fail(
+                f"matrix {row} MiB: the pinned row's repackaged image differs from the "
+                "closure's, so the row is not the image the closure built"
+            )
+        image = output / "image.elf"
+        print(
+            f"[matrix identity] platform={platform} memory_mib={row} "
+            f"image={identity['image']['sha256']} kernel={identity['kernel']['sha256']} "
+            f"dtb={identity['dtb']['sha256']} loader={identity['loader']['sha256']} "
+            f"root={root_digest} abi={identity['abi']}",
+            flush=True,
+        )
+        transcript = boot(
+            profile,
+            section=section,
+            qemu_binary=qemu_binary,
+            image=image,
+            memory_mib=row,
+            timeout=MATRIX_TIMEOUT,
+        )
+        if sha256_file(image, fail) != identity["image"]["sha256"]:
+            fail(f"matrix {row} MiB: packaged bytes changed during execution")
+        log = ROOT / "build" / f"{variant}-mem{row}.log"
+        log.write_text(transcript + "\n", encoding="utf-8")
+        print(f"[matrix transcript] memory_mib={row} sha256={sha256_file(log, fail)}", flush=True)
+        measured[row] = check_matrix_transcript(transcript, reserve, f"matrix {row} MiB: ")
+        check_matrix_inventory(transcript, identity["kernelMemory"], f"matrix {row} MiB: ")
+        identities[row] = identity
+        schedules = measured[row]["schedules"]
+        print(
+            f"[matrix row] platform={platform} memory_mib={row} "
+            f"ordinary={measured[row]['ordinary']} pool={measured[row]['pool']} "
+            + " ".join(
+                f"{name}_resident={value['resident']}" for name, value in schedules.items()
+            )
+            + " "
+            + " ".join(
+                f"{name}:{instance}:limit={walk['resource']}"
+                for name, value in schedules.items()
+                for instance, walk in value["walks"].items()
+            ),
+            flush=True,
+        )
+    if only is not None:
+        fail(f"matrix: only the {only} MiB row ran; a partial matrix qualifies nothing")
+    check_matrix_rows(identities, measured, rows, product)
+
+    # Launcher-only control: more emulated RAM, the pinned row's kernel.
+    pinned = ROOT / "build" / "inventory" / variant / f"mem{product}" / "image.elf"
+    control = boot(
+        profile,
+        section=section,
+        qemu_binary=qemu_binary,
+        image=pinned,
+        memory_mib=rows[-1],
+        timeout=MATRIX_TIMEOUT,
+    )
+    (ROOT / "build" / f"{variant}-launcher-only.log").write_text(control + "\n", encoding="utf-8")
+    observed = check_matrix_transcript(control, reserve, "matrix launcher-only: ")
+    check_matrix_inventory(control, identities[product]["kernelMemory"], "matrix launcher-only: ")
+    check_matrix_launcher_only(observed, measured[product])
+    largest = measured[rows[-1]]["schedules"]["bulk"]["resident"] * 4096
+    print(
+        f"private-memory matrix finished on {platform}: {len(rows)} inventories "
+        f"({', '.join(f'{row} MiB' for row in rows)}) booted one root {root_digest[:16]} "
+        "and one component set; verified bulk residency "
+        + " < ".join(
+            str(measured[row]["schedules"]["bulk"]["resident"]) for row in rows
+        )
+        + f" pages, {largest} bytes on the largest row; a launcher-only "
+        f"{rows[-1]} MiB boot of the {product} MiB kernel kept its inventory"
+    )
+
+
+def check_matrix_rows(
+    identities: dict[int, dict], measured: dict[int, dict], rows: tuple[int, ...], product: int
+) -> None:
+    prefix = "matrix: "
+    if len(rows) < 3 or rows[0] >= product or rows[-1] <= product:
+        fail(prefix + "the rows do not bracket the pinned inventory")
+    for key in ("kernel", "dtb", "loader", "image"):
+        digests = [identities[row][key]["sha256"] for row in rows]
+        if len(set(digests)) != len(rows):
+            fail(prefix + f"two rows share a {key}, so they are not distinct inventories")
+    for key in ("abi",):
+        if len({identities[row][key] for row in rows}) != 1:
+            fail(prefix + "rows disagree on the userspace ABI")
+    if len({identities[row]["root"]["sha256"] for row in rows}) != 1:
+        fail(prefix + "rows booted different roots")
+    for field in ("ordinary", "pool"):
+        values = [measured[row][field] for row in rows]
+        if values != sorted(set(values)):
+            fail(prefix + f"{field} does not strictly increase with the inventory: {values}")
+    for schedule, _ in MATRIX_SCHEDULES:
+        values = [measured[row]["schedules"][schedule]["resident"] for row in rows]
+        if values != sorted(set(values)):
+            fail(prefix + f"{schedule} residency does not grow with the inventory: {values}")
+    if max(measured[rows[-1]]["schedules"][name]["resident"] for name, _ in MATRIX_SCHEDULES) * 4096 <= 1 << 30:
+        fail(prefix + "the largest row verified no more than 1 GiB resident")
+
+
+def check_matrix_launcher_only(observed: dict, pinned: dict) -> None:
+    """More launcher RAM under the same kernel must change nothing root sees."""
+    if observed["ordinary"] != pinned["ordinary"] or observed["pool"] != pinned["pool"]:
+        fail(
+            "matrix launcher-only: a larger emulator changed the root's inventory "
+            f"({observed['ordinary']}/{observed['pool']} against "
+            f"{pinned['ordinary']}/{pinned['pool']})"
+        )
+    for schedule, _ in MATRIX_SCHEDULES:
+        if observed["schedules"][schedule]["resident"] != pinned["schedules"][schedule]["resident"]:
+            fail(f"matrix launcher-only: {schedule} residency moved without a kernel change")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check mixed-size private memory on seL4")
     parser.add_argument(
         "--arm",
         choices=(
             "ceiling", "cycles", "capacity", "isolation", "stress", "cspace", "metadata",
-            "bootstrap", "elastic", "fragmentation", "rollback", "conservation",
+            "bootstrap", "elastic", "fragmentation", "rollback", "conservation", "adaptive",
+            "adaptive-lifecycle", "matrix",
         ),
         default="ceiling",
         help="which qualification to run: the declared ceiling or MEM-64M's reuse cycles",
@@ -2844,7 +4493,21 @@ def main() -> None:
         default="qemu-arm-virt",
         help="the pinned QEMU profile and image to build and boot",
     )
+    parser.add_argument(
+        "--matrix-row",
+        type=int,
+        help="development only: boot one inventory row of the matrix arm; the run then fails",
+    )
     arguments = parser.parse_args()
+    if arguments.arm == "adaptive":
+        run_adaptive_plane_arm(arguments.platform)
+        return
+    if arguments.arm == "adaptive-lifecycle":
+        run_adaptive_lifecycle_arm(arguments.platform)
+        return
+    if arguments.arm == "matrix":
+        run_matrix_arm(arguments.platform, arguments.matrix_row)
+        return
     if arguments.arm in (
         "cspace", "metadata", "bootstrap", "elastic", "fragmentation", "rollback", "conservation",
     ):

@@ -766,15 +766,55 @@ pub(super) fn reclaim_dead_task(
 /// whose other components are still running should not be stopped over one
 /// task's cleanup.
 pub(super) fn reclaim_task_objects(
+    generation: &Generation<'_>,
     launched: &mut LaunchedInstances,
     tasks: &mut TaskTable<MAX_TASKS>,
     allocator: &mut ObjectAllocator,
+    mut adaptive: Option<&mut super::super::adaptive::AdaptivePolicy<'_>>,
     reclaimed: &mut usize,
     id: TaskId,
 ) -> bool {
+    // Read while the record still exists: reclamation clears the entry, and
+    // the entitlement this incarnation returns to is a property of the task
+    // that is about to stop existing.
+    let binding = tasks.private_binding(id);
+    let instance = tasks
+        .get(id)
+        .and_then(|task| task.instance)
+        .and_then(|index| generation.instance(index).ok())
+        .map_or("", |instance| instance.name);
+    let held_pages = tasks.get(id).map_or(0, |task| task.private_memory.pages());
+    // One injected revoke failure for the first published adaptive holder that
+    // dies, so the quarantine-and-retry path is observed on a real task rather
+    // than modelled: a reclamation that did not recover the machine's memory
+    // must refund nothing, and exactly one retry must return it.
+    #[cfg(slime_private_conservation)]
+    if binding.is_some() && launched.instance_for_task(id).is_some() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+        static ARMED: AtomicBool = AtomicBool::new(true);
+        if ARMED.swap(false, Ordering::Relaxed) {
+            crate::object_allocator::elastic::arm_arena_revoke_failure();
+            sel4::debug_println!(
+                "SLIME_MEM adaptive injected kind=revoke task={} instance={instance}",
+                id.0,
+            );
+        }
+    }
     match tasks.reclaim(allocator, id) {
-        Ok(record) => *reclaimed += record.slot_count(),
+        Ok(record) => {
+            *reclaimed += record.slot_count();
+            // The revoke succeeded, so the pages are genuinely gone and the
+            // entitlement may have them back.
+            if let (Some(policy), Some(binding)) = (adaptive.as_deref_mut(), binding.as_ref()) {
+                policy.retire(allocator, id, instance, binding, true, held_pages);
+            }
+        }
         Err(error) => {
+            // Capacity the machine has not recovered is never returned: the
+            // incarnation stays charged and quarantined until a retry lands.
+            if let (Some(policy), Some(binding)) = (adaptive, binding.as_ref()) {
+                policy.retire(allocator, id, instance, binding, false, 0);
+            }
             sel4::debug_println!(
                 "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",
                 id.0

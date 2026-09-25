@@ -232,12 +232,20 @@ impl Holder {
     ) -> Result<Self, QualificationError> {
         let arena = allocator.begin_task_arena(16)?;
         allocator.mark_arena_elastic(arena)?;
-        let base = WINDOW_BASE + index * WINDOW_STRIDE;
+        let base = WINDOW_BASE
+            .checked_add(
+                index
+                    .checked_mul(WINDOW_STRIDE)
+                    .ok_or(QualificationError::Unmet(
+                        "holder window stride does not fit an address",
+                    ))?,
+            )
+            .ok_or(QualificationError::Unmet(
+                "holder window base does not fit an address",
+            ))?;
         reserve_window(allocator, arena, base)?;
-        let region = Region::elastic(base, maximum);
-        if !region.is_elastic() {
-            return Err(QualificationError::Unmet("window base is unrepresentable"));
-        }
+        let region = Region::reserve(allocator, base, HOLDER_WINDOW_PAGES, maximum, true)
+            .map_err(|_| QualificationError::Unmet("window base is unrepresentable"))?;
         let token = ledger.bind(&policy::subject_identity(name))?;
         Ok(Self {
             name,
@@ -265,6 +273,7 @@ impl Holder {
             sel4::init_thread::slot::VSPACE.cap(),
             &mut self.region,
             pages,
+            super::GrowthPlan::elastic(),
         )?;
         self.committed = self.region.pages();
         Ok(previous)
@@ -307,7 +316,14 @@ impl Holder {
         ledger: &mut Ledger<'_>,
     ) -> Result<usize, QualificationError> {
         let revoked = allocator.release_task_arena(self.arena).is_ok();
-        let pages = elastic::retire(table, ledger, self.token, &mut self.region, revoked)?;
+        let pages = elastic::retire(
+            table,
+            allocator,
+            ledger,
+            self.token,
+            &mut self.region,
+            revoked,
+        )?;
         self.committed = 0;
         Ok(pages)
     }
@@ -929,6 +945,7 @@ impl Holder {
             sel4::init_thread::slot::VSPACE.cap(),
             &mut self.region,
             pages,
+            super::GrowthPlan::elastic(),
             kernel,
         )?;
         self.committed = self.region.pages();
@@ -1073,7 +1090,7 @@ pub fn exercise_failure_rollback(
             allocator.untyped_bytes_remaining(),
             holder.region.leaf_tables() - tables_before,
             u8::from(intact),
-            u8::from(allocator.elastic_quarantined()),
+            u8::from(allocator.elastic_quarantined(holder.arena)),
         );
         if holder.region.pages() != committed || !intact {
             return Err(QualificationError::Unmet(
@@ -1110,21 +1127,21 @@ pub fn exercise_failure_rollback(
     else {
         return Err(QualificationError::Unmet("the cleanup stage did not fail"));
     };
-    let owned = allocator.elastic_quarantined();
+    let owned = allocator.elastic_quarantined(holder.arena);
     let refused = holder.grow(&mut table, allocator, &mut ledger, 1).is_err();
     let pool_held = ledger.available().bytes;
-    let released = allocator.retry_elastic_quarantine();
+    let released = allocator.retry_elastic_quarantine(holder.arena);
     sel4::debug_println!(
         "SLIME_MEM elastic quarantine stage=cleanup cause={} owned={} refused={} released={} remaining={} pool_held={} pool_after={}",
         quarantine.cause(),
         u8::from(owned),
         u8::from(refused),
         u8::from(released.is_ok()),
-        u8::from(allocator.elastic_quarantined()),
+        u8::from(allocator.elastic_quarantined(holder.arena)),
         pool_held,
         ledger.available().bytes,
     );
-    if !owned || !refused || released.is_err() || allocator.elastic_quarantined() {
+    if !owned || !refused || released.is_err() || allocator.elastic_quarantined(holder.arena) {
         return Err(QualificationError::Unmet(
             "a failed cleanup was not retryable exactly once",
         ));

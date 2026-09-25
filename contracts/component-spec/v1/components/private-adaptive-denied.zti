@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "exact";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [
+    "private-adaptive-coordinator";
+  ];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "private-adaptive-denied";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "private-adaptive-denied";
+  owner = "private-adaptive-coordinator";
+  provides = [];
+  purpose = "A declared instance the adaptive policy never names, proving omission denies rather than defaults.";
+  requires = [];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    expectedResult = "It holds no window, is refused its first page, and exits cleanly.";
+    passFailCriteria = "[private-adaptive:denied] end incarnation=0 pages=0";
+    requiredTestEnvironment = "private_memory_adaptive_check";
+    testCondition = "An instance absent from the policy's subject list requests one page while bound peers hold theirs.";
+  };
+  version = "1.0.0";
+}

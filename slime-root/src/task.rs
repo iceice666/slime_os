@@ -439,6 +439,35 @@ pub struct Task {
     /// reason `capabilities` is: it is then reclaimed atomically with the task
     /// record and there is no parallel database to keep in step.
     pub private_memory: crate::private_memory::Region,
+    /// This task's adaptive entitlement binding, absent for a fixed or
+    /// unbudgeted task.
+    ///
+    /// Present exactly when an admitted policy names this instance as a
+    /// subject and the incarnation bound before publication. Growth consults
+    /// it, so a staged task whose binding never succeeded cannot grow at all.
+    pub private_binding: Option<PrivateBinding>,
+}
+
+/// One task's bound adaptive entitlement.
+///
+/// Copied onto the task record for the reason `private_memory` is: it is then
+/// reclaimed with the task, and there is no second table to keep in step. The
+/// incarnation token is what stops a late cleanup from charging a restart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrivateBinding {
+    pub token: boot_contracts::private_memory_policy::ledger::Incarnation,
+    pub entitlement: usize,
+    pub reservation: Option<crate::object_allocator::guarantee_vault::ReservationId>,
+    /// Pages this entitlement promises, shared across its cohort.
+    pub guarantee_pages: usize,
+    /// Address maximum resolved at admission; a pool maximum is the admitted
+    /// capacity rather than the encoded zero sentinel.
+    pub maximum_pages: usize,
+    pub pooled_maximum: bool,
+    /// Descriptors and CSlots this task has spent out of its entitlement's
+    /// withheld funding, returned to the reservation when it retires.
+    pub lent_descriptors: usize,
+    pub lent_slots: usize,
 }
 
 impl Task {
@@ -728,6 +757,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // the task's complete segmented backing before publication and a quota
         // whose extents it cannot hold would be one the task could never reach.
         private_memory_pages: usize,
+        // The address maximum an adaptive holder is admitted against, absent
+        // for a fixed or unbudgeted task. Present means the task's backing
+        // arrives on demand against a bound entitlement rather than being
+        // reserved whole here, so construction provisions no private extents
+        // and the window is sized to the policy's maximum.
+        adaptive_maximum: Option<usize>,
     ) -> Result<TaskId, TaskError> {
         self.retry_failed_construction(allocator)?;
         admit_priority(priority)?;
@@ -736,8 +771,28 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             return Err(TaskError::TableFull { limit: CAPACITY });
         };
         let id = TaskId(self.next_id);
+        // The window this address space is built around, decided once, here,
+        // and threaded through the arena plan, the mapped tables and the
+        // region alike so no second calculation can disagree with it.
+        //
+        // A v1 quota is a guarantee, not an address maximum: the generation
+        // declares how many pages the holder is promised, and the address
+        // space it may ever hold is the target profile's per-region capacity.
+        // Sizing the window to the quota instead would make the reserved-but-
+        // unbacked part of a small holder's window available to any other
+        // mapping, which is the space the window exists to defend. A task the
+        // generation gives no quota reserves nothing at all.
+        // An adaptive subject's window is its declared address maximum, which
+        // is a policy number and may be neither a power of two nor bounded by
+        // the target's per-region capacity; the fixed path keeps that capacity
+        // because a v1 quota is a guarantee rather than an address maximum.
+        let reservation = match (adaptive_maximum, private_memory_pages) {
+            (Some(maximum), _) => maximum,
+            (None, 0) => 0,
+            (None, _) => crate::private_memory::MAX_REGION_PAGES,
+        };
         let mut plan = image
-            .vspace_arena_plan(threads)
+            .vspace_arena_plan(threads, reservation)
             .map_err(VSpaceError::Image)?;
         plan.add(sel4::cap_type::CNode::object_blueprint(cnode_size_bits))
             .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
@@ -784,9 +839,15 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // capability in a descriptor-only slot; count those aliases before
         // private provisioning so construction cannot exhaust the global table
         // after passing this preflight.
-        let private_allocations =
+        // An adaptive holder reserves no payload descriptors at construction:
+        // its entitlement funds them, and every other page it may ask for is
+        // taken from the pool at the moment of the request.
+        let private_allocations = if adaptive_maximum.is_some() {
+            0
+        } else {
             crate::object_allocator::PrivateBackingLayout::for_quota(private_memory_pages)
-                .allocation_descriptors;
+                .allocation_descriptors
+        };
         let required_descriptors = construction_allocation_descriptors(
             private_allocations,
             plan.allocation_count(),
@@ -833,7 +894,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             allocator.provision_private_backing(arena, private_memory_pages)
         };
         #[cfg(not(slime_private_stress))]
-        let provisioning = allocator.provision_private_backing(arena, private_memory_pages);
+        let provisioning = if adaptive_maximum.is_some() {
+            allocator.mark_arena_elastic(arena)
+        } else {
+            allocator.provision_private_backing(arena, private_memory_pages)
+        };
         if let Err(error) = provisioning {
             #[cfg(slime_private_stress)]
             crate::object_allocator::stress_slot_pressure(usize::MAX);
@@ -854,7 +919,23 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 scratch,
                 asid_pool,
                 threads,
+                reservation,
             )?;
+            // Built from the window the VSpace was actually constructed with,
+            // inside the construction boundary: a span record this cannot fund
+            // must unwind the task like any other construction failure, not
+            // leave a published task whose growth is untrackable.
+            let private_memory = if reservation == 0 {
+                crate::private_memory::Region::DENIED
+            } else {
+                crate::private_memory::Region::reserve(
+                    allocator,
+                    vspace.private_base,
+                    vspace.private_pages,
+                    adaptive_maximum.unwrap_or(private_memory_pages),
+                    adaptive_maximum.is_some(),
+                )?
+            };
             let cnode = allocator
                 .allocate_variable_in::<sel4::cap_type::CNode>(arena, cnode_size_bits)?
                 .cap();
@@ -1105,10 +1186,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     .map_err(TaskError::WriteRegisters)?;
                 *slot = Some(worker_tcb);
             }
-            Ok((vspace, cnode, tcb, entry, workers))
+            Ok((vspace, cnode, tcb, entry, workers, private_memory))
         })();
 
-        let (vspace, cnode, tcb, entry, workers) = match construction {
+        let (vspace, cnode, tcb, entry, workers, private_memory) = match construction {
             Ok(task) => task,
             Err(error) => {
                 self.unwind_construction(allocator, id, arena)?;
@@ -1135,18 +1216,17 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             entry,
             activated: false,
             cleanup,
+            // A binding is installed after construction and before
+            // publication; a task that never gets one cannot grow.
+            private_binding: None,
             spawner,
             executable,
             instance,
-            // Reserved at the base the VSpace construction chose, authorized
-            // for exactly the declared quota. A zero quota yields `DENIED`, so
+            // Reserved at the base the VSpace construction chose, over exactly
+            // the window it mapped tables for. A zero quota yields `DENIED`, so
             // a task the generation does not name carries no window at all
             // rather than a window it may not use.
-            private_memory: if private_memory_pages == 0 {
-                crate::private_memory::Region::DENIED
-            } else {
-                crate::private_memory::Region::reserved(vspace.private_base, private_memory_pages)
-            },
+            private_memory,
         });
         self.len += 1;
         self.next_id += 1;
@@ -1228,7 +1308,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // Past the fallible step: the frames are gone, so the charge they held
         // is genuinely free. Taken from the local snapshot, which is why the
         // table entry can be cleared either side of this.
-        self.private.reclaim(&mut task.private_memory);
+        self.private.reclaim(allocator, &mut task.private_memory);
         self.tasks[index] = None;
         self.len -= 1;
         if task.activated {
@@ -1252,6 +1332,90 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     /// would make an unrelated worker's `Call` execute more than once. Tail-only
     /// mappings are published by the kernel one operation at a time, while the
     /// region count remains unchanged until the whole transaction commits.
+    /// Grow one adaptive holder against its entitlement.
+    ///
+    /// The guaranteed prefix is whatever the entitlement still promises this
+    /// task, served from its reservation; the rest comes from the pool. Both
+    /// settle as one ledger transaction, and a failure leaves the holder's
+    /// pages, contents and charges exactly as they were.
+    pub fn grow_private_memory_adaptive(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+        ledger: &mut boot_contracts::private_memory_policy::ledger::Ledger<'_>,
+        id: TaskId,
+        delta: usize,
+        redeemable_pages: usize,
+    ) -> Result<usize, crate::private_memory::elastic::ElasticGrowError> {
+        let Some(index) = self
+            .tasks
+            .iter()
+            .position(|task| task.as_ref().is_some_and(|task| task.id == id))
+        else {
+            return Err(crate::private_memory::elastic::ElasticGrowError::Policy(
+                boot_contracts::private_memory_policy::ledger::Error::Denied,
+            ));
+        };
+        let Some(task) = self.tasks[index].as_mut() else {
+            return Err(crate::private_memory::elastic::ElasticGrowError::Policy(
+                boot_contracts::private_memory_policy::ledger::Error::Denied,
+            ));
+        };
+        let Some(binding) = task.private_binding else {
+            return Err(crate::private_memory::elastic::ElasticGrowError::Policy(
+                boot_contracts::private_memory_policy::ledger::Error::Denied,
+            ));
+        };
+        let arena = task.cleanup.arena;
+        let vspace = task.vspace.vspace;
+        let guaranteed_pages = delta.min(redeemable_pages);
+        let growth = crate::private_memory::GrowthPlan {
+            // A holder with guarantee left maps base pages, so its promise
+            // never depends on an aligned 2 MiB placement still existing.
+            lane: if guaranteed_pages == 0 {
+                crate::private_memory::Lane::LargeFrame
+            } else {
+                crate::private_memory::Lane::BasePage
+            },
+            guaranteed_pages,
+            reservation: binding.reservation,
+        };
+        let previous = crate::private_memory::elastic::grow_native(
+            &mut self.private,
+            allocator,
+            ledger,
+            binding.token,
+            arena,
+            vspace,
+            &mut task.private_memory,
+            delta,
+            growth,
+        )?;
+        Ok(previous)
+    }
+
+    /// The binding a task grows against, if it has one.
+    pub fn private_binding(&self, id: TaskId) -> Option<PrivateBinding> {
+        self.get(id).and_then(|task| task.private_binding)
+    }
+
+    /// Record one task's binding before it is published.
+    pub fn bind_private_memory(
+        &mut self,
+        id: TaskId,
+        binding: PrivateBinding,
+    ) -> Result<(), TaskError> {
+        let index = self
+            .tasks
+            .iter()
+            .position(|task| task.as_ref().is_some_and(|task| task.id == id))
+            .ok_or(TaskError::UnknownTask(id))?;
+        let Some(task) = self.tasks[index].as_mut() else {
+            return Err(TaskError::UnknownTask(id));
+        };
+        task.private_binding = Some(binding);
+        Ok(())
+    }
+
     pub fn grow_private_memory(
         &mut self,
         allocator: &mut ObjectAllocator,

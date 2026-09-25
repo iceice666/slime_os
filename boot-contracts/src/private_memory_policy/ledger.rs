@@ -186,29 +186,121 @@ pub struct Placement {
     pub size_bits: u8,
 }
 
+/// Authorization to draw part of one transaction from protected backing.
+///
+/// Produced by the allocator that actually borrowed the backing, so it states
+/// what was taken from a reservation rather than what a caller would like
+/// charged to one. Certification binds the two together: the bytes that land
+/// in protected ranges must be exactly `guaranteed.bytes`, so neither pool
+/// backing relabelled as redeemed guarantee nor a guarantee spent without
+/// being declared can pass.
+/// Payload pages one leaf table maps: a 2 MiB span on every reference
+/// architecture.
+pub const PAGES_PER_LEAF_TABLE: u64 = 512;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Witness {
+    pub guaranteed: Resources,
+    pub guarantee_pages: u64,
+}
+
+impl Witness {
+    /// Whether the redeemed pages fit in the protected bytes left after its
+    /// leaf tables: a table is guaranteed backing but never a redeemed page.
+    fn payload_fits(self) -> Result<bool, Error> {
+        let tables = self
+            .guaranteed
+            .tables
+            .checked_mul(PAGE_BYTES)
+            .ok_or(Error::Overflow)?;
+        let pages = self
+            .guarantee_pages
+            .checked_mul(PAGE_BYTES)
+            .ok_or(Error::Overflow)?;
+        Ok(self
+            .guaranteed
+            .bytes
+            .checked_sub(tables)
+            .is_some_and(|payload| pages <= payload))
+    }
+}
+
+/// A consecutive run of equal-sized placements taken from one source.
+///
+/// The exact shape a bump allocation inside one owned extent produces, and
+/// the reason page-granular guaranteed backing needs no placement array per
+/// page: `count` objects of `1 << size_bits` bytes starting at `start`, each
+/// one aligned because the first is and the size is a power of two.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Run {
+    pub start: u64,
+    pub size_bits: u8,
+    pub count: u64,
+}
+
+impl Run {
+    fn bytes(self) -> Result<u64, Error> {
+        1u64.checked_shl(self.size_bits.into())
+            .and_then(|size| size.checked_mul(self.count))
+            .ok_or(Error::Overflow)
+    }
+    fn end(self) -> Result<u64, Error> {
+        self.start.checked_add(self.bytes()?).ok_or(Error::Overflow)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Plan {
     resources: Resources,
+    guaranteed: Resources,
+    guarantee_pages: u64,
 }
 
 impl Plan {
+    /// Certify a transaction drawn entirely from ordinary free memory.
+    ///
+    /// A placement in a protected range is refused here: without a witness,
+    /// reservation-owned backing is not free memory and never becomes so by
+    /// being pointed at.
     pub fn validate(
         free: &[Range],
         placements: &[Placement],
         resources: Resources,
     ) -> Result<Self, Error> {
+        Self::certify(free, placements, resources, None)
+    }
+
+    /// Certify a transaction whose protected part is authorized by `witness`.
+    pub fn validate_reserved(
+        sources: &[Range],
+        placements: &[Placement],
+        resources: Resources,
+        witness: Witness,
+    ) -> Result<Self, Error> {
+        Self::certify(sources, placements, resources, Some(witness))
+    }
+
+    fn certify(
+        sources: &[Range],
+        placements: &[Placement],
+        resources: Resources,
+        witness: Option<Witness>,
+    ) -> Result<Self, Error> {
         let mut bytes = 0u64;
+        let mut guaranteed_bytes = 0u64;
         for (index, placement) in placements.iter().enumerate() {
             let size = 1u64
                 .checked_shl(placement.size_bits.into())
                 .ok_or(Error::Overflow)?;
             let end = placement.start.checked_add(size).ok_or(Error::Overflow)?;
+            let contained =
+                |range: &Range| placement.start >= range.start && end <= range.end().unwrap_or(0);
+            let protected = witness.is_some()
+                && sources
+                    .iter()
+                    .any(|range| range.class == Class::Guaranteed && contained(range));
             if !placement.start.is_multiple_of(size)
-                || !free.iter().any(|range| {
-                    range.free()
-                        && placement.start >= range.start
-                        && end <= range.end().unwrap_or(0)
-                })
+                || !(protected || sources.iter().any(|range| range.free() && contained(range)))
                 || placements[..index].iter().any(|prior| {
                     let prior_end = prior.start + (1u64 << prior.size_bits);
                     placement.start < prior_end && prior.start < end
@@ -217,14 +309,113 @@ impl Plan {
                 return Err(Error::Placement);
             }
             bytes = bytes.checked_add(size).ok_or(Error::Overflow)?;
+            if protected {
+                guaranteed_bytes = guaranteed_bytes.checked_add(size).ok_or(Error::Overflow)?;
+            }
         }
         if bytes != resources.bytes {
             return Err(Error::Placement);
         }
-        Ok(Self { resources })
+        let (guaranteed, guarantee_pages) = match witness {
+            None => (Resources::ZERO, 0),
+            Some(witness) => {
+                // The declared protected tuple must be what physically landed
+                // in protected ranges, must fit inside the transaction, and
+                // must not claim more redeemed pages than its own bytes hold.
+                if witness.guaranteed.bytes != guaranteed_bytes
+                    || resources.subtract(witness.guaranteed).is_err()
+                    || !witness.payload_fits()?
+                {
+                    return Err(Error::Guarantee);
+                }
+                (witness.guaranteed, witness.guarantee_pages)
+            }
+        };
+        Ok(Self {
+            resources,
+            guaranteed,
+            guarantee_pages,
+        })
     }
+
+    /// Certify a transaction expressed as runs rather than single placements.
+    ///
+    /// Same rules, same evidence: every run must be aligned, contained in one
+    /// source, and disjoint from every other run, and the protected runs must
+    /// account for exactly the witness's bytes. Runs exist because a guaranteed
+    /// growth places one object per page inside a borrowed extent, and listing
+    /// thousands of consecutive placements would bound the transaction by the
+    /// size of an array rather than by the resources it actually spends.
+    pub fn validate_runs(
+        sources: &[Range],
+        runs: &[Run],
+        resources: Resources,
+        witness: Witness,
+    ) -> Result<Self, Error> {
+        let mut bytes = 0u64;
+        let mut guaranteed_bytes = 0u64;
+        for (index, run) in runs.iter().enumerate() {
+            if run.count == 0 {
+                continue;
+            }
+            let size = 1u64
+                .checked_shl(run.size_bits.into())
+                .ok_or(Error::Overflow)?;
+            let end = run.end()?;
+            let contained =
+                |range: &Range| run.start >= range.start && end <= range.end().unwrap_or(0);
+            let protected = sources
+                .iter()
+                .any(|range| range.class == Class::Guaranteed && contained(range));
+            if !run.start.is_multiple_of(size)
+                || !(protected || sources.iter().any(|range| range.free() && contained(range)))
+                || runs[..index]
+                    .iter()
+                    .filter(|prior| prior.count != 0)
+                    .any(|prior| {
+                        prior
+                            .end()
+                            .is_ok_and(|prior_end| run.start < prior_end && prior.start < end)
+                    })
+            {
+                return Err(Error::Placement);
+            }
+            let run_bytes = run.bytes()?;
+            bytes = bytes.checked_add(run_bytes).ok_or(Error::Overflow)?;
+            if protected {
+                guaranteed_bytes = guaranteed_bytes
+                    .checked_add(run_bytes)
+                    .ok_or(Error::Overflow)?;
+            }
+        }
+        if bytes != resources.bytes {
+            return Err(Error::Placement);
+        }
+        if witness.guaranteed.bytes != guaranteed_bytes
+            || resources.subtract(witness.guaranteed).is_err()
+            || !witness.payload_fits()?
+        {
+            return Err(Error::Guarantee);
+        }
+        Ok(Self {
+            resources,
+            guaranteed: witness.guaranteed,
+            guarantee_pages: witness.guarantee_pages,
+        })
+    }
+
     pub fn resources(self) -> Resources {
         self.resources
+    }
+
+    /// What this transaction took from protected backing, as certified.
+    pub fn guaranteed(self) -> Resources {
+        self.guaranteed
+    }
+
+    /// Payload pages the protected part of this transaction redeems.
+    pub fn guarantee_pages(self) -> u64 {
+        self.guarantee_pages
     }
 }
 
@@ -244,6 +435,27 @@ struct Member {
 pub struct Incarnation {
     subject: usize,
     epoch: u64,
+}
+
+impl Incarnation {
+    /// Which replacement of its subject this token names. Reported so a
+    /// transcript can tell a restart from the incarnation it replaced.
+    pub const fn epoch(self) -> u64 {
+        self.epoch
+    }
+
+    pub const fn subject(self) -> usize {
+        self.subject
+    }
+}
+
+/// One successfully bound policy subject and the address maximum resolved at
+/// admission. Pool maxima are deliberately resolved from admitted capacity,
+/// not from the encoded zero sentinel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Binding {
+    pub token: Incarnation,
+    pub maximum_pages: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -296,7 +508,13 @@ impl<'a> Ledger<'a> {
                     .ok_or(Error::Overflow)?
                 || resources.slots < entitlement.guarantee_pages
                 || resources.descriptors < entitlement.guarantee_pages
-                || resources.extents < entitlement.guarantee_pages
+                // Extents are coarse ownership records, and how many a
+                // guarantee needs is the reservation's granularity rather
+                // than its page count: one aligned parent can own a whole
+                // span of pages. Requiring one per page would bake a single
+                // allocator shape into the policy contract. What must hold is
+                // that backing a guarantee owns is owned by something.
+                || (entitlement.guarantee_pages != 0 && resources.extents == 0)
                 || resources.tables < entitlement.guarantee_pages
                 || (entitlement.guarantee_pages == 0 && resources != Resources::ZERO)
             {
@@ -319,6 +537,15 @@ impl<'a> Ledger<'a> {
     pub fn available(&self) -> Resources {
         self.free
     }
+    /// The pool-relative maximum, fixed at admission.
+    ///
+    /// A pool-relative subject's permission is the admitted pool, never the
+    /// share of it free at the moment the subject binds: a holder bound while
+    /// a peer holds most of the pool must still be able to grow into capacity
+    /// that peer later returns.
+    pub fn pool_pages(&self) -> u64 {
+        self.pool_pages
+    }
     pub fn guaranteed_available(&self, identity: &[u8; 32]) -> Result<Resources, Error> {
         Ok(self.guarantee_free[self
             .policy
@@ -326,17 +553,37 @@ impl<'a> Ledger<'a> {
             .ok_or(Error::Denied)?])
     }
     pub fn bind(&mut self, subject: &[u8; 32]) -> Result<Incarnation, Error> {
-        let index = self.policy.subject_index(subject).ok_or(Error::Denied)?;
+        Ok(self.bind_with_maximum(subject)?.token)
+    }
+
+    pub fn bind_with_maximum(&mut self, identity: &[u8; 32]) -> Result<Binding, Error> {
+        let index = self.policy.subject_index(identity).ok_or(Error::Denied)?;
+        let subject = self.policy.subject(index).ok_or(Error::Denied)?;
+        let maximum_pages = if subject.maximum_mode == FIXED {
+            subject.maximum_pages
+        } else {
+            self.pool_pages
+        };
         let member = &mut self.members[index];
         if member.live {
             return Err(Error::Incarnation);
         }
         member.epoch = member.epoch.checked_add(1).ok_or(Error::Overflow)?;
         member.live = true;
-        Ok(Incarnation {
-            subject: index,
-            epoch: member.epoch,
+        Ok(Binding {
+            token: Incarnation {
+                subject: index,
+                epoch: member.epoch,
+            },
+            maximum_pages,
         })
+    }
+
+    /// Quarantine a live incarnation whose physical cleanup did not complete.
+    pub fn quarantine(&mut self, token: Incarnation) -> Result<(), Error> {
+        self.member(token)?;
+        self.members[token.subject].quarantined = true;
+        Ok(())
     }
     fn member(&self, token: Incarnation) -> Result<Member, Error> {
         self.members
@@ -354,6 +601,75 @@ impl<'a> Ledger<'a> {
         Ok(self.member(token)?.pages)
     }
 
+    /// Payload pages every live member of one entitlement holds together.
+    ///
+    /// A cohort shares one guarantee, so what it has committed is a property
+    /// of the entitlement rather than of any member.
+    pub fn entitlement_pages(&self, index: usize) -> u64 {
+        let Some(entitlement) = self.policy.entitlement(index) else {
+            return 0;
+        };
+        (0..self.policy.subject_count())
+            .filter(|position| {
+                self.policy
+                    .subject(*position)
+                    .is_some_and(|subject| subject.entitlement == entitlement.identity)
+            })
+            .map(|position| {
+                self.members[position]
+                    .pages
+                    .saturating_add(self.members[position].held_payload_pages)
+            })
+            .sum()
+    }
+
+    /// Guaranteed pages this incarnation's entitlement can still redeem.
+    ///
+    /// Shared across the cohort: a member asking for more than this gets the
+    /// remainder from the pool, and gets nothing from the entitlement once
+    /// its peers have redeemed it all.
+    pub fn redeemable_guarantee(&self, token: Incarnation) -> Result<u64, Error> {
+        self.member(token)?;
+        let index = self.entitlement(token);
+        let entitlement = self.policy.entitlement(index).ok_or(Error::Denied)?;
+        let redeemed: u64 = (0..self.policy.subject_count())
+            .filter(|position| {
+                self.policy
+                    .subject(*position)
+                    .is_some_and(|subject| subject.entitlement == entitlement.identity)
+            })
+            .map(|position| self.members[position].guarantee_pages)
+            .sum();
+        Ok(entitlement.guarantee_pages.saturating_sub(redeemed))
+    }
+
+    /// Everything one incarnation has drawn from its entitlement's protected
+    /// funding, as certified at each transaction.
+    ///
+    /// The counts an owner must put back when the incarnation retires: the
+    /// allocator lent them out of a reservation's withheld floor, and a
+    /// replacement cannot be funded until they are restored.
+    pub fn guaranteed_held(&self, token: Incarnation) -> Result<Resources, Error> {
+        Ok(self.member(token)?.guaranteed)
+    }
+
+    /// The entitlement one incarnation belongs to.
+    pub fn entitlement_of(&self, token: Incarnation) -> Result<usize, Error> {
+        self.member(token)?;
+        Ok(self.entitlement(token))
+    }
+
+    /// The payload pages one subject may hold: its fixed maximum, or the
+    /// admitted pool.
+    fn page_limit(&self, token: Incarnation) -> u64 {
+        let subject = self.policy.subject(token.subject).unwrap();
+        if subject.maximum_mode == FIXED {
+            subject.maximum_pages
+        } else {
+            self.pool_pages
+        }
+    }
+
     pub fn begin(&mut self, token: Incarnation, pages: u64, plan: Plan) -> Result<(), Error> {
         if self.pending.is_some() {
             return Err(Error::Transaction);
@@ -362,7 +678,6 @@ impl<'a> Ledger<'a> {
         if member.quarantined {
             return Err(Error::Cleanup);
         }
-        let subject = self.policy.subject(token.subject).unwrap();
         let index = self.entitlement(token);
         let entitlement = self.policy.entitlement(index).unwrap();
         let requested = member
@@ -370,11 +685,7 @@ impl<'a> Ledger<'a> {
             .checked_add(member.held_payload_pages)
             .and_then(|held| held.checked_add(pages))
             .ok_or(Error::Overflow)?;
-        let subject_limit = if subject.maximum_mode == FIXED {
-            subject.maximum_pages
-        } else {
-            self.pool_pages
-        };
+        let subject_limit = self.page_limit(token);
         let entitlement_limit = if entitlement.maximum_mode == FIXED {
             entitlement.maximum_pages
         } else {
@@ -402,14 +713,28 @@ impl<'a> Ledger<'a> {
         if pages == 0 && plan.resources != Resources::ZERO {
             return Err(Error::Placement);
         }
-        let guarantee_pages = pages.min(entitlement.guarantee_pages.saturating_sub(redeemed));
-        let guaranteed = plan
-            .resources
-            .minimum(
-                self.guarantee_total[index]
-                    .page_share(guarantee_pages, entitlement.guarantee_pages),
+        // A certified plan states what it actually drew from the entitlement's
+        // reservation. Without one — the path a transaction served entirely
+        // from the pool still takes — the redeemable share is estimated from
+        // the entitlement's per-page envelope, as before.
+        let (guarantee_pages, guaranteed) = if plan.guaranteed() == Resources::ZERO {
+            let pages = pages.min(entitlement.guarantee_pages.saturating_sub(redeemed));
+            (
+                pages,
+                plan.resources
+                    .minimum(
+                        self.guarantee_total[index].page_share(pages, entitlement.guarantee_pages),
+                    )
+                    .minimum(self.guarantee_free[index]),
             )
-            .minimum(self.guarantee_free[index]);
+        } else {
+            if plan.guarantee_pages() > pages
+                || plan.guarantee_pages() > entitlement.guarantee_pages.saturating_sub(redeemed)
+            {
+                return Err(Error::Guarantee);
+            }
+            (plan.guarantee_pages(), plan.guaranteed())
+        };
         let elastic = plan.resources.subtract(guaranteed)?;
         let free = self.free.subtract(elastic)?;
         let guarantee_free = self.guarantee_free[index].subtract(guaranteed)?;
@@ -434,6 +759,11 @@ impl<'a> Ledger<'a> {
             .filter(|pending| pending.member == token)
             .ok_or(Error::Transaction)?;
         let old = self.member(token)?;
+        // A member quarantined while its transaction was open must not gain
+        // pages; the transaction stays pending for an abort to settle.
+        if old.quarantined {
+            return Err(Error::Cleanup);
+        }
         let guaranteed = old.guaranteed.checked_add(pending.guaranteed)?;
         let elastic = old.elastic.checked_add(pending.elastic)?;
         let pages = old
@@ -479,10 +809,11 @@ impl<'a> Ledger<'a> {
             {
                 return Err(Error::Cleanup);
             }
-            let table_bound = old
-                .pages
-                .checked_add(pending.pages)
-                .ok_or(Error::Overflow)?;
+            // A leaf table serves a span rather than a page, so a failed growth
+            // may keep one mapped past the committed frontier. Retention is
+            // bounded by the spans the member's span-aligned maximum window can
+            // touch, so repeated rollback cannot accumulate tables without limit.
+            let table_bound = self.page_limit(token).div_ceil(PAGES_PER_LEAF_TABLE);
             let retained_tables = old
                 .guaranteed
                 .tables
@@ -524,7 +855,7 @@ impl<'a> Ledger<'a> {
         self.free = free;
         self.members[token.subject].guaranteed = guaranteed;
         self.members[token.subject].elastic = elastic;
-        self.members[token.subject].quarantined = !cleanup_succeeded;
+        self.members[token.subject].quarantined = old.quarantined || !cleanup_succeeded;
         self.members[token.subject].held_payload_pages = held_payload_pages;
         self.members[token.subject].guarantee_pages = guarantee_pages;
         self.pending = None;

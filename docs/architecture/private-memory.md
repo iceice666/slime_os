@@ -188,9 +188,8 @@ Fixed and adaptive declarations/resource objects cannot coexist.
 The v2 resource retains the `SLIMEPM` magic family and changes the version, so
 old v1 readers refuse it rather than treating authority as absent. The current
 root scans the whole resource family, rejects duplicates, validates v2 structure
-and instance ownership, then refuses adaptive activation before task publication.
-Existing fixed v1 bytes, target bounds and full-affordability semantics remain
-unchanged. This is a policy/host-accounting boundary, not an adaptive allocator.
+and instance ownership, and binds each subject to a real task. Existing fixed v1
+bytes, target bounds and full-affordability semantics remain unchanged.
 
 The allocation-free model in `boot-contracts/src/private_memory_policy/ledger.rs`
 charges guarantees once per entitlement, keeps incarnation tokens distinct from
@@ -210,10 +209,52 @@ only elastic-funded table resources; otherwise it remains pending or quarantined
 until cleanup. Quarantined payload remains charged against authorization maxima.
 Payload quotas do not count metadata or unused extent backing as mapped pages;
 all such overhead remains charged to the resource pool, not hidden as free RAM.
-The pure model does not prove kernel placement or discover RAM. Expandable
-CSpace, resource-backed metadata and demand-backed allocation are implemented
-and qualified; dynamic task windows, spawn/admission integration and
-multi-inventory runtime qualification remain separate work.
+The pure model does not prove kernel placement or discover RAM.
+
+## Guarantee reservation and adaptive task windows
+
+A guarantee is physical before it is promised. Admission runs before any task
+exists: `slime-root/src/object_allocator/guarantee_vault.rs` takes concrete
+aligned backing, extent records, allocation descriptors and CSlots for every
+entitlement's guaranteed pages, all entitlements together or none, and removes
+them from ordinary and elastic selection. Only the residual funds the ledger,
+so the same bytes are never offered twice. A composition whose guarantees the
+inventory cannot hold refuses admission and publishes nothing.
+
+Guaranteed payload is mapped through a base-page lane, so a promise never
+depends on an aligned 2 MiB placement surviving fragmentation; elastic payload
+keeps the large-frame selection, and the fixed v1 path is unchanged. Planner,
+acquisition and mapper consume one plan, and the placements the allocator
+actually obtained are certified against their protected sources before any
+retype. A guaranteed page is never served from the common pool: its funding,
+including the descriptors and CSlots its frame and leaf table need, is lent from
+its own entitlement and returned with it. A leaf table belongs to the half
+whose page first needs it, so a growth whose guarantee ends at a span boundary
+takes the next span's table from the pool with that span's pages. A growth
+that fails after the ledger opened its transaction returns the lent funding as
+soon as its abort settles, since the abort charged the entitlement nothing.
+
+An adaptive subject's window is its declared address maximum rather than the
+target's per-region capacity, so a policy may declare a window no power of two
+fits; the base is still aligned independently and never moves. Backing arrives
+only on demand, so construction reserves address space and nothing else.
+
+Each incarnation is bound between construction and publication, on the boot path
+and the dynamic spawn path alike: a staged task can neither be dispatched nor
+grow before its binding succeeds, and a subject cannot hold two live
+incarnations. Retirement returns capacity to the originating entitlement only
+after the revoke succeeded; a failed revoke quarantines it instead, and a
+restarted subject rebinds the same entitlement rather than a second one.
+
+Device mappings meet the same window. The adaptive plane's IO holder binds a
+real transport, proves an MMIO map and a device-queue map succeed outside its
+reservation, and is then refused at its own backed page and at a reserved but
+unbacked address inside the same window, on both reference architectures. The
+positive controls use the same capabilities, rights and device epoch, so the
+refusals are the destination's doing rather than absent authority.
+
+Every result here is a QEMU envelope on two architectures that qualifies no
+physical machine.
 
 ## Demand-backed acquisition
 
@@ -245,8 +286,11 @@ stays allocated while the ledger counts none; the allocator's own record
 capacity, not the ledger's, is what refuses a demand that cannot be stored.
 
 A cleanup that does not complete is quarantined rather than lost: the
-acquisition record stays in the allocator, the holder keeps ownership, its next
-request is refused, and exactly one retry returns the resources. Guarantees are
+unreturned extents stay named in their arena's record, the holder keeps
+ownership, and the ledger member is quarantined on every failure path. Each
+later request retries the return and is refused; the ledger keeps the charge
+until the incarnation retires, and the arena's revoke at retirement recovers
+anything a retry could not. Guarantees are
 reserved in the ledger at admission rather than pre-provisioned physically, so
 an exhausted elastic pool refuses elastic transactions while a guaranteed
 holder's first growth still finds its bytes.
@@ -256,6 +300,64 @@ space before any component is published. That exercises the same allocator,
 ledger, retypes and kernel mappings a component's growth would take, and
 deliberately not the spawn, admission or window-placement path, which the next
 stage owns.
+
+## Device-derived capacity
+
+A pool-relative maximum is the pool admitted at boot, fixed for the root's
+lifetime. A subject bound while a peer holds most of that pool still receives
+a window of the whole pool, so capacity the peer later returns stays reachable;
+sizing the window from what happened to be free at bind time would strand a
+late holder forever. One window reserves at most 4096 spans of 2 MiB (8 GiB),
+the spans one leaf-span record tracks: a pool-relative maximum is clamped to
+that limit, and admission refuses a fixed maximum above it before anything is
+published. Admission subtracts each guarantee from the pool exactly
+once: the allocator reserves its backing first, and the ledger is admitted
+against that residual with the reserved envelopes restored, so its own
+subtraction is the only one.
+
+Root CSlots are priced like allocation and extent descriptors. The root
+CSpace grows by leaves retyped from ordinary memory, so the inventory counts
+the slots the byte pool could still fund, as an alternative use of those
+bytes and never in addition to them. The allocator, not the ledger, refuses a
+leaf it cannot fund. Record tables likewise grow past their inline page
+directory through directory pages funded on demand
+(`object_allocator/segmented.rs`), so the number of base pages a machine can
+track follows its memory rather than a compile-time table size.
+
+Returned capacity is reusable at any size. A task's extents come back at the
+size they were taken; once ordinary tails are spent, a smaller request splits
+the smallest larger free extent in halves (`object_allocator/extent_buddy.rs`)
+until a child fits, and two free siblings merge back when their parent's
+revoke succeeds. A split parent is neither free nor active, and every kernel
+operation precedes its metadata change, so a failed retype or revoke leaves
+every capability owned and the operation retryable. Infrastructure, which
+funds metadata pages and CSpace leaves, adopts a whole returned extent when no
+ordinary tail can fund it, holding it for the root's lifetime like every other
+infrastructure source. Without both, a machine whose ordinary tails a bulk
+holder had consumed could not serve base-page growth, or the metadata it
+needs, from capacity that holder returned.
+
+Every refused adaptive growth is followed by a `SLIME_MEM adaptive limit` line
+naming the resource that refused, the ledger's residual, the allocator's
+residual and the largest placeable block, and by an elastic census of that
+residual by owner. Exhaustion is therefore reconcilable: a refused single page
+whose allocator residual exceeds the operational reserve is a request that
+fitted and was refused.
+
+### Inventory rows
+
+seL4 compiles the device tree's memory ranges into the kernel and its loader,
+so a larger `-m` alone cannot enlarge what root is handed. Each emulated
+platform in `sel4/pins.toml` pins `inventory_memory_mib`: a constrained row,
+its product envelope and a larger row. `build-sel4.py::inventory_row` builds
+and installs a kernel, device tree, platform description and loader per row;
+`package_inventory_image` then packages one root task, byte for byte, with
+each row, refusing when the row's installed libsel4 differs from the pinned
+envelope's or its kernel memory does not end where the row declares. QEMU's
+dumped device tree is normalized by deleting RISC-V's runtime `rng-seed` and
+re-emitting the blob through `dtc`; RISC-V dumps otherwise differ in bytes no
+property names. Every build dumps twice and refuses unless both normalized
+dumps are identical.
 
 ## Verification
 
@@ -301,6 +403,33 @@ stage owns.
   pre-workload baseline.
 - `just private_memory_phase3_check` runs all four over the phase-2 surface, so
   one execution binds them to the same code closure and images.
+- `just private_memory_adaptive_check` boots the adaptive composition twice on
+  both QEMU architectures: guarantees are reserved before any task, every
+  declared instance reports the entitlement actually installed on its record,
+  holders are spawned dynamically, a fixed request schedule produces the same
+  grants and refusals on both boots, a faulted subject's replacement rebinds one
+  entitlement rather than two, an IO holder's device and queue mappings are
+  refused inside its window and admitted outside it, and a separate
+  over-guaranteed composition refuses admission before publication.
+- `just private_memory_adaptive_lifecycle_check` boots the same composition
+  from an image whose root carries two compiled-in failures. A construction
+  that fails after its incarnation is bound holds the entitlement until the
+  unwind's revoke succeeds, and the retried spawn binds the next incarnation
+  rather than a second live one. The first adaptive holder to die is then
+  quarantined, refunds nothing, and is returned by exactly one retry, while its
+  peers finish their own schedule.
+- `just private_memory_matrix_check` boots one root and component set against
+  every pinned inventory row on both QEMU architectures. Pool-relative bulk,
+  all-small and mixed holders each walk to a refused single page whose
+  allocator residual is no more than the operational reserve; an idle maximum
+  takes nothing from a peer's walk; a guarantee is redeemed at exhaustion and a
+  spawn under pressure is funded by the reserve; twenty coordinated deaths are
+  each followed by a different holder's zeroed reuse with an unchanged census;
+  verified residency grows with the row; and a launcher-only boot of the
+  pinned row's kernel with the largest row's RAM changes nothing root sees.
+- `just private_memory_phase4_check` runs both over the whole phase-3 surface,
+  because adaptive binding changes construction, growth and reclamation for
+  fixed holders too.
 - `just sel4_gate_control_check` mutation-checks the plane's marker contract.
 - Contract changes additionally run `just contracts_check` and
   `just system_spec_check`.

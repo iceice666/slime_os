@@ -57,7 +57,7 @@ use crate::child_vspace::{
     GRANULE_SIZE, LARGE_FRAME_BYTES, LARGE_FRAME_PAGES, LARGE_FRAME_TYPE, private_leaf_table_type,
 };
 use crate::object_allocator::{
-    AllocError, ObjectAllocator, PrivateAllocation, PrivateObjectKind, TaskArenaId,
+    AllocError, LeafSpanBits, ObjectAllocator, PrivateAllocation, PrivateObjectKind, TaskArenaId,
 };
 
 /// Target profile embedded into this root image by `build.rs`.
@@ -69,10 +69,27 @@ const IMAGE_CAPACITY: (usize, usize) =
 /// Pages one task's private region may ever hold in this target-qualified image.
 pub const MAX_REGION_PAGES: usize = IMAGE_CAPACITY.0;
 
+/// Pages one adaptive window may reserve: the spans one leaf-span record
+/// tracks. A pool-relative maximum is clamped to it and a fixed maximum above
+/// it is refused at admission, so no inventory size makes a window unplaceable.
+pub const MAX_WINDOW_PAGES: usize =
+    crate::object_allocator::MAX_WINDOW_SPANS * crate::child_vspace::LARGE_FRAME_PAGES;
+
+/// The window a subject's admitted maximum reserves, or `None` when no
+/// window can: a pool-relative maximum is clamped to [`MAX_WINDOW_PAGES`], a
+/// fixed one above it is refused.
+pub const fn window_pages(maximum: u64, pooled: bool) -> Option<usize> {
+    if maximum <= MAX_WINDOW_PAGES as u64 {
+        Some(maximum as usize)
+    } else if pooled {
+        Some(MAX_WINDOW_PAGES)
+    } else {
+        None
+    }
+}
+
 /// Pages every live private region may hold together in this image.
 pub const MAX_TOTAL_PAGES: usize = IMAGE_CAPACITY.1;
-const MAX_REGION_SPANS: usize = MAX_REGION_PAGES.div_ceil(LARGE_FRAME_PAGES);
-const LEAF_SPAN_WORDS: usize = MAX_REGION_SPANS.div_ceil(usize::BITS as usize);
 
 const _: () = assert!(
     MAX_REGION_PAGES == boot_contracts::private_memory_budget::capacity_for(IMAGE_TARGET_NAME).0,
@@ -128,9 +145,12 @@ pub enum GrowError {
 /// much of it is currently backed.
 ///
 /// `Copy`, because [`crate::task::Task`] is: the whole per-task record is a
-/// fixed-size value the table stores inline. Leaf-table ownership is a bounded
-/// bitmap because large-frame spans and base-page spans may be interleaved, and
-/// failed transactions retain mapped tables for retry.
+/// fixed-size value the table stores inline. Leaf-table ownership is tracked
+/// per 2 MiB span because large-frame spans and base-page spans may be
+/// interleaved and failed transactions retain mapped tables for retry, but the
+/// span bits themselves live in allocator-owned page-backed storage: a window
+/// sized by policy is not bounded by the compiled target row, and a copy of a
+/// region names the same window and therefore the same ownership record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Region {
     base: usize,
@@ -140,7 +160,7 @@ pub struct Region {
     large_frames: usize,
     base_frames: usize,
     leaf_tables: usize,
-    leaf_spans: [usize; LEAF_SPAN_WORDS],
+    leaf_spans: LeafSpanBits,
     /// Backing for this region arrives per request from the common pool.
     ///
     /// A quota is a promise the construction path already paid for; an elastic
@@ -165,70 +185,108 @@ impl Region {
         large_frames: 0,
         base_frames: 0,
         leaf_tables: 0,
-        leaf_spans: [0; LEAF_SPAN_WORDS],
+        leaf_spans: LeafSpanBits::NONE,
         elastic: false,
     };
 
-    /// A region reserved at `base`, with `quota` pages of growth authorized.
+    /// Reserve a window of `reservation` pages at `base`, authorizing `quota`
+    /// pages of growth into it.
+    ///
+    /// The one constructor for a region with a window, because the reservation
+    /// is decided once — by the same layout the child's VSpace was built from —
+    /// and every other property follows it. `elastic` selects which model funds
+    /// the growth: a fixed quota is a promise the construction path already
+    /// paid for, an elastic maximum is permission to ask.
     ///
     /// `quota` is clamped by the reservation rather than refused: the
-    /// reservation is this root's structural bound and the quota is the
-    /// generation's policy, so a policy asking for more than the mechanism can
-    /// hold is honoured up to the mechanism. C10.2's admission refuses such a
-    /// budget at decode, before any component launches; this clamp is the
-    /// mechanism side that holds when a quota arrives from anywhere else.
-    pub const fn reserved(base: usize, quota: usize) -> Self {
-        let quota = if quota > MAX_REGION_PAGES {
-            MAX_REGION_PAGES
-        } else {
-            quota
-        };
-        Self {
+    /// reservation is the address space the window physically holds and the
+    /// quota is policy, so a policy asking for more than the window can hold is
+    /// honoured up to the window. Admission refuses a fixed maximum above
+    /// [`MAX_WINDOW_PAGES`] and clamps a pool-relative one; this clamp is the
+    /// mechanism side of the same rule.
+    ///
+    /// Three refusals, all deny-by-default, because each would otherwise fail
+    /// later with pages already committed:
+    ///
+    /// * A base that is not large-frame aligned. Leaf-table ownership is
+    ///   tracked per 2 MiB span of the window, so a misaligned base would put
+    ///   one span's pages under two leaf tables and the second would never be
+    ///   priced or recorded.
+    /// * A window whose end does not fit an address. Every later window and
+    ///   page address derives from this sum, and they are unchecked because
+    ///   this is where the check belongs.
+    /// * A window with more spans than the allocator can track.
+    pub(crate) fn reserve(
+        allocator: &mut ObjectAllocator,
+        base: usize,
+        reservation: usize,
+        quota: usize,
+        elastic: bool,
+    ) -> Result<Self, AllocError> {
+        let spans = Self::admit_window(base, reservation)?;
+        let leaf_spans = allocator.acquire_leaf_spans(spans)?;
+        Ok(Self::with_spans(
             base,
-            reservation: MAX_REGION_PAGES,
+            reservation,
             quota,
-            pages: 0,
-            large_frames: 0,
-            base_frames: 0,
-            leaf_tables: 0,
-            leaf_spans: [0; LEAF_SPAN_WORDS],
-            elastic: false,
-        }
+            elastic,
+            leaf_spans,
+        ))
     }
 
-    /// A region whose window is reserved but whose backing is not.
-    ///
-    /// `maximum` is authorization, not a promise: nothing is taken from the
-    /// pool here, and a holder that never grows costs the machine only the
-    /// address space no other mapping may use. The clamp to the compiled
-    /// window is the same structural bound the fixed path applies, for the
-    /// same reason: the base cannot move, so growth cannot pass it.
-    ///
-    /// A base that is not large-frame aligned is refused outright. Leaf-table
-    /// ownership is tracked per 2 MiB span of the *window*, so a misaligned
-    /// base would put one span's pages under two leaf tables and the second
-    /// would never be priced or recorded. Deny-by-default is the only safe
-    /// answer: returning a window whose accounting cannot represent it would
-    /// fail later, during a mapping, with pages already committed.
-    pub const fn elastic(base: usize, maximum: usize) -> Self {
-        if !base.is_multiple_of(LARGE_FRAME_BYTES) {
-            return Self::DENIED;
+    /// The same window, with its span record taken from the host-test store.
+    #[cfg(test)]
+    pub(crate) fn reserve_for_test(
+        base: usize,
+        reservation: usize,
+        quota: usize,
+        elastic: bool,
+    ) -> Result<Self, AllocError> {
+        let spans = Self::admit_window(base, reservation)?;
+        let leaf_spans = crate::object_allocator::host_leaf_spans(spans)
+            .ok_or(AllocError::PrivateRegionSpans { spans, limit: 0 })?;
+        Ok(Self::with_spans(
+            base,
+            reservation,
+            quota,
+            elastic,
+            leaf_spans,
+        ))
+    }
+
+    /// Admit a window's shape, answering the spans it needs tracked.
+    fn admit_window(base: usize, reservation: usize) -> Result<usize, AllocError> {
+        if reservation == 0 || !base.is_multiple_of(LARGE_FRAME_BYTES) {
+            return Err(AllocError::PrivateRegionWindow { base, reservation });
         }
-        let maximum = if maximum > MAX_REGION_PAGES {
-            MAX_REGION_PAGES
-        } else {
-            maximum
-        };
+        reservation
+            .checked_mul(GRANULE_SIZE)
+            .and_then(|bytes| base.checked_add(bytes))
+            .ok_or(AllocError::PrivateRegionWindow { base, reservation })?;
+        Ok(reservation.div_ceil(LARGE_FRAME_PAGES))
+    }
+
+    fn with_spans(
+        base: usize,
+        reservation: usize,
+        quota: usize,
+        elastic: bool,
+        leaf_spans: LeafSpanBits,
+    ) -> Self {
         Self {
             base,
-            reservation: MAX_REGION_PAGES,
-            quota: maximum,
+            reservation,
+            quota: if quota > reservation {
+                reservation
+            } else {
+                quota
+            },
             pages: 0,
             large_frames: 0,
             base_frames: 0,
             leaf_tables: 0,
-            leaf_spans: [0; LEAF_SPAN_WORDS],
-            elastic: true,
+            leaf_spans,
+            elastic,
         }
     }
 
@@ -266,10 +324,8 @@ impl Region {
         self.leaf_tables
     }
 
-    const fn has_leaf_table(self, span: usize) -> bool {
-        let word = span / usize::BITS as usize;
-        let bit = span % usize::BITS as usize;
-        word < LEAF_SPAN_WORDS && self.leaf_spans[word] & (1usize << bit) != 0
+    fn has_leaf_table(self, span: usize) -> bool {
+        self.leaf_spans.get(span)
     }
 
     /// Apply a priced shape to this region without a kernel, for host tests of
@@ -287,17 +343,16 @@ impl Region {
     }
 
     fn mark_leaf_table(&mut self, span: usize) {
-        let word = span / usize::BITS as usize;
-        let bit = span % usize::BITS as usize;
-        debug_assert!(word < LEAF_SPAN_WORDS);
-        let mask = 1usize << bit;
-        if self.leaf_spans[word] & mask == 0 {
-            self.leaf_spans[word] |= mask;
+        if self.leaf_spans.set(span) {
             self.leaf_tables += 1;
         }
     }
 
     /// Bytes of address space the window spans, backed or not.
+    ///
+    /// Unchecked, like every other address this region derives: [`Self::reserve`]
+    /// proved `base + reservation * GRANULE_SIZE` fits an address before the
+    /// window existed, and the reservation never grows.
     pub const fn reserved_bytes(self) -> usize {
         self.reservation * GRANULE_SIZE
     }
@@ -357,7 +412,9 @@ impl Region {
         // can physically hold, so a request past it is malformed rather than
         // merely unaffordable, and reporting the affordable-but-impossible case
         // as a quota problem would tell a caller to wait for something that
-        // will never happen.
+        // will never happen. A task with no window is refused here too, which
+        // is what deny-by-default means: no address space rather than a policy
+        // number that could be raised.
         if requested > self.reservation {
             return Err(GrowError::ReservationExceeded {
                 pages,
@@ -621,7 +678,17 @@ impl Table {
         if delta == 0 {
             return Ok(previous);
         }
-        let outcome = map_growth(allocator, arena, vspace, region, delta, kernel)?;
+        // The fixed model's selection is unchanged: its quota is reserved whole
+        // at construction, so a large frame is always placeable.
+        let outcome = map_growth(
+            allocator,
+            arena,
+            vspace,
+            region,
+            delta,
+            GrowthPlan::elastic(),
+            kernel,
+        )?;
         allocator
             .commit_private_transaction(arena)
             .map_err(|error| GrowError::Frames {
@@ -659,17 +726,94 @@ impl Table {
     /// *charge*, which is bookkeeping the revoke cannot see.
     ///
     /// Idempotent: reclaiming a region twice returns zero the second time, so a
-    /// retried teardown cannot drive the total negative.
-    pub fn reclaim(&mut self, region: &mut Region) -> usize {
+    /// retried teardown cannot drive the total negative. The span-ownership
+    /// record goes back to the allocator with the same call, because the window
+    /// it describes is gone; the region keeps no handle to it.
+    pub(crate) fn reclaim(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+        region: &mut Region,
+    ) -> usize {
+        let released = region.leaf_spans;
+        let pages = self.reclaim_accounting(region);
+        allocator.release_leaf_spans(released);
+        pages
+    }
+
+    /// The accounting half, for host tests that hold no allocator.
+    #[cfg(test)]
+    pub(crate) fn reclaim_for_test(&mut self, region: &mut Region) -> usize {
+        let released = region.leaf_spans;
+        let pages = self.reclaim_accounting(region);
+        crate::object_allocator::host_release_leaf_spans(released);
+        pages
+    }
+
+    fn reclaim_accounting(&mut self, region: &mut Region) -> usize {
         let pages = region.pages;
         region.pages = 0;
         region.large_frames = 0;
         region.base_frames = 0;
         region.leaf_tables = 0;
-        region.leaf_spans = [0; LEAF_SPAN_WORDS];
+        region.leaf_spans = LeafSpanBits::NONE;
         self.total_pages = self.total_pages.saturating_sub(pages);
         self.reclaimed_pages += pages;
         pages
+    }
+}
+
+/// Which frame sizes one growth is allowed to use.
+///
+/// The single mapping decision for a growth, resolved by the caller and then
+/// consumed by pricing, acquisition and mapping alike. A guaranteed payload
+/// takes [`Lane::BasePage`] so its promise never depends on an aligned 2 MiB
+/// placement still existing when the page is finally asked for; elastic
+/// payload keeps [`Lane::LargeFrame`], which is the selection every fixed and
+/// elastic holder has always used.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Lane {
+    #[default]
+    LargeFrame,
+    BasePage,
+}
+
+impl Lane {
+    const fn allows_large_frames(self) -> bool {
+        matches!(self, Self::LargeFrame)
+    }
+}
+
+/// One growth's complete mapping decision, resolved once by the caller.
+///
+/// Pricing, acquisition, certification and mapping all read this same value.
+/// `guaranteed_pages` is a prefix of the growth rather than a set of page
+/// numbers because a transaction redeems its entitlement before it spends the
+/// pool, which is also the order the ledger charges them in.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GrowthPlan {
+    pub lane: Lane,
+    pub guaranteed_pages: usize,
+    pub reservation: Option<crate::object_allocator::guarantee_vault::ReservationId>,
+}
+
+impl GrowthPlan {
+    /// Ordinary growth: every page from the common pool, large frames allowed.
+    pub const fn elastic() -> Self {
+        Self {
+            lane: Lane::LargeFrame,
+            guaranteed_pages: 0,
+            reservation: None,
+        }
+    }
+
+    /// Where the `offset`-th page of this growth must be retyped from.
+    const fn source(self, offset: usize) -> crate::object_allocator::ExtentSource {
+        match self.reservation {
+            Some(id) if offset < self.guaranteed_pages => {
+                crate::object_allocator::ExtentSource::Guaranteed(id)
+            }
+            _ => crate::object_allocator::ExtentSource::Common,
+        }
     }
 }
 
@@ -694,8 +838,10 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
     vspace: sel4::cap::VSpace,
     region: &mut Region,
     delta: usize,
+    plan: GrowthPlan,
     kernel: &mut K,
 ) -> Result<GrowthOutcome, GrowError> {
+    let lane = plan.lane;
     let previous = region.pages;
     let mut pages_backed = 0;
     let mut large_frames = 0;
@@ -714,9 +860,18 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
             }
             let vaddr = region.base + page * GRANULE_SIZE;
             let remaining = delta - pages_backed;
-            let large = !leaf_available
+            // The same predicate `Region::shape_in` priced, reading the same
+            // lane. Deciding it independently here is how a mapper could take
+            // a large frame the transaction was never charged for.
+            let large = lane.allows_large_frames()
+                && !leaf_available
                 && vaddr.is_multiple_of(LARGE_FRAME_BYTES)
                 && remaining >= LARGE_FRAME_PAGES;
+            // The page's own source, and the same source for the leaf table
+            // that page needs: a guaranteed page whose table came from the
+            // pool would leave the guarantee unredeemable after exactly the
+            // pool exhaustion it was supposed to be immune to.
+            let source = plan.source(pages_backed);
             let result = if large {
                 back_large(
                     allocator,
@@ -724,11 +879,12 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
                     vspace,
                     vaddr,
                     previous == 0 && delta == region.quota,
+                    source,
                     kernel,
                 )
             } else {
                 if !leaf_available {
-                    match back_leaf_table(allocator, arena, vspace, vaddr, kernel) {
+                    match back_leaf_table(allocator, arena, vspace, vaddr, source, kernel) {
                         Ok(table) => {
                             region.mark_leaf_table(span);
                             if let Err(error) =
@@ -753,7 +909,7 @@ pub(crate) fn map_growth<K: PrivateMemoryKernel>(
                         }
                     }
                 }
-                back_page(allocator, arena, vspace, vaddr, kernel)
+                back_page(allocator, arena, vspace, vaddr, source, kernel)
             };
             match result {
                 Ok(backing) => {
@@ -805,6 +961,7 @@ fn back_leaf_table<K: PrivateMemoryKernel>(
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     vaddr: usize,
+    source: crate::object_allocator::ExtentSource,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let ty = private_leaf_table_type();
@@ -813,6 +970,7 @@ fn back_leaf_table<K: PrivateMemoryKernel>(
         arena,
         PrivateObjectKind::LeafTable,
         ty.blueprint(),
+        source,
         kernel,
     )?;
     let table = allocation
@@ -835,6 +993,7 @@ fn back_page<K: PrivateMemoryKernel>(
     arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     vaddr: usize,
+    source: crate::object_allocator::ExtentSource,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let size_bits = sel4::FrameObjectType::GRANULE.bits();
@@ -842,6 +1001,7 @@ fn back_page<K: PrivateMemoryKernel>(
         arena,
         PrivateObjectKind::Granule,
         sel4::cap_type::Granule::object_blueprint(),
+        source,
         kernel,
     )?;
     let frame = allocation.cap().cast::<sel4::cap_type::UnspecifiedPage>();
@@ -870,6 +1030,7 @@ fn back_large<K: PrivateMemoryKernel>(
     vaddr: usize,
     #[cfg_attr(not(slime_private_fail_large_map), allow(unused_variables))]
     first_of_full_window: bool,
+    source: crate::object_allocator::ExtentSource,
     kernel: &mut K,
 ) -> Result<Backing, AllocError> {
     let size_bits = LARGE_FRAME_TYPE.bits();
@@ -877,6 +1038,7 @@ fn back_large<K: PrivateMemoryKernel>(
         arena,
         PrivateObjectKind::LargeFrame,
         LARGE_FRAME_TYPE.blueprint(),
+        source,
         kernel,
     )?;
     let frame = allocation.cap().cast::<sel4::cap_type::UnspecifiedPage>();
@@ -919,8 +1081,47 @@ fn back_large<K: PrivateMemoryKernel>(
 mod tests {
     use super::*;
 
+    /// The window limit is exactly what the span record admits: the largest
+    /// window reserves, one span more is refused, a pool-relative maximum past
+    /// it is clamped and a fixed one is refused.
+    #[test]
+    fn a_maximum_beyond_one_window_is_clamped_when_pooled_and_refused_when_fixed() {
+        extern crate std;
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = crate::object_allocator::ObjectAllocator::empty();
+                let limit = MAX_WINDOW_PAGES;
+                assert!(Region::reserve(&mut allocator, 0x40_0000, limit, limit, true).is_ok());
+                assert!(matches!(
+                    Region::reserve(
+                        &mut allocator,
+                        0x40_0000,
+                        limit + LARGE_FRAME_PAGES,
+                        limit,
+                        true
+                    ),
+                    Err(AllocError::PrivateRegionSpans { .. })
+                ));
+                let pool = 64u64 << 30 >> 12;
+                assert_eq!(window_pages(pool, true), Some(limit));
+                assert_eq!(window_pages(pool, false), None);
+                assert_eq!(window_pages(limit as u64, false), Some(limit));
+                assert_eq!(window_pages(4096, true), Some(4096));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A window of the compiled per-region capacity with an 8-page quota, so
+    /// the quota bound and the reservation bound stay distinguishable.
     fn region() -> Region {
-        Region::reserved(0x1000_0000, 8)
+        reserved(0x1000_0000, MAX_REGION_PAGES, 8)
+    }
+
+    fn reserved(base: usize, reservation: usize, quota: usize) -> Region {
+        Region::reserve_for_test(base, reservation, quota, false).expect("host test window")
     }
 
     #[test]
@@ -953,9 +1154,20 @@ mod tests {
 
     #[test]
     fn a_quota_is_clamped_to_the_reservation_never_raised_past_it() {
-        let wide = Region::reserved(0x1000_0000, MAX_REGION_PAGES * 4);
-        assert_eq!(wide.quota(), MAX_REGION_PAGES);
-        assert_eq!(wide.reserved_bytes(), MAX_REGION_PAGES * GRANULE_SIZE);
+        let wide = reserved(0x1000_0000, LARGE_FRAME_PAGES, LARGE_FRAME_PAGES * 4);
+        assert_eq!(wide.quota(), LARGE_FRAME_PAGES);
+        assert_eq!(wide.reserved_bytes(), LARGE_FRAME_PAGES * GRANULE_SIZE);
+    }
+
+    #[test]
+    fn a_malformed_window_is_refused_before_any_address_derives_from_it() {
+        // Misaligned base: span ownership is indexed from it.
+        assert!(Region::reserve_for_test(0x1000_0000 + GRANULE_SIZE, 8, 8, false).is_err());
+        // Empty window: a region with a base and no reservation would answer
+        // an empty `window()` while still claiming an address.
+        assert!(Region::reserve_for_test(0x1000_0000, 0, 0, false).is_err());
+        // A window whose end does not fit an address.
+        assert!(Region::reserve_for_test(0x1000_0000, usize::MAX, 1, false).is_err());
     }
 
     #[test]
@@ -968,6 +1180,13 @@ mod tests {
             0x1000_0000 + MAX_REGION_PAGES * GRANULE_SIZE
         );
         assert_eq!(region.next_vaddr(), 0x1000_0000);
+        // The reservation is the window the caller asked for, not a compiled
+        // constant: a narrower policy yields a narrower window.
+        let narrow = reserved(0x1000_0000, LARGE_FRAME_PAGES, LARGE_FRAME_PAGES);
+        assert_eq!(
+            narrow.window().end,
+            0x1000_0000 + LARGE_FRAME_PAGES * GRANULE_SIZE
+        );
     }
 
     #[test]
@@ -1044,11 +1263,28 @@ mod tests {
 
     #[test]
     fn the_reservation_is_reported_before_the_quota() {
-        let mut region = Region::reserved(0x1000_0000, MAX_REGION_PAGES * 2);
-        region.pages = MAX_REGION_PAGES;
+        // Deny-by-default is about address space: a task the generation does
+        // not name has no window, and reporting a zero quota would suggest a
+        // number that could be raised.
         assert!(matches!(
-            region.admit(1, 0),
+            Region::DENIED.admit(1, 0),
+            Err(GrowError::ReservationExceeded { reservation: 0, .. })
+        ));
+        // A holder whose window is narrower than its request is refused by the
+        // window, whatever its quota says.
+        let mut wide = reserved(0x1000_0000, MAX_REGION_PAGES, MAX_REGION_PAGES);
+        wide.quota = MAX_REGION_PAGES * 2;
+        wide.pages = MAX_REGION_PAGES;
+        assert!(matches!(
+            wide.admit(1, 0),
             Err(GrowError::ReservationExceeded { .. })
+        ));
+        // A holder still inside its window is refused by the quota policy set.
+        let mut narrow = reserved(0x1000_0000, MAX_REGION_PAGES, LARGE_FRAME_PAGES);
+        narrow.pages = LARGE_FRAME_PAGES;
+        assert!(matches!(
+            narrow.admit(1, 0),
+            Err(GrowError::QuotaExceeded { .. })
         ));
     }
 
@@ -1069,31 +1305,37 @@ mod tests {
     #[test]
     fn reclaiming_a_region_returns_its_pages_and_is_idempotent() {
         let mut table = Table::new();
-        let mut region = region();
+        let mut region = reserved(0x1000_0000, MAX_REGION_PAGES, 8);
         // The commit half of `grow` without a kernel: the host cannot map a
         // frame, so the accounting is driven directly and the mapping path
         // stays the seL4 gate's to prove.
         region.pages = 5;
         table.total_pages = 5;
         table.grown_pages = 5;
-        assert_eq!(table.reclaim(&mut region), 5);
+        assert_eq!(table.reclaim_for_test(&mut region), 5);
         assert_eq!(table.total_pages(), 0);
         assert_eq!(table.reclaimed_pages(), 5);
         assert_eq!(region.pages(), 0);
         // A failed initial growth may retain its mapped leaf without charging a
         // page. Teardown must clear that translation state without inventing a
-        // grant or reclamation.
+        // grant or reclamation. The span record went back to the allocator with
+        // the first reclaim, so a region that has been torn down owns no spans
+        // at all rather than silently writing into a record another region may
+        // now hold.
+        let mut live = reserved(0x2000_0000, MAX_REGION_PAGES, 8);
+        live.mark_leaf_table(1);
+        assert!(live.has_leaf_table(1));
         region.mark_leaf_table(1);
-        assert!(region.has_leaf_table(1));
-        assert_eq!(table.reclaim(&mut region), 0);
-        assert_eq!(region.leaf_tables(), 0);
         assert!(!region.has_leaf_table(1));
+        assert_eq!(table.reclaim_for_test(&mut region), 0);
+        assert_eq!(region.leaf_tables(), 0);
+        assert!(live.has_leaf_table(1), "a live region keeps its own spans");
         assert_eq!(table.total_pages(), 0);
         assert_eq!(table.grown_pages(), 5);
         assert_eq!(table.reclaimed_pages(), 5);
         assert_eq!(table.grants(), 0);
         // A retried teardown must not drive the total negative.
-        assert_eq!(table.reclaim(&mut region), 0);
+        assert_eq!(table.reclaim_for_test(&mut region), 0);
         assert_eq!(table.total_pages(), 0);
         assert_eq!(table.reclaimed_pages(), 5);
     }
@@ -1102,9 +1344,9 @@ mod tests {
     fn one_tasks_exhaustion_leaves_another_tasks_ceiling_intact() {
         // The root-wide total is shared; the per-task quota is not. A task at
         // its own ceiling must not lower anyone else's.
-        let mut exhausted = Region::reserved(0x1000_0000, 4);
+        let mut exhausted = reserved(0x1000_0000, MAX_REGION_PAGES, 4);
         exhausted.pages = 4;
-        let untouched = Region::reserved(0x2000_0000, 4);
+        let untouched = reserved(0x2000_0000, MAX_REGION_PAGES, 4);
         assert_eq!(
             exhausted.admit(1, 4),
             Err(GrowError::QuotaExceeded {

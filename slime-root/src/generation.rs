@@ -23,6 +23,8 @@ use boot_contracts::recording_policy::{self, RecordingPolicy};
 use boot_contracts::scheduling_class::{self, SchedulingClass};
 use boot_contracts::target_profile::TargetProfile;
 use boot_contracts::wait_set::{self, WaitSet};
+
+use crate::object_allocator::{ObjectAllocator, guarantee_vault};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
@@ -562,18 +564,93 @@ fn select_private_memory_object<'a>(
     Ok(found)
 }
 
-/// Fixed-budget lookup for launch paths; adaptive generations never pass admission.
+/// The declared format version of the generation's private-memory resource.
+///
+/// One family, two formats: the version decides which reader owns the bytes,
+/// and a resource that is neither is refused rather than read by the older one.
+fn private_memory_version(bytes: &[u8]) -> Result<u32, GenerationError> {
+    let version = bytes
+        .get(
+            private_memory_policy::OFF_HEADER_FORMAT_VERSION
+                ..private_memory_policy::OFF_HEADER_FORMAT_VERSION_END,
+        )
+        .ok_or(GenerationError::MalformedPrivateMemoryPolicy)?;
+    Ok(u32::from_le_bytes(version.try_into().unwrap()))
+}
+
+/// Fixed-budget lookup for launch paths.
+///
+/// A generation carrying the adaptive format answers `None`: it declares no
+/// fixed budget, so every holder resolves to no quota through this reader and
+/// the adaptive path owns its own binding. Returning a decode error instead
+/// would fail an adaptive boot on the reader rather than on the policy.
 pub fn private_memory_budget_object<'a>(
     generation: &Generation<'a>,
 ) -> Option<Result<PrivateMemoryBudget<'a>, GenerationError>> {
     match private_memory_object(generation) {
-        Ok(Some(bytes)) => Some(
-            PrivateMemoryBudget::decode(bytes)
-                .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget),
-        ),
+        Ok(Some(bytes)) => match private_memory_version(bytes) {
+            Ok(private_memory_policy::FORMAT_VERSION) => None,
+            Ok(_) => Some(
+                PrivateMemoryBudget::decode(bytes)
+                    .map_err(|_| GenerationError::UnsatisfiablePrivateMemoryBudget),
+            ),
+            Err(error) => Some(Err(error)),
+        },
         Ok(None) => None,
         Err(error) => Some(Err(error)),
     }
+}
+
+/// Adaptive-policy lookup for the paths that bind entitlements.
+///
+/// The mirror of [`private_memory_budget_object`]: a fixed budget answers
+/// `None` here, so each reader sees only the format it owns and neither has to
+/// guess what the other's absence means.
+pub fn private_memory_policy_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<PrivateMemoryPolicy<'a>, GenerationError>> {
+    match private_memory_object(generation) {
+        Ok(Some(bytes)) => match private_memory_version(bytes) {
+            Ok(private_memory_policy::FORMAT_VERSION) => Some(
+                PrivateMemoryPolicy::decode(bytes)
+                    .map_err(|_| GenerationError::MalformedPrivateMemoryPolicy),
+            ),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        },
+        Ok(None) => None,
+        Err(error) => Some(Err(error)),
+    }
+}
+
+/// This generation's instances as the policy's trusted topology.
+///
+/// Identities are derived from the instance names the generation itself
+/// declares and ownership from its own owner field, so a policy can never
+/// name a subject this generation does not contain, and membership stays
+/// explicit: a subtree root restricts its listed members rather than
+/// admitting every descendant.
+pub fn private_memory_instances(
+    generation: &Generation<'_>,
+    instances: &mut [private_memory_policy::Instance],
+) -> Result<usize, GenerationError> {
+    let count = generation.instance_count();
+    if count > instances.len() {
+        return Err(GenerationError::MalformedPrivateMemoryPolicy);
+    }
+    for (index, slot) in instances.iter_mut().enumerate().take(count) {
+        let instance = generation.instance(index)?;
+        *slot = private_memory_policy::Instance {
+            identity: private_memory_policy::subject_identity(instance.name),
+            owner: match instance.owner {
+                boot_contracts::generation::InstanceOwner::Root => None,
+                boot_contracts::generation::InstanceOwner::Instance(owner) => Some(
+                    private_memory_policy::subject_identity(generation.instance(owner)?.name),
+                ),
+            },
+        };
+    }
+    Ok(count)
 }
 pub fn io_resource_budget_object<'a>(
     generation: &Generation<'a>,
@@ -1293,41 +1370,14 @@ fn private_memory_budget_admission(
     let Some(bytes) = private_memory_object(generation)? else {
         return Ok(None);
     };
-    let version = bytes
-        .get(
-            private_memory_policy::OFF_HEADER_FORMAT_VERSION
-                ..private_memory_policy::OFF_HEADER_FORMAT_VERSION_END,
-        )
-        .ok_or(GenerationError::MalformedPrivateMemoryPolicy)?;
-    let version = u32::from_le_bytes(version.try_into().unwrap());
+    let version = private_memory_version(bytes)?;
     if version == private_memory_policy::FORMAT_VERSION {
         let mut instances = [private_memory_policy::Instance {
             identity: [0; 32],
             owner: None,
         }; MAX_ADMITTED_INSTANCES];
-        if generation.instance_count() > instances.len() {
-            return Err(GenerationError::MalformedPrivateMemoryPolicy);
-        }
-        for (index, slot) in instances
-            .iter_mut()
-            .enumerate()
-            .take(generation.instance_count())
-        {
-            let instance = generation.instance(index)?;
-            *slot = private_memory_policy::Instance {
-                identity: private_memory_policy::subject_identity(instance.name),
-                owner: match instance.owner {
-                    boot_contracts::generation::InstanceOwner::Root => None,
-                    boot_contracts::generation::InstanceOwner::Instance(owner) => Some(
-                        private_memory_policy::subject_identity(generation.instance(owner)?.name),
-                    ),
-                },
-            };
-        }
-        return adaptive_private_memory_activation(
-            bytes,
-            &instances[..generation.instance_count()],
-        );
+        let count = private_memory_instances(generation, &mut instances)?;
+        return adaptive_private_memory_activation(bytes, &instances[..count]);
     }
     if version != private_memory_budget::FORMAT_VERSION {
         return Err(GenerationError::UnsupportedPrivateMemoryPolicy);
@@ -1338,6 +1388,12 @@ fn private_memory_budget_admission(
     Ok(Some(budget.holder_count()))
 }
 
+/// Admit an adaptive policy's structure against this generation's topology.
+///
+/// Structure only. Whether the machine can actually reserve every guarantee is
+/// a question about inventory the allocator owns, and it is answered by
+/// [`admit_private_memory_ledger`] before any task is published; deciding it
+/// here would compare a policy against a pool this code cannot see.
 fn adaptive_private_memory_activation(
     bytes: &[u8],
     instances: &[private_memory_policy::Instance],
@@ -1347,7 +1403,337 @@ fn adaptive_private_memory_activation(
     policy
         .validate_instances(instances)
         .map_err(|_| GenerationError::MalformedPrivateMemoryPolicy)?;
-    Err(GenerationError::UnsupportedAdaptivePrivateMemoryPolicy)
+    Ok(Some(policy.subject_count()))
+}
+
+/// Reserve an adaptive policy's guarantees against the real ordinary pool.
+///
+/// The resource half of admission, and the reason it takes an allocator: a
+/// policy is admissible only against the inventory this machine actually has,
+/// after its own operational reserve and every already-committed root
+/// allocation. Each entitlement's guarantee is reserved in full and
+/// simultaneously, with a conservative per-page envelope that covers the
+/// page's bytes and its table, descriptor, extent and slot alike. Elastic
+/// maxima are never summed: permission to ask is not a promise, and adding
+/// them would refuse compositions this machine can serve.
+///
+/// Nothing is physically provisioned here. The ledger records what is
+/// reserved so a later growth cannot spend another holder's guarantee.
+///
+/// `residual` is the inventory left *after* every guarantee was reserved. The
+/// ledger subtracts each guarantee's envelope itself, so the envelopes are
+/// added back first: subtracting them from a residual that no longer contains
+/// them would strand that much ordinary memory in neither the pool nor any
+/// guarantee.
+pub fn admit_private_memory_ledger<'a>(
+    policy: PrivateMemoryPolicy<'a>,
+    instances: &[private_memory_policy::Instance],
+    residual: private_memory_policy::ledger::Resources,
+) -> Result<private_memory_policy::ledger::Ledger<'a>, private_memory_policy::ledger::Error> {
+    use private_memory_policy::ledger::{Error, Resources};
+    let mut guarantees = [Resources::ZERO; private_memory_policy::MAX_ENTITLEMENTS];
+    let count = policy.entitlement_count();
+    if count > guarantees.len() {
+        return Err(Error::Guarantee);
+    }
+    let mut available = residual;
+    for (index, slot) in guarantees.iter_mut().enumerate().take(count) {
+        let entitlement = policy.entitlement(index).ok_or(Error::Guarantee)?;
+        *slot = guarantee_reservation_resources(entitlement.guarantee_pages)?;
+        available = available.checked_add(*slot)?;
+    }
+    private_memory_policy::ledger::Ledger::admit(policy, instances, available, &guarantees[..count])
+}
+
+/// Why an admitted policy's guarantees could not be made physical.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GuaranteeReservationError {
+    /// More entitlements carry a guarantee than the allocator can hold
+    /// identities for. Refused whole: reserving a prefix would publish a graph
+    /// whose later entitlements promise backing nobody owns.
+    Entitlements {
+        declared: usize,
+        limit: usize,
+    },
+    Overflow,
+    Backing(guarantee_vault::ReservationError),
+}
+
+/// Every entitlement's guarantee, made physical simultaneously.
+///
+/// Holds only what was actually materialized. `reserved_bytes`/
+/// `reserved_extents`/`reserved_anchor_slots` are read back from the
+/// allocator after the fact, never from the request, so a caller reporting
+/// them is reporting ownership rather than an intention.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GuaranteeReservations {
+    entries: [Option<(usize, guarantee_vault::ReservationId)>; guarantee_vault::MAX_RESERVATIONS],
+    len: usize,
+    pub guarantee_pages: u64,
+    pub reserved_bytes: usize,
+    pub reserved_extents: usize,
+    /// Root CSlots this reservation holds: one spent anchor per backing
+    /// extent, plus the count withheld from every ordinary consumer.
+    pub reserved_slots: usize,
+    /// Allocation descriptors withheld from every ordinary consumer.
+    pub reserved_descriptors: usize,
+    /// Leaf tables the reserved table extents are funded to hold: one per
+    /// guaranteed page, which is the conservative bound for a cohort whose
+    /// pages can land one per span across several address spaces.
+    pub reserved_tables: u64,
+}
+
+impl GuaranteeReservations {
+    /// The reservation funding one entitlement, or `None` when it promises
+    /// nothing.
+    pub fn reservation_for(&self, entitlement: usize) -> Option<guarantee_vault::ReservationId> {
+        self.entries[..self.len]
+            .iter()
+            .flatten()
+            .find(|(index, _)| *index == entitlement)
+            .map(|(_, id)| *id)
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Return every reservation to common capacity.
+    ///
+    /// Used to fail an admission closed. A reservation with backing already
+    /// borrowed refuses to close, and that refusal is reported rather than
+    /// ignored: capacity a holder still owns is not free.
+    pub fn release(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+    ) -> Result<(), guarantee_vault::ReservationError> {
+        let mut failure = None;
+        for (_, id) in self.entries[..self.len].iter().flatten() {
+            if let Err(error) = allocator.close_reservation(*id) {
+                failure = Some(error);
+            }
+        }
+        self.len = 0;
+        self.entries = [None; guarantee_vault::MAX_RESERVATIONS];
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Make every entitlement's guarantee physical, all of them or none.
+///
+/// Runs before any task is constructed: a guarantee that static construction
+/// could still spend is not a guarantee, so the reservation takes its backing
+/// out of the pool first and a construction that then cannot be funded fails
+/// the boot closed. Elastic maxima are never summed — only `guaranteePages`
+/// is reserved, and an entitlement promising nothing reserves nothing and
+/// takes no identity.
+///
+/// What is reserved is backing extents. Allocation descriptors, root CSlots
+/// beyond each extent's own parent anchor, and metadata pages are still taken
+/// from the common pool when a growth uses them, so this is not yet the
+/// complete funded tuple [`admit_private_memory_ledger`] prices.
+pub fn reserve_private_memory_guarantees(
+    allocator: &mut ObjectAllocator,
+    policy: PrivateMemoryPolicy<'_>,
+) -> Result<GuaranteeReservations, GuaranteeReservationError> {
+    let declared = (0..policy.entitlement_count())
+        .filter(|index| {
+            policy
+                .entitlement(*index)
+                .is_some_and(|entitlement| entitlement.guarantee_pages != 0)
+        })
+        .count();
+    if declared > guarantee_vault::MAX_RESERVATIONS {
+        return Err(GuaranteeReservationError::Entitlements {
+            declared,
+            limit: guarantee_vault::MAX_RESERVATIONS,
+        });
+    }
+    let mut promised = [(0usize, 0u64); guarantee_vault::MAX_RESERVATIONS];
+    let mut len = 0;
+    for index in 0..policy.entitlement_count() {
+        let Some(entitlement) = policy.entitlement(index) else {
+            continue;
+        };
+        if entitlement.guarantee_pages != 0 {
+            promised[len] = (index, entitlement.guarantee_pages);
+            len += 1;
+        }
+    }
+    reserve_guarantee_pages(allocator, &promised[..len])
+}
+
+/// The reservation loop, over the guarantees a policy resolved to.
+///
+/// Separated from decoding so the all-or-none boundary can be driven directly:
+/// what must hold is that a second entitlement the machine cannot fund leaves
+/// the first one's backing returned, not that a particular encoding produced
+/// the numbers.
+pub(crate) fn reserve_guarantee_pages(
+    allocator: &mut ObjectAllocator,
+    promised: &[(usize, u64)],
+) -> Result<GuaranteeReservations, GuaranteeReservationError> {
+    if promised.len() > guarantee_vault::MAX_RESERVATIONS {
+        return Err(GuaranteeReservationError::Entitlements {
+            declared: promised.len(),
+            limit: guarantee_vault::MAX_RESERVATIONS,
+        });
+    }
+    let mut reservations = GuaranteeReservations::default();
+    for (index, pages) in promised.iter().copied() {
+        // An entitlement promising nothing takes no identity: the table is
+        // small, and an empty reservation would spend one for a promise
+        // nobody can redeem.
+        if pages == 0 {
+            continue;
+        }
+        let spans = usize::try_from(guarantee_vault::spans_for_pages(pages))
+            .map_err(|_| GuaranteeReservationError::Overflow)?;
+        let envelope =
+            guaranteed_page_envelope().map_err(|_| GuaranteeReservationError::Overflow)?;
+        let fungible = |unit: u64| {
+            pages
+                .checked_mul(unit)
+                .and_then(|total| usize::try_from(total).ok())
+                .ok_or(GuaranteeReservationError::Overflow)
+        };
+        // The anchors the spans themselves spend are not withheld here: they
+        // are already gone from the pool, and withholding them again would
+        // charge one CSlot twice.
+        let descriptors = fungible(envelope.descriptors)?;
+        let slots = fungible(envelope.slots)?;
+        let opened = allocator.open_reservation().and_then(|id| {
+            // The identity is closed here rather than by the rollback below,
+            // because an identity whose backing was refused is not in the
+            // published set and would otherwise be held for the whole boot.
+            if let Err(error) = allocator
+                .reserve_guarantee_spans(id, spans)
+                .and_then(|()| allocator.reserve_guarantee_resources(id, descriptors, slots))
+            {
+                let _ = allocator.close_reservation(id);
+                return Err(error);
+            }
+            Ok(id)
+        });
+        match opened {
+            Ok(id) => {
+                reservations.entries[reservations.len] = Some((index, id));
+                reservations.len += 1;
+                reservations.guarantee_pages = reservations
+                    .guarantee_pages
+                    .checked_add(pages)
+                    .ok_or(GuaranteeReservationError::Overflow)?;
+            }
+            Err(error) => {
+                let _ = reservations.release(allocator);
+                return Err(GuaranteeReservationError::Backing(error));
+            }
+        }
+    }
+    // Read back rather than accumulated: these are the totals a boot reports,
+    // and they must describe extents the allocator owns right now.
+    for (_, id) in reservations.entries[..reservations.len].iter().flatten() {
+        let backing = allocator
+            .reservation_backing(*id)
+            .map_err(GuaranteeReservationError::Backing)?;
+        reservations.reserved_bytes += backing.bytes;
+        reservations.reserved_extents += backing.extents;
+        // One retained parent capability per backing extent, on top of the
+        // count withheld from ordinary consumers.
+        reservations.reserved_slots += backing.extents;
+    }
+    reservations.reserved_slots += allocator.reserved_slots();
+    reservations.reserved_descriptors = allocator.reserved_descriptors();
+    reservations.reserved_tables = reservations.guarantee_pages;
+    Ok(reservations)
+}
+
+/// What one entitlement's guarantee actually costs the machine.
+///
+/// The larger of two true lower bounds, component by component, because both
+/// can dominate: the per-page envelope is what the pages cost at their worst
+/// placement, and the span shape is what the reservation physically takes.
+/// A guarantee smaller than one span still removes a whole aligned span from
+/// the pool, so pricing it at the per-page envelope alone would admit a policy
+/// against bytes the reservation had already taken.
+pub fn guarantee_reservation_resources(
+    pages: u64,
+) -> Result<private_memory_policy::ledger::Resources, private_memory_policy::ledger::Error> {
+    use private_memory_policy::ledger::{Error, Resources};
+    if pages == 0 {
+        return Ok(Resources::ZERO);
+    }
+    let page = guaranteed_page_envelope()?;
+    let spans = guarantee_vault::spans_for_pages(pages);
+    let span_bytes = 1u64
+        .checked_shl(guarantee_vault::GUARANTEE_SPAN_BITS as u32)
+        .ok_or(Error::Overflow)?;
+    let per_page = |unit: u64| pages.checked_mul(unit).ok_or(Error::Overflow);
+    // Two extents per span, payload and tables, each of one span's size.
+    let span_extents = spans.checked_mul(2).ok_or(Error::Overflow)?;
+    let span_total = span_extents
+        .checked_mul(span_bytes)
+        .ok_or(Error::Overflow)?;
+    Ok(Resources {
+        bytes: per_page(page.bytes)?.max(span_total),
+        // Per page: one CSlot for the frame and one for its worst-case leaf
+        // table. Per extent: the parent anchor the reservation retains.
+        slots: per_page(page.slots)?
+            .checked_add(span_extents)
+            .ok_or(Error::Overflow)?,
+        descriptors: per_page(page.descriptors)?,
+        // Coarse parents, not one per page: one aligned extent owns every
+        // page retyped inside it, which is what lets a cohort member take a
+        // page without stranding the rest of that span from its peers.
+        extents: span_extents,
+        tables: per_page(page.tables)?,
+    })
+}
+
+/// The complete resource cost of one guaranteed page, at its worst placement.
+///
+/// Priced by the same demand code a growth is charged with rather than
+/// restated here. The worst case for a guaranteed page is its own base page
+/// plus its own leaf table, because a cohort's pages can land one per span
+/// across several address spaces; deriving the tuple is what stops an envelope
+/// from drifting away from what a transaction actually costs, which is the
+/// drift that makes a guarantee unfundable at the moment it is redeemed.
+///
+/// A reservation whose extents are coarser — one aligned 2 MiB block backing a
+/// whole span of base pages — costs strictly fewer extents and slots than this
+/// bound and exactly these bytes, descriptors and tables, so the bound stays
+/// conservative for the shape the allocator actually reserves.
+fn guaranteed_page_envelope()
+-> Result<private_memory_policy::ledger::Resources, private_memory_policy::ledger::Error> {
+    let demand = crate::object_allocator::elastic::ElasticRequest {
+        large_frames: 0,
+        base_pages: 1,
+        tables: 1,
+    }
+    .demand()
+    .map_err(|_| private_memory_policy::ledger::Error::Guarantee)?
+    .resources();
+    // The demand prices a page that brings its own extents, because that is
+    // what an elastic growth does. A guaranteed page is retyped inside an
+    // extent its reservation already owns, so the parent anchors and the
+    // extent records are charged to the span instead. What remains here is
+    // the page's own objects: its frame, its worst-case leaf table, and the
+    // CSlot and descriptor each of those needs.
+    Ok(private_memory_policy::ledger::Resources {
+        slots: demand
+            .slots
+            .checked_sub(demand.extents)
+            .ok_or(private_memory_policy::ledger::Error::Overflow)?,
+        extents: 0,
+        ..demand
+    })
 }
 
 /// The result of admitting a v5 generation graph.
@@ -2832,17 +3218,173 @@ mod adaptive_policy_tests {
     }
 
     #[test]
-    fn adaptive_policy_is_structurally_checked_but_never_activated() {
+    fn an_adaptive_policy_is_admitted_on_structure_and_refused_on_malformation() {
         let valid = deny_all_policy();
-        assert_eq!(
-            adaptive_private_memory_activation(&valid, &[]),
-            Err(GenerationError::UnsupportedAdaptivePrivateMemoryPolicy)
-        );
+        // A policy naming no subject admits, and says so: nobody may grow,
+        // which is a composition rather than a failure.
+        assert_eq!(adaptive_private_memory_activation(&valid, &[]), Ok(Some(0)));
         let mut invalid = valid;
         invalid[private_memory_policy::OFF_HEADER_REQUIRED_FLAGS] = 1;
         assert_eq!(
             adaptive_private_memory_activation(&invalid, &[]),
             Err(GenerationError::MalformedPrivateMemoryPolicy)
         );
+    }
+
+    /// The residual after reservation already excludes each guarantee, so the
+    /// admitted pool must be exactly that residual less the operational
+    /// reserve: a second subtraction would strand the guarantee's envelope.
+    #[test]
+    fn a_reserved_guarantee_is_subtracted_from_the_pool_once() {
+        use private_memory_policy::ledger::Resources;
+        let entitlement = private_memory_policy::Entitlement {
+            identity: private_memory_policy::entitlement_identity("promised"),
+            subtree_root: [0; 32],
+            guarantee_pages: 64,
+            maximum_pages: 0,
+            maximum_mode: private_memory_policy::POOL,
+            reserved: 0,
+        };
+        let subject = private_memory_policy::Subject {
+            identity: private_memory_policy::subject_identity("holder"),
+            entitlement: entitlement.identity,
+            maximum_pages: 0,
+            maximum_mode: private_memory_policy::POOL,
+            reserved: 0,
+        };
+        let mut bytes = deny_all_policy();
+        let mut header = private_memory_policy::Header::decode(&bytes).expect("header");
+        header.entitlement_count = 1;
+        header.subject_count = 1;
+        header.total_len = (private_memory_policy::HEADER_BYTES
+            + private_memory_policy::ENTITLEMENT_BYTES
+            + private_memory_policy::SUBJECT_BYTES) as u32;
+        header.reserve_bytes = 4096;
+        bytes = header.encode().to_vec();
+        bytes.extend(entitlement.encode());
+        bytes.extend(subject.encode());
+        let policy = PrivateMemoryPolicy::decode(&bytes).expect("policy");
+        let instances = [private_memory_policy::Instance {
+            identity: subject.identity,
+            owner: None,
+        }];
+        let residual = Resources {
+            bytes: 1 << 24,
+            slots: 4096,
+            descriptors: 4096,
+            extents: 64,
+            tables: 4096,
+        };
+        let ledger = admit_private_memory_ledger(policy, &instances, residual).expect("admitted");
+        assert_eq!(ledger.available().bytes, residual.bytes - 4096);
+        assert_eq!(ledger.available().slots, residual.slots);
+    }
+
+    #[test]
+    fn a_guarantee_larger_than_the_pool_is_refused_before_anything_launches() {
+        use private_memory_policy::ledger::Resources;
+        let bytes = deny_all_policy();
+        let policy = PrivateMemoryPolicy::decode(&bytes).expect("policy");
+        // No entitlement, so the only claim on the pool is the policy's own
+        // reserve, which this one declares as zero.
+        assert!(admit_private_memory_ledger(policy, &[], Resources::ZERO).is_ok());
+
+        let mut over = bytes.clone();
+        over[private_memory_policy::OFF_HEADER_RESERVE_BYTES
+            ..private_memory_policy::OFF_HEADER_RESERVE_BYTES + 8]
+            .copy_from_slice(&4096u64.to_le_bytes());
+        let policy = PrivateMemoryPolicy::decode(&over).expect("policy");
+        // The reserve is subtracted from the real pool first, so a machine
+        // that cannot fund it refuses the policy rather than publishing tasks
+        // whose operational capacity was never there.
+        assert!(admit_private_memory_ledger(policy, &[], Resources::ZERO).is_err());
+        let policy = PrivateMemoryPolicy::decode(&over).expect("policy");
+        assert!(
+            admit_private_memory_ledger(
+                policy,
+                &[],
+                Resources {
+                    bytes: 8192,
+                    slots: 8,
+                    descriptors: 8,
+                    extents: 8,
+                    tables: 8,
+                }
+            )
+            .is_ok()
+        );
+    }
+
+    /// An entitlement's reserved cost is never below what the reservation
+    /// physically takes. A guarantee under one span still removes a whole
+    /// aligned span, and a policy admitted against the per-page envelope alone
+    /// would be admitted against bytes that were already gone.
+    #[test]
+    fn a_guarantee_is_priced_at_least_at_what_its_reservation_takes() {
+        use private_memory_policy::ledger::Resources;
+        let span_pages = guarantee_vault::GUARANTEE_SPAN_PAGES as u64;
+        let span_bytes = 1u64 << guarantee_vault::GUARANTEE_SPAN_BITS;
+        assert_eq!(guarantee_reservation_resources(0), Ok(Resources::ZERO));
+        for pages in [1, 2, span_pages - 1, span_pages, span_pages + 1, 4096] {
+            let spans = pages.div_ceil(span_pages);
+            let priced = guarantee_reservation_resources(pages).expect("priced");
+            // Never below what the reservation physically takes: two coarse
+            // extents per span, each one span wide, and their anchors.
+            assert!(priced.bytes >= 2 * spans * span_bytes, "pages {pages}");
+            assert_eq!(priced.extents, 2 * spans, "pages {pages}");
+            assert!(priced.slots >= 2 * spans, "pages {pages}");
+            // Never below what the pages themselves cost at their worst
+            // placement: payload plus one leaf table each.
+            assert!(priced.bytes >= 2 * pages * private_memory_policy::PAGE_BYTES);
+            assert!(priced.descriptors >= 2 * pages);
+            assert!(priced.tables >= pages);
+            assert!(priced.slots >= 2 * pages + 2 * spans);
+        }
+        // A whole span of pages is exactly where the two bounds meet.
+        let exact = guarantee_reservation_resources(span_pages).expect("priced");
+        assert_eq!(exact.bytes, 2 * span_bytes);
+        assert_eq!(
+            exact.bytes,
+            2 * span_pages * private_memory_policy::PAGE_BYTES
+        );
+    }
+
+    /// The guaranteed envelope is the real cost of the worst page placement,
+    /// taken from the demand code that charges a growth. A page that lands
+    /// alone in its own span costs its own base page *and* its own leaf table:
+    /// two granules of backing, four root CSlots, two allocation descriptors,
+    /// two extents and one table. An envelope of one unit per page — what this
+    /// reserved before — funds a quarter of the slots such a page needs.
+    #[test]
+    fn the_guaranteed_page_envelope_is_priced_by_the_growth_path() {
+        use private_memory_policy::ledger::Resources;
+        assert_eq!(
+            guaranteed_page_envelope(),
+            Ok(Resources {
+                bytes: 2 * private_memory_policy::PAGE_BYTES,
+                // One CSlot and one descriptor each for the frame and its
+                // worst-case leaf table. The extents those objects are
+                // retyped from belong to the span, not to the page.
+                slots: 2,
+                descriptors: 2,
+                extents: 0,
+                tables: 1,
+            })
+        );
+        // Every component is at least the ledger's own admission minimum of
+        // one unit per guaranteed page, so raising it can never make a policy
+        // the old envelope admitted structurally inadmissible.
+        let envelope = guaranteed_page_envelope().expect("envelope");
+        for unit in [
+            envelope.bytes / private_memory_policy::PAGE_BYTES,
+            envelope.slots,
+            envelope.descriptors,
+            envelope.tables,
+        ] {
+            assert!(unit >= 1);
+        }
+        // Every entitlement still owns at least one extent, which is the
+        // shape-neutral minimum the ledger admits against.
+        assert!(guarantee_reservation_resources(1).expect("priced").extents >= 1);
     }
 }

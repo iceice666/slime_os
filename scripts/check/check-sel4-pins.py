@@ -438,6 +438,29 @@ def qemu_dtb_parameters() -> dict[str, tuple[str, ...]]:
     fail("scripts/build/build-sel4.py is missing QEMU_DTB_PARAMETERS")
 
 
+def check_inventory_rows(section: str, profile: dict[str, object]) -> None:
+    """MEM-ADAPTIVE's qualification inventories: a constrained, the product, and a larger row.
+
+    Each row is a separately built kernel, so the list is a pinned platform
+    fact rather than a launcher knob, and the product envelope must be one of
+    them for its kernel to count as a qualified inventory.
+    """
+    rows = profile.get("inventory_memory_mib")
+    if (
+        not isinstance(rows, list)
+        or len(rows) < 3
+        or any(not isinstance(row, int) or isinstance(row, bool) or row <= 0 for row in rows)
+        or rows != sorted(set(rows))
+    ):
+        fail(f"{section}.inventory_memory_mib must list at least three increasing sizes")
+    memory = integer(profile, "memory_mib", section)
+    if memory not in rows or rows[0] >= memory or rows[-1] <= memory:
+        fail(
+            f"{section}.inventory_memory_mib must place memory_mib ({memory}) strictly "
+            "between a constrained and a larger row"
+        )
+
+
 def check_qemu_dtb_parameters() -> None:
     parameters = qemu_dtb_parameters()
     for platform in ("qemu-arm-virt", "qemu-riscv-virt"):
@@ -567,6 +590,8 @@ def check_profile(pins: dict[str, object]) -> None:
     ):
         fail("qemu-riscv-virt QEMU shape must be one CPU and 3072 MiB")
 
+    for section, profile in (("qemu_arm_virt", arm), ("qemu_riscv_virt", riscv)):
+        check_inventory_rows(section, profile)
     check_qemu_dtb_parameters()
 
     duo = table(pins, "cv1800b_duo")

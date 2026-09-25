@@ -206,6 +206,14 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",
     "sel4-private-memory-heap-stress-rv64",
+    # MEM-ADAPTIVE's three compositions. They declare `privateMemoryPolicy`,
+    # which no pre-CP1 hand-authored manifest could express at all, so there is
+    # nothing for a frozen baseline to have been migrated from.
+    "sel4-private-memory-adaptive",
+    "sel4-private-memory-adaptive-rv64",
+    "sel4-private-memory-adaptive-overcommit",
+    "sel4-private-memory-matrix",
+    "sel4-private-memory-matrix-rv64",
 })
 
 

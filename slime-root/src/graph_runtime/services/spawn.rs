@@ -330,6 +330,7 @@ pub(super) fn preflight_spawn_grants(
 /// first spawn grant.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construct_child(
+    retirements: &mut supervision::Retirements,
     generation: &Generation<'_>,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
@@ -340,7 +341,9 @@ pub(super) fn construct_child(
     console_endpoint: sel4::cap::Endpoint,
     parent: TaskId,
     plan: &SpawnPlan,
+    adaptive: Option<&mut super::super::adaptive::AdaptivePolicy<'_>>,
 ) -> Result<TaskId, IpcError> {
+    let mut adaptive = adaptive;
     let record = generation
         .executable(plan.executable)
         .map_err(|_| IpcError::BadCapability)?;
@@ -458,6 +461,9 @@ pub(super) fn construct_child(
                 Some(Err(_)) => return Err(IpcError::BadCapability),
                 None => 0,
             },
+            adaptive
+                .as_ref()
+                .and_then(|policy| policy.maximum_pages(instance.name)),
         )
         .map_err(|error| {
             sel4::debug_println!(
@@ -467,8 +473,86 @@ pub(super) fn construct_child(
             IpcError::DestinationSlotsExhausted
         })?;
 
+    // Bound between construction and publication, exactly as the boot path
+    // does: a duplicate live incarnation is refused here rather than
+    // multiplying its entitlement, and the spawn is unwound.
+    if let Some(policy) = adaptive.as_deref_mut()
+        && policy.maximum_pages(instance.name).is_some()
+    {
+        match policy.bind(instance.name) {
+            Some(binding) if tasks.bind_private_memory(id, binding).is_ok() => {}
+            _ => {
+                release_child(
+                    retirements,
+                    generation,
+                    tasks,
+                    windows,
+                    buffers,
+                    allocator,
+                    None,
+                    id,
+                );
+                return Err(IpcError::BadCapability);
+            }
+        }
+    }
+    if let Some(policy) = adaptive.as_deref_mut() {
+        let (installed, base) = tasks.get(id).map_or((0, 0), |task| {
+            (
+                task.private_memory.reservation(),
+                task.private_memory.base(),
+            )
+        });
+        policy.report_task(
+            id,
+            instance.name,
+            tasks.private_binding(id),
+            installed,
+            base,
+        );
+    }
+    // One injected construction failure for the first dynamically spawned
+    // subject, after its incarnation is bound and before it is published. The
+    // unwind must hold the entitlement until the arena's revoke succeeds and
+    // then release it, so a retried spawn binds the next incarnation rather
+    // than a second live one.
+    #[cfg(slime_private_conservation)]
+    if tasks.private_binding(id).is_some() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+        static ARMED: AtomicBool = AtomicBool::new(true);
+        if ARMED.swap(false, Ordering::Relaxed) {
+            sel4::debug_println!(
+                "SLIME_MEM adaptive injected kind=construction task={} instance={}",
+                id.0,
+                instance.name,
+            );
+            // The unwind's own revoke fails too, so the unpublished task must
+            // reach the retirement retry before its subject can spawn again.
+            crate::object_allocator::elastic::arm_arena_revoke_failure();
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                id,
+            );
+            return Err(IpcError::DestinationSlotsExhausted);
+        }
+    }
     let Some(task) = tasks.get(id) else {
-        release_child(tasks, windows, buffers, allocator, id);
+        release_child(
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive.as_deref_mut(),
+            id,
+        );
         return Err(IpcError::DestinationSlotsExhausted);
     };
     for (thread, pages) in task
@@ -488,7 +572,16 @@ pub(super) fn construct_child(
             )
             .is_err()
         {
-            release_child(tasks, windows, buffers, allocator, id);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                id,
+            );
             return Err(IpcError::DestinationSlotsExhausted);
         }
     }
@@ -498,7 +591,16 @@ pub(super) fn construct_child(
         .declare_quota(HolderId(u64::from(id.0)), quota)
         .is_err()
     {
-        release_child(tasks, windows, buffers, allocator, id);
+        release_child(
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive.as_deref_mut(),
+            id,
+        );
         return Err(IpcError::DestinationSlotsExhausted);
     }
     sel4::debug_println!(
@@ -533,7 +635,16 @@ pub(super) fn construct_child(
             .install_authority(id, *destination, *capability)
             .is_err()
         {
-            release_child(tasks, windows, buffers, allocator, id);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                id,
+            );
             return Err(IpcError::DestinationSlotsExhausted);
         }
     }
@@ -542,16 +653,43 @@ pub(super) fn construct_child(
     // the only party that can install it, and preflight has already excluded
     // these from the count the parent must satisfy.
     let Ok(child) = generation.instance(plan.instance) else {
-        release_child(tasks, windows, buffers, allocator, id);
+        release_child(
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive.as_deref_mut(),
+            id,
+        );
         return Err(IpcError::BadCapability);
     };
     for index in 0..child.binding_count() {
         let Ok(binding) = generation.binding(child, index) else {
-            release_child(tasks, windows, buffers, allocator, id);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                id,
+            );
             return Err(IpcError::BadCapability);
         };
         let Ok(grant) = generation.grant(binding.grant) else {
-            release_child(tasks, windows, buffers, allocator, id);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                id,
+            );
             return Err(IpcError::BadCapability);
         };
         if grant.source != GrantEndpoint::Instance(plan.instance)
@@ -569,7 +707,16 @@ pub(super) fn construct_child(
             .install_authority(id, binding.slot as u32, capability)
             .is_err()
         {
-            release_child(tasks, windows, buffers, allocator, id);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                id,
+            );
             return Err(IpcError::DestinationSlotsExhausted);
         }
         // The evidence that a child's own declared authority reached it. Only
@@ -594,15 +741,44 @@ pub(super) fn construct_child(
 /// task identity becomes unreachable, and the task's object span is revoked
 /// last.
 pub(super) fn release_child(
+    retirements: &mut supervision::Retirements,
+    generation: &Generation<'_>,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
+    adaptive: Option<&mut super::super::adaptive::AdaptivePolicy<'_>>,
     id: TaskId,
 ) {
     windows.release(id);
     buffers.release_quota(HolderId(u64::from(id.0)));
-    match tasks.reclaim(allocator, id) {
+    // Read before reclamation clears the record. An unwound construction that
+    // bound an incarnation must return it, or its entitlement would be
+    // permanently held by a task that never ran.
+    let binding = tasks.private_binding(id);
+    let held_pages = tasks.get(id).map_or(0, |task| task.private_memory.pages());
+    let instance = tasks
+        .get(id)
+        .and_then(|task| task.instance)
+        .and_then(|index| generation.instance(index).ok())
+        .map_or("", |instance| instance.name);
+    let reclaimed = tasks.reclaim(allocator, id);
+    // A revoke that did not complete leaves the task owned and its
+    // incarnation quarantined; the exit and fault paths' retry settles it.
+    if reclaimed.is_err() && !retirements.insert(id) {
+        return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+    }
+    if let (Some(policy), Some(binding)) = (adaptive, binding.as_ref()) {
+        policy.retire(
+            allocator,
+            id,
+            instance,
+            binding,
+            reclaimed.is_ok(),
+            held_pages,
+        );
+    }
+    match reclaimed {
         Ok(cleanup) => sel4::debug_println!(
             "SLIME_GRAPH spawn unwound task={} slots={} arena={}",
             id.0,
@@ -639,6 +815,7 @@ pub(super) fn spawner_budget(
 /// supervision handle.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn serve_spawn(
+    retirements: &mut supervision::Retirements,
     generation: &Generation<'_>,
     launched: &mut LaunchedInstances,
     tasks: &mut TaskTable<MAX_TASKS>,
@@ -660,7 +837,9 @@ pub(super) fn serve_spawn(
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
     spawns: &mut usize,
+    adaptive: Option<&mut super::super::adaptive::AdaptivePolicy<'_>>,
 ) -> Response {
+    let mut adaptive = adaptive;
     let executable_slot = words[0] as u32;
     // The wide reader (B15), because a grant array is not a message: at
     // `SPAWN_GRANT_RECORD_BYTES` each, the message bound admitted four records
@@ -796,6 +975,7 @@ pub(super) fn serve_spawn(
     );
 
     let child = match construct_child(
+        retirements,
         generation,
         tasks,
         windows,
@@ -806,6 +986,7 @@ pub(super) fn serve_spawn(
         console_endpoint,
         id,
         &plan,
+        adaptive.as_deref_mut(),
     ) {
         Ok(child) => child,
         Err(error) => {
@@ -819,7 +1000,16 @@ pub(super) fn serve_spawn(
     let (child_arena, child_cnode, child_cnode_bits) = match tasks.get(child) {
         Some(task) => (task.cleanup.arena, task.cnode, task.cnode_size_bits),
         None => {
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             return Response::error(IpcError::DestinationSlotsExhausted);
         }
     };
@@ -834,7 +1024,16 @@ pub(super) fn serve_spawn(
     ) {
         Ok(installed) => installed,
         Err(error) => {
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_GRAPH spawn failed task={} component={name} error=EndpointInstall({error:?})",
                 id.0
@@ -853,7 +1052,16 @@ pub(super) fn serve_spawn(
     ) {
         Ok(installed) => installed,
         Err(error) => {
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_GRAPH spawn failed task={} component={name} error=NotificationInstall({error:?})",
                 id.0
@@ -896,7 +1104,16 @@ pub(super) fn serve_spawn(
         Ok(authority) => authority,
         Err(error) => {
             clock_service.clear_task(child);
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_GRAPH spawn failed task={} component={name} error=ClockInstall({error:?})",
                 id.0
@@ -930,7 +1147,16 @@ pub(super) fn serve_spawn(
         Err(error) => {
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_GRAPH spawn failed task={} component={name} error=WaitSetInstall({error:?})",
                 id.0
@@ -961,7 +1187,16 @@ pub(super) fn serve_spawn(
             scheduling_service.release(child);
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_GRAPH spawn failed task={} component={name} error=SchedulingInstall({error:?})",
                 id.0
@@ -989,7 +1224,16 @@ pub(super) fn serve_spawn(
             scheduling_service.release(child);
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_GRAPH spawn failed task={} component={name} error=LifecycleInstall({error:?})",
                 id.0
@@ -1086,7 +1330,16 @@ pub(super) fn serve_spawn(
         scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
-        release_child(tasks, windows, buffers, allocator, child);
+        release_child(
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive.as_deref_mut(),
+            child,
+        );
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=NoHandleSlot",
             id.0,
@@ -1106,7 +1359,16 @@ pub(super) fn serve_spawn(
         scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
-        release_child(tasks, windows, buffers, allocator, child);
+        release_child(
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive.as_deref_mut(),
+            child,
+        );
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=Activate",
             id.0,
@@ -1136,7 +1398,16 @@ pub(super) fn serve_spawn(
             scheduling_service.release(child);
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
-            release_child(tasks, windows, buffers, allocator, child);
+            release_child(
+                retirements,
+                generation,
+                tasks,
+                windows,
+                buffers,
+                allocator,
+                adaptive.as_deref_mut(),
+                child,
+            );
             sel4::debug_println!(
                 "SLIME_IO FAIL spawned quota install task={} instance={} error={error:?}",
                 child.0,
@@ -1163,7 +1434,16 @@ pub(super) fn serve_spawn(
         scheduling_service.release(child);
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
-        release_child(tasks, windows, buffers, allocator, child);
+        release_child(
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive,
+            child,
+        );
         return Response::error(IpcError::BadCapability);
     }
     // The satisfied restart reservation, cleared only now that the replacement

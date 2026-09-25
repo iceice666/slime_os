@@ -10,7 +10,13 @@
 
 pub mod elastic;
 mod global_backing;
+pub mod guarantee_vault;
 mod infrastructure;
+mod leaf_spans;
+#[cfg(test)]
+pub(crate) use leaf_spans::host::{bits as host_leaf_spans, release as host_release_leaf_spans};
+pub(crate) use leaf_spans::{LeafSpanBits, MAX_WINDOW_SPANS};
+mod extent_buddy;
 mod mapping_tables;
 mod preserved;
 mod qualification;
@@ -376,6 +382,41 @@ pub enum AllocError {
     ProvenanceTableFull {
         limit: usize,
     },
+    /// A private window needs more 2 MiB spans than one span-ownership record
+    /// addresses.
+    ///
+    /// An addressing limit of the tracking storage, not a capacity the image
+    /// reserves: it refuses the window outright rather than tracking part of
+    /// it, because a span whose table ownership is untracked would be priced
+    /// as empty and take a second table over the same address.
+    PrivateRegionSpans {
+        spans: usize,
+        limit: usize,
+    },
+    /// A private window is malformed: empty, misaligned, or ending past the
+    /// last address. Refused before the window exists, because every later
+    /// page address is derived from it unchecked.
+    PrivateRegionWindow {
+        base: usize,
+        reservation: usize,
+    },
+}
+
+impl AllocError {
+    /// The allocator resource this error names, in a refusal report's words.
+    pub const fn resource(self) -> &'static str {
+        match self {
+            Self::NoKernelUntyped | Self::UntypedExhausted { .. } => "ordinary-layout",
+            Self::UntypedTableFull { .. } => "retained-prefix-records",
+            Self::SlotsExhausted { .. } | Self::SlotRangeTooLarge { .. } => "root-cslots",
+            Self::Retype { .. } => "retype",
+            Self::ArenaTableFull { .. } => "extent-records",
+            Self::ArenaSlotTableFull { .. } => "allocation-descriptors",
+            Self::ArenaTooSmall { .. } => "arena-extent",
+            Self::ArenaCleanup { .. } => "cleanup",
+            _ => "acquisition",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -932,6 +973,20 @@ impl TaskArenaId {
     }
 }
 
+/// Which backing one private allocation may be retyped from.
+///
+/// Passed down from the growth plan rather than decided here, so a page the
+/// transaction priced and certified against reservation-owned backing cannot
+/// be served from the common pool, and a pooled page cannot quietly spend a
+/// guarantee. Selection without this is best-fit over everything the arena
+/// owns, which would mix the two.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExtentSource {
+    #[default]
+    Common,
+    Guaranteed(guarantee_vault::ReservationId),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrivateObjectKind {
     Empty = 0,
@@ -1057,6 +1112,9 @@ enum ExtentKind {
     PrivateData,
     PrivateTables,
     MappingTables,
+    /// A returned extent adopted whole as an infrastructure source. Held for
+    /// the root's lifetime, like every other infrastructure source.
+    Infrastructure,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1078,6 +1136,21 @@ struct ExtentRecord {
     watermark: usize,
     objects: usize,
     bytes: usize,
+    /// Reservation that owns this record across borrows, or
+    /// [`guarantee_vault::RESERVATION_NONE`].
+    ///
+    /// Retained while a task arena holds the extent. That retention is the
+    /// whole of borrow/return: every existing release path already clears
+    /// `active` only after its revoke succeeded, so a returned extent lands
+    /// back in the reservation it was taken from rather than in common
+    /// capacity, and a failed revoke leaves it owned and unavailable.
+    origin: u32,
+    /// Two half-size children now own this record's bytes; see
+    /// [`extent_buddy`]. A split record is neither free nor active until both
+    /// children are free again and its revoke merges them.
+    split: bool,
+    /// The two children of a split record, or [`extent_buddy::NO_EXTENT`].
+    children: [u32; 2],
 }
 
 impl ExtentRecord {
@@ -1094,9 +1167,17 @@ impl ExtentRecord {
             watermark: 0,
             objects: 0,
             bytes: 0,
+            origin: guarantee_vault::RESERVATION_NONE,
+            split: false,
+            children: [extent_buddy::NO_EXTENT; 2],
         }
     }
 
+    /// Hand this record to one task arena.
+    ///
+    /// `origin` is deliberately untouched: a record taken from common capacity
+    /// has none, and a record borrowed from a reservation must keep it so the
+    /// return path knows where the backing belongs.
     fn assign(&mut self, owner: usize, serial: u32, kind: ExtentKind) {
         self.owner = owner as u16;
         self.serial = serial;
@@ -1106,6 +1187,57 @@ impl ExtentRecord {
         self.watermark = 0;
         self.objects = 0;
         self.bytes = 0;
+    }
+
+    /// Take this record out of common capacity for one reservation.
+    ///
+    /// A reserved record stays inactive and owned by no task arena: `active`
+    /// keeps meaning "held by a live arena", and reservation ownership is the
+    /// separate fact every selection path tests through [`Self::is_reserved`].
+    fn reserve(&mut self, reservation: usize, kind: ExtentKind) {
+        self.owner = u16::MAX;
+        self.serial = 0;
+        self.kind = kind;
+        self.active = false;
+        self.revoked = false;
+        self.watermark = 0;
+        self.objects = 0;
+        self.bytes = 0;
+        self.origin = reservation as u32;
+    }
+
+    /// Publish this record back as common capacity.
+    fn unreserve(&mut self) {
+        self.origin = guarantee_vault::RESERVATION_NONE;
+    }
+
+    /// Whether a reservation owns this record and no arena holds it.
+    ///
+    /// The one predicate ordinary and elastic paths consult, directly or
+    /// through [`Self::is_common_free`]. A record it answers `true` for is
+    /// invisible to arena ownership, reusable-chain rebuild, best-fit
+    /// selection, extent reuse and free-capacity reporting.
+    const fn is_reserved(&self) -> bool {
+        self.origin != guarantee_vault::RESERVATION_NONE && !self.active
+    }
+
+    /// Whether a task arena currently holds backing a reservation owns.
+    const fn is_borrowed(&self) -> bool {
+        self.origin != guarantee_vault::RESERVATION_NONE && self.active
+    }
+
+    const fn owned_by_reservation(&self, reservation: usize) -> bool {
+        self.origin == reservation as u32 && self.origin != guarantee_vault::RESERVATION_NONE
+    }
+
+    const fn reserved_by(&self, reservation: usize) -> bool {
+        self.is_reserved() && self.owned_by_reservation(reservation)
+    }
+
+    /// Whether this record is capacity the next ordinary or elastic request
+    /// may take: no live arena holds it and no reservation owns it.
+    const fn is_common_free(&self) -> bool {
+        !self.active && !self.split && self.origin == guarantee_vault::RESERVATION_NONE
     }
 
     const fn belongs_to(&self, id: TaskArenaId) -> bool {
@@ -1222,6 +1354,8 @@ pub struct ObjectAllocator {
     untypeds: [Option<UntypedRegion>; MAX_KERNEL_UNTYPEDS],
     untyped_len: usize,
     preserved: preserved::PreservedStore,
+    /// Span-ownership records private regions hold pointers into.
+    leaf_spans: leaf_spans::LeafSpanStore,
     devices: [Option<DeviceRegion>; MAX_DEVICE_UNTYPEDS],
     device_len: usize,
     arenas: [ArenaRecord; MAX_TASK_ARENAS],
@@ -1240,12 +1374,13 @@ pub struct ObjectAllocator {
     physical: ProvenanceTable,
     shared_backing: shared_backing::BuddyBacking,
     mapping_tables: mapping_tables::MappingTables,
-    /// One failed elastic rollback, still owned and still retryable.
+    /// Reservation identities owning backing extents outside common capacity.
+    reservations: guarantee_vault::ReservationTable,
+    /// Each arena's failed elastic rollbacks, still owned and still retryable.
     ///
-    /// Root serializes growth, so at most one transaction can be unsettled.
-    /// Holding the record here rather than in the caller is what keeps the
-    /// resources named after the caller that took them has returned.
-    elastic_quarantine: Option<elastic::ElasticAcquisition>,
+    /// Per arena, so one holder's failure never overwrites another's record;
+    /// the arena's own revoke at retirement recovers whatever is still named.
+    elastic_quarantine: [elastic::Quarantine; MAX_TASK_ARENAS],
     #[cfg(test)]
     private_visits: PrivateRecordVisits,
 }
@@ -1266,6 +1401,7 @@ impl ObjectAllocator {
             untypeds: [None; MAX_KERNEL_UNTYPEDS],
             untyped_len: 0,
             preserved: preserved::PreservedStore::new(),
+            leaf_spans: leaf_spans::LeafSpanStore::new(),
             devices: [None; MAX_DEVICE_UNTYPEDS],
             device_len: 0,
             arenas: [ArenaRecord::empty(); MAX_TASK_ARENAS],
@@ -1284,7 +1420,8 @@ impl ObjectAllocator {
             physical: ProvenanceTable::new(),
             shared_backing: shared_backing::BuddyBacking::new(),
             mapping_tables: mapping_tables::MappingTables::new(),
-            elastic_quarantine: None,
+            reservations: guarantee_vault::ReservationTable::new(),
+            elastic_quarantine: [elastic::Quarantine::EMPTY; MAX_TASK_ARENAS],
             #[cfg(test)]
             private_visits: PrivateRecordVisits {
                 reusable: 0,
@@ -1528,7 +1665,7 @@ impl ObjectAllocator {
         if !self.infrastructure.needs_source(bytes) {
             return Ok(());
         }
-        let (index, source) = self.untypeds[..self.untyped_len]
+        let found = self.untypeds[..self.untyped_len]
             .iter()
             .enumerate()
             .filter_map(|(index, source)| {
@@ -1536,11 +1673,16 @@ impl ObjectAllocator {
                     .filter(|source| source.remaining() >= bytes)
                     .map(|source| (index, source))
             })
-            .min_by_key(|(_, source)| source.remaining())
-            .ok_or(AllocError::UntypedExhausted {
+            .min_by_key(|(_, source)| source.remaining());
+        let Some((index, source)) = found else {
+            // No ordinary tail can fund it, but returned capacity may. The
+            // original refusal stands if no free extent is large enough.
+            let refusal = AllocError::UntypedExhausted {
                 size_bits: 12,
                 remaining: self.untyped_bytes_remaining(),
-            })?;
+            };
+            return self.adopt_returned_extent(bytes).map_err(|_| refusal);
+        };
         self.infrastructure.adopt_pinned_source(source)?;
         self.untypeds[index]
             .as_mut()
@@ -1723,19 +1865,27 @@ impl ObjectAllocator {
     }
 
     /// Root capabilities retained as lifetime anchors for reusable extents.
+    ///
+    /// Reservation-owned anchors are excluded here and reported by
+    /// [`Self::reserved_extent_anchors`] instead, so each anchor appears in
+    /// exactly one of the two counts.
     pub fn reusable_extent_anchors(&self) -> usize {
         self.extents
             .iter()
             .flatten()
-            .filter(|extent| !extent.active)
+            .filter(|extent| extent.is_common_free())
             .count()
     }
 
+    /// Bytes task arenas and reservations hold in extents.
+    ///
+    /// An extent adopted for infrastructure is counted by
+    /// [`Self::infrastructure_owned_bytes`] alone.
     pub fn active_extent_bytes(&self) -> usize {
         self.extents
             .iter()
             .flatten()
-            .filter(|extent| extent.active)
+            .filter(|extent| extent.active && extent.kind != ExtentKind::Infrastructure)
             .map(|extent| 1usize << extent.size_bits)
             .sum()
     }
@@ -1744,7 +1894,7 @@ impl ObjectAllocator {
         self.extents
             .iter()
             .flatten()
-            .filter(|extent| !extent.active)
+            .filter(|extent| extent.is_common_free())
             .map(|extent| 1usize << extent.size_bits)
             .sum()
     }
@@ -1762,7 +1912,7 @@ impl ObjectAllocator {
             .iter()
             .flatten()
             .filter(|extent| {
-                !extent.active
+                extent.is_common_free()
                     && matches!(
                         extent.kind,
                         ExtentKind::PrivateData | ExtentKind::PrivateTables
@@ -1942,6 +2092,13 @@ impl ObjectAllocator {
             }
             let words = crate::root_cspace::LEAF_SLOTS.div_ceil(usize::BITS as usize);
             while self.slots.metadata_free() < words {
+                if self.slots.words.needs_directory_page() {
+                    let page = self.map_metadata_page()?;
+                    // SAFETY: the ledger retains this fresh page exclusively
+                    // as the slot table's next directory page.
+                    unsafe { self.slots.words.add_directory_page(page) }
+                        .map_err(|()| AllocError::NoKernelUntyped)?;
+                }
                 let page = self.map_metadata_page()?;
                 // SAFETY: the infrastructure ledger retains this fresh mapping
                 // exclusively for slot occupancy and planning scratch.
@@ -2391,6 +2548,17 @@ impl ObjectAllocator {
         kind: PrivateObjectKind,
         size_bits: Option<usize>,
     ) -> Result<Option<usize>, AllocError> {
+        self.pop_reusable_from(id, kind, size_bits, None)
+    }
+
+    fn pop_reusable_from(
+        &mut self,
+        id: TaskArenaId,
+        kind: PrivateObjectKind,
+        size_bits: Option<usize>,
+        source: impl Into<Option<ExtentSource>>,
+    ) -> Result<Option<usize>, AllocError> {
+        let source = source.into();
         let mut previous = PRIVATE_STATE_NONE;
         let mut current = self.private_arena(id)?.reusable_heads[kind as usize];
         let limit = self.private_arena(id)?.slot_len;
@@ -2415,7 +2583,13 @@ impl ObjectAllocator {
                 })
                 .ok_or_else(Self::private_record_error)?;
             let next = record.next_state;
-            if size_bits.is_none_or(|expected| record.allocation.size_bits() == expected) {
+            let extent = record.extent;
+            let matches_source = source.is_none_or(|source| {
+                extent == PRIVATE_EXTENT_NONE || self.extent_matches_source(extent as usize, source)
+            });
+            if matches_source
+                && size_bits.is_none_or(|expected| record.allocation.size_bits() == expected)
+            {
                 if previous == PRIVATE_STATE_NONE {
                     self.arena_mut(id)?.reusable_heads[kind as usize] = next;
                 } else {
@@ -2453,6 +2627,51 @@ impl ObjectAllocator {
             .ok_or_else(Self::private_record_error)
     }
 
+    /// Obtain an extent record backed by a parent untyped of `size_bits`,
+    /// without assigning an owner.
+    ///
+    /// Reuse selects only common free capacity, so a record a reservation owns
+    /// is never re-served to a task arena or an elastic transaction.
+    fn acquire_extent_record(&mut self, size_bits: usize) -> Result<usize, AllocError> {
+        if let Some(index) = self.reusable_extent(size_bits) {
+            self.extents_reused += 1;
+            return Ok(index);
+        }
+        self.ensure_extent_descriptors(1)?;
+        let index =
+            self.extents
+                .iter()
+                .position(Option::is_none)
+                .ok_or(AllocError::ArenaTableFull {
+                    limit: MAX_TASK_EXTENTS,
+                })?;
+        let parent_slot = self.take_slot()?;
+        let blueprint = sel4::ObjectBlueprint::Untyped { size_bits };
+        if let Err(error) = self.allocate_from_global(blueprint, parent_slot) {
+            self.slots.release(parent_slot);
+            // Ordinary tails cannot place it, but returned capacity may: a
+            // larger free extent is split rather than left unreachable to a
+            // smaller request. The original refusal stands if none exists.
+            // Host tests have no kernel to split with, and exercise the split
+            // through `extent_buddy`'s injected operations instead.
+            #[cfg(not(test))]
+            return self.acquire_split_extent(size_bits).map_err(|split| {
+                sel4::debug_println!(
+                    "SLIME_MEM extent split refused size_bits={size_bits} error={split:?}"
+                );
+                error
+            });
+            #[cfg(test)]
+            return Err(error);
+        }
+        let parent =
+            crate::root_cspace::RootSlot::<sel4::cap_type::Untyped>::from_address(parent_slot)
+                .cap();
+        self.extents[index] = Some(ExtentRecord::new(parent, size_bits));
+        self.extents[index].as_mut().expect("new extent").paddr = self.last_paddr;
+        Ok(index)
+    }
+
     fn provision_extent(
         &mut self,
         id: TaskArenaId,
@@ -2460,37 +2679,33 @@ impl ObjectAllocator {
         kind: ExtentKind,
     ) -> Result<usize, AllocError> {
         self.arena(id)?;
-        let reusable = self.extents.iter().position(|entry| {
-            entry.is_some_and(|extent| !extent.active && extent.size_bits == size_bits)
-        });
-        let index = if let Some(index) = reusable {
-            self.extents_reused += 1;
-            index
-        } else {
-            self.ensure_extent_descriptors(1)?;
-            let index = self.extents.iter().position(Option::is_none).ok_or(
-                AllocError::ArenaTableFull {
-                    limit: MAX_TASK_EXTENTS,
-                },
-            )?;
-            let parent_slot = self.take_slot()?;
-            let blueprint = sel4::ObjectBlueprint::Untyped { size_bits };
-            if let Err(error) = self.allocate_from_global(blueprint, parent_slot) {
-                self.slots.release(parent_slot);
-                return Err(error);
-            }
-            let parent =
-                crate::root_cspace::RootSlot::<sel4::cap_type::Untyped>::from_address(parent_slot)
-                    .cap();
-            self.extents[index] = Some(ExtentRecord::new(parent, size_bits));
-            self.extents[index].as_mut().expect("new extent").paddr = self.last_paddr;
-            index
-        };
+        let index = self.acquire_extent_record(size_bits)?;
         self.extents[index]
             .as_mut()
             .expect("extent position is provisioned")
             .assign(id.index(), id.serial, kind);
         Ok(index)
+    }
+
+    /// Settle one extent record whose revoke has completed.
+    ///
+    /// The single return point for both release paths. A record a reservation
+    /// owns keeps its `origin`, so settling returns it to that reservation;
+    /// a record from common capacity becomes a reusable anchor. Nothing here
+    /// is reachable until the revoke succeeded: a failed revoke leaves the
+    /// record active and owned, which is what keeps a quarantine unavailable
+    /// rather than advertised as free.
+    fn settle_returned_extent(&mut self, index: usize) {
+        let Some(record) = self.extents.get_mut(index).and_then(Option::as_mut) else {
+            return;
+        };
+        record.active = false;
+        record.revoked = false;
+        record.owner = u16::MAX;
+        record.serial = 0;
+        record.watermark = 0;
+        record.objects = 0;
+        record.bytes = 0;
     }
 
     fn allocation_position(&self) -> Result<usize, AllocError> {
@@ -2529,11 +2744,25 @@ impl ObjectAllocator {
     /// page consume the aligned 2 MiB extent a large frame in the same
     /// transaction was planned to occupy, failing a growth whose resources all
     /// exist. Best fit by extent size keeps every planned mapping payable.
+    /// Whether this extent is backing the named source may draw from.
+    fn extent_matches_source(&self, index: usize, source: ExtentSource) -> bool {
+        self.extents
+            .get(index)
+            .and_then(Option::as_ref)
+            .is_some_and(|extent| match source {
+                ExtentSource::Common => !extent.is_borrowed(),
+                ExtentSource::Guaranteed(id) => {
+                    extent.is_borrowed() && extent.owned_by_reservation(id.index())
+                }
+            })
+    }
+
     fn extent_for_allocation(
         &self,
         id: TaskArenaId,
         kind: ExtentKind,
         size_bits: usize,
+        source: ExtentSource,
     ) -> Result<(usize, usize), AllocError> {
         let elastic = self.arena(id).is_ok_and(|arena| arena.elastic);
         let candidates = self
@@ -2541,6 +2770,7 @@ impl ObjectAllocator {
             .iter()
             .enumerate()
             .filter_map(|(index, extent)| extent.as_ref().map(|extent| (index, extent)))
+            .filter(|(index, _)| self.extent_matches_source(*index, source))
             .filter(|(_, extent)| extent.belongs_to(id) && extent.kind == kind && !extent.revoked)
             .filter_map(|(index, extent)| {
                 plan_allocation(extent.watermark, 1usize << extent.size_bits, size_bits)
@@ -2567,6 +2797,29 @@ impl ObjectAllocator {
         self.allocate_in_kind(id, blueprint, ExtentKind::Static)
     }
 
+    /// Physical base and remaining room of one extent this arena may draw from.
+    ///
+    /// Read from the record the allocator keeps, never predicted: a caller
+    /// certifying where its pages will land must use the same paddr and
+    /// watermark the next retype will.
+    fn extent_placement(
+        &self,
+        id: TaskArenaId,
+        kind: ExtentKind,
+        size_bits: usize,
+        source: ExtentSource,
+    ) -> Option<(usize, usize, usize)> {
+        let (index, _) = self
+            .extent_for_allocation(id, kind, size_bits, source)
+            .ok()?;
+        let extent = self.extents.get(index).and_then(Option::as_ref)?;
+        let size = 1usize << size_bits;
+        let start = extent.watermark.checked_next_multiple_of(size)?;
+        let capacity = 1usize << extent.size_bits;
+        let room = capacity.checked_sub(start)? / size;
+        Some((index, extent.paddr.checked_add(start)?, room))
+    }
+
     fn allocate_in_kind(
         &mut self,
         id: TaskArenaId,
@@ -2577,7 +2830,8 @@ impl ObjectAllocator {
         self.ensure_allocation_descriptors(1)?;
         self.allocation_position()?;
         let size_bits = blueprint.physical_size_bits();
-        let (extent_index, watermark) = self.extent_for_allocation(id, kind, size_bits)?;
+        let (extent_index, watermark) =
+            self.extent_for_allocation(id, kind, size_bits, ExtentSource::Common)?;
         let slot = self.take_slot()?;
         let parent = self.extents[extent_index]
             .expect("selected extent exists")
@@ -2644,8 +2898,15 @@ impl ObjectAllocator {
         Ok(crate::root_cspace::RootSlot::from_address(slot))
     }
 
+    /// Root CSlots an ordinary consumer may take.
+    ///
+    /// Reservation-held slots are withheld here rather than at `take_slot`,
+    /// so every funding predicate that asks "can this be paid for" — task
+    /// construction, preserved splits, private provisioning, the elastic
+    /// inventory — sees the same reduced figure, and a guarantee cannot be
+    /// spent by an unrelated consumer between admission and redemption.
     pub fn free_slots(&self) -> usize {
-        self.slots.free()
+        self.slots.free().saturating_sub(self.reserved_slots())
     }
 
     pub fn ensure_allocation_descriptors(&mut self, free: usize) -> Result<(), AllocError> {
@@ -2661,6 +2922,13 @@ impl ObjectAllocator {
             {
                 return Err(Self::private_record_error());
             }
+            if self.allocations.needs_directory_page() {
+                let page = self.map_metadata_page()?;
+                // SAFETY: the ledger retains this fresh page exclusively as the
+                // allocation table's next directory page.
+                unsafe { self.allocations.add_directory_page(page) }
+                    .map_err(|()| Self::private_record_error())?;
+            }
             let page = self.map_metadata_page()?;
             // SAFETY: page ownership is retained by the metadata ledger and no
             // other record table references this freshly mapped page.
@@ -2674,17 +2942,64 @@ impl ObjectAllocator {
         self.infrastructure.owned_bytes()
     }
 
+    /// Hand a private region the record tracking which spans own a leaf table.
+    ///
+    /// Funded like every other metadata table: a page is taken from the same
+    /// infrastructure allocator and stays owned by it, so the record's address
+    /// is stable for the region's whole life. A window wider than one record
+    /// addresses is refused here rather than silently tracked in part.
+    pub(crate) fn acquire_leaf_spans(
+        &mut self,
+        spans: usize,
+    ) -> Result<leaf_spans::LeafSpanBits, AllocError> {
+        if spans == 0 || spans > leaf_spans::MAX_WINDOW_SPANS {
+            return Err(AllocError::PrivateRegionSpans {
+                spans,
+                limit: leaf_spans::MAX_WINDOW_SPANS,
+            });
+        }
+        if self.leaf_spans.available() == 0 {
+            #[cfg(test)]
+            self.leaf_spans
+                .provision_host(leaf_spans::LeafSpanStore::entries_per_page());
+            if self.leaf_spans.available() == 0 {
+                let page = self.map_metadata_page()?;
+                // SAFETY: page ownership is retained by the metadata ledger and
+                // no other record table references this freshly mapped page.
+                unsafe { self.leaf_spans.append(page) }
+                    .map_err(|()| Self::private_record_error())?;
+            }
+        }
+        self.leaf_spans
+            .acquire(spans)
+            .ok_or_else(Self::private_record_error)
+    }
+
+    /// Return a reclaimed region's span record for the next region.
+    pub(crate) fn release_leaf_spans(&mut self, bits: leaf_spans::LeafSpanBits) {
+        self.leaf_spans.release(bits);
+    }
+
+    /// Span records this allocator can hand out without new backing.
+    pub(crate) fn leaf_span_records_free(&self) -> usize {
+        self.leaf_spans.available()
+    }
+
     pub fn allocation_descriptor_capacity(&self) -> usize {
         self.allocations.len()
     }
 
+    /// Allocation descriptors an ordinary consumer may take, with every
+    /// reservation-held record withheld for the reason [`Self::free_slots`]
+    /// withholds slots.
     pub fn allocation_descriptors_free(&self) -> usize {
-        self.allocations.len()
+        (self.allocations.len()
             - self
                 .allocations
                 .iter()
                 .filter(|entry| entry.owner != u16::MAX)
-                .count()
+                .count())
+        .saturating_sub(self.reserved_descriptors())
     }
 
     #[cfg(any(slime_private_stress, slime_private_rollback, test))]
@@ -2754,6 +3069,13 @@ impl ObjectAllocator {
                 return Err(AllocError::ArenaTableFull {
                     limit: self.extents.len(),
                 });
+            }
+            if self.extents.needs_directory_page() {
+                let page = self.map_metadata_page()?;
+                // SAFETY: the ledger retains this fresh page exclusively as the
+                // extent table's next directory page.
+                unsafe { self.extents.add_directory_page(page) }
+                    .map_err(|()| AllocError::NoKernelUntyped)?;
             }
             let page = self.map_metadata_page()?;
             // SAFETY: the metadata ledger retains this fresh page exclusively
@@ -2922,8 +3244,12 @@ impl ObjectAllocator {
         id: TaskArenaId,
         kind: PrivateObjectKind,
         size_bits: usize,
+        source: ExtentSource,
     ) -> Result<(usize, usize, usize, bool, bool), AllocError> {
-        if let Some(position) = self.pop_reusable(id, kind, Some(size_bits))? {
+        // A released record still names the extent it was retyped from, so it
+        // may only be reused for the same source; otherwise a guaranteed page
+        // could be served by a record backed from the common pool.
+        if let Some(position) = self.pop_reusable_from(id, kind, Some(size_bits), source)? {
             let record = &mut self.allocations[position];
             let mapped = record.allocation.is_mapped();
             let extent = record.extent as usize;
@@ -2937,7 +3263,7 @@ impl ObjectAllocator {
         } else {
             ExtentKind::PrivateData
         };
-        let (extent, watermark) = self.extent_for_allocation(id, extent_kind, size_bits)?;
+        let (extent, watermark) = self.extent_for_allocation(id, extent_kind, size_bits, source)?;
         let position = self
             .pop_reusable(id, PrivateObjectKind::Empty, None)?
             .ok_or_else(Self::private_record_error)?;
@@ -3008,6 +3334,7 @@ impl ObjectAllocator {
         id: TaskArenaId,
         kind: PrivateObjectKind,
         blueprint: sel4::ObjectBlueprint,
+        source: ExtentSource,
         kernel: &mut K,
     ) -> Result<PrivateAllocation, AllocError> {
         debug_assert!(kind != PrivateObjectKind::Empty);
@@ -3024,7 +3351,7 @@ impl ObjectAllocator {
         }
         let size_bits = blueprint.physical_size_bits();
         let (position, extent_index, watermark, reused, mapped) =
-            self.take_private_slot(id, kind, size_bits)?;
+            self.take_private_slot(id, kind, size_bits, source)?;
         let slot = self.allocations[position].allocation.slot();
         if !reused {
             let parent = self.extents[extent_index]
@@ -3257,16 +3584,13 @@ impl ObjectAllocator {
             self.allocations[index] = AllocationRecord::EMPTY;
             self.allocation_search_start = self.allocation_search_start.min(index);
         }
-        for extent in self.extents.iter_mut().flatten() {
-            if extent.belongs_to(id) {
-                extent.active = false;
-                extent.revoked = false;
-                extent.owner = u16::MAX;
-                extent.serial = 0;
-                extent.watermark = 0;
+        for index in 0..self.extents.len() {
+            if self.extents[index].is_some_and(|extent| extent.belongs_to(id)) {
+                self.settle_returned_extent(index);
             }
         }
         self.mapping_tables.forget(id);
+        self.elastic_quarantine[id.index()] = elastic::Quarantine::EMPTY;
         self.arenas[id.index()] = ArenaRecord::empty();
         Ok(released)
     }
@@ -3417,16 +3741,21 @@ impl ObjectAllocator {
 
 #[cfg(test)]
 mod tests {
+    use super::elastic::{ElasticRefusal, ElasticRequest};
+    use super::guarantee_vault::{
+        MAX_RESERVATION_BATCH, MAX_RESERVATIONS, ReservationBacking, ReservationError,
+        ReservationRequest, ReservedKind,
+    };
     use super::{
         AllocError, AllocationRecord, ArenaAllocation, ArenaPlan, ArenaRecord, ExtentKind,
-        ExtentRecord, GRANULE_BYTES, KERNEL_ROOT_CNODE_SLOTS, LARGE_DESCRIPTOR_TABLES,
-        MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES, MAX_PLANNED_PRIVATE_SPANS,
-        MAX_PLANNED_STATIC_ALLOCATIONS, MAX_PRIVATE_EXTENT_BYTES, MAX_PRIVATE_EXTENT_PAGES,
-        MAX_TASK_ALLOCATIONS, MAX_TASK_ARENAS, MAX_TASK_EXTENTS, ObjectAllocator,
-        PLANNED_QUALIFICATION_HOLDERS, PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE, PROVENANCE_SLOTS,
-        PrivateBackingLayout, PrivateBackingRequest, PrivateObjectKind, PrivateRecordVisits,
-        ProvenanceTable, SlotPool, TaskArenaId, TaskBackingCapacity, TaskStaticBacking,
-        UntypedRegion, device_retype_plan, max_admissible_private_allocations,
+        ExtentRecord, ExtentSource, GRANULE_BYTES, KERNEL_ROOT_CNODE_SLOTS,
+        LARGE_DESCRIPTOR_TABLES, MAX_PHYSICAL_PROVENANCE, MAX_PLANNED_PRIVATE_PAGES,
+        MAX_PLANNED_PRIVATE_SPANS, MAX_PLANNED_STATIC_ALLOCATIONS, MAX_PRIVATE_EXTENT_BYTES,
+        MAX_PRIVATE_EXTENT_PAGES, MAX_TASK_ALLOCATIONS, MAX_TASK_ARENAS, MAX_TASK_EXTENTS,
+        ObjectAllocator, PLANNED_QUALIFICATION_HOLDERS, PRIVATE_EXTENT_NONE, PRIVATE_STATE_NONE,
+        PROVENANCE_SLOTS, PrivateBackingLayout, PrivateBackingRequest, PrivateObjectKind,
+        PrivateRecordVisits, ProvenanceTable, SlotPool, TaskArenaId, TaskBackingCapacity,
+        TaskStaticBacking, UntypedRegion, device_retype_plan, max_admissible_private_allocations,
         max_admissible_private_extents, plan_allocation, plan_task_backing,
         provision_private_backing_with, task_backing_extents_fit_in,
         task_static_backing_from_records, widest_private_allocations, widest_private_extents,
@@ -4211,6 +4540,9 @@ mod tests {
             watermark: 4096,
             objects: 1,
             bytes: 4096,
+            origin: super::guarantee_vault::RESERVATION_NONE,
+            split: false,
+            children: [super::extent_buddy::NO_EXTENT; 2],
         };
         assert_eq!(
             task_static_backing_from_records(
@@ -4344,7 +4676,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 for page in 0..512 {
@@ -4454,6 +4793,7 @@ mod tests {
                         arena,
                         PrivateObjectKind::Granule,
                         sel4::cap_type::Granule::object_blueprint(),
+                        ExtentSource::Common,
                         &mut kernel,
                     ),
                     Err(AllocError::ArenaSlotTableFull {
@@ -4539,7 +4879,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     fail_map_frame_at: Some(1),
@@ -4696,7 +5043,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert_eq!(
@@ -4776,7 +5130,14 @@ mod tests {
                 assert!(allocator.slots.release(last));
                 assert_eq!(allocator.free_slots(), slots);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 65_536);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    65_536,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 for (delta, previous) in [(1, 0), (511, 1)] {
@@ -4873,7 +5234,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     fail_retype_at: Some(3),
@@ -4920,7 +5288,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture();
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 512);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    512,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     fail_retype_at: Some(3),
@@ -4981,7 +5356,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture_for(513);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 513);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    513,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel {
                     // Retype and map the first span's leaf, then fail the first
@@ -5083,7 +5465,7 @@ mod tests {
                     PRIVATE_STATE_NONE
                 );
                 assert_eq!(allocator.arenas[arena.index()].in_flight_granules, 0);
-                assert_eq!(table.reclaim(&mut region), 513);
+                assert_eq!(table.reclaim(&mut allocator, &mut region), 513);
                 assert_eq!(
                     (region.pages(), region.base_frames(), region.leaf_tables()),
                     (0, 0, 0)
@@ -5102,7 +5484,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture_for(514);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 514);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    514,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert_eq!(
@@ -5160,7 +5549,14 @@ mod tests {
             .spawn(|| {
                 let (mut allocator, arena) = setup_private_growth_fixture_for(513);
                 let mut table = Table::new();
-                let mut region = Region::reserved(0x1000_0000, 513);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    513,
+                    false,
+                )
+                .expect("host test window");
                 let vspace = sel4::cap::VSpace::from_bits(7);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert_eq!(
@@ -5214,6 +5610,1518 @@ mod tests {
                         .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
                         .count(),
                     leaf_maps
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    const LARGE_EXTENT_BITS: usize = MAX_PRIVATE_EXTENT_BYTES.trailing_zeros() as usize;
+    const GRANULE_EXTENT_BITS: usize = GRANULE_BYTES.trailing_zeros() as usize;
+
+    fn reservation_fixture() -> ObjectAllocator {
+        let mut allocator = ObjectAllocator::empty();
+        allocator.extents.provision_host(MAX_TASK_EXTENTS, None);
+        allocator
+            .allocations
+            .provision_host(MAX_TASK_ALLOCATIONS, AllocationRecord::EMPTY);
+        allocator.slots = SlotPool::new(1024..KERNEL_ROOT_CNODE_SLOTS).unwrap();
+        allocator
+    }
+
+    /// Seed returned extent records, exactly as an elastic release leaves
+    /// them: inactive, unreserved, owned by no arena. The fixture admits no
+    /// ordinary untyped range, so a request these records cannot serve fails
+    /// without a kernel — which is what makes "the reserved one was not
+    /// taken" observable rather than inferred.
+    fn seed_reusable_extents(
+        allocator: &mut ObjectAllocator,
+        kind: ExtentKind,
+        size_bits: usize,
+        count: usize,
+    ) {
+        for _ in 0..count {
+            let slot = allocator.take_slot().expect("host test slot");
+            let index = allocator
+                .extents
+                .iter()
+                .position(Option::is_none)
+                .expect("host test extent record");
+            let mut extent = ExtentRecord::new(sel4::cap::Untyped::from_bits(slot as _), size_bits);
+            extent.kind = kind;
+            // Distinct aligned bases, as a real retype would produce: two
+            // extents sharing one address would let overlapping placements
+            // certify.
+            extent.paddr = (index + 1) * MAX_PRIVATE_EXTENT_BYTES;
+            allocator.extents[index] = Some(extent);
+        }
+    }
+
+    fn reserved_positions(allocator: &ObjectAllocator) -> Vec<usize> {
+        allocator
+            .extents
+            .iter()
+            .enumerate()
+            .filter(|(_, extent)| extent.is_some_and(|extent| extent.is_reserved()))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn data_request(size_bits: usize) -> ReservationRequest {
+        ReservationRequest {
+            kind: ReservedKind::Data,
+            size_bits,
+        }
+    }
+
+    #[test]
+    fn a_reserved_extent_is_never_selected_by_ordinary_or_elastic_acquisition() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_backing(reservation, &[data_request(LARGE_EXTENT_BITS)])
+                    .unwrap();
+                let reserved = reserved_positions(&allocator);
+                assert_eq!(reserved.len(), 1);
+
+                // Ordinary arena provisioning of the same size takes the
+                // unreserved record.
+                let arena = allocator.arena_owning_slots_for_test(0);
+                let taken = allocator
+                    .provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData)
+                    .unwrap();
+                assert!(!reserved.contains(&taken));
+                assert_eq!(
+                    allocator
+                        .extent_for_allocation(
+                            arena,
+                            ExtentKind::PrivateData,
+                            LARGE_EXTENT_BITS,
+                            ExtentSource::Common,
+                        )
+                        .map(|(index, _)| index),
+                    Ok(taken)
+                );
+
+                // Only the reserved extent is left, so the next request is
+                // refused instead of served from it.
+                assert!(matches!(
+                    allocator.provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData),
+                    Err(AllocError::UntypedExhausted { .. })
+                ));
+                assert_eq!(reserved_positions(&allocator), reserved);
+
+                // The elastic path refuses for the same reason: its inventory
+                // does not see the reserved bytes, and its acquisition cannot
+                // reach the record.
+                let elastic = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(elastic).unwrap();
+                let demand = ElasticRequest {
+                    large_frames: 1,
+                    base_pages: 0,
+                    tables: 0,
+                }
+                .demand()
+                .unwrap();
+                assert!(matches!(
+                    allocator.preflight_elastic(&demand),
+                    Err(ElasticRefusal::Exhausted {
+                        resource: "ordinary-bytes",
+                        available: 0,
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    allocator.acquire_elastic(elastic, &demand),
+                    Err(AllocError::UntypedExhausted { .. })
+                ));
+                assert_eq!(reserved_positions(&allocator), reserved);
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap(),
+                    ReservationBacking {
+                        extents: 1,
+                        bytes: MAX_PRIVATE_EXTENT_BYTES,
+                        data_extents: 1,
+                        table_extents: 0,
+                        borrowed_extents: 0,
+                        borrowed_bytes: 0,
+                    }
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn reserved_backing_leaves_common_capacity_exactly_once() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    3,
+                );
+                let before = allocator.elastic_inventory();
+                assert_eq!(before.bytes, 3 * MAX_PRIVATE_EXTENT_BYTES as u64);
+                assert_eq!(allocator.reusable_extent_anchors(), 3);
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+
+                let reservation = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_backing(
+                        reservation,
+                        &[
+                            data_request(LARGE_EXTENT_BITS),
+                            data_request(LARGE_EXTENT_BITS),
+                        ],
+                    )
+                    .unwrap();
+
+                let after = allocator.elastic_inventory();
+                assert_eq!(after.bytes, MAX_PRIVATE_EXTENT_BYTES as u64);
+                assert_eq!(allocator.reusable_extent_bytes(), MAX_PRIVATE_EXTENT_BYTES);
+                assert_eq!(
+                    allocator.reusable_private_extent_bytes(),
+                    MAX_PRIVATE_EXTENT_BYTES
+                );
+                assert_eq!(allocator.active_extent_bytes(), 0);
+                assert_eq!(
+                    allocator.reserved_extent_bytes(),
+                    2 * MAX_PRIVATE_EXTENT_BYTES
+                );
+                assert_eq!(allocator.reusable_extent_anchors(), 1);
+                assert_eq!(allocator.reserved_extent_anchors(), 2);
+                // Held, free and reserved are disjoint and complete: every
+                // seeded byte appears in exactly one of the three.
+                assert_eq!(
+                    allocator.active_extent_bytes()
+                        + allocator.reusable_extent_bytes()
+                        + allocator.reserved_extent_bytes(),
+                    3 * MAX_PRIVATE_EXTENT_BYTES
+                );
+                // A reserved record is not a free record either.
+                assert_eq!(after.extents, before.extents);
+
+                assert_eq!(allocator.close_reservation(reservation).unwrap(), 2);
+                assert_eq!(allocator.elastic_inventory().bytes, before.bytes);
+                assert_eq!(allocator.reserved_extent_bytes(), 0);
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+                assert_eq!(allocator.reusable_extent_anchors(), 3);
+                assert_eq!(allocator.live_reservations(), 0);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn two_reservations_own_disjoint_backing() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    3,
+                );
+                let first = allocator.open_reservation().unwrap();
+                let second = allocator.open_reservation().unwrap();
+                assert_ne!(first.index(), second.index());
+                allocator
+                    .reserve_backing(first, &[data_request(LARGE_EXTENT_BITS)])
+                    .unwrap();
+                let owned_by_first = reserved_positions(&allocator);
+                allocator
+                    .reserve_backing(
+                        second,
+                        &[
+                            data_request(LARGE_EXTENT_BITS),
+                            data_request(LARGE_EXTENT_BITS),
+                        ],
+                    )
+                    .unwrap();
+                let owned_by_second: Vec<usize> = reserved_positions(&allocator)
+                    .into_iter()
+                    .filter(|index| !owned_by_first.contains(index))
+                    .collect();
+                assert_eq!(owned_by_first.len(), 1);
+                assert_eq!(owned_by_second.len(), 2);
+                assert_eq!(allocator.reservation_backing(first).unwrap().extents, 1);
+                assert_eq!(allocator.reservation_backing(second).unwrap().extents, 2);
+                assert_eq!(allocator.live_reservations(), 2);
+
+                // Closing one returns only its own backing.
+                assert_eq!(allocator.close_reservation(first).unwrap(), 1);
+                assert_eq!(
+                    allocator.reservation_backing(second).unwrap(),
+                    ReservationBacking {
+                        extents: 2,
+                        bytes: 2 * MAX_PRIVATE_EXTENT_BYTES,
+                        data_extents: 2,
+                        table_extents: 0,
+                        borrowed_extents: 0,
+                        borrowed_bytes: 0,
+                    }
+                );
+                assert_eq!(reserved_positions(&allocator), owned_by_second);
+                assert_eq!(allocator.reusable_extent_anchors(), 1);
+                assert_eq!(
+                    allocator.reservation_backing(first),
+                    Err(ReservationError::UnknownReservation(first))
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_stale_reservation_identity_is_refused_by_every_entry_point() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                let stale = allocator.open_reservation().unwrap();
+                assert_eq!(allocator.close_reservation(stale).unwrap(), 0);
+                let live = allocator.open_reservation().unwrap();
+                // The table position is reissued; the identity is not.
+                assert_eq!(live.index(), stale.index());
+                assert_ne!(live.serial(), stale.serial());
+
+                assert_eq!(
+                    allocator.reserve_backing(stale, &[data_request(LARGE_EXTENT_BITS)]),
+                    Err(ReservationError::UnknownReservation(stale))
+                );
+                assert_eq!(
+                    allocator.reservation_backing(stale),
+                    Err(ReservationError::UnknownReservation(stale))
+                );
+                assert_eq!(
+                    allocator.close_reservation(stale),
+                    Err(ReservationError::UnknownReservation(stale))
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+                assert_eq!(allocator.live_reservations(), 1);
+
+                // The live identity at the same position still works.
+                allocator
+                    .reserve_backing(live, &[data_request(LARGE_EXTENT_BITS)])
+                    .unwrap();
+                assert_eq!(allocator.reservation_backing(live).unwrap().extents, 1);
+
+                // The identity table is bounded and refuses by name.
+                let mut opened = Vec::new();
+                while allocator.live_reservations() < MAX_RESERVATIONS {
+                    opened.push(allocator.open_reservation().unwrap());
+                }
+                assert_eq!(
+                    allocator.open_reservation(),
+                    Err(ReservationError::TableFull {
+                        limit: MAX_RESERVATIONS
+                    })
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn reserved_data_and_table_backing_are_separately_owned() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateTables,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_backing(
+                        reservation,
+                        &[ReservationRequest {
+                            kind: ReservedKind::Tables,
+                            size_bits: GRANULE_EXTENT_BITS,
+                        }],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap(),
+                    ReservationBacking {
+                        extents: 1,
+                        bytes: GRANULE_BYTES,
+                        data_extents: 0,
+                        table_extents: 1,
+                        borrowed_extents: 0,
+                        borrowed_bytes: 0,
+                    }
+                );
+
+                // The reserved table extent is the only granule record left,
+                // so a task arena's table provisioning is refused while its
+                // data provisioning is untouched.
+                let arena = allocator.arena_owning_slots_for_test(0);
+                assert!(matches!(
+                    allocator.provision_extent(
+                        arena,
+                        GRANULE_EXTENT_BITS,
+                        ExtentKind::PrivateTables
+                    ),
+                    Err(AllocError::UntypedExhausted { .. })
+                ));
+                assert!(
+                    allocator
+                        .provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData)
+                        .is_ok()
+                );
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap().bytes,
+                    GRANULE_BYTES
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A reservation call that cannot complete returns the extents it already
+    /// took, so a failure leaves the reservation and the pool exactly as the
+    /// call found them. Backing taken by an earlier successful call stays.
+    #[test]
+    fn a_failed_reservation_rolls_back_its_own_prefix_only() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                assert!(matches!(
+                    allocator.reserve_backing(reservation, &[data_request(LARGE_EXTENT_BITS); 3]),
+                    Err(ReservationError::Backing(
+                        AllocError::UntypedExhausted { .. }
+                    ))
+                ));
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap(),
+                    ReservationBacking::default()
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+                assert_eq!(allocator.reusable_extent_anchors(), 2);
+                assert_eq!(
+                    allocator.reusable_extent_bytes(),
+                    2 * MAX_PRIVATE_EXTENT_BYTES
+                );
+
+                // A wider request than one call may own is refused by name,
+                // before anything is taken.
+                let wide = std::vec![data_request(LARGE_EXTENT_BITS); MAX_RESERVATION_BATCH + 1];
+                assert_eq!(
+                    allocator.reserve_backing(reservation, &wide),
+                    Err(ReservationError::Batch {
+                        requested: MAX_RESERVATION_BATCH + 1,
+                        limit: MAX_RESERVATION_BATCH,
+                    })
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+
+                // The rolled-back records are ordinary capacity again.
+                allocator
+                    .reserve_backing(reservation, &[data_request(LARGE_EXTENT_BITS)])
+                    .unwrap();
+                assert!(matches!(
+                    allocator.reserve_backing(reservation, &[data_request(LARGE_EXTENT_BITS); 2]),
+                    Err(ReservationError::Backing(
+                        AllocError::UntypedExhausted { .. }
+                    ))
+                ));
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap().extents,
+                    1
+                );
+                let arena = allocator.arena_owning_slots_for_test(0);
+                assert!(
+                    allocator
+                        .provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData)
+                        .is_ok()
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// The mapper consumes the lane the pricing resolved. Same window, same
+    /// fresh aligned span, same 512-page request: the elastic lane takes the
+    /// 2 MiB frame it was charged for, and the guaranteed lane takes base
+    /// pages and one leaf table, so its promise does not depend on an aligned
+    /// large-frame placement still being available.
+    #[test]
+    fn the_guaranteed_lane_maps_base_pages_where_the_elastic_lane_takes_a_large_frame() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                use crate::private_memory::Lane;
+                for (lane, large, base, leaf_maps) in [
+                    (Lane::LargeFrame, 1, 0, 0),
+                    (Lane::BasePage, 0, MAX_PRIVATE_EXTENT_PAGES, 1),
+                ] {
+                    let (mut allocator, arena) =
+                        setup_private_growth_fixture_for(MAX_PRIVATE_EXTENT_PAGES);
+                    let mut region = Region::reserve(
+                        &mut allocator,
+                        0x1000_0000,
+                        crate::private_memory::MAX_REGION_PAGES,
+                        MAX_PRIVATE_EXTENT_PAGES,
+                        false,
+                    )
+                    .expect("host test window");
+                    let mut kernel = RecordingPrivateKernel::default();
+                    let outcome = crate::private_memory::map_growth(
+                        &mut allocator,
+                        arena,
+                        sel4::cap::VSpace::from_bits(7),
+                        &mut region,
+                        MAX_PRIVATE_EXTENT_PAGES,
+                        crate::private_memory::GrowthPlan {
+                            lane,
+                            ..crate::private_memory::GrowthPlan::elastic()
+                        },
+                        &mut kernel,
+                    )
+                    .expect("host test growth");
+                    assert_eq!(
+                        (
+                            outcome.large_frames,
+                            outcome.base_frames,
+                            outcome.pages_backed
+                        ),
+                        (large, base, MAX_PRIVATE_EXTENT_PAGES),
+                        "lane {lane:?}"
+                    );
+                    assert_eq!(
+                        kernel
+                            .requests
+                            .iter()
+                            .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
+                            .count(),
+                        leaf_maps,
+                        "lane {lane:?}"
+                    );
+                    assert_eq!(
+                        kernel
+                            .requests
+                            .iter()
+                            .filter(|request| matches!(request, KernelRequest::MapFrame { .. }))
+                            .count(),
+                        large + base,
+                        "lane {lane:?}"
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Borrowed backing is the arena's for every allocation purpose and the
+    /// reservation's for every ownership purpose: it leaves the idle pool, it
+    /// stays invisible to common capacity, its reservation cannot be closed
+    /// while it is out, and the settle a completed revoke performs returns it
+    /// to that same reservation rather than to the common pool.
+    #[test]
+    fn borrowed_backing_returns_to_its_own_reservation_and_never_to_common_capacity() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_backing(reservation, &[data_request(LARGE_EXTENT_BITS)])
+                    .unwrap();
+                let extent = reserved_positions(&allocator)[0];
+
+                let arena = allocator.arena_owning_slots_for_test(0);
+                assert_eq!(
+                    allocator.borrow_reserved(
+                        reservation,
+                        arena,
+                        ReservedKind::Data,
+                        LARGE_EXTENT_BITS
+                    ),
+                    Ok(extent)
+                );
+                // Selectable only through the source that certified it: a
+                // pooled page may not be served from borrowed backing, and a
+                // guaranteed page may not be served from anything else.
+                assert_eq!(
+                    allocator
+                        .extent_for_allocation(
+                            arena,
+                            ExtentKind::PrivateData,
+                            LARGE_EXTENT_BITS,
+                            ExtentSource::Guaranteed(reservation),
+                        )
+                        .map(|(index, _)| index),
+                    Ok(extent)
+                );
+                assert!(
+                    allocator
+                        .extent_for_allocation(
+                            arena,
+                            ExtentKind::PrivateData,
+                            LARGE_EXTENT_BITS,
+                            ExtentSource::Common,
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap(),
+                    ReservationBacking {
+                        extents: 1,
+                        bytes: MAX_PRIVATE_EXTENT_BYTES,
+                        data_extents: 1,
+                        table_extents: 0,
+                        borrowed_extents: 1,
+                        borrowed_bytes: MAX_PRIVATE_EXTENT_BYTES,
+                    }
+                );
+                assert_eq!(
+                    allocator
+                        .reservation_backing(reservation)
+                        .unwrap()
+                        .available_extents(),
+                    0
+                );
+                assert_eq!(allocator.borrowed_extent_bytes(), MAX_PRIVATE_EXTENT_BYTES);
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+                assert_eq!(allocator.reusable_extent_anchors(), 0);
+                assert_eq!(allocator.reusable_extent_bytes(), 0);
+                assert_eq!(allocator.elastic_inventory().bytes, 0);
+                assert_eq!(
+                    allocator.close_reservation(reservation),
+                    Err(ReservationError::Occupied { extent })
+                );
+                assert_eq!(
+                    allocator.borrow_reserved(
+                        reservation,
+                        arena,
+                        ReservedKind::Data,
+                        LARGE_EXTENT_BITS
+                    ),
+                    Err(ReservationError::Unavailable {
+                        size_bits: LARGE_EXTENT_BITS
+                    })
+                );
+
+                allocator.settle_returned_extent(extent);
+                assert_eq!(allocator.reserved_extent_anchors(), 1);
+                assert_eq!(allocator.borrowed_extent_bytes(), 0);
+                assert_eq!(allocator.reusable_extent_anchors(), 0);
+                assert_eq!(allocator.elastic_inventory().bytes, 0);
+                assert_eq!(
+                    allocator
+                        .reservation_backing(reservation)
+                        .unwrap()
+                        .available_extents(),
+                    1
+                );
+                assert_eq!(allocator.close_reservation(reservation), Ok(1));
+                assert_eq!(allocator.reusable_extent_anchors(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A guaranteed span is two aligned 2 MiB extents — one for payload, one
+    /// for the leaf tables that payload's worst distribution needs — and a
+    /// span request that cannot be completed returns every span it took,
+    /// across batch boundaries.
+    #[test]
+    fn guarantee_spans_reserve_two_aligned_extents_each_and_roll_back_as_one() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    4,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 2).unwrap();
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap(),
+                    ReservationBacking {
+                        extents: 4,
+                        bytes: 4 * MAX_PRIVATE_EXTENT_BYTES,
+                        data_extents: 2,
+                        table_extents: 2,
+                        borrowed_extents: 0,
+                        borrowed_bytes: 0,
+                    }
+                );
+                assert_eq!(allocator.reusable_extent_anchors(), 0);
+
+                // Nothing left: the refusal leaves the two spans already held.
+                assert!(allocator.reserve_guarantee_spans(reservation, 1).is_err());
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap().extents,
+                    4
+                );
+                assert_eq!(allocator.close_reservation(reservation), Ok(4));
+
+                // A request wider than one batch that runs out in a later
+                // batch returns every span, not just the failing batch's.
+                let batch_spans = super::guarantee_vault::MAX_RESERVATION_BATCH / 2;
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2 * batch_spans - 2,
+                );
+                let anchors = allocator.reusable_extent_anchors();
+                assert_eq!(anchors, 2 * batch_spans + 2);
+                let wide = allocator.open_reservation().unwrap();
+                assert!(
+                    allocator
+                        .reserve_guarantee_spans(wide, batch_spans + 2)
+                        .is_err()
+                );
+                assert_eq!(allocator.reservation_backing(wide).unwrap().extents, 0);
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+                assert_eq!(allocator.reusable_extent_anchors(), anchors);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Guarantees are made physical simultaneously or not at all: an
+    /// entitlement the machine cannot fund returns every entitlement reserved
+    /// before it, so no graph is published against a partial promise.
+    #[test]
+    fn every_entitlement_guarantee_is_reserved_together_or_none_is() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                use crate::generation::reserve_guarantee_pages;
+                let span_pages = super::guarantee_vault::GUARANTEE_SPAN_PAGES as u64;
+                let mut allocator = reservation_fixture();
+                // Two spans of capacity: enough for the first entitlement's
+                // one span, not for both.
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    4,
+                );
+                assert!(
+                    reserve_guarantee_pages(
+                        &mut allocator,
+                        &[(0, span_pages), (2, span_pages + 1)]
+                    )
+                    .is_err()
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 0);
+                assert_eq!(allocator.live_reservations(), 0);
+                assert_eq!(allocator.reusable_extent_anchors(), 4);
+
+                // Both fit: each entitlement keeps its own identity, and the
+                // totals are read back from what the allocator owns.
+                let reservations =
+                    reserve_guarantee_pages(&mut allocator, &[(0, span_pages), (2, span_pages)])
+                        .expect("both guarantees fit");
+                assert_eq!(reservations.len(), 2);
+                assert_eq!(reservations.guarantee_pages, 2 * span_pages);
+                assert_eq!(reservations.reserved_extents, 4);
+                assert_eq!(reservations.reserved_bytes, 4 * MAX_PRIVATE_EXTENT_BYTES);
+                // Four spent extent anchors, plus the withheld envelope: two
+                // slots and two descriptors for every guaranteed page, being
+                // that page's own frame and its worst-case leaf table.
+                assert_eq!(reservations.reserved_slots, 4 + 2 * 2 * span_pages as usize);
+                assert_eq!(
+                    reservations.reserved_descriptors,
+                    2 * 2 * span_pages as usize
+                );
+                assert_eq!(allocator.reserved_extent_anchors(), 4);
+                assert_eq!(allocator.reusable_extent_anchors(), 0);
+                assert_eq!(allocator.elastic_inventory().bytes, 0);
+                let first = reservations.reservation_for(0).expect("first entitlement");
+                let second = reservations.reservation_for(2).expect("second entitlement");
+                assert_ne!(first.index(), second.index());
+                assert_eq!(reservations.reservation_for(1), None);
+                assert_eq!(allocator.reservation_backing(first).unwrap().extents, 2);
+
+                // An entitlement promising nothing takes no identity.
+                let mut none =
+                    reserve_guarantee_pages(&mut allocator, &[(0, 0), (1, 0)]).expect("no promise");
+                assert!(none.is_empty());
+                assert_eq!(none.reserved_bytes, 0);
+                assert_eq!(none.release(&mut allocator), Ok(()));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Descriptors and CSlots a reservation funds are withheld from every
+    /// ordinary consumer for as long as it lives, and returned whole when it
+    /// closes. Both are materialized before they are withheld, so the floor
+    /// stands over storage that exists rather than over storage the metadata
+    /// window might still fund.
+    #[test]
+    fn reserved_descriptors_and_slots_are_withheld_from_ordinary_consumers() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                let slots = allocator.free_slots();
+                let descriptors = allocator.allocation_descriptors_free();
+                let reservation = allocator.open_reservation().unwrap();
+                // Everything but a small remainder, so an ordinary request
+                // just past that remainder has to reach into the reservation
+                // to be served — and must not be.
+                let (held_descriptors, held_slots) = (descriptors - 8, slots - 8);
+                assert_eq!(
+                    allocator.reserve_guarantee_resources(
+                        reservation,
+                        held_descriptors,
+                        held_slots
+                    ),
+                    Ok(())
+                );
+                assert_eq!(allocator.reserved_slots(), held_slots);
+                assert_eq!(allocator.reserved_descriptors(), held_descriptors);
+                assert_eq!(allocator.free_slots(), 8);
+                assert_eq!(allocator.allocation_descriptors_free(), 8);
+                // The elastic inventory reports the reduced figures, so a
+                // policy is never admitted against capacity a guarantee owns.
+                assert_eq!(allocator.elastic_inventory().slots, 8);
+
+                let arena = allocator.arena_owning_slots_for_test(0);
+                assert!(allocator.provision_private_slots(arena, 16).is_err());
+                assert_eq!(allocator.reserved_slots(), held_slots);
+                assert_eq!(allocator.free_slots(), 8);
+                // What is left over is still ordinary capacity.
+                assert_eq!(allocator.provision_private_slots(arena, 8), Ok(()));
+                assert_eq!(allocator.free_slots(), 0);
+
+                // Closing returns the withheld counts; the eight the arena
+                // actually took stay taken, which is the difference between
+                // withholding capacity and spending it.
+                assert_eq!(allocator.close_reservation(reservation), Ok(0));
+                assert_eq!(allocator.reserved_slots(), 0);
+                assert_eq!(allocator.reserved_descriptors(), 0);
+                assert_eq!(allocator.free_slots(), slots - 8);
+                assert_eq!(allocator.allocation_descriptors_free(), descriptors - 8);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A guaranteed transaction is planned from the extents' own recorded
+    /// bases and watermarks, borrows a further span only when the current one
+    /// is full, refuses rather than reaching into the pool when the
+    /// reservation is spent, and certifies against the ledger as protected
+    /// backing.
+    #[test]
+    fn a_guaranteed_transaction_is_planned_from_recorded_extents_and_certified() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                use boot_contracts::private_memory_policy::ledger;
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 1).unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+
+                let acquired = allocator
+                    .acquire_guaranteed(reservation, arena, 3, 1)
+                    .expect("the reservation funds three pages and a table");
+                assert_eq!(acquired.pages(), 3);
+                assert_eq!(acquired.runs().len(), 2);
+                assert_eq!(
+                    acquired.resources(),
+                    ledger::Resources {
+                        bytes: 4 * GRANULE_BYTES as u64,
+                        slots: 4,
+                        descriptors: 4,
+                        // The span's extents were charged when the
+                        // reservation took them; a page inside one adds none.
+                        extents: 0,
+                        tables: 1,
+                    }
+                );
+                // Every run starts at its extent's recorded base, and every
+                // source is that extent, marked protected.
+                for (run, source) in acquired.runs().iter().zip(acquired.sources()) {
+                    assert_eq!(run.start, source.start);
+                    assert_eq!(run.size_bits, GRANULE_EXTENT_BITS as u8);
+                    assert_eq!(source.bytes, MAX_PRIVATE_EXTENT_BYTES as u64);
+                    assert_eq!(source.class, ledger::Class::Guaranteed);
+                }
+                assert_eq!(acquired.runs()[0].count, 3);
+                assert_eq!(acquired.runs()[1].count, 1);
+
+                // The ledger certifies exactly this, and refuses the same
+                // runs without the witness that authorizes them.
+                assert!(
+                    ledger::Plan::validate_runs(
+                        acquired.sources(),
+                        acquired.runs(),
+                        acquired.resources(),
+                        acquired.witness(),
+                    )
+                    .is_ok()
+                );
+                assert_eq!(
+                    ledger::Plan::validate_runs(
+                        acquired.sources(),
+                        acquired.runs(),
+                        acquired.resources(),
+                        ledger::Witness {
+                            guaranteed: ledger::Resources::ZERO,
+                            guarantee_pages: 0,
+                        },
+                    ),
+                    Err(ledger::Error::Guarantee)
+                );
+
+                // Both span extents are now borrowed, and the reservation has
+                // nothing idle left.
+                assert_eq!(
+                    allocator
+                        .reservation_backing(reservation)
+                        .unwrap()
+                        .available_extents(),
+                    0
+                );
+                // A further request cannot be funded and is refused against
+                // the reservation rather than served from the pool, even
+                // though two 2 MiB extents are sitting in common capacity.
+                assert_eq!(allocator.reusable_extent_anchors(), 0);
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                assert!(matches!(
+                    allocator.acquire_guaranteed(
+                        reservation,
+                        arena,
+                        MAX_PRIVATE_EXTENT_PAGES + 1,
+                        0
+                    ),
+                    Err(ReservationError::Unavailable { .. })
+                ));
+                // The refusal returned everything it had borrowed for that
+                // attempt: the pool's spare extent is untouched.
+                assert_eq!(allocator.reusable_extent_anchors(), 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// The shape a real adaptive holder's first growth takes: a whole
+    /// entitlement redeemed at once, spanning several borrowed extents, with
+    /// one leaf table per address span. Every run must certify against its
+    /// own protected source and the totals must reconcile exactly.
+    #[test]
+    fn a_whole_entitlement_redeemed_at_once_certifies_run_by_run() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                use boot_contracts::private_memory_policy::ledger;
+                const PAGES: usize = 4 * MAX_PRIVATE_EXTENT_PAGES;
+                const TABLES: usize = 4;
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    8,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 4).unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+
+                let acquired = allocator
+                    .acquire_guaranteed(reservation, arena, PAGES, TABLES)
+                    .expect("four spans fund four spans of pages");
+                assert_eq!(acquired.pages(), PAGES);
+                assert_eq!(acquired.runs().len(), 5);
+                let placed: u64 = acquired
+                    .runs()
+                    .iter()
+                    .map(|run| run.count * (1u64 << run.size_bits))
+                    .sum();
+                assert_eq!(placed, acquired.resources().bytes);
+                // Every run sits inside the protected source recorded beside
+                // it, and no two runs overlap.
+                for (run, source) in acquired.runs().iter().zip(acquired.sources()) {
+                    let end = run.start + run.count * (1u64 << run.size_bits);
+                    assert!(run.start >= source.start, "run {run:?} source {source:?}");
+                    assert!(
+                        end <= source.start + source.bytes,
+                        "run {run:?} source {source:?}"
+                    );
+                }
+                assert_eq!(
+                    ledger::Plan::validate_runs(
+                        acquired.sources(),
+                        acquired.runs(),
+                        acquired.resources(),
+                        acquired.witness(),
+                    )
+                    .map(|plan| plan.guarantee_pages()),
+                    Ok(PAGES as u64)
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A guaranteed growth needs its own descriptors and CSlots, and they
+    /// come from the entitlement's withheld funding rather than from the
+    /// pool. Without that lend the mapping fails with nothing placed, which
+    /// is the defect this covers: the pooled half provisions descriptors for
+    /// its own objects only, so a wholly guaranteed growth provisioned none.
+    #[test]
+    fn a_guaranteed_growth_is_funded_by_its_entitlement_not_by_the_pool() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                const PAGES: usize = 4;
+                const TABLES: usize = 1;
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 1).unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, PAGES + TABLES, PAGES + TABLES)
+                    .unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let acquired = allocator
+                    .acquire_guaranteed(reservation, arena, PAGES, TABLES)
+                    .expect("the reservation funds the backing");
+                assert_eq!(acquired.pages() + acquired.tables(), PAGES + TABLES);
+
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    true,
+                )
+                .expect("host test window");
+                let plan = crate::private_memory::GrowthPlan {
+                    lane: crate::private_memory::Lane::BasePage,
+                    guaranteed_pages: PAGES,
+                    reservation: Some(reservation),
+                };
+                let mut kernel = RecordingPrivateKernel::default();
+
+                // Backing alone is not enough: with no descriptor records the
+                // growth cannot place its first page.
+                assert!(
+                    crate::private_memory::map_growth(
+                        &mut allocator,
+                        arena,
+                        sel4::cap::VSpace::from_bits(7),
+                        &mut region,
+                        PAGES,
+                        plan,
+                        &mut kernel,
+                    )
+                    .is_err()
+                );
+                assert_eq!(region.pages(), 0);
+
+                // Lending the entitlement's own withheld funding is what makes
+                // the same growth payable.
+                let lent = PAGES + TABLES;
+                allocator
+                    .lend_reserved_resources(reservation, lent, lent)
+                    .unwrap();
+                allocator.provision_private_slots(arena, lent).unwrap();
+                let mut kernel = RecordingPrivateKernel::default();
+                let outcome = crate::private_memory::map_growth(
+                    &mut allocator,
+                    arena,
+                    sel4::cap::VSpace::from_bits(7),
+                    &mut region,
+                    PAGES,
+                    plan,
+                    &mut kernel,
+                )
+                .expect("funded guaranteed growth");
+                assert_eq!(
+                    (
+                        outcome.large_frames,
+                        outcome.base_frames,
+                        outcome.pages_backed
+                    ),
+                    (0, PAGES, PAGES)
+                );
+                assert_eq!(
+                    kernel
+                        .requests
+                        .iter()
+                        .filter(|request| matches!(request, KernelRequest::MapLeaf { .. }))
+                        .count(),
+                    TABLES
+                );
+                // Every object came from the reservation's borrowed backing,
+                // so the entitlement's idle capacity is what shrank.
+                assert_eq!(
+                    allocator
+                        .reservation_backing(reservation)
+                        .unwrap()
+                        .borrowed_extents,
+                    2
+                );
+                assert_eq!(allocator.reserved_descriptors(), 0);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Funding an incarnation drew from its entitlement comes back when it
+    /// retires, so a replacement can be funded. Without the restore the floor
+    /// shrinks once per incarnation and the second one is refused against a
+    /// reservation that still owns all of its backing.
+    #[test]
+    fn retiring_an_incarnation_returns_the_funding_it_drew_from_its_entitlement() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                let reservation = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, 16, 16)
+                    .unwrap();
+                assert_eq!(allocator.reserved_descriptors(), 16);
+
+                // One incarnation spends most of the floor.
+                allocator
+                    .lend_reserved_resources(reservation, 12, 12)
+                    .unwrap();
+                assert_eq!(allocator.reserved_descriptors(), 4);
+                assert_eq!(allocator.reserved_slots(), 4);
+                // A second incarnation of the same size cannot be funded
+                // while the first still holds it.
+                assert!(matches!(
+                    allocator.lend_reserved_resources(reservation, 12, 12),
+                    Err(ReservationError::Unavailable { .. })
+                ));
+
+                // Retirement returns exactly what was drawn.
+                allocator.restore_reserved_resources(reservation, 12, 12);
+                assert_eq!(allocator.reserved_descriptors(), 16);
+                assert_eq!(allocator.reserved_slots(), 16);
+                assert_eq!(
+                    allocator.lend_reserved_resources(reservation, 12, 12),
+                    Ok(())
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A borrow names one reservation, one kind and one size. Nothing else may
+    /// be served from it, and a stale identity borrows nothing at all.
+    #[test]
+    fn a_borrow_matches_its_reservation_kind_and_size_exactly() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                let first = allocator.open_reservation().unwrap();
+                let second = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_backing(first, &[data_request(LARGE_EXTENT_BITS)])
+                    .unwrap();
+                allocator
+                    .reserve_backing(second, &[data_request(GRANULE_EXTENT_BITS)])
+                    .unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+
+                assert_eq!(
+                    allocator.borrow_reserved(
+                        first,
+                        arena,
+                        ReservedKind::Data,
+                        GRANULE_EXTENT_BITS
+                    ),
+                    Err(ReservationError::Unavailable {
+                        size_bits: GRANULE_EXTENT_BITS
+                    })
+                );
+                assert_eq!(
+                    allocator.borrow_reserved(
+                        second,
+                        arena,
+                        ReservedKind::Tables,
+                        GRANULE_EXTENT_BITS
+                    ),
+                    Err(ReservationError::Unavailable {
+                        size_bits: GRANULE_EXTENT_BITS
+                    })
+                );
+                assert_eq!(allocator.borrowed_extent_bytes(), 0);
+
+                let stale = first;
+                let borrowed = allocator
+                    .borrow_reserved(first, arena, ReservedKind::Data, LARGE_EXTENT_BITS)
+                    .unwrap();
+                allocator.settle_returned_extent(borrowed);
+                assert_eq!(allocator.close_reservation(first), Ok(1));
+                assert_eq!(
+                    allocator.borrow_reserved(stale, arena, ReservedKind::Data, LARGE_EXTENT_BITS),
+                    Err(ReservationError::UnknownReservation(stale))
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// One-entitlement policy whose single subject may redeem `guarantee`
+    /// pages and grow into the pool beyond them.
+    fn guaranteed_policy(guarantee: u64) -> Vec<u8> {
+        use boot_contracts::private_memory_policy::{self as policy, Entitlement, Header, Subject};
+        let entitlement = Entitlement {
+            identity: policy::entitlement_identity("guaranteed"),
+            subtree_root: [0; 32],
+            guarantee_pages: guarantee,
+            maximum_pages: 0,
+            maximum_mode: policy::POOL,
+            reserved: 0,
+        };
+        let subject = Subject {
+            identity: policy::subject_identity("holder"),
+            entitlement: entitlement.identity,
+            maximum_pages: 0,
+            maximum_mode: policy::POOL,
+            reserved: 0,
+        };
+        let header = Header {
+            magic: policy::MAGIC,
+            format_version: policy::FORMAT_VERSION,
+            header_size: policy::HEADER_BYTES as u32,
+            required_flags: 0,
+            entitlement_count: 1,
+            subject_count: 1,
+            total_len: (policy::HEADER_BYTES + policy::ENTITLEMENT_BYTES + policy::SUBJECT_BYTES)
+                as u32,
+            reserved: 0,
+            reserve_bytes: 0,
+            reserve_slots: 0,
+            reserve_descriptors: 0,
+            reserve_extents: 0,
+            reserve_tables: 0,
+        };
+        let mut bytes = header.encode().to_vec();
+        bytes.extend(entitlement.encode());
+        bytes.extend(subject.encode());
+        bytes
+    }
+
+    fn guaranteed_ledger(
+        policy: &[u8],
+        guarantee: u64,
+    ) -> (
+        boot_contracts::private_memory_policy::ledger::Ledger<'_>,
+        boot_contracts::private_memory_policy::ledger::Incarnation,
+    ) {
+        use boot_contracts::private_memory_policy::{self as policy, Instance, ledger};
+        let decoded = policy::Policy::decode(policy).unwrap();
+        let instances = [Instance {
+            identity: policy::subject_identity("holder"),
+            owner: None,
+        }];
+        let envelope = ledger::Resources {
+            bytes: 2 * guarantee * policy::PAGE_BYTES,
+            slots: 2 * guarantee,
+            descriptors: 2 * guarantee,
+            extents: if guarantee == 0 { 0 } else { 2 },
+            tables: guarantee,
+        };
+        let available = ledger::Resources {
+            bytes: 1 << 30,
+            slots: 1 << 20,
+            descriptors: 1 << 20,
+            extents: 1 << 16,
+            tables: 1 << 16,
+        }
+        .checked_add(envelope)
+        .unwrap();
+        let mut ledger =
+            ledger::Ledger::admit(decoded, &instances, available, &[envelope]).unwrap();
+        let token = ledger.bind(&policy::subject_identity("holder")).unwrap();
+        (ledger, token)
+    }
+
+    /// A guarantee that ends exactly at a span boundary funds that span's
+    /// table only; the next span's table is pooled, like the page it maps.
+    /// Charging every table to the guarantee left the pooled page asking the
+    /// pool for a table no source had acquired, and the growth failed after
+    /// mapping the whole guarantee.
+    #[test]
+    fn a_guarantee_ending_at_a_span_boundary_leaves_the_next_table_pooled() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                const GUARANTEE: usize = MAX_PRIVATE_EXTENT_PAGES;
+                let mut allocator = reservation_fixture();
+                // Pooled backing for one page and one table, and nothing more:
+                // a pooled half priced with no table would still fail to map.
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateTables,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 1).unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, GUARANTEE + 1, GUARANTEE + 1)
+                    .unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let policy = guaranteed_policy(GUARANTEE as u64);
+                let (mut ledger, token) = guaranteed_ledger(&policy, GUARANTEE as u64);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    true,
+                )
+                .expect("host test window");
+                let (_, prefix_tables) = region.shape_split(
+                    GUARANTEE + 1,
+                    crate::private_memory::Lane::BasePage,
+                    GUARANTEE,
+                );
+                assert_eq!(prefix_tables, 1);
+
+                let mut table = Table::new();
+                let mut kernel = RecordingPrivateKernel::default();
+                let previous = crate::private_memory::elastic::grow(
+                    &mut table,
+                    &mut allocator,
+                    &mut ledger,
+                    token,
+                    arena,
+                    sel4::cap::VSpace::from_bits(7),
+                    &mut region,
+                    GUARANTEE + 1,
+                    crate::private_memory::GrowthPlan {
+                        lane: crate::private_memory::Lane::BasePage,
+                        guaranteed_pages: GUARANTEE,
+                        reservation: Some(reservation),
+                    },
+                    &mut kernel,
+                )
+                .expect("the guarantee and one pooled page and table are all present");
+                assert_eq!(previous, 0);
+                assert_eq!((region.pages(), region.leaf_tables()), (GUARANTEE + 1, 2));
+                assert_eq!(ledger.pages(token), Ok(GUARANTEE as u64 + 1));
+                // Exactly one table was charged to the guarantee.
+                assert_eq!(ledger.guaranteed_held(token).unwrap().tables, 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A guaranteed growth that fails after the ledger opened its transaction
+    /// hands back every descriptor and CSlot it borrowed from its
+    /// entitlement. The abort charged the entitlement nothing and retirement
+    /// restores only what a commit charged, so a lend kept here would be gone
+    /// for good, and after a few failures no guaranteed page could be funded.
+    #[test]
+    fn a_failed_guaranteed_growth_returns_its_lent_funding() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                const PAGES: usize = 4;
+                const FUNDING: usize = PAGES + 1;
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    2,
+                );
+                let reservation = allocator.open_reservation().unwrap();
+                allocator.reserve_guarantee_spans(reservation, 1).unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, FUNDING, FUNDING)
+                    .unwrap();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let policy = guaranteed_policy(PAGES as u64);
+                let (mut ledger, token) = guaranteed_ledger(&policy, PAGES as u64);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    true,
+                )
+                .expect("host test window");
+                let plan = crate::private_memory::GrowthPlan {
+                    lane: crate::private_memory::Lane::BasePage,
+                    guaranteed_pages: PAGES,
+                    reservation: Some(reservation),
+                };
+                let floor = (allocator.reserved_descriptors(), allocator.reserved_slots());
+                let backing = allocator.reservation_backing(reservation).unwrap();
+                let mut table = Table::new();
+
+                // Every attempt fails on its second frame, after the ledger
+                // began. More attempts than the funding could survive once.
+                for _ in 0..3 * FUNDING {
+                    let mut kernel = RecordingPrivateKernel {
+                        fail_map_frame_at: Some(2),
+                        ..RecordingPrivateKernel::default()
+                    };
+                    assert!(matches!(
+                        crate::private_memory::elastic::grow(
+                            &mut table,
+                            &mut allocator,
+                            &mut ledger,
+                            token,
+                            arena,
+                            sel4::cap::VSpace::from_bits(7),
+                            &mut region,
+                            PAGES,
+                            plan,
+                            &mut kernel,
+                        ),
+                        Err(crate::private_memory::elastic::ElasticGrowError::Frames {
+                            allocated: 1,
+                            ..
+                        })
+                    ));
+                    assert_eq!(region.pages(), 0);
+                    assert_eq!(
+                        (allocator.reserved_descriptors(), allocator.reserved_slots()),
+                        floor
+                    );
+                    assert_eq!(ledger.redeemable_guarantee(token), Ok(PAGES as u64));
+                }
+
+                // The guarantee is still whole and still fundable.
+                let mut kernel = RecordingPrivateKernel::default();
+                crate::private_memory::elastic::grow(
+                    &mut table,
+                    &mut allocator,
+                    &mut ledger,
+                    token,
+                    arena,
+                    sel4::cap::VSpace::from_bits(7),
+                    &mut region,
+                    PAGES,
+                    plan,
+                    &mut kernel,
+                )
+                .expect("the guarantee survives its failed attempts");
+                assert_eq!(region.pages(), PAGES);
+                assert_eq!(ledger.redeemable_guarantee(token), Ok(0));
+                assert_eq!(
+                    allocator.reservation_backing(reservation).unwrap().extents,
+                    backing.extents
                 );
             })
             .unwrap()

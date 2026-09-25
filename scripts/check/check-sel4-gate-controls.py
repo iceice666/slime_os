@@ -42,9 +42,15 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
     # 54 existing markers plus 6 cspace, 12 metadata and 14 bootstrap markers,
-    # 12 elastic, 12 fragmentation, 11 rollback and 7 conservation markers, and
-    # one order-independent marker.
-    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 128),
+    # 12 elastic, 12 fragmentation, 11 rollback and 7 conservation markers, one
+    # order-independent marker, and MEM-ADAPTIVE's 31: 4 reserve-first policy and
+    # binding markers, 5 denial/duplicate-incarnation markers, 6 schedule
+    # markers, 6 restart markers, 4 omitted-subject markers and 6 survival and
+    # completion markers. The over-guaranteed negative composition's chain is
+    # deliberately *not* counted here: its terminal is a `SLIME_MEM FAIL` line
+    # that every other arm vetoes, so a synthetic transcript carrying both would
+    # contradict itself. It is controlled by `check_private_adaptive_controls`.
+    ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 159),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
@@ -1477,6 +1483,735 @@ def check_private_conservation_controls(gate) -> int:
     )
 
 
+# MEM-ADAPTIVE's synthetic schedule. The deltas are the ones the coordinator's
+# own table produces; restating them here is what lets a control transcript
+# exist at all, and every assertion the gate makes about them is derived from
+# the *composition's* declared maxima rather than from these numbers.
+ADAPTIVE_UNIT = 257
+ADAPTIVE_ROUNDS = 3
+
+
+def adaptive_control_schedule(policy: dict) -> list[tuple[str, int]]:
+    """`(instance, delta)` for each of the eighteen scheduled requests."""
+    guaranteed = "private-adaptive-guaranteed"
+    pool_a, pool_b = "private-adaptive-pool-a", "private-adaptive-pool-b"
+    guarantee = policy["entitlements"]["adaptive-guaranteed"]["guaranteePages"]
+    pool_maximum = policy["subjects"][pool_a]["maximumPages"]
+    guaranteed_maximum = policy["subjects"][guaranteed]["maximumPages"]
+    held = (ADAPTIVE_ROUNDS + 1) * ADAPTIVE_UNIT
+    schedule = [(pool_b, ADAPTIVE_UNIT), (pool_a, ADAPTIVE_UNIT), (guaranteed, guarantee)]
+    for _ in range(ADAPTIVE_ROUNDS):
+        schedule += [
+            (pool_a, ADAPTIVE_UNIT),
+            (pool_b, ADAPTIVE_UNIT),
+            (guaranteed, ADAPTIVE_UNIT),
+        ]
+    schedule += [
+        (pool_a, pool_maximum - held),
+        (pool_b, pool_maximum - held + 1),
+        (guaranteed, guaranteed_maximum - guarantee - ADAPTIVE_ROUNDS * ADAPTIVE_UNIT + 1),
+        (pool_a, ADAPTIVE_UNIT),
+        (pool_b, ADAPTIVE_UNIT),
+        (guaranteed, ADAPTIVE_UNIT),
+    ]
+    return schedule
+
+
+def adaptive_control_transcript(gate, policy: dict) -> list[str]:
+    """A complete, self-consistent adaptive transcript, line by line.
+
+    Every line has to be load-bearing: `check_adaptive_control_mutations`
+    deletes each one in turn and requires a refusal, so a decorative line here
+    would be reported as a hole in the gate rather than in this fixture.
+    """
+    identity = gate.entitlement_identity
+    base = "0x10000000"
+    pool = 1_610_612_736
+    subjects = policy["subjects"]
+    entitlements = policy["entitlements"]
+    guarantee_pages = sum(entry["guaranteePages"] for entry in entitlements.values())
+    # What marker A reports is the guarantee reservation the root materialized,
+    # not the declared operational reserve: one payload granule and one leaf
+    # table per promised page, a descriptor and a CSlot for each, taken from
+    # coarse aligned spans that each cost one extent and one anchor CSlot.
+    spans = sum(
+        -(-entry["guaranteePages"] // 512)
+        for entry in entitlements.values()
+        if entry["guaranteePages"]
+    )
+    reserve = {
+        "bytes": guarantee_pages * 8192,
+        "slots": guarantee_pages * 2 + spans * 2,
+        "descriptors": guarantee_pages * 2,
+        "extents": spans * 2,
+        "tables": guarantee_pages,
+    }
+
+    io_window_end = hex(
+        int(base, 16) + subjects["private-adaptive-io-holder"]["maximumPages"] * 4096
+    )
+
+    def incarnation(instance: str, live: int) -> str:
+        subject = subjects[instance]
+        return (
+            f"SLIME_MEM adaptive incarnation instance={instance} "
+            f"entitlement={identity(subject['entitlement'])} live={live} "
+            "admitted=1 cause=ok"
+        )
+
+    def binding(task: int, instance: str, incarnation: int = 0) -> str:
+        subject = subjects.get(instance)
+        if subject is None:
+            return (
+                f"SLIME_MEM entitlement task={task} instance={instance} entitlement=none "
+                "incarnation=0 guarantee=0 maximum=0 mode=none installed=0 base=0x0"
+            )
+        entitlement = entitlements[subject["entitlement"]]
+        return (
+            f"SLIME_MEM entitlement task={task} instance={instance} "
+            f"entitlement={identity(subject['entitlement'])} incarnation={incarnation} "
+            f"guarantee={entitlement['guaranteePages']} maximum={subject['maximumPages']} "
+            f"mode={subject['maximumMode']} installed={subject['maximumPages']} base={base}"
+        )
+
+    lines = [
+        f"SLIME_MEM policy entitlements={len(entitlements)} subjects={len(subjects)} "
+        f"guarantee_pages={guarantee_pages} reserved_bytes={reserve['bytes']} "
+        f"reserved_slots={reserve['slots']} reserved_descriptors={reserve['descriptors']} "
+        f"reserved_extents={reserve['extents']} reserved_tables={reserve['tables']} "
+        f"pool_bytes={pool}",
+        binding(1, "init"),
+        binding(2, "private-adaptive-coordinator"),
+        binding(10, "private-adaptive-io-supervisor"),
+        incarnation("private-adaptive-pool-b", 1),
+        binding(3, "private-adaptive-pool-b"),
+        "[private-adaptive] coordinator subject=private-adaptive-coordinator "
+        "entitlement=none base=0x0 pages=0 refused=1",
+        incarnation("private-adaptive-guaranteed", 2),
+        binding(4, "private-adaptive-guaranteed"),
+        incarnation("private-adaptive-pool-a", 3),
+        binding(5, "private-adaptive-pool-a"),
+        # The IO holder's block, in the order a boot produces it: bound during
+        # construction, then its own positive controls, then the four refused
+        # destinations the root names against its window.
+        incarnation("private-adaptive-io-holder", 4),
+        binding(9, "private-adaptive-io-holder"),
+        "[private-adaptive:io-supervisor] holder spawned",
+        "[private-adaptive:io] outside_window mmio=1 queue=1",
+        f"SLIME_MEM mapping refused task=9 base={base} end=0x10001000 "
+        f"window={base}..{io_window_end}",
+        f"SLIME_MEM mapping refused task=9 base=0x14000000 end=0x14001000 "
+        f"window={base}..{io_window_end}",
+        f"SLIME_MEM mapping refused task=9 base={base} end=0x10002000 "
+        f"window={base}..{io_window_end}",
+        f"SLIME_MEM mapping refused task=9 base=0x14000000 end=0x14002000 "
+        f"window={base}..{io_window_end}",
+        "[private-adaptive:io] mmio_backed_refused=1",
+        "[private-adaptive:io] mmio_unbacked_refused=1",
+        "[private-adaptive:io] queue_backed_refused=1",
+        "[private-adaptive:io] queue_unbacked_refused=1",
+        "[private-adaptive:io] pages=1",
+        "[private-adaptive:io] device mappings excluded from the private window",
+        # The root refuses a duplicate before a task exists, so the control
+        # transcript carries the spawn refusal rather than a ledger bind that
+        # never happens.
+        "SLIME_GRAPH spawn refused task=2 child=private-adaptive-guaranteed "
+        "class=instance-live",
+        f"[private-adaptive] duplicate subject=private-adaptive-guaranteed refused=1 live_base={base}",
+    ]
+    tasks = {
+        "private-adaptive-guaranteed": 4,
+        "private-adaptive-pool-a": 5,
+        "private-adaptive-pool-b": 3,
+    }
+    labels = {
+        "private-adaptive-guaranteed": "guaranteed",
+        "private-adaptive-pool-a": "pool-a",
+        "private-adaptive-pool-b": "pool-b",
+    }
+    held = dict.fromkeys(tasks, 0)
+    committed = dict.fromkeys(entitlements, 0)
+    served_total = 0
+    for number, (instance, delta) in enumerate(adaptive_control_schedule(policy)):
+        subject = subjects[instance]
+        entitlement = subject["entitlement"]
+        promise = entitlements[entitlement]["guaranteePages"]
+        pages = held[instance]
+        # Only the three boundary steps are refused, distinguished by which
+        # declaration they cross: past a subject maximum, or inside it but past
+        # any inventory. Every other request fits and is served.
+        cause = None
+        if number in (gate.ADAPTIVE_POOL_REFUSAL, *gate.ADAPTIVE_DECLARED_REFUSALS):
+            cause = "maximum" if pages + delta > subject["maximumPages"] else "resource"
+        if cause is None:
+            from_guarantee = max(0, min(delta, promise - committed[entitlement]))
+            held[instance] = pages + delta
+            committed[entitlement] += delta
+            served_total += 1
+            lines.append(
+                f"SLIME_MEM adaptive grant task={tasks[instance]} instance={instance} "
+                f"entitlement={identity(entitlement)} delta={delta} previous={pages} "
+                f"pages={held[instance]} guaranteed={from_guarantee} "
+                f"elastic={delta - from_guarantee} "
+                f"entitlement_committed={committed[entitlement]} pool_bytes={pool} base={base}"
+            )
+        else:
+            lines.append(
+                f"SLIME_MEM adaptive refused task={tasks[instance]} instance={instance} "
+                f"entitlement={identity(entitlement)} delta={delta} pages={pages} "
+                f"cause={cause} entitlement_committed={committed[entitlement]} "
+                f"pool_bytes={pool}"
+            )
+        lines.append(
+            f"[private-adaptive] step={number} subject={instance} delta={delta} "
+            f"served={int(cause is None)} pages={held[instance]} base={base}"
+        )
+        lines.append(
+            f"[private-adaptive:{labels[instance]}] request incarnation=0 delta={delta} "
+            f"served={int(cause is None)} pages={held[instance]} base={base} "
+            f"zeroed={int(cause is None)} stable=1"
+        )
+    steps = len(adaptive_control_schedule(policy))
+    lines.append(
+        f"[private-adaptive] schedule steps={steps} served={served_total} "
+        f"refused={steps - served_total} digest=0x{'1234567890abcdef'}"
+    )
+
+    restart = "private-adaptive-restart"
+    promise = entitlements[subjects[restart]["entitlement"]]["guaranteePages"]
+    restart_identity = identity(subjects[restart]["entitlement"])
+    lines += [
+        incarnation(restart, 5),
+        binding(6, restart),
+        f"SLIME_MEM adaptive grant task=6 instance={restart} entitlement={restart_identity} "
+        f"delta={promise} previous=0 pages={promise} guaranteed={promise} elastic=0 "
+        f"entitlement_committed={promise} pool_bytes={pool} base={base}",
+        f"[private-adaptive] restart subject={restart} incarnation=0 base={base} "
+        f"pages={promise} end=fault",
+        f"[private-adaptive:restart] end incarnation=0 pages={promise} refused=0 kind=fault",
+        f"SLIME_MEM adaptive retired task=6 instance={restart} entitlement={restart_identity} "
+        f"returned_pages={promise} entitlement_committed=0 quarantined=0",
+        incarnation(restart, 5),
+        binding(7, restart, incarnation=1),
+        f"SLIME_MEM adaptive grant task=7 instance={restart} entitlement={restart_identity} "
+        f"delta={promise} previous=0 pages={promise} guaranteed={promise} elastic=0 "
+        f"entitlement_committed={promise} pool_bytes={pool} base={base}",
+        f"[private-adaptive] restart subject={restart} incarnation=1 base={base} "
+        f"pages={promise} same_base=1 end=exit",
+        f"[private-adaptive:restart] end incarnation=1 pages={promise} refused=0 kind=exit",
+        binding(8, "private-adaptive-denied"),
+        "SLIME_MEM adaptive refused task=8 instance=private-adaptive-denied entitlement=none "
+        f"delta=1 pages=0 cause=entitlement entitlement_committed=0 pool_bytes={pool}",
+        "[private-adaptive] denied subject=private-adaptive-denied pages=0 base=0x0 "
+        "refused=1 end=exit",
+        "[private-adaptive:denied] end incarnation=0 pages=0 refused=1 kind=exit",
+        f"[private-adaptive] stable subjects=3 "
+        f"guaranteed_pages={held['private-adaptive-guaranteed']} "
+        f"pool_a_pages={held['private-adaptive-pool-a']} "
+        f"pool_b_pages={held['private-adaptive-pool-b']}",
+        f"[private-adaptive:guaranteed] end incarnation=0 "
+        f"pages={held['private-adaptive-guaranteed']} refused=1 kind=exit",
+        f"[private-adaptive:pool-a] end incarnation=0 pages={held['private-adaptive-pool-a']} "
+        "refused=1 kind=exit",
+        f"[private-adaptive:pool-b] end incarnation=0 pages={held['private-adaptive-pool-b']} "
+        "refused=1 kind=exit",
+        f"[private-adaptive] complete steps={steps} served={served_total} "
+        f"refused={steps - served_total} restarts=1 duplicates=1 denied=1 exits=5 "
+        f"digest=0x{'1234567890abcdef'}",
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    return lines
+
+
+def matrix_walk_lines(task: int, instance: str, unit: int, served: int, limit: str) -> list[str]:
+    """One holder's exhaustion walk as the root reports it: `served` grants at
+    `unit`, then a halving refusal chain ending at one page with `limit`."""
+    lines = []
+    pages = 0
+    for _ in range(served):
+        lines.append(
+            f"SLIME_MEM adaptive grant task={task} instance={instance} entitlement=0000000000000000 "
+            f"delta={unit} previous={pages} pages={pages + unit} guaranteed=0 elastic={unit} "
+            f"entitlement_committed={pages + unit} pool_bytes=1936 base=0x400000"
+        )
+        pages += unit
+    delta = unit
+    while True:
+        lines.append(
+            f"SLIME_MEM adaptive refused task={task} instance={instance} entitlement=0000000000000000 "
+            f"delta={delta} pages={pages} cause=pool entitlement_committed={pages} pool_bytes=1936"
+        )
+        final = delta == 1
+        lines.append(
+            f"SLIME_MEM adaptive limit task={task} instance={instance} delta={delta} "
+            + (limit if final else "resource=ledger-pool required=0 available=0 ledger_pool=1936 "
+               "inventory_bytes=15204192 inventory_slots=517340 largest_block=0")
+        )
+        if final:
+            return lines
+        delta //= 2
+
+
+def matrix_control_transcript(gate) -> list[str]:
+    """A complete, self-consistent single-row matrix transcript, line by line."""
+    bulk, small = gate.MATRIX_BULK_UNIT, gate.MATRIX_SMALL_UNIT
+    exhausted = (
+        "resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192 "
+        "inventory_slots=517340 largest_block=0"
+    )
+    census = (
+        "SLIME_MEM census retired={} free_slots=517340 untyped=5521312 reusable=0 anchors=3 "
+        "mapped_pages=0 allocations_free=10 shared_reusable=0 shared_anchors=0 "
+        "active_extent_bytes=0 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=65536"
+    )
+    lines = [
+        "SLIME_ROOT ordinary range=0 paddr=0x60000000 bytes=536870912",
+        "SLIME_ROOT ordinary ranges=1 bytes=536870912 end=0x80000000",
+        "SLIME_MEM policy entitlements=2 subjects=3 guarantee_pages=1024 reserved_bytes=8388608 "
+        "reserved_slots=2052 reserved_descriptors=2048 reserved_extents=4 reserved_tables=1024 "
+        "pool_bytes=487864208",
+        "[private-matrix:bulk] verified incarnation=0 base=0x400000 pages=0 pattern=1 refused=0",
+        *matrix_walk_lines(3, "private-matrix-bulk", bulk, 3, exhausted),
+        "[private-matrix] guarantee pressure redeemed=1 beyond_promise_served=0 pages=1024",
+        "[private-matrix] idle maximum subject=private-matrix-small pages=0 refused=1",
+        "[private-matrix:small] end incarnation=0 pages=0 refused=1 kind=exit",
+        "[private-matrix] reserve spawn subject=private-matrix-small incarnation=1 pages=0 refused=1",
+        f"[private-matrix] exhausted schedule=bulk subject=private-matrix-bulk incarnation=0 "
+        f"pages={3 * bulk} served=3 refused=16 final_delta=1",
+        f"[private-matrix] resident schedule=bulk pages={3 * bulk + 1024} "
+        f"bytes={(3 * bulk + 1024) * 4096} guaranteed=1024 bulk={3 * bulk} small=0",
+        f"[private-matrix:bulk] end incarnation=0 pages={3 * bulk} refused=16 kind=exit",
+        *matrix_walk_lines(5, "private-matrix-small", small, 4, exhausted),
+        f"[private-matrix] exhausted schedule=small subject=private-matrix-small incarnation=1 "
+        f"pages={4 * small} served=4 refused=9 final_delta=1",
+        f"[private-matrix] resident schedule=small pages={4 * small + 1024} "
+        f"bytes={(4 * small + 1024) * 4096} guaranteed=1024 bulk=0 small={4 * small}",
+        f"[private-matrix:small] end incarnation=1 pages={4 * small} refused=9 kind=exit",
+        *matrix_walk_lines(6, "private-matrix-bulk", bulk, 2, exhausted),
+        *matrix_walk_lines(7, "private-matrix-small", small, 1, exhausted),
+        f"[private-matrix] exhausted schedule=mixed subject=private-matrix-bulk incarnation=1 "
+        f"pages={2 * bulk} served=2 refused=16 final_delta=1",
+        f"[private-matrix] exhausted schedule=mixed subject=private-matrix-small incarnation=2 "
+        f"pages={small} served=1 refused=9 final_delta=1",
+        f"[private-matrix] resident schedule=mixed pages={2 * bulk + small + 1024} "
+        f"bytes={(2 * bulk + small + 1024) * 4096} guaranteed=1024 bulk={2 * bulk} small={small}",
+        census.format(8),
+        "SLIME_ALLOC preserved parent=1 slot=2 paddr=4096 bytes=4096",
+        f"[private-matrix] cycles begin count={gate.MATRIX_CYCLES} pages={gate.MATRIX_CYCLE_PAGES}",
+    ]
+    for cycle in range(gate.MATRIX_CYCLES):
+        victim, reuser = ("bulk", "small") if cycle % 2 == 0 else ("small", "bulk")
+        lines += [
+            census.format(9 + 2 * cycle),
+            f"[private-matrix] cycle={cycle} victim=private-matrix-{victim} incarnation={2 + cycle} "
+            f"end={'fault' if cycle % 4 < 2 else 'exit'} reuser=private-matrix-{reuser} "
+            f"incarnation={3 + cycle} pages={gate.MATRIX_CYCLE_PAGES} zeroed=1 peer_pages=1024",
+        ]
+    lines += [
+        "[private-matrix:guaranteed] end incarnation=0 pages=1024 refused=1 kind=exit",
+        f"[private-matrix] complete schedules=3 cycles={gate.MATRIX_CYCLES}",
+        census.format(9 + 2 * gate.MATRIX_CYCLES),
+        "SLIME_GRAPH HEALTHY generation=1 required=1 live=0 completed=1 failed=0",
+    ]
+    return lines
+
+
+def check_private_matrix_controls(gate) -> int:
+    """MEM-ADAPTIVE's inventory matrix: exhaustion, reuse and cross-row claims.
+
+    A still-fitting refusal, an exhaustion that was really a declaration, a
+    refusal with no named cost, a walk that skipped its halving, a holder whose
+    report disagrees with the root, census drift across a reuse cycle, reuse by
+    the dying holder itself, and every cross-row identity and growth claim must
+    each be refused.
+    """
+    reserve = gate.matrix_policy(gate.MATRIX_FIXTURES["qemu-arm-virt"])["reserve"]["bytes"]
+    lines = matrix_control_transcript(gate)
+    transcript = "\n".join(lines)
+    measured = gate.check_matrix_transcript(transcript, reserve, "control: ")
+    final = "delta=1 resource=ledger-pool required=0 available=0 ledger_pool=1936 inventory_bytes=15204192"
+    bulk = gate.MATRIX_BULK_UNIT
+    mutations = [
+        ("still-fitting refusal", transcript.replace(
+            final, final.replace("inventory_bytes=15204192", f"inventory_bytes={reserve + (1 << 20)}"), 1)),
+        ("invented fit under a counted resource", transcript.replace(
+            final, "delta=1 resource=ordinary-bytes required=4096 available=8192 ledger_pool=0 "
+            "inventory_bytes=15204192", 1)),
+        ("ledger refused a page it could fund", transcript.replace(
+            final, final.replace("ledger_pool=1936", "ledger_pool=8192"), 1)),
+        ("exhaustion was a declaration", transcript.replace(
+            final, final.replace("resource=ledger-pool", "resource=maximum"), 1)),
+        ("refusal with no named cost", "\n".join(
+            line for index, line in enumerate(lines)
+            if not (line.startswith("SLIME_MEM adaptive limit") and "delta=16384 " in line
+                    and "instance=private-matrix-bulk" in line and index < 40))),
+        ("walk skipped its halving", transcript.replace(
+            " delta=16384 pages=", " delta=8192 pages=", 1)),
+        ("grant disagrees with the extent", transcript.replace(
+            f"delta={bulk} previous={bulk} pages={2 * bulk}", f"delta={bulk} previous={bulk} pages={2 * bulk + 1}", 1)),
+        ("holder report disagrees with the root", transcript.replace(
+            f"pages={3 * bulk} served=3 refused=16", f"pages={3 * bulk + 1} served=3 refused=16", 1)),
+        ("resident total is not the holders' sum", transcript.replace(
+            f"resident schedule=bulk pages={3 * bulk + 1024}", f"resident schedule=bulk pages={3 * bulk + 1025}", 1)),
+        ("census drifted across a cycle", transcript.replace(
+            "SLIME_MEM census retired=19 free_slots=517340", "SLIME_MEM census retired=19 free_slots=517339", 1)),
+        ("the dying holder reused its own capacity", transcript.replace(
+            "victim=private-matrix-bulk incarnation=2 end=fault reuser=private-matrix-small",
+            "victim=private-matrix-bulk incarnation=2 end=fault reuser=private-matrix-bulk", 1)),
+        ("a cycle ended by the wrong path", transcript.replace(
+            "incarnation=2 end=fault", "incarnation=2 end=exit", 1)),
+        ("a cycle is missing", "\n".join(line for line in lines if not line.startswith("[private-matrix] cycle=7 "))),
+        ("a reuser was not zeroed", transcript.replace("pages=4095 zeroed=1", "pages=4095 zeroed=0", 1)),
+        ("explicit holder failure", transcript + "\n[private-matrix:small] FAIL a newly served word was not zero"),
+        ("explicit coordinator failure", transcript + "\n[private-matrix] FAIL injected"),
+        ("adopted backing counted twice", transcript.replace(
+            f"retired={9 + 2 * gate.MATRIX_CYCLES} free_slots=517340 untyped=5521312",
+            f"retired={9 + 2 * gate.MATRIX_CYCLES} free_slots=517340 untyped=5455776", 1).replace(
+            "active_extent_bytes=0 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=65536\n"
+            "SLIME_GRAPH",
+            "active_extent_bytes=65536 preserved_bytes=0 preserved_anchors=0 infrastructure_owned=131072\n"
+            "SLIME_GRAPH", 1)),
+    ]
+    for description, mutated in mutations:
+        if mutated == transcript:
+            fail(f"matrix control {description}: mutation did not change evidence")
+        require_rejection(description, "control: ",
+                          lambda mutated=mutated: gate.check_matrix_transcript(mutated, reserve, "control: "))
+
+    kernel = [{"start": "0x60000000", "end": "0x80000000", "bytes": 1 << 29}]
+    gate.check_matrix_inventory(transcript, kernel, "control: ")
+    require_rejection("device memory counted as ordinary", "control: ", lambda: gate.check_matrix_inventory(
+        transcript.replace("paddr=0x60000000 bytes=536870912", "paddr=0x08000000 bytes=536870912", 1),
+        kernel, "control: "))
+
+    rows = (1024, 2048, 4096)
+
+    def row(scale: int) -> dict:
+        grown = {name: {"resident": value["resident"] * scale, "walks": value["walks"]}
+                 for name, value in measured["schedules"].items()}
+        return {"ordinary": measured["ordinary"] * scale, "pool": measured["pool"] * scale,
+                "schedules": grown, "cycles": measured["cycles"]}
+
+    def identity(scale: int) -> dict:
+        record = {key: {"sha256": f"{key}-{scale}"} for key in ("kernel", "dtb", "loader", "image")}
+        return {**record, "root": {"sha256": "root"}, "abi": "abi"}
+
+    measurements = {size: row(size // 1024 * 4) for size in rows}
+    identities = {size: identity(size) for size in rows}
+    gate.check_matrix_rows(identities, measurements, rows, 2048)
+    row_mutations = [
+        ("rows share a kernel", {**identities, 4096: {**identities[4096], "kernel": identities[2048]["kernel"]}},
+         measurements, rows, 2048),
+        ("rows booted different roots", {**identities, 1024: {**identities[1024], "root": {"sha256": "other"}}},
+         measurements, rows, 2048),
+        ("rows disagree on the ABI", {**identities, 1024: {**identities[1024], "abi": "other"}},
+         measurements, rows, 2048),
+        ("residency did not grow", identities, {**measurements, 4096: measurements[2048]}, rows, 2048),
+        ("the largest row stayed under 1 GiB", identities, {size: row(1) for size in rows} | {
+            1024: row(1), 2048: {**row(1), "ordinary": row(1)["ordinary"] + 1, "pool": row(1)["pool"] + 1,
+                                 "schedules": {n: {"resident": v["resident"] + 1, "walks": v["walks"]}
+                                               for n, v in row(1)["schedules"].items()}},
+            4096: {**row(1), "ordinary": row(1)["ordinary"] + 2, "pool": row(1)["pool"] + 2,
+                   "schedules": {n: {"resident": v["resident"] + 2, "walks": v["walks"]}
+                                 for n, v in row(1)["schedules"].items()}}}, rows, 2048),
+        ("the pinned row is not bracketed", identities, measurements, rows, 4096),
+    ]
+    for description, ids, measured_rows, row_sizes, product in row_mutations:
+        require_rejection(description, "matrix: ", lambda ids=ids, measured_rows=measured_rows,
+                          row_sizes=row_sizes, product=product: gate.check_matrix_rows(
+                              ids, measured_rows, row_sizes, product))
+    gate.check_matrix_launcher_only(measurements[2048], measurements[2048])
+    require_rejection("a launcher-only boot changed the inventory", "matrix launcher-only: ",
+                      lambda: gate.check_matrix_launcher_only(measurements[4096], measurements[2048]))
+    return len(mutations) + 1 + len(row_mutations) + 1
+
+
+def check_private_adaptive_controls(gate) -> int:
+    """MEM-ADAPTIVE's arm: every adjudication, binding and outcome is checked.
+
+    Built from the composition's *own* declared policy rather than from numbers
+    invented here, so a control that drifted from the plane it guards fails
+    while building instead of passing against a fiction.
+    """
+    policy = gate.declared_policy(gate.ADAPTIVE_FIXTURES["qemu-arm-virt"])
+    lines = adaptive_control_transcript(gate, policy)
+    transcript = "\n".join(lines)
+    pool_maximum = policy["subjects"]["private-adaptive-pool-a"]["maximumPages"]
+    permitted = sum(entry["maximumPages"] for entry in policy["subjects"].values())
+    mutations = [
+        (
+            "admission reserved the sum of elastic maxima",
+            transcript.replace("guarantee_pages=6144", f"guarantee_pages={permitted}", 1),
+        ),
+        (
+            "the materialized reserve is below the declaration",
+            transcript.replace("reserved_slots=512", "reserved_slots=0", 1),
+        ),
+        (
+            "a task was constructed before the guarantees were reserved",
+            "\n".join([lines[1], lines[0]] + lines[2:]),
+        ),
+        (
+            "a subject's installed maximum differs from its declaration",
+            transcript.replace(
+                f"maximum={pool_maximum} mode=fixed installed={pool_maximum}",
+                f"maximum={pool_maximum} mode=fixed installed={pool_maximum - 1}",
+                1,
+            ),
+        ),
+        (
+            "a declaration-derived refusal was reported as exhaustion",
+            transcript.replace(
+                f"delta={pool_maximum - (ADAPTIVE_ROUNDS + 1) * ADAPTIVE_UNIT + 1} pages=",
+                f"delta={pool_maximum - (ADAPTIVE_ROUNDS + 1) * ADAPTIVE_UNIT + 1} pages=",
+                1,
+            ).replace("cause=maximum", "cause=resource", 1),
+        ),
+        (
+            "an inventory refusal was reported as a declaration",
+            transcript.replace("cause=resource", "cause=maximum", 1),
+        ),
+        (
+            "the root and the holder disagree on an outcome",
+            transcript.replace("[private-adaptive] step=0 subject=private-adaptive-pool-b "
+                               f"delta={ADAPTIVE_UNIT} served=1",
+                               "[private-adaptive] step=0 subject=private-adaptive-pool-b "
+                               f"delta={ADAPTIVE_UNIT} served=0", 1),
+        ),
+        (
+            "a served request's sources do not sum to its delta",
+            transcript.replace("guaranteed=0 elastic=257", "guaranteed=0 elastic=256", 1),
+        ),
+        (
+            "a refused request charged its entitlement",
+            transcript.replace(
+                "cause=resource entitlement_committed=2056",
+                "cause=resource entitlement_committed=4112",
+                1,
+            ),
+        ),
+        (
+            "a holder reported zeroing after a refusal",
+            transcript.replace("served=0 pages=1028 base=0x10000000 zeroed=0",
+                               "served=0 pages=1028 base=0x10000000 zeroed=1", 1),
+        ),
+        (
+            "a holder lost an earlier stamp",
+            transcript.replace("zeroed=1 stable=1", "zeroed=1 stable=0", 1),
+        ),
+        (
+            "a replacement bound a different entitlement",
+            transcript.replace(
+                f"instance=private-adaptive-restart "
+                f"entitlement={gate.entitlement_identity('adaptive-restart')} incarnation=1",
+                "instance=private-adaptive-restart "
+                f"entitlement={gate.entitlement_identity('adaptive-pool')} incarnation=1",
+                1,
+            ),
+        ),
+        (
+            "a dead incarnation's charge outlived it",
+            transcript.replace("returned_pages=2048 entitlement_committed=0",
+                               "returned_pages=2048 entitlement_committed=2048", 1),
+        ),
+        (
+            "reclamation quarantined the returned backing",
+            transcript.replace("quarantined=0", "quarantined=1", 1),
+        ),
+        (
+            "a replacement multiplied its entitlement",
+            transcript.replace(
+                "guaranteed=2048 elastic=0 entitlement_committed=2048",
+                "guaranteed=2048 elastic=0 entitlement_committed=4096",
+            ).replace("entitlement_committed=2048 pool_bytes", "entitlement_committed=4096 pool_bytes"),
+        ),
+    ]
+    mutations = [entry for entry in mutations if entry[1] != transcript]
+    count = check_adaptive_control_mutations(
+        lambda text: gate.check_adaptive_plane(text, policy),
+        "adaptive plane:",
+        lines,
+        mutations,
+    )
+
+    # Determinism is a two-boot claim, so its control is a second transcript
+    # rather than a mutated single one.
+    steps = gate.check_adaptive_plane(transcript, policy)
+    gate.check_adaptive_determinism(transcript, transcript, steps)
+    for description, replay in (
+        (
+            "two boots answered one step differently",
+            transcript.replace("step=17 subject=private-adaptive-guaranteed "
+                               f"delta={ADAPTIVE_UNIT} served=1",
+                               "step=17 subject=private-adaptive-guaranteed "
+                               f"delta={ADAPTIVE_UNIT} served=0", 1),
+        ),
+        (
+            "two boots reported different schedule digests",
+            transcript.replace("digest=0x1234567890abcdef", "digest=0xfedcba0987654321"),
+        ),
+        (
+            "a window base moved between boots",
+            transcript.replace("step=0 subject=private-adaptive-pool-b delta=257 served=1 "
+                               "pages=257 base=0x10000000",
+                               "step=0 subject=private-adaptive-pool-b delta=257 served=1 "
+                               "pages=257 base=0x20000000", 1),
+        ),
+    ):
+        require_rejection(
+            description,
+            "adaptive plane:",
+            lambda replay=replay: gate.check_adaptive_determinism(transcript, replay, steps),
+        )
+        count += 1
+
+    # The over-guaranteed negative composition, whose whole claim is that
+    # nothing was published. Its terminal is a failure marker, so it cannot
+    # share a synthetic transcript with the arm above.
+    refusal = (
+        "SLIME_MEM FAIL adaptive guarantee exceeds inventory required=1048576 "
+        "available=520192 published=0"
+    )
+    gate.check_adaptive_refusal(refusal)
+    for description, mutated in (
+        ("the refusal was never reported", "SLIME_ROOT boot\n"),
+        (
+            "a refused admission still staged a task",
+            refusal + "\nSLIME_GRAPH staged task=1 instance=init",
+        ),
+        (
+            "a refused admission still reserved a policy",
+            "SLIME_MEM policy entitlements=3 subjects=4 guarantee_pages=1 reserved_bytes=1 "
+            "reserved_slots=1 reserved_descriptors=1 reserved_extents=1 reserved_tables=1 "
+            "pool_bytes=1\n" + refusal,
+        ),
+        (
+            "a refused admission still reached a healthy graph",
+            refusal + "\nSLIME_GRAPH HEALTHY generation=1 required=1 live=1 completed=0 failed=0",
+        ),
+        (
+            "admission refused a guarantee its inventory could fund",
+            refusal.replace("available=520192", "available=2097152"),
+        ),
+    ):
+        require_rejection(
+            description,
+            "adaptive refusal:",
+            lambda mutated=mutated: gate.check_adaptive_refusal(mutated),
+        )
+        count += 1
+    return (
+        count
+        + check_adaptive_quarantine_controls(gate)
+        + check_adaptive_construction_controls(gate)
+    )
+
+
+def check_adaptive_construction_controls(gate) -> int:
+    """A failed construction may neither leak its incarnation nor double it."""
+    holder = "private-adaptive-io-holder"
+    identity = "27f32bfd1f46f2fc"
+
+    def bound(task: int, incarnation: int) -> str:
+        return (
+            f"SLIME_MEM entitlement task={task} instance={holder} entitlement={identity} "
+            f"incarnation={incarnation} guarantee=0 maximum=32768 mode=fixed "
+            "installed=32768 base=0x400000"
+        )
+
+    injected = f"SLIME_MEM adaptive injected kind=construction task=4 instance={holder}"
+    quarantined = (
+        f"SLIME_MEM adaptive retired task=4 instance={holder} entitlement={identity} "
+        "returned_pages=0 entitlement_committed=0 quarantined=1"
+    )
+    unwound = (
+        f"SLIME_MEM adaptive retired task=4 instance={holder} entitlement={identity} "
+        "returned_pages=0 entitlement_committed=0 quarantined=0"
+    )
+    retrying = "[private-adaptive:io-supervisor] spawn refused, retrying"
+    lines = [bound(4, 0), injected, quarantined, retrying, unwound, bound(5, 1)]
+    baseline = "\n".join(lines)
+    gate.check_adaptive_construction_failure(baseline)
+    count = 0
+    for description, mutated in (
+        ("no failure was injected", baseline.replace(injected + "\n", "")),
+        ("the failed incarnation was never released", baseline.replace(unwound + "\n", "")),
+        (
+            "the failed incarnation was released while quarantined",
+            baseline.replace("returned_pages=0 entitlement_committed=0 quarantined=0", "returned_pages=0 entitlement_committed=0 quarantined=1"),
+        ),
+        ("the unwind's failed revoke was never quarantined", baseline.replace(quarantined + "\n", "")),
+        (
+            "the incarnation was released before its quarantine",
+            "\n".join([bound(4, 0), injected, unwound, quarantined, retrying, bound(5, 1)]),
+        ),
+        ("the retry was never bound", baseline.replace("\n" + bound(5, 1), "")),
+        ("the retry reused the failed task", baseline.replace(bound(5, 1), bound(4, 1))),
+        ("the retry did not advance the incarnation", baseline.replace(bound(5, 1), bound(5, 0))),
+        (
+            "the retry bound before the failure was released",
+            "\n".join([bound(4, 0), injected, quarantined, retrying, bound(5, 1), unwound]),
+        ),
+        ("the spawner never saw the refusal", baseline.replace(retrying + "\n", "")),
+    ):
+        require_rejection(
+            description,
+            "adaptive lifecycle:",
+            lambda mutated=mutated: gate.check_adaptive_construction_failure(mutated),
+        )
+        count += 1
+    return count
+
+
+def check_adaptive_quarantine_controls(gate) -> int:
+    """The injected revoke failure's own controls.
+
+    Its claim is narrow and entirely about what a failed cleanup may not do,
+    so every mutation below is a way of refunding capacity the machine never
+    recovered, or of never proving that it was recovered later.
+    """
+    injected = "SLIME_MEM adaptive injected kind=revoke task=4 instance=private-adaptive-io-holder"
+    quarantined = (
+        "SLIME_MEM adaptive retired task=4 instance=private-adaptive-io-holder "
+        "entitlement=27f32bfd1f46f2fc returned_pages=0 entitlement_committed=1 quarantined=1"
+    )
+    settled = (
+        "SLIME_MEM adaptive retired task=4 instance=private-adaptive-io-holder "
+        "entitlement=27f32bfd1f46f2fc returned_pages=1 entitlement_committed=0 quarantined=0"
+    )
+    complete = (
+        "[private-adaptive] complete steps=18 served=15 refused=3 restarts=1 "
+        "duplicates=1 denied=1 exits=5 digest=0x1234567890abcdef"
+    )
+    baseline = "\n".join([injected, quarantined, settled, complete])
+    gate.check_adaptive_quarantine(baseline)
+    count = 0
+    for description, mutated in (
+        ("no failure was injected", baseline.replace(injected + "\n", "")),
+        (
+            "a failed revoke refunded pages",
+            baseline.replace("returned_pages=0 entitlement_committed=1 quarantined=1", "returned_pages=1 entitlement_committed=0 quarantined=1"),
+        ),
+        ("the quarantine was never retried", baseline.replace("\n" + settled, "")),
+        (
+            "the retry returned nothing",
+            baseline.replace("returned_pages=1 entitlement_committed=0 quarantined=0", "returned_pages=0 entitlement_committed=0 quarantined=0"),
+        ),
+        (
+            "a second quarantine was reported as settled",
+            baseline.replace(complete, quarantined.replace("task=4", "task=4") + "\n" + complete),
+        ),
+        ("the plane never completed", baseline.replace("\n" + complete, "")),
+    ):
+        require_rejection(
+            description,
+            "adaptive lifecycle:",
+            lambda mutated=mutated: gate.check_adaptive_quarantine(mutated),
+        )
+        count += 1
+    return count
+
+
 def check_private_memory_capacity_controls() -> int:
     gate = load_script(
         "sel4_private_memory_semantic_controls", "check/check-sel4-private-memory-plane.py"
@@ -1751,6 +2486,8 @@ def check_private_memory_capacity_controls() -> int:
         + check_private_fragmentation_controls(gate)
         + check_private_rollback_controls(gate)
         + check_private_conservation_controls(gate)
+        + check_private_adaptive_controls(gate)
+        + check_private_matrix_controls(gate)
         + len(fault_mutations)
         + len(ledger_mutations)
         + len(conservation_mutations)
@@ -1776,7 +2513,7 @@ def main() -> None:
         identity_controls = check_image_identity_controls(control_root)
         runtime_controls = check_plane_runtime_controls(control_root)
     print(
-        f"seL4 gate control check: {len(GATES) + 1} gates plus 7 adaptive arms reject "
+        f"seL4 gate control check: {len(GATES) + 1} gates plus 9 adaptive arms reject "
         f"{total} mutated transcripts and layouts; "
         f"{identity_controls} identity cases and {runtime_controls} runtime cases passed"
     )
