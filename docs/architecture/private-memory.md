@@ -304,7 +304,10 @@ A pool-relative maximum is the pool admitted at boot, fixed for the root's
 lifetime. A subject bound while a peer holds most of that pool still receives
 a window of the whole pool, so capacity the peer later returns stays reachable;
 sizing the window from what happened to be free at bind time would strand a
-late holder forever. Admission subtracts each guarantee from the pool exactly
+late holder forever. One window reserves at most 4096 spans of 2 MiB (8 GiB),
+the spans one leaf-span record tracks: a pool-relative maximum is clamped to
+that limit, and admission refuses a fixed maximum above it before anything is
+published. Admission subtracts each guarantee from the pool exactly
 once: the allocator reserves its backing first, and the ledger is admitted
 against that residual with the reserved envelopes restored, so its own
 subtraction is the only one.

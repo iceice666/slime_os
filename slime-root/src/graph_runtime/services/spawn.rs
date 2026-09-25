@@ -330,6 +330,7 @@ pub(super) fn preflight_spawn_grants(
 /// first spawn grant.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construct_child(
+    retirements: &mut supervision::Retirements,
     generation: &Generation<'_>,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
@@ -481,7 +482,16 @@ pub(super) fn construct_child(
         match policy.bind(instance.name) {
             Some(binding) if tasks.bind_private_memory(id, binding).is_ok() => {}
             _ => {
-                release_child(generation, tasks, windows, buffers, allocator, None, id);
+                release_child(
+                    retirements,
+                    generation,
+                    tasks,
+                    windows,
+                    buffers,
+                    allocator,
+                    None,
+                    id,
+                );
                 return Err(IpcError::BadCapability);
             }
         }
@@ -516,7 +526,11 @@ pub(super) fn construct_child(
                 id.0,
                 instance.name,
             );
+            // The unwind's own revoke fails too, so the unpublished task must
+            // reach the retirement retry before its subject can spawn again.
+            crate::object_allocator::elastic::arm_arena_revoke_failure();
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -530,6 +544,7 @@ pub(super) fn construct_child(
     }
     let Some(task) = tasks.get(id) else {
         release_child(
+            retirements,
             generation,
             tasks,
             windows,
@@ -558,6 +573,7 @@ pub(super) fn construct_child(
             .is_err()
         {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -576,6 +592,7 @@ pub(super) fn construct_child(
         .is_err()
     {
         release_child(
+            retirements,
             generation,
             tasks,
             windows,
@@ -619,6 +636,7 @@ pub(super) fn construct_child(
             .is_err()
         {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -636,6 +654,7 @@ pub(super) fn construct_child(
     // these from the count the parent must satisfy.
     let Ok(child) = generation.instance(plan.instance) else {
         release_child(
+            retirements,
             generation,
             tasks,
             windows,
@@ -649,6 +668,7 @@ pub(super) fn construct_child(
     for index in 0..child.binding_count() {
         let Ok(binding) = generation.binding(child, index) else {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -661,6 +681,7 @@ pub(super) fn construct_child(
         };
         let Ok(grant) = generation.grant(binding.grant) else {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -687,6 +708,7 @@ pub(super) fn construct_child(
             .is_err()
         {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -719,6 +741,7 @@ pub(super) fn construct_child(
 /// task identity becomes unreachable, and the task's object span is revoked
 /// last.
 pub(super) fn release_child(
+    retirements: &mut supervision::Retirements,
     generation: &Generation<'_>,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
@@ -740,6 +763,11 @@ pub(super) fn release_child(
         .and_then(|index| generation.instance(index).ok())
         .map_or("", |instance| instance.name);
     let reclaimed = tasks.reclaim(allocator, id);
+    // A revoke that did not complete leaves the task owned and its
+    // incarnation quarantined; the exit and fault paths' retry settles it.
+    if reclaimed.is_err() && !retirements.insert(id) {
+        return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+    }
     if let (Some(policy), Some(binding)) = (adaptive, binding.as_ref()) {
         policy.retire(
             allocator,
@@ -787,6 +815,7 @@ pub(super) fn spawner_budget(
 /// supervision handle.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn serve_spawn(
+    retirements: &mut supervision::Retirements,
     generation: &Generation<'_>,
     launched: &mut LaunchedInstances,
     tasks: &mut TaskTable<MAX_TASKS>,
@@ -946,6 +975,7 @@ pub(super) fn serve_spawn(
     );
 
     let child = match construct_child(
+        retirements,
         generation,
         tasks,
         windows,
@@ -971,6 +1001,7 @@ pub(super) fn serve_spawn(
         Some(task) => (task.cleanup.arena, task.cnode, task.cnode_size_bits),
         None => {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -994,6 +1025,7 @@ pub(super) fn serve_spawn(
         Ok(installed) => installed,
         Err(error) => {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1021,6 +1053,7 @@ pub(super) fn serve_spawn(
         Ok(installed) => installed,
         Err(error) => {
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1072,6 +1105,7 @@ pub(super) fn serve_spawn(
         Err(error) => {
             clock_service.clear_task(child);
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1114,6 +1148,7 @@ pub(super) fn serve_spawn(
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1153,6 +1188,7 @@ pub(super) fn serve_spawn(
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1189,6 +1225,7 @@ pub(super) fn serve_spawn(
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1294,6 +1331,7 @@ pub(super) fn serve_spawn(
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(
+            retirements,
             generation,
             tasks,
             windows,
@@ -1322,6 +1360,7 @@ pub(super) fn serve_spawn(
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(
+            retirements,
             generation,
             tasks,
             windows,
@@ -1360,6 +1399,7 @@ pub(super) fn serve_spawn(
             wait_set_service.clear_task(child);
             clock_service.clear_task(child);
             release_child(
+                retirements,
                 generation,
                 tasks,
                 windows,
@@ -1395,7 +1435,14 @@ pub(super) fn serve_spawn(
         wait_set_service.clear_task(child);
         clock_service.clear_task(child);
         release_child(
-            generation, tasks, windows, buffers, allocator, adaptive, child,
+            retirements,
+            generation,
+            tasks,
+            windows,
+            buffers,
+            allocator,
+            adaptive,
+            child,
         );
         return Response::error(IpcError::BadCapability);
     }

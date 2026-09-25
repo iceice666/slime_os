@@ -784,12 +784,12 @@ pub(super) fn reclaim_task_objects(
         .and_then(|index| generation.instance(index).ok())
         .map_or("", |instance| instance.name);
     let held_pages = tasks.get(id).map_or(0, |task| task.private_memory.pages());
-    // One injected revoke failure for the first adaptive holder that dies, so
-    // the quarantine-and-retry path is observed on a real task rather than
-    // modelled: a reclamation that did not recover the machine's memory must
-    // refund nothing, and exactly one retry must return it.
+    // One injected revoke failure for the first published adaptive holder that
+    // dies, so the quarantine-and-retry path is observed on a real task rather
+    // than modelled: a reclamation that did not recover the machine's memory
+    // must refund nothing, and exactly one retry must return it.
     #[cfg(slime_private_conservation)]
-    if binding.is_some() {
+    if binding.is_some() && launched.instance_for_task(id).is_some() {
         use core::sync::atomic::{AtomicBool, Ordering};
         static ARMED: AtomicBool = AtomicBool::new(true);
         if ARMED.swap(false, Ordering::Relaxed) {

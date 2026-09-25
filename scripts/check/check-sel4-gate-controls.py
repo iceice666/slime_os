@@ -2120,12 +2120,16 @@ def check_adaptive_construction_controls(gate) -> int:
         )
 
     injected = f"SLIME_MEM adaptive injected kind=construction task=4 instance={holder}"
+    quarantined = (
+        f"SLIME_MEM adaptive retired task=4 instance={holder} entitlement={identity} "
+        "returned_pages=0 entitlement_committed=0 quarantined=1"
+    )
     unwound = (
         f"SLIME_MEM adaptive retired task=4 instance={holder} entitlement={identity} "
         "returned_pages=0 entitlement_committed=0 quarantined=0"
     )
     retrying = "[private-adaptive:io-supervisor] spawn refused, retrying"
-    lines = [bound(4, 0), injected, unwound, retrying, bound(5, 1)]
+    lines = [bound(4, 0), injected, quarantined, retrying, unwound, bound(5, 1)]
     baseline = "\n".join(lines)
     gate.check_adaptive_construction_failure(baseline)
     count = 0
@@ -2136,12 +2140,17 @@ def check_adaptive_construction_controls(gate) -> int:
             "the failed incarnation was released while quarantined",
             baseline.replace("returned_pages=0 entitlement_committed=0 quarantined=0", "returned_pages=0 entitlement_committed=0 quarantined=1"),
         ),
+        ("the unwind's failed revoke was never quarantined", baseline.replace(quarantined + "\n", "")),
+        (
+            "the incarnation was released before its quarantine",
+            "\n".join([bound(4, 0), injected, unwound, quarantined, retrying, bound(5, 1)]),
+        ),
         ("the retry was never bound", baseline.replace("\n" + bound(5, 1), "")),
         ("the retry reused the failed task", baseline.replace(bound(5, 1), bound(4, 1))),
         ("the retry did not advance the incarnation", baseline.replace(bound(5, 1), bound(5, 0))),
         (
             "the retry bound before the failure was released",
-            "\n".join([bound(4, 0), injected, bound(5, 1), unwound, retrying]),
+            "\n".join([bound(4, 0), injected, quarantined, retrying, bound(5, 1), unwound]),
         ),
         ("the spawner never saw the refusal", baseline.replace(retrying + "\n", "")),
     ):

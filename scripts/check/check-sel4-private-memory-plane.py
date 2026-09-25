@@ -3598,13 +3598,23 @@ def check_adaptive_construction_failure(transcript: str) -> None:
         fail(prefix + "no construction failure was injected, so nothing was proven")
     task, instance = injected.groups()
     after = transcript[injected.end():]
+    # The unwind's own revoke is injected to fail as well: the unpublished task
+    # is quarantined, and only the retirement retry may release it.
+    quarantined = re.search(
+        rf"^SLIME_MEM adaptive retired task={task} instance={re.escape(instance)} "
+        r"entitlement=(\S+) returned_pages=0 entitlement_committed=\d+ quarantined=1$",
+        after,
+        re.MULTILINE,
+    )
+    if quarantined is None:
+        fail(prefix + "the unwind's failed revoke did not quarantine its incarnation")
     unwound = re.search(
         rf"^SLIME_MEM adaptive retired task={task} instance={re.escape(instance)} "
         r"entitlement=(\S+) returned_pages=0 entitlement_committed=\d+ quarantined=0$",
         after,
         re.MULTILINE,
     )
-    if unwound is None:
+    if unwound is None or unwound.start() < quarantined.end():
         fail(prefix + "the failed construction did not return its bound incarnation")
     bindings = [
         match

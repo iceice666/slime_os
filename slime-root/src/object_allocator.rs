@@ -13,9 +13,9 @@ mod global_backing;
 pub mod guarantee_vault;
 mod infrastructure;
 mod leaf_spans;
-pub(crate) use leaf_spans::LeafSpanBits;
 #[cfg(test)]
 pub(crate) use leaf_spans::host::{bits as host_leaf_spans, release as host_release_leaf_spans};
+pub(crate) use leaf_spans::{LeafSpanBits, MAX_WINDOW_SPANS};
 mod extent_buddy;
 mod mapping_tables;
 mod preserved;
