@@ -2,6 +2,9 @@
 --
 -- Execution-only inputs live here so a marker oracle, timeout, disk image, or
 -- injected runtime device event cannot alter the image closure it exercises.
+-- Frozen declarations may leave path and identity both empty until the owning
+-- checker binds a fixture. A partially bound pair is invalid; executable input
+-- admission requires both fields and a valid content digest.
 Fixture :: type {
   name : Text;
   path : Text;
@@ -9,6 +12,8 @@ Fixture :: type {
   writable : Bool;
 };
 
+-- A declaration may name only the fault kind, leaving target and value both
+-- empty. Executable input admission requires both fields to be bound.
 FaultControl :: type {
   kind : Text;
   target : Text;
@@ -18,6 +23,8 @@ FaultControl :: type {
 SystemTestRun :: type {
   formatVersion : Int;
   name : Text;
+  -- Empty only for a declaration whose checker is explicitly closure-exempt;
+  -- it is not an executable image identity.
   imageClosureIdentity : Text;
   executionKind : Text;
   executionProfile : Text;

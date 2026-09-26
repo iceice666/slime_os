@@ -103,9 +103,26 @@ execution profile, disks, networks, devices, runtime fault controls, timeout,
 marker contract, and forbidden outcomes for one image closure. Changing an
 oracle or timeout must not change executable identity.
 
-A build closure proves reproducibility of bytes. A test-run contract and its gate
-prove behavior of those bytes. Neither substitutes for the other, and a QEMU run
-cannot establish a physical-board observation.
+The committed records are frozen checker declarations, not independent execution
+requests. `compile_test_run_declaration` accepts paired empty fixture path/identity
+or fault target/value fields as unbound declarations. Empty image identity is
+allowed only where the owning gate confirms an explicit closure exemption.
+`compile_test_run` remains the strict boundary used by SDK consumers: it refuses
+all such placeholders. A populated digest is a declaration of expected content,
+not proof that a fixture exists or matches it; the executing checker owns that
+verification. No declaration alone proves that a test ran.
+
+After an intended image-closure change, update only its test-run references with
+`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.
+This checks the entire batch before writing and refuses any execution-field
+drift. Review genuine checker-input changes separately before using
+`just system_test_run_bless`, then run `just system_test_run_check` and
+`just system_image_closure_check`. The fixed private-memory records do not inherit
+the adaptive-only transport from the same checker module.
+
+A build closure proves reproducibility of bytes. An observed test execution
+proves behavior within its tested scope. Neither substitutes for the other, and
+a QEMU run cannot establish a physical-board observation.
 
 ## Qualification limits
 

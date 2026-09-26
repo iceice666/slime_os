@@ -95,6 +95,14 @@ system_image_builder_check: system_composition_closure_check
 system_test_run_check:
     python3 scripts/check/check-system-test-run.py
 
+# One execution identity covers the declaration/closure boundary and its quality gates.
+[group('contracts')]
+system_test_run_baseline_check: system_image_closure_check system_test_run_check
+    just tasks_check
+    just docs_check
+    just ruff
+    just typos
+
 [group('contracts')]
 system_test_run_bless:
     python3 scripts/generate/generate-system-test-runs.py --bless

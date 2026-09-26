@@ -39,6 +39,11 @@ import subprocess
 
 from harness import ROOT
 from zutai_cli import STDLIB, binary
+from system_image_closure import (
+    SystemImageClosureError,
+    compile_test_run,
+    compile_test_run_declaration,
+)
 
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
 CONTRACT = ROOT / "contracts" / "system-test-run" / "v1"
@@ -247,6 +252,11 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
                 )
             exempt += 1
 
+        try:
+            compile_test_run_declaration(path)
+        except SystemImageClosureError as error:
+            fail(f"{name}: invalid frozen declaration: {error}")
+
     return resolved, exempt, faults
 
 
@@ -335,11 +345,117 @@ def _check_scratch(scratch: _Path, vocabulary: dict[str, set[str]]) -> None:
         RUN_ROOT = saved
 
 
+def check_declaration_controls() -> int:
+    """Placeholders are declarations only; refresh cannot bless execution drift."""
+    import copy
+    import tempfile
+
+    template = json.loads(path_json(RUN_ROOT / "sel4-channel.zti"))
+    # Use the existing generator's inert-data renderer, without its placeholder synthesis.
+    renderer = load(ROOT / "scripts/generate/generate-generation-from-spec.py").zti
+    fixture = {"name": "disk-0", "path": "", "identity": "", "writable": True}
+    fault = {"kind": "delay", "target": "", "value": ""}
+    refused = 0
+    with tempfile.TemporaryDirectory(prefix="slime-run-declaration-") as directory:
+        root = _Path(directory)
+        path = root / "sel4-channel.zti"
+
+        def write(value: dict) -> None:
+            path.write_text(renderer(value) + "\n", encoding="utf-8")
+
+        for patch in (
+            {"disks": [fixture]}, {"faultControls": [fault]}, {"imageClosureIdentity": ""},
+        ):
+            value = template | patch
+            write(value)
+            compile_test_run_declaration(path)
+            try:
+                compile_test_run(path)
+            except SystemImageClosureError:
+                refused += 1
+            else:
+                fail("unbound declaration admitted as executable test-run input")
+
+        for patch in (
+            {"disks": [fixture | {"path": "disk.raw"}]},
+            {"disks": [fixture | {"identity": "a" * 64}]},
+            {"disks": [fixture | {"path": "disk.raw", "identity": "invalid"}]},
+            {"faultControls": [fault | {"target": "peer"}]},
+            {"faultControls": [fault | {"value": "1"}]},
+            {"disks": [fixture, fixture]},
+            {"imageClosureIdentity": "invalid"},
+        ):
+            write(template | patch)
+            try:
+                compile_test_run_declaration(path)
+            except SystemImageClosureError:
+                refused += 1
+            else:
+                fail("malformed or partially bound declaration accepted")
+
+        bound = template | {
+            "disks": [fixture | {"path": "disk.raw", "identity": "a" * 64}],
+            "faultControls": [fault | {"target": "peer", "value": "1"}],
+        }
+        write(bound)
+        if compile_test_run(path).identity != compile_test_run_declaration(path).identity:
+            fail("bound declaration and strict input have different content identities")
+
+        original = renderer(template) + "\n"
+        expected = renderer(template | {"imageClosureIdentity": "a" * 64}) + "\n"
+        path.write_text(original, encoding="utf-8")
+        other = root / "other.zti"
+        other.write_text(original, encoding="utf-8")
+        changed = copy.deepcopy(template)
+        changed["timeoutSeconds"] += 1
+        try:
+            GENERATOR_MODULE.refresh_identities({path: expected, other: renderer(changed) + "\n"})
+        except SystemExit as error:
+            if "execution declaration drift" not in str(error):
+                raise
+            refused += 1
+        else:
+            fail("identity refresh accepted execution drift")
+        if path.read_text() != original or other.read_text() != original:
+            fail("identity refresh wrote part of a refused batch")
+        GENERATOR_MODULE.refresh_identities({path: expected})
+        GENERATOR_MODULE.refresh_identities({path: expected})
+        if path.read_text() != expected:
+            fail("identity refresh changed execution fields or was not idempotent")
+        checker = root / "check-sel4-private-memory-plane.py"
+        checker.write_text('TIMEOUT = 240\n', encoding="utf-8")
+        try:
+            GENERATOR_MODULE.extract(checker)
+        except SystemExit as error:
+            if "adaptive-only transport declaration" not in str(error):
+                raise
+            refused += 1
+        else:
+            fail("missing adaptive-only transport boundary was accepted")
+        checker.write_text('TIMEOUT = 240\nADAPTIVE_DEVICE_ARGUMENTS = ()\n')
+        base = GENERATOR_MODULE.extract(checker)
+        checker.write_text(
+            'TIMEOUT = 240\nADAPTIVE_DEVICE_ARGUMENTS: tuple[str, ...] = (\n'
+            '    "-drive", "if=none,file=/dev/zero",\n'
+            '    "-device", "virtio-blk-device,drive=d0",\n)\n',
+            encoding="utf-8",
+        )
+        if GENERATOR_MODULE.extract(checker) != base:
+            fail("adaptive-only transport changed fixed-memory declarations")
+        checker.write_text(checker.read_text().replace(': tuple[str, ...]', ''))
+        if GENERATOR_MODULE.extract(checker) != base:
+            fail("unannotated adaptive-only transport changed fixed-memory declarations")
+        checker.write_text(checker.read_text() + 'FIXED_ARGS = ("-drive",)\n')
+        if GENERATOR_MODULE.extract(checker)["drives"] != 1:
+            fail("fixed-memory transport was hidden with the adaptive-only arguments")
+    return refused
+
+
 vocabulary = contract_vocabulary()
 record_count = check_records_and_planes_correspond()
 resolved, exempt, fault_count = check_records(vocabulary)
 check_records_match_their_checkers()
-control_count = check_controls(vocabulary)
+control_count = check_controls(vocabulary) + check_declaration_controls()
 
 print(
     f"system test run check: {record_count} record(s) correspond one-to-one with the plane "
