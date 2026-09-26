@@ -21,7 +21,7 @@
 let
   # One Git fetch backs every Zutai crate devloop locks at its pinned revision,
   # so they share this digest. Nix reports the expected value on a mismatch.
-  zutaiSource = "sha256-LYZv/c2i8cePZ/CYWeRTNn7dO6yw5Y0MDFM3Jrzq3xo=";
+  zutaiSource = "sha256-Q4nWyu6TDqbi0sRkp8sczC1dn2iCbb1I+0Nm0BJolsM=";
   bridge = rustPlatform.buildRustPackage {
     pname = "devloop-zutai";
     inherit version src;

@@ -33,7 +33,7 @@
     # evidence contracts; Slime OS only configures it. It publishes no flake,
     # so `nix/devloop.nix` builds the pinned release's two programs.
     devloop = {
-      url = "github:mozufu/devloop/c78fcf345de424469196297d2be7b479fbb31a71";
+      url = "github:mozufu/devloop/f15302c27a7225ff247b27706307f4744d1a20ba";
       flake = false;
     };
     # The Zutai revision `deps/zutai` is pinned to, packaged for the work-item
@@ -41,7 +41,7 @@
     # revision equal to the submodule's; `scripts/lib/devloop.py` refuses a
     # toolchain devloop was not released against.
     zutai = {
-      url = "github:iceice666/zutai/9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
+      url = "github:iceice666/zutai/b667e3c5018e69a3f8e39948a73a6c57c514de6e";
       flake = false;
     };
     # The projection consumer. Slime OS runs it itself rather than through
@@ -94,7 +94,7 @@
           # validate without building it from source.
           zutaiTools = pkgs.callPackage ./nix/zutai.nix {
             src = zutai;
-            revision = "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a";
+            revision = "b667e3c5018e69a3f8e39948a73a6c57c514de6e";
           };
           # Workspace host crates use this toolchain. The seL4 root, child,
           # and loader use the independent pin in `sel4/pins.toml`.
