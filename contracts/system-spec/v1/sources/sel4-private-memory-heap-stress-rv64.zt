@@ -1,9 +1,0 @@
-helpers ::= import "../helpers.zt";
-base ::= import "../systems/sel4-private-memory-heap-stress.zti";
-identity ::= helpers.architectureVariant "sel4-private-memory-heap-stress-rv64" 61 "riscv64-sel4-qemu-virt";
-
-base with {
-  name = identity.name;
-  generation = identity.generation;
-  targetRequirement = identity.targetRequirement;
-}
