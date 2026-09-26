@@ -29,6 +29,8 @@ from harness import ROOT
 from system_spec import (
     DERIVED_GENERATION_FIXTURES as DERIVED_FIXTURES,
     compile_system,
+    compile_rendered_system,
+    computed_system_outputs,
     derive_manifest,
     derived_manifest_path,
     prefetch_systems,
@@ -61,7 +63,7 @@ def zti(value: object, indent: int = 0) -> str:
 def render() -> dict[Path, str]:
     catalogue = interface_catalogue()
     components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
-    outputs: dict[Path, str] = {}
+    outputs: dict[Path, str] = computed_system_outputs()
     paths = system_paths()
     prefetch_systems(paths)
     for path in paths:
@@ -71,7 +73,8 @@ def render() -> dict[Path, str]:
                 f"{path.name} derives no declared fixture; add it to "
                 "check-system-spec.py's DERIVED_FIXTURES"
             )
-        system = compile_system(path, components=components)
+        system = (compile_rendered_system(path.stem, outputs[path], components=components)
+                  if path in outputs else compile_system(path, components=components))
         outputs[derived_manifest_path(fixture)] = zti(derive_manifest(system)) + "\n"
     return outputs
 
@@ -99,11 +102,11 @@ def main() -> None:
         stale = [
             path
             for path, contents in outputs.items()
-            if not path.is_file() or path.read_text(encoding="utf-8") != contents
+            if not path.is_file() or path.read_bytes() != contents.encode("utf-8")
         ]
         if stale:
             raise SystemExit(
-                "stale derived generation fixture(s): "
+                "stale derived system/generation fixture(s): "
                 + ", ".join(str(path.relative_to(ROOT)) for path in stale)
                 + "; run python3 scripts/generate/generate-generation-from-spec.py"
             )

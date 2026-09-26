@@ -25,6 +25,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 import copy
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -35,6 +36,11 @@ from component_spec import admit_specs, interface_catalogue
 from harness import ROOT, load_script
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
+    COMPUTED_SYSTEM_SOURCES,
+    check_computed_systems,
+    computed_system_outputs,
+    render_computed_system,
+    validate_source_mapping,
     SystemSpecError,
     compile_system,
     derive_manifest,
@@ -555,9 +561,120 @@ def first_difference(left: object, right: object, label: str) -> str:
     return f"{label}: {left!r} != {right!r}"
 
 
+def computed_source_controls(components: dict[str, dict]) -> int:
+    """Mutation controls exercise authoring admission independently of output drift."""
+    refused = 0
+    name = "sel4-call"
+    with tempfile.TemporaryDirectory(prefix="slime-system-source-") as directory:
+        contracts = Path(directory) / "contracts"
+        shutil.copytree(ROOT / "contracts", contracts)
+        root = contracts / "system-spec" / "v1"
+        source = root / COMPUTED_SYSTEM_SOURCES[name]
+        original = source.read_text()
+        output = root / "systems" / f"{name}.zti"
+        output_bytes = output.read_bytes()
+
+        def reject(label: str, operation, reason: str = "") -> None:
+            nonlocal refused
+            try:
+                operation()
+            except SystemSpecError as error:
+                if name not in str(error) or reason not in str(error):
+                    fail(f"computed source {label}: diagnostic does not name {name}: {error}")
+                refused += 1
+            else:
+                fail(f"computed source {label}: was accepted")
+
+        output.write_bytes(output_bytes + b"\n")
+        reject("derived output drift", lambda: check_computed_systems(components=components, root=root))
+        output.write_bytes(output_bytes.replace(b"\n", b"\r\n"))
+        reject("derived output newline drift", lambda: check_computed_systems(components=components, root=root))
+        output.unlink()
+        alias = root / "systems" / "alias.zti"
+        alias.write_bytes(output_bytes + b"\n")
+        output.symlink_to(alias)
+        reject("symlinked output drift", lambda: check_computed_systems(components=components, root=root))
+        output.unlink()
+        alias.unlink()
+        output.write_bytes(output_bytes)
+        competing = source.with_suffix(".zti")
+        competing.write_bytes(output_bytes)
+        reject("competing hand-authored source", lambda: validate_source_mapping(root))
+        competing.unlink()
+        source.unlink()
+        reject("missing source", lambda: validate_source_mapping(root))
+        source.write_text(original)
+        external = contracts.parent / "outside.zti"
+        external.write_text('{ value = 1; }')
+        for label, text in (
+            ("type error", 'value :: Int = "wrong"; value'),
+            ("function result", 'value :: Int -> Int = x => x; value'),
+            ("runtime Type result", '{ value = Int; }'),
+            ("invalid record", '{ formatVersion = 999; }'),
+            ("explicit stdlib", 'prelude ::= import stdlib.prelude; { value = 1; }'),
+            ("derived output import", 'import "../systems/sel4-call.zti"'),
+            ("escaping import", 'import "../../../../outside.zti"'),
+        ):
+            source.write_text(text)
+            reject(label, lambda: check_computed_systems(components=components, root=root))
+        source.write_text(original)
+        link = source.parent / "outside.zti"
+        link.symlink_to(external)
+        source.write_text('import "outside.zti"')
+        reject("symlink import escape", lambda: render_computed_system(name, root))
+        link.unlink()
+        source.write_text(original.replace('generation = 18;', 'generation = 0;'))
+        reject("semantic validation", lambda: check_computed_systems(components=components, root=root),
+               "generation: must be positive")
+        effect_module = source.parent / "effect-lib.zt"
+        effect_module.write_text(
+            'run :: Text -> Text ! { io.print : Text -> Text; } = x => print x; { run = run; }'
+        )
+        source.write_text('unused ::= import "effect-lib.zt"; { value = 1; }')
+        reject("unused imported effect", lambda: render_computed_system(name, root), "effects")
+        effect_module.unlink()
+        source.write_text('askValue :: Unit -> Text ! { ask : Unit -> Text; } '
+                          '= _ => perform ask (); askValue')
+        reject("direct effect", lambda: render_computed_system(name, root), "effects")
+        external_package = contracts.parent / "outside-package"
+        external_package.mkdir()
+        (external_package / "api.zt").write_text('{ value = 1; }')
+        (external_package / "zutai.zti").write_text(
+            '{ formatVersion = 1; name = "external"; compilerCompatibility = "0.1.0"; '
+            'modules = [{ name = "api"; path = "api.zt"; };]; dependencies = []; }'
+        )
+        package = source.parent / "zutai.zti"
+        package.write_text(
+            '{ formatVersion = 1; name = "source"; compilerCompatibility = "0.1.0"; '
+            'modules = []; dependencies = [{ alias = "external"; '
+            'path = "../../../../outside-package"; };]; }'
+        )
+        source.write_text('import external.api')
+        reject("package import escape", lambda: render_computed_system(name, root), "escapes")
+        package.unlink()
+        source.write_text(original)
+        import system_spec as owner
+        saved_root = owner.SYSTEM_ROOT
+        try:
+            owner.SYSTEM_ROOT = root / "systems"
+            output.write_bytes(output_bytes + b"\n")
+            reject("equivalent output path drift", lambda: compile_system(
+                root / "systems" / ".." / "systems" / f"{name}.zti", components=components,
+            ))
+        finally:
+            owner.SYSTEM_ROOT = saved_root
+            output.write_bytes(output_bytes)
+        before = computed_system_outputs(root)
+        after = computed_system_outputs(root)
+        if before != after:
+            fail("computed system output is not deterministic")
+    return refused
+
+
 CATALOGUE = interface_catalogue()
 COMPONENTS = {entry.name: entry.spec for entry in admit_specs(catalogue=CATALOGUE)}
 
+computed_refusals = computed_source_controls(COMPONENTS)
 paths = system_paths()
 if not paths:
     fail("no system specs declared")
@@ -1131,5 +1248,6 @@ for name, holder, field in (
 print(
     f"system spec derivation: {len(systems)} systems compiled and "
     f"{len(DERIVED_FIXTURES)} generation manifests derived semantically identical to "
-    f"their committed fixtures; {refusals} named mutations refused"
+    f"their committed fixtures; {refusals} named mutations and "
+    f"{computed_refusals} computed-source controls refused"
 )

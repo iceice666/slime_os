@@ -1,0 +1,74 @@
+schema ::= import "./schema.zt";
+
+-- Architecture variants replace only these three identity fields.
+ArchitectureVariant :: type {
+  name : Text;
+  generation : Int;
+  targetRequirement : Text;
+};
+
+architectureVariant :: Text -> Int -> Text -> ArchitectureVariant
+= name generation targetRequirement => {
+  name =;
+  generation =;
+  targetRequirement =;
+};
+
+executableSpawnGrant :: Text -> Text -> Text -> Bool -> schema.SystemGrant
+= name source target transferable => {
+  name =;
+  capabilityKind = "executable";
+  source =;
+  target =;
+  rights = { "exec"; "spawn"; };
+  transferable =;
+};
+
+EndpointChannel :: type {
+  grant : schema.SystemGrant;
+  sourcePin : schema.SlotPin;
+  targetPin : schema.SlotPin;
+};
+
+-- Each endpoint channel declares both holders' pinned views of one grant.
+endpointChannel :: Text -> Text -> Text -> Bool -> Int -> Text -> Int -> Text -> EndpointChannel
+= name source target transferable sourceSlot sourceReason targetSlot targetReason => {
+  grant = {
+    name =;
+    capabilityKind = "endpoint";
+    source =;
+    target =;
+    rights = { "send"; "recv"; };
+    transferable =;
+  };
+  sourcePin = {
+    holder = source;
+    grant = name;
+    slot = sourceSlot;
+    reason = sourceReason;
+  };
+  targetPin = {
+    holder = target;
+    grant = name;
+    slot = targetSlot;
+    reason = targetReason;
+  };
+};
+
+mintedSupervision :: Text -> Text -> Text -> Int -> schema.SystemMintedBinding
+= name owner holder slot => {
+  name =;
+  owner =;
+  holder =;
+  capabilityKind = "supervision";
+  slot =;
+  rights = { "supervise"; };
+  transferable = false;
+};
+
+{
+  architectureVariant =;
+  executableSpawnGrant =;
+  endpointChannel =;
+  mintedSupervision =;
+}
