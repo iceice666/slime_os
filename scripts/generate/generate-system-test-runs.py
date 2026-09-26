@@ -27,6 +27,7 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import argparse
+import ast
 import re
 
 from harness import ROOT
@@ -221,6 +222,24 @@ def closure_identity_for(name: str) -> str:
 def extract(path: _Path) -> dict:
     """Read one checker's execution-only inputs from its own constants."""
     text = path.read_text(encoding="utf-8")
+    if path.name == "check-sel4-private-memory-plane.py":
+        # The frozen variants above are fixed-capacity arms. This transport
+        # belongs only to the separately selected adaptive/matrix arms.
+        lines = text.splitlines(keepends=True)
+        declarations = []
+        for node in ast.parse(text).body:
+            targets = ([node.target] if isinstance(node, ast.AnnAssign)
+                       else node.targets if isinstance(node, ast.Assign) else [])
+            if any(isinstance(target, ast.Name) and target.id == "ADAPTIVE_DEVICE_ARGUMENTS"
+                   for target in targets):
+                declarations.append(node)
+        if len(declarations) != 1:
+            fail(f"{path.name}: expected one top-level adaptive-only transport declaration")
+        node = declarations[0]
+        lines[node.lineno - 1:node.end_lineno] = ["\n"] * (
+            node.end_lineno - node.lineno + 1
+        )
+        text = "".join(lines)
 
     timeouts = re.findall(
         r"^(?:BOOT_TIMEOUT_SECONDS|TIMEOUT|BOOT_TIMEOUT|SESSION_TIMEOUT_SECONDS)\s*=\s*(\d+)",
@@ -374,13 +393,38 @@ def outputs() -> dict[_Path, str]:
     return emitted
 
 
+def refresh_identities(emitted: dict[_Path, str]) -> int:
+    """Refresh only image references, refusing all execution drift before writing."""
+    field = re.compile(r'^  imageClosureIdentity = "[0-9a-f]*";$', re.MULTILINE)
+    updates = {}
+    for path, expected in emitted.items():
+        if not path.is_file():
+            fail(f"{path.name}: missing declaration; identity refresh cannot create it")
+        current = path.read_text(encoding="utf-8")
+        before, after = field.findall(current), field.findall(expected)
+        if len(before) != 1 or len(after) != 1:
+            fail(f"{path.name}: expected one canonical imageClosureIdentity field")
+        if field.sub('', current) != field.sub('', expected):
+            fail(f"{path.name}: execution declaration drift; review before re-freezing")
+        updates[path] = field.sub(after[0], current)
+    for path, contents in updates.items():
+        if path.read_text(encoding="utf-8") != contents:
+            path.write_text(contents, encoding="utf-8")
+    return len(updates)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
         "--check", action="store_true", help="refuse any record that drifted from its checker"
     )
-    parser.add_argument(
+    mode.add_argument(
         "--bless", action="store_true", help="re-freeze records after an intended change"
+    )
+    mode.add_argument(
+        "--refresh-identities", action="store_true",
+        help="update only closure references; refuse any execution declaration drift",
     )
     arguments = parser.parse_args()
 
@@ -401,8 +445,10 @@ def main() -> int:
         print(f"{len(emitted)} system test-run records are current")
         return 0
 
-    if not arguments.bless:
-        fail("pass --check to verify or --bless to re-freeze")
+    if arguments.refresh_identities:
+        count = refresh_identities(emitted)
+        print(f"{count} test-run closure references checked; execution declarations unchanged")
+        return 0
 
     for path, content in sorted(emitted.items()):
         path.write_text(content, encoding="utf-8")

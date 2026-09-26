@@ -109,6 +109,16 @@ class CompiledTestRun:
 
 
 @dataclass(frozen=True)
+class CompiledTestRunDeclaration:
+    """A frozen checker declaration, not permission to execute unbound inputs."""
+
+    path: Path
+    value: dict
+    normalized: bytes
+    identity: bytes
+
+
+@dataclass(frozen=True)
 class CompiledNegativeCase:
     path: Path
     value: dict
@@ -348,6 +358,20 @@ def compile_closure(path: Path, contract: ModuleType = image_contract) -> Compil
 
 
 def compile_test_run(path: Path, contract: ModuleType = test_contract) -> CompiledTestRun:
+    """Require fully bound fields; declaration placeholders are never executable."""
+    return _compile_test_run(path, contract, declaration=False)
+
+
+def compile_test_run_declaration(
+    path: Path, contract: ModuleType = test_contract,
+) -> CompiledTestRunDeclaration:
+    """Validate frozen checker inputs, allowing explicitly paired unbound fields."""
+    return _compile_test_run(path, contract, declaration=True)
+
+
+def _compile_test_run(
+    path: Path, contract: ModuleType, *, declaration: bool,
+) -> CompiledTestRun | CompiledTestRunDeclaration:
     value = _exact(
         _run_zutai(
             path.resolve(), TEST_CHECKER, "SLIME_SYSTEM_TEST_RUN_PATH", contract.MAX_SOURCE_BYTES
@@ -360,7 +384,8 @@ def compile_test_run(path: Path, contract: ModuleType = test_contract) -> Compil
     name = _bounded_text(value["name"], contract.MAX_NAME_BYTES, "name")
     if _NAME.fullmatch(name) is None or name != path.stem:
         _fail("test-run name must match its file name and use canonical spelling")
-    _digest(value["imageClosureIdentity"], "imageClosureIdentity", contract)
+    if not (declaration and value["imageClosureIdentity"] == ""):
+        _digest(value["imageClosureIdentity"], "imageClosureIdentity", contract)
     if value["executionKind"] not in contract.EXECUTION_KINDS:
         _fail(f"unknown execution kind {value['executionKind']!r}")
     _bounded_text(value["executionProfile"], contract.MAX_NAME_BYTES, "executionProfile")
@@ -370,8 +395,10 @@ def compile_test_run(path: Path, contract: ModuleType = test_contract) -> Compil
         for index, raw in enumerate(fixtures):
             entry = _exact(raw, _FIXTURE_FIELDS, f"{field}[{index}]")
             names.append(_bounded_text(entry["name"], contract.MAX_NAME_BYTES, "fixture name"))
-            _bounded_text(entry["path"], contract.MAX_PATH_BYTES, "fixture path")
-            _digest(entry["identity"], "fixture identity", contract)
+            unbound = declaration and entry["path"] == "" and entry["identity"] == ""
+            if not unbound:
+                _bounded_text(entry["path"], contract.MAX_PATH_BYTES, "fixture path")
+                _digest(entry["identity"], "fixture identity", contract)
             if not isinstance(entry["writable"], bool):
                 _fail("fixture writable must be boolean")
         if names != sorted(names) or len(set(names)) != len(names):
@@ -381,8 +408,10 @@ def compile_test_run(path: Path, contract: ModuleType = test_contract) -> Compil
         entry = _exact(raw, _FAULT_FIELDS, f"faultControls[{index}]")
         if entry["kind"] not in contract.FAULT_KINDS:
             _fail(f"faultControls[{index}]: unknown kind {entry['kind']!r}")
-        _bounded_text(entry["target"], contract.MAX_TEXT_BYTES, "fault target")
-        _bounded_text(entry["value"], contract.MAX_TEXT_BYTES, "fault value")
+        unbound = declaration and entry["target"] == "" and entry["value"] == ""
+        if not unbound:
+            _bounded_text(entry["target"], contract.MAX_TEXT_BYTES, "fault target")
+            _bounded_text(entry["value"], contract.MAX_TEXT_BYTES, "fault value")
     timeout = value["timeoutSeconds"]
     if (
         not isinstance(timeout, int)
@@ -399,7 +428,8 @@ def compile_test_run(path: Path, contract: ModuleType = test_contract) -> Compil
     normalized = normalize(value)
     if len(normalized) > contract.MAX_NORMALIZED_BYTES:
         _fail("normalized test run exceeds bound")
-    return CompiledTestRun(
+    result = CompiledTestRunDeclaration if declaration else CompiledTestRun
+    return result(
         path.resolve(),
         value,
         normalized,
