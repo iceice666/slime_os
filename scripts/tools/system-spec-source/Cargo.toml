@@ -1,0 +1,13 @@
+[package]
+name = "system-spec-source"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+serde_json = "1"
+zutai-eval = { path = "../../../deps/zutai/crates/general/eval", default-features = false }
+zutai-semantic = { path = "../../../deps/zutai/crates/general/semantic" }
+zutai-thir = { path = "../../../deps/zutai/crates/general/thir" }
