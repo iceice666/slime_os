@@ -593,7 +593,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let Some(cleanup) = self.construction_cleanup else {
             return Ok(());
         };
-        let reclaimed = cleanup.revoke(allocator)?;
+        let inventory_before = allocator.elastic_inventory().bytes;
+        let system_before = allocator.system_backing_bytes();
+        let reclaimed = cleanup.revoke(allocator);
+        allocator.report_construction_cleanup(inventory_before, system_before);
+        let reclaimed = reclaimed?;
         self.construction_cleanup = None;
         self.reclaimed_slots += reclaimed;
         Ok(())
@@ -615,7 +619,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     ) -> Result<(), TaskError> {
         let cleanup =
             construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
-        match cleanup.revoke(allocator) {
+        let inventory_before = allocator.elastic_inventory().bytes;
+        let system_before = allocator.system_backing_bytes();
+        let result = cleanup.revoke(allocator);
+        allocator.report_construction_cleanup(inventory_before, system_before);
+        match result {
             Ok(reclaimed) => {
                 self.reclaimed_slots += reclaimed;
                 Ok(())
@@ -832,7 +840,6 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             }
             attempt
         };
-        let arena = allocator.begin_task_arena(arena_bits)?;
         // Reserve physical extents, allocation descriptors, and CSlots as one
         // construction boundary. `plan` counts retyped VSpace, image, and
         // thread objects. Each thread also keeps one copied transfer-window
@@ -853,384 +860,408 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             plan.allocation_count(),
             threads,
         );
-        if let Some(required) = required_descriptors
-            && let Err(error) = allocator.ensure_allocation_descriptors(required)
-        {
-            self.unwind_construction(allocator, id, arena)?;
-            return Err(TaskError::Alloc(error));
-        }
-        #[cfg(slime_private_stress)]
-        if stress_attempt == 2 {
-            let actual = allocator.allocation_descriptors_free();
-            let required = required_descriptors.unwrap_or(usize::MAX);
-            let reserved = allocator.reserve_stress_descriptors(required.saturating_sub(1));
-            let effective = allocator.allocation_descriptors_free();
-            sel4::debug_println!(
-                "SLIME_MEM stress construction case=descriptors attempt=2 actual={actual} effective={effective} required={required} reserved={reserved}"
-            );
-        }
-        let available_descriptors = allocator.allocation_descriptors_free();
-        let refused = required_descriptors.is_none_or(|required| required > available_descriptors);
-        #[cfg(slime_private_stress)]
-        allocator.release_stress_descriptors();
-        if refused {
-            self.unwind_construction(allocator, id, arena)?;
-            #[cfg(slime_private_stress)]
-            if stress_attempt < 3 {
-                Self::stress_census(allocator, stress_attempt, "after");
+        // Executable authority has already been checked by the spawn caller.
+        // Every authorized runtime spawn may spend operational funding; boot
+        // construction and ordinary growth preserve the configured full floor.
+        let funding = allocator
+            .begin_construction_funding(arena_bits, spawner.is_some() && executable.is_some())?;
+        // Keep all fallible construction and rollback inside this closure so
+        // no early return can leak the allocator's serialized funding scope.
+        let result = (|| {
+            let arena = allocator.begin_task_arena(arena_bits)?;
+            if let Some(required) = required_descriptors
+                && let Err(error) = allocator.ensure_allocation_descriptors(required)
+            {
+                self.unwind_construction(allocator, id, arena)?;
+                return Err(TaskError::Alloc(error));
             }
-            return Err(TaskError::Alloc(AllocError::ArenaSlotTableFull {
-                limit: available_descriptors,
-            }));
-        }
-        #[cfg(slime_private_stress)]
-        if stress_attempt == 1 {
-            crate::object_allocator::stress_slot_pressure(stress_attempt);
-        }
-        #[cfg(slime_private_stress)]
-        let provisioning = if stress_attempt != usize::MAX {
-            allocator.provision_stress_private_backing(arena, private_memory_pages, stress_attempt)
-        } else {
-            allocator.provision_private_backing(arena, private_memory_pages)
-        };
-        #[cfg(not(slime_private_stress))]
-        let provisioning = if adaptive_maximum.is_some() {
-            allocator.mark_arena_elastic(arena)
-        } else {
-            allocator.provision_private_backing(arena, private_memory_pages)
-        };
-        if let Err(error) = provisioning {
             #[cfg(slime_private_stress)]
-            crate::object_allocator::stress_slot_pressure(usize::MAX);
-            self.unwind_construction(allocator, id, arena)?;
-            #[cfg(slime_private_stress)]
-            if stress_attempt < 3 {
-                Self::stress_census(allocator, stress_attempt, "after");
-            }
-            return Err(TaskError::Alloc(error));
-        }
-
-        let construction = (|| {
-            let vspace = create_child_vspace(
-                allocator,
-                arena,
-                image,
-                caller_vspace,
-                scratch,
-                asid_pool,
-                threads,
-                reservation,
-            )?;
-            // Built from the window the VSpace was actually constructed with,
-            // inside the construction boundary: a span record this cannot fund
-            // must unwind the task like any other construction failure, not
-            // leave a published task whose growth is untrackable.
-            let private_memory = if reservation == 0 {
-                crate::private_memory::Region::DENIED
-            } else {
-                crate::private_memory::Region::reserve(
-                    allocator,
-                    vspace.private_base,
-                    vspace.private_pages,
-                    adaptive_maximum.unwrap_or(private_memory_pages),
-                    adaptive_maximum.is_some(),
-                )?
-            };
-            let cnode = allocator
-                .allocate_variable_in::<sel4::cap_type::CNode>(arena, cnode_size_bits)?
-                .cap();
-            let tcb = allocator
-                .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
-                .cap();
-            #[cfg(slime_private_stress)]
-            if stress_attempt == 0 {
+            if stress_attempt == 2 {
+                let actual = allocator.allocation_descriptors_free();
+                let required = required_descriptors.unwrap_or(usize::MAX);
+                let reserved = allocator.reserve_stress_descriptors(required.saturating_sub(1));
+                let effective = allocator.allocation_descriptors_free();
                 sel4::debug_println!(
-                    "SLIME_MEM stress construction case=construction attempt=0 actual=0 effective=0 required=0 reserved=0"
+                    "SLIME_MEM stress construction case=descriptors attempt=2 actual={actual} effective={effective} required={required} reserved={reserved}"
                 );
-                return Err(TaskError::ForcedConstructionFailure);
             }
-            #[cfg(slime_b38_force_unwind)]
-            if spawner.is_some() && crate::object_allocator::take_forced_unwind() {
-                return Err(TaskError::ForcedConstructionFailure);
-            }
-
-            let root_cnode = sel4::init_thread::slot::CNODE.cap();
-            let mut ledger = InstallLedger::default();
-            // Slot 1 is invocation-only transport. In particular it must never
-            // carry receive authority: all children share the root endpoint,
-            // so a receiver could dequeue and answer another child's request
-            // before the root dispatcher saw it.
-            mint_child_slot(
-                cnode,
-                cnode_size_bits,
-                child_slots.service,
-                &root_cnode.absolute_cptr(service_endpoint),
-                {
-                    // Wrong rights: grant read on the shared root endpoint,
-                    // which would let this child dequeue another's request.
-                    #[cfg(slime_b40_mutate_wrong_rights)]
-                    {
-                        sel4::CapRights::all()
-                    }
-                    #[cfg(not(slime_b40_mutate_wrong_rights))]
-                    {
-                        child_service_rights(authority)
-                    }
-                },
-                id.service_badge(),
-                true,
-                &mut ledger,
-            )?;
-            // Slot 3: the same endpoint object under this task's fault badge.
-            // The kernel requires a fault handler endpoint to carry send plus
-            // grant or grant-reply authority, and resolves this CPtr in the
-            // child's CSpace.
-            mint_child_slot(
-                cnode,
-                cnode_size_bits,
-                {
-                    // Wrong slot: install a declared capability somewhere the
-                    // plan leaves empty. B67: this used to be `fault + 1`, which
-                    // is `CHILD_SLOT_CNODE` under the default layout — already
-                    // occupied, so the mint failed with `DeleteFirst` during
-                    // construction and the audit never ran. Asking for the first
-                    // undeclared slot keeps the perturbation a *layout* error,
-                    // which is what this arm exists to have refused.
-                    #[cfg(slime_b40_mutate_wrong_slot)]
-                    {
-                        child_slots
-                            .first_undeclared(
-                                cnode_size_bits,
-                                supervision == Supervision::SelfManaged,
-                            )
-                            .unwrap_or(child_slots.fault)
-                    }
-                    #[cfg(not(slime_b40_mutate_wrong_slot))]
-                    {
-                        child_slots.fault
-                    }
-                },
-                &root_cnode.absolute_cptr(service_endpoint),
-                sel4::CapRightsBuilder::none()
-                    .write(true)
-                    .grant_reply(true)
-                    .build(),
-                {
-                    // Aliased: reuse the service badge so the fault slot holds
-                    // a capability indistinguishable from the service one.
-                    #[cfg(slime_b40_mutate_aliased)]
-                    {
-                        id.service_badge()
-                    }
-                    #[cfg(not(slime_b40_mutate_aliased))]
-                    {
-                        id.fault_badge()
-                    }
-                },
-                true,
-                &mut ledger,
-            )?;
-            // Write-only, and never receive: every child shares the console
-            // dispatcher, so a receiver could dequeue another child's output
-            // before the console saw it.
-            mint_child_slot(
-                cnode,
-                cnode_size_bits,
-                child_slots.console,
-                &root_cnode.absolute_cptr(console_endpoint),
-                // Write plus reply: a console write is one-way, but an input
-                // read on the same endpoint is a Call. Never recv — every
-                // child shares this dispatcher, so a receiver could answer
-                // another child's read.
-                sel4::CapRightsBuilder::none()
-                    .write(true)
-                    .grant_reply(true)
-                    .build(),
-                id.service_badge(),
-                true,
-                &mut ledger,
-            )?;
-            if supervision == Supervision::SelfManaged {
-                mint_child_slot(
-                    cnode,
-                    cnode_size_bits,
-                    child_slots.tcb,
-                    &root_cnode.absolute_cptr(tcb),
-                    sel4::CapRights::all(),
-                    0,
-                    false,
-                    &mut ledger,
-                )?;
-                mint_child_slot(
-                    cnode,
-                    cnode_size_bits,
-                    CHILD_SLOT_CNODE,
-                    &root_cnode.absolute_cptr(cnode),
-                    sel4::CapRights::all(),
-                    0,
-                    false,
-                    &mut ledger,
-                )?;
-                #[cfg(slime_b40_mutate_wrong_type)]
-                {
-                    // Wrong type: the plan binds a TCB here, so replace it
-                    // with the CNode. Occupancy is unchanged, which is exactly
-                    // why the audit must check the installed type and not only
-                    // whether something is present.
-                    let cptr =
-                        cnode.absolute_cptr_from_bits_with_depth(child_slots.tcb, cnode_size_bits);
-                    let _ = cptr.delete();
-                    let _ = cptr.copy(&root_cnode.absolute_cptr(cnode), sel4::CapRights::all());
-                }
-            }
-
-            // Audit the constructed CSpace against what the plan declared, by
-            // asking the kernel rather than trusting the loop above. Every
-            // slot the plan named must be occupied and every slot it did not
-            // must be empty; a `Delete` on an empty slot succeeds and on a
-            // full one is refused, which is the only way to observe occupancy
-            // without destroying it.
-            //
-            // This catches an install that silently landed elsewhere — a wrong
-            // depth, a stale constant, a plan naming a slot outside the CNode.
-            audit_child_cspace(cnode, cnode_size_bits, child_slots, supervision)?;
-            // Type is not an occupancy question, so it is probed separately.
-            audit_child_types(cnode, cnode_size_bits, child_slots, supervision)?;
-
-            tcb.tcb_configure(
-                sel4::CPtr::from_bits(child_slots.fault),
-                cnode,
-                sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
-                vspace.vspace,
-                vspace.main().ipc_buffer_addr as sel4::Word,
-                vspace.main().ipc_buffer,
-            )
-            .map_err(TaskError::Configure)?;
-            tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), priority, priority)
-                .map_err(TaskError::SchedParams)?;
-
-            let entry = image.entry();
-            let mut context = sel4::UserContext::default();
-            *context.pc_mut() =
-                sel4::Word::try_from(entry).map_err(|_| TaskError::EntryOutOfRange { entry })?;
-            *context.c_param_mut(0) = sel4::Word::from(startup_arg);
-            // `resume = false`: nothing runs until every allocation for every
-            // task in this generation has succeeded. The child runtime
-            // establishes its own stack pointer at `_start`.
-            tcb.tcb_write_all_registers(false, &mut context)
-                .map_err(TaskError::WriteRegisters)?;
-
-            // Every thread beyond the main one (B47). Same CSpace and VSpace —
-            // that is what makes them threads of one process rather than
-            // separate tasks — with its own TCB, IPC buffer, stack, and
-            // schedule.
-            let mut workers = [None; MAX_CHILD_THREADS];
-            #[allow(clippy::never_loop)]
-            for (index, slot) in workers.iter_mut().enumerate().take(threads).skip(1) {
-                // The image must declare a worker entry point and stack. A
-                // plan asking for a thread an image cannot run is refused
-                // rather than started at a garbage PC.
-                let worker = image.worker().ok_or(TaskError::MissingWorkerImage)?;
-                let worker_tcb = allocator
-                    .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
-                    .cap();
-                worker_tcb
-                    .tcb_configure(
-                        sel4::CPtr::from_bits(child_slots.fault),
-                        cnode,
-                        sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
-                        vspace.vspace,
-                        vspace.pages[index].ipc_buffer_addr as sel4::Word,
-                        vspace.pages[index].ipc_buffer,
-                    )
-                    .map_err(TaskError::Configure)?;
-                // The worker's own declared priority, not its main thread's
-                // (B48). Below it, a component can hold a busy thread while
-                // its own IPC stays responsive and unrelated services keep
-                // running; the `ScheduleRecord` has always been per-thread.
-                let worker_priority = admit_priority(worker_priorities[index])?;
-                worker_tcb
-                    .tcb_set_sched_params(
-                        sel4::init_thread::slot::TCB.cap(),
-                        worker_priority,
-                        worker_priority,
-                    )
-                    .map_err(TaskError::SchedParams)?;
-                // The per-thread index lives in the architecture's software
-                // thread-pointer register. seL4 saves and restores it with the
-                // user context, so no two threads observe each other's value.
-                let mut worker_context = sel4::UserContext::default();
-                *worker_context.pc_mut() = worker.entry;
-                *worker_context.sp_mut() = worker.stack_top;
-                *worker_context.c_param_mut(0) = sel4::Word::from(startup_arg);
-                #[cfg(target_arch = "aarch64")]
-                {
-                    worker_context.inner_mut().tpidr_el0 = index as sel4::Word;
-                }
-                #[cfg(target_arch = "riscv64")]
-                {
-                    worker_context.inner_mut().tp = index as sel4::Word;
-                }
-                // x86-64 has no dedicated thread-pointer register; seL4 keeps
-                // `fs_base` in the saved user context and reloads it on every
-                // switch, which is the same per-thread guarantee. The
-                // component runtime reads it back through `rdfsbase`, legal in
-                // userspace because this profile builds the kernel with
-                // `KernelFSGSBase "inst"`, which sets `CR4.FSGSBASE` at boot.
-                #[cfg(target_arch = "x86_64")]
-                {
-                    worker_context.inner_mut().fs_base = index as sel4::Word;
-                }
-                worker_tcb
-                    .tcb_write_all_registers(false, &mut worker_context)
-                    .map_err(TaskError::WriteRegisters)?;
-                *slot = Some(worker_tcb);
-            }
-            Ok((vspace, cnode, tcb, entry, workers, private_memory))
-        })();
-
-        let (vspace, cnode, tcb, entry, workers, private_memory) = match construction {
-            Ok(task) => task,
-            Err(error) => {
+            let available_descriptors = allocator.allocation_descriptors_free();
+            let refused =
+                required_descriptors.is_none_or(|required| required > available_descriptors);
+            #[cfg(slime_private_stress)]
+            allocator.release_stress_descriptors();
+            if refused {
                 self.unwind_construction(allocator, id, arena)?;
                 #[cfg(slime_private_stress)]
                 if stress_attempt < 3 {
                     Self::stress_census(allocator, stress_attempt, "after");
                 }
-                return Err(error);
+                return Err(TaskError::Alloc(AllocError::ArenaSlotTableFull {
+                    limit: available_descriptors,
+                }));
             }
-        };
+            #[cfg(slime_private_stress)]
+            if stress_attempt == 1 {
+                crate::object_allocator::stress_slot_pressure(stress_attempt);
+            }
+            #[cfg(slime_private_stress)]
+            let provisioning = if stress_attempt != usize::MAX {
+                allocator.provision_stress_private_backing(
+                    arena,
+                    private_memory_pages,
+                    stress_attempt,
+                )
+            } else {
+                allocator.provision_private_backing(arena, private_memory_pages)
+            };
+            #[cfg(not(slime_private_stress))]
+            let provisioning = if adaptive_maximum.is_some() {
+                allocator.mark_arena_elastic(arena)
+            } else {
+                allocator.provision_private_backing(arena, private_memory_pages)
+            };
+            if let Err(error) = provisioning {
+                #[cfg(slime_private_stress)]
+                crate::object_allocator::stress_slot_pressure(usize::MAX);
+                self.unwind_construction(allocator, id, arena)?;
+                #[cfg(slime_private_stress)]
+                if stress_attempt < 3 {
+                    Self::stress_census(allocator, stress_attempt, "after");
+                }
+                return Err(TaskError::Alloc(error));
+            }
 
-        let cleanup = construction_record(id, arena, allocator.arena_slot_count(arena)?);
-        self.tasks[index] = Some(Task {
-            cnode_size_bits,
-            workers,
-            id,
-            cnode,
-            tcb,
-            vspace,
-            authority,
-            capabilities: AuthorityTable::new(),
-            cspace: CSpaceLedger::EMPTY,
-            supervision,
-            entry,
-            activated: false,
-            cleanup,
-            // A binding is installed after construction and before
-            // publication; a task that never gets one cannot grow.
-            private_binding: None,
-            spawner,
-            executable,
-            instance,
-            // Reserved at the base the VSpace construction chose, over exactly
-            // the window it mapped tables for. A zero quota yields `DENIED`, so
-            // a task the generation does not name carries no window at all
-            // rather than a window it may not use.
-            private_memory,
-        });
-        self.len += 1;
-        self.next_id += 1;
-        Ok(id)
+            let construction = (|| {
+                let vspace = create_child_vspace(
+                    allocator,
+                    arena,
+                    image,
+                    caller_vspace,
+                    scratch,
+                    asid_pool,
+                    threads,
+                    reservation,
+                )?;
+                // Built from the window the VSpace was actually constructed with,
+                // inside the construction boundary: a span record this cannot fund
+                // must unwind the task like any other construction failure, not
+                // leave a published task whose growth is untrackable.
+                let private_memory = if reservation == 0 {
+                    crate::private_memory::Region::DENIED
+                } else {
+                    crate::private_memory::Region::reserve(
+                        allocator,
+                        vspace.private_base,
+                        vspace.private_pages,
+                        adaptive_maximum.unwrap_or(private_memory_pages),
+                        adaptive_maximum.is_some(),
+                    )?
+                };
+                let cnode = allocator
+                    .allocate_variable_in::<sel4::cap_type::CNode>(arena, cnode_size_bits)?
+                    .cap();
+                let tcb = allocator
+                    .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
+                    .cap();
+                #[cfg(slime_private_stress)]
+                if stress_attempt == 0 {
+                    sel4::debug_println!(
+                        "SLIME_MEM stress construction case=construction attempt=0 actual=0 effective=0 required=0 reserved=0"
+                    );
+                    return Err(TaskError::ForcedConstructionFailure);
+                }
+                #[cfg(slime_b38_force_unwind)]
+                if spawner.is_some() && crate::object_allocator::take_forced_unwind() {
+                    return Err(TaskError::ForcedConstructionFailure);
+                }
+
+                let root_cnode = sel4::init_thread::slot::CNODE.cap();
+                let mut ledger = InstallLedger::default();
+                // Slot 1 is invocation-only transport. In particular it must never
+                // carry receive authority: all children share the root endpoint,
+                // so a receiver could dequeue and answer another child's request
+                // before the root dispatcher saw it.
+                mint_child_slot(
+                    cnode,
+                    cnode_size_bits,
+                    child_slots.service,
+                    &root_cnode.absolute_cptr(service_endpoint),
+                    {
+                        // Wrong rights: grant read on the shared root endpoint,
+                        // which would let this child dequeue another's request.
+                        #[cfg(slime_b40_mutate_wrong_rights)]
+                        {
+                            sel4::CapRights::all()
+                        }
+                        #[cfg(not(slime_b40_mutate_wrong_rights))]
+                        {
+                            child_service_rights(authority)
+                        }
+                    },
+                    id.service_badge(),
+                    true,
+                    &mut ledger,
+                )?;
+                // Slot 3: the same endpoint object under this task's fault badge.
+                // The kernel requires a fault handler endpoint to carry send plus
+                // grant or grant-reply authority, and resolves this CPtr in the
+                // child's CSpace.
+                mint_child_slot(
+                    cnode,
+                    cnode_size_bits,
+                    {
+                        // Wrong slot: install a declared capability somewhere the
+                        // plan leaves empty. B67: this used to be `fault + 1`, which
+                        // is `CHILD_SLOT_CNODE` under the default layout — already
+                        // occupied, so the mint failed with `DeleteFirst` during
+                        // construction and the audit never ran. Asking for the first
+                        // undeclared slot keeps the perturbation a *layout* error,
+                        // which is what this arm exists to have refused.
+                        #[cfg(slime_b40_mutate_wrong_slot)]
+                        {
+                            child_slots
+                                .first_undeclared(
+                                    cnode_size_bits,
+                                    supervision == Supervision::SelfManaged,
+                                )
+                                .unwrap_or(child_slots.fault)
+                        }
+                        #[cfg(not(slime_b40_mutate_wrong_slot))]
+                        {
+                            child_slots.fault
+                        }
+                    },
+                    &root_cnode.absolute_cptr(service_endpoint),
+                    sel4::CapRightsBuilder::none()
+                        .write(true)
+                        .grant_reply(true)
+                        .build(),
+                    {
+                        // Aliased: reuse the service badge so the fault slot holds
+                        // a capability indistinguishable from the service one.
+                        #[cfg(slime_b40_mutate_aliased)]
+                        {
+                            id.service_badge()
+                        }
+                        #[cfg(not(slime_b40_mutate_aliased))]
+                        {
+                            id.fault_badge()
+                        }
+                    },
+                    true,
+                    &mut ledger,
+                )?;
+                // Write-only, and never receive: every child shares the console
+                // dispatcher, so a receiver could dequeue another child's output
+                // before the console saw it.
+                mint_child_slot(
+                    cnode,
+                    cnode_size_bits,
+                    child_slots.console,
+                    &root_cnode.absolute_cptr(console_endpoint),
+                    // Write plus reply: a console write is one-way, but an input
+                    // read on the same endpoint is a Call. Never recv — every
+                    // child shares this dispatcher, so a receiver could answer
+                    // another child's read.
+                    sel4::CapRightsBuilder::none()
+                        .write(true)
+                        .grant_reply(true)
+                        .build(),
+                    id.service_badge(),
+                    true,
+                    &mut ledger,
+                )?;
+                if supervision == Supervision::SelfManaged {
+                    mint_child_slot(
+                        cnode,
+                        cnode_size_bits,
+                        child_slots.tcb,
+                        &root_cnode.absolute_cptr(tcb),
+                        sel4::CapRights::all(),
+                        0,
+                        false,
+                        &mut ledger,
+                    )?;
+                    mint_child_slot(
+                        cnode,
+                        cnode_size_bits,
+                        CHILD_SLOT_CNODE,
+                        &root_cnode.absolute_cptr(cnode),
+                        sel4::CapRights::all(),
+                        0,
+                        false,
+                        &mut ledger,
+                    )?;
+                    #[cfg(slime_b40_mutate_wrong_type)]
+                    {
+                        // Wrong type: the plan binds a TCB here, so replace it
+                        // with the CNode. Occupancy is unchanged, which is exactly
+                        // why the audit must check the installed type and not only
+                        // whether something is present.
+                        let cptr = cnode
+                            .absolute_cptr_from_bits_with_depth(child_slots.tcb, cnode_size_bits);
+                        let _ = cptr.delete();
+                        let _ = cptr.copy(&root_cnode.absolute_cptr(cnode), sel4::CapRights::all());
+                    }
+                }
+
+                // Audit the constructed CSpace against what the plan declared, by
+                // asking the kernel rather than trusting the loop above. Every
+                // slot the plan named must be occupied and every slot it did not
+                // must be empty; a `Delete` on an empty slot succeeds and on a
+                // full one is refused, which is the only way to observe occupancy
+                // without destroying it.
+                //
+                // This catches an install that silently landed elsewhere — a wrong
+                // depth, a stale constant, a plan naming a slot outside the CNode.
+                audit_child_cspace(cnode, cnode_size_bits, child_slots, supervision)?;
+                // Type is not an occupancy question, so it is probed separately.
+                audit_child_types(cnode, cnode_size_bits, child_slots, supervision)?;
+
+                tcb.tcb_configure(
+                    sel4::CPtr::from_bits(child_slots.fault),
+                    cnode,
+                    sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
+                    vspace.vspace,
+                    vspace.main().ipc_buffer_addr as sel4::Word,
+                    vspace.main().ipc_buffer,
+                )
+                .map_err(TaskError::Configure)?;
+                tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), priority, priority)
+                    .map_err(TaskError::SchedParams)?;
+
+                let entry = image.entry();
+                let mut context = sel4::UserContext::default();
+                *context.pc_mut() = sel4::Word::try_from(entry)
+                    .map_err(|_| TaskError::EntryOutOfRange { entry })?;
+                *context.c_param_mut(0) = sel4::Word::from(startup_arg);
+                // `resume = false`: nothing runs until every allocation for every
+                // task in this generation has succeeded. The child runtime
+                // establishes its own stack pointer at `_start`.
+                tcb.tcb_write_all_registers(false, &mut context)
+                    .map_err(TaskError::WriteRegisters)?;
+
+                // Every thread beyond the main one (B47). Same CSpace and VSpace —
+                // that is what makes them threads of one process rather than
+                // separate tasks — with its own TCB, IPC buffer, stack, and
+                // schedule.
+                let mut workers = [None; MAX_CHILD_THREADS];
+                #[allow(clippy::never_loop)]
+                for (index, slot) in workers.iter_mut().enumerate().take(threads).skip(1) {
+                    // The image must declare a worker entry point and stack. A
+                    // plan asking for a thread an image cannot run is refused
+                    // rather than started at a garbage PC.
+                    let worker = image.worker().ok_or(TaskError::MissingWorkerImage)?;
+                    let worker_tcb = allocator
+                        .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
+                        .cap();
+                    worker_tcb
+                        .tcb_configure(
+                            sel4::CPtr::from_bits(child_slots.fault),
+                            cnode,
+                            sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
+                            vspace.vspace,
+                            vspace.pages[index].ipc_buffer_addr as sel4::Word,
+                            vspace.pages[index].ipc_buffer,
+                        )
+                        .map_err(TaskError::Configure)?;
+                    // The worker's own declared priority, not its main thread's
+                    // (B48). Below it, a component can hold a busy thread while
+                    // its own IPC stays responsive and unrelated services keep
+                    // running; the `ScheduleRecord` has always been per-thread.
+                    let worker_priority = admit_priority(worker_priorities[index])?;
+                    worker_tcb
+                        .tcb_set_sched_params(
+                            sel4::init_thread::slot::TCB.cap(),
+                            worker_priority,
+                            worker_priority,
+                        )
+                        .map_err(TaskError::SchedParams)?;
+                    // The per-thread index lives in the architecture's software
+                    // thread-pointer register. seL4 saves and restores it with the
+                    // user context, so no two threads observe each other's value.
+                    let mut worker_context = sel4::UserContext::default();
+                    *worker_context.pc_mut() = worker.entry;
+                    *worker_context.sp_mut() = worker.stack_top;
+                    *worker_context.c_param_mut(0) = sel4::Word::from(startup_arg);
+                    #[cfg(target_arch = "aarch64")]
+                    {
+                        worker_context.inner_mut().tpidr_el0 = index as sel4::Word;
+                    }
+                    #[cfg(target_arch = "riscv64")]
+                    {
+                        worker_context.inner_mut().tp = index as sel4::Word;
+                    }
+                    // x86-64 has no dedicated thread-pointer register; seL4 keeps
+                    // `fs_base` in the saved user context and reloads it on every
+                    // switch, which is the same per-thread guarantee. The
+                    // component runtime reads it back through `rdfsbase`, legal in
+                    // userspace because this profile builds the kernel with
+                    // `KernelFSGSBase "inst"`, which sets `CR4.FSGSBASE` at boot.
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        worker_context.inner_mut().fs_base = index as sel4::Word;
+                    }
+                    worker_tcb
+                        .tcb_write_all_registers(false, &mut worker_context)
+                        .map_err(TaskError::WriteRegisters)?;
+                    *slot = Some(worker_tcb);
+                }
+                Ok((vspace, cnode, tcb, entry, workers, private_memory))
+            })();
+
+            let (vspace, cnode, tcb, entry, workers, private_memory) = match construction {
+                Ok(task) => task,
+                Err(error) => {
+                    self.unwind_construction(allocator, id, arena)?;
+                    #[cfg(slime_private_stress)]
+                    if stress_attempt < 3 {
+                        Self::stress_census(allocator, stress_attempt, "after");
+                    }
+                    return Err(error);
+                }
+            };
+
+            let slots = match allocator.arena_slot_count(arena) {
+                Ok(slots) => slots,
+                Err(error) => {
+                    self.unwind_construction(allocator, id, arena)?;
+                    return Err(TaskError::Alloc(error));
+                }
+            };
+            let cleanup = construction_record(id, arena, slots);
+            self.tasks[index] = Some(Task {
+                cnode_size_bits,
+                workers,
+                id,
+                cnode,
+                tcb,
+                vspace,
+                authority,
+                capabilities: AuthorityTable::new(),
+                cspace: CSpaceLedger::EMPTY,
+                supervision,
+                entry,
+                activated: false,
+                cleanup,
+                // A binding is installed after construction and before
+                // publication; a task that never gets one cannot grow.
+                private_binding: None,
+                spawner,
+                executable,
+                instance,
+                // Reserved at the base the VSpace construction chose, over exactly
+                // the window it mapped tables for. A zero quota yields `DENIED`, so
+                // a task the generation does not name carries no window at all
+                // rather than a window it may not use.
+                private_memory,
+            });
+            self.len += 1;
+            self.next_id += 1;
+            Ok(id)
+        })();
+        allocator.finish_construction_funding(funding, result.is_ok());
+        result
     }
 
     /// Start one constructed task.
@@ -1304,7 +1335,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             .ok_or(TaskError::UnknownTask(id))?;
         // Failed arena cleanup stays owned by the table and is retryable.
         let _ = task.suspend();
-        let reclaimed = task.cleanup.revoke(allocator)?;
+        let inventory_before = allocator.elastic_inventory().bytes;
+        let system_before = allocator.system_backing_bytes();
+        let reclaimed = task.cleanup.revoke(allocator);
+        allocator.report_construction_cleanup(inventory_before, system_before);
+        let reclaimed = reclaimed?;
         // Past the fallible step: the frames are gone, so the charge they held
         // is genuinely free. Taken from the local snapshot, which is why the
         // table entry can be cleared either side of this.

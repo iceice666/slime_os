@@ -82,6 +82,8 @@ impl ObjectAllocator {
         // from looping forever.
         for _ in 0..MAX_SPLIT_RESELECTIONS {
             if let Some(index) = self.reusable_extent(size_bits) {
+                self.check_common_funding(1usize << size_bits)?;
+                self.consume_payload_funding(1usize << size_bits)?;
                 self.extents_reused += 1;
                 return Ok(index);
             }
@@ -99,6 +101,8 @@ impl ObjectAllocator {
                 .ok_or(AllocError::NoKernelUntyped)?;
             loop {
                 if self.extent(index).size_bits == size_bits {
+                    self.check_common_funding(1usize << size_bits)?;
+                    self.consume_payload_funding(1usize << size_bits)?;
                     self.extents_reused += 1;
                     return Ok(index);
                 }
@@ -139,6 +143,7 @@ impl ObjectAllocator {
             .map(|(index, _)| index)
             .ok_or(AllocError::NoKernelUntyped)?;
         let extent = self.extent(index);
+        self.check_root_funding(1usize << extent.size_bits)?;
         self.infrastructure
             .adopt_extent_source(super::UntypedRegion {
                 cap: extent.parent,
@@ -146,6 +151,7 @@ impl ObjectAllocator {
                 size_bits: extent.size_bits,
                 watermark: 0,
             })?;
+        self.consume_root_funding(1usize << extent.size_bits)?;
         self.extents[index]
             .as_mut()
             .expect("owned extent record")

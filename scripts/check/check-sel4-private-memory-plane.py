@@ -495,6 +495,12 @@ ROLLBACK_CHAINS = (
         r"SLIME_MEM elastic retry stage=all committed=\d+ charged=\d+ clean=\d+ doubled=0",
         r"SLIME_MEM elastic quarantine stage=cleanup cause=\S+ owned=1 refused=1 released=1 "
         r"remaining=0 pool_held=\d+ pool_after=\d+",
+    ) + tuple(
+        rf"SLIME_MEM elastic acquisition_quarantine stage={stage} committed=4 peer=8 "
+        r"sentinels=1 retained=\d+ charged=\d+ retry_refund=0 pre_acquire_refused=1 "
+        r"refund=\d+ pool_held=\d+ pool_after=\d+ root_before=\d+ root_after=\d+ retired_once=1"
+        for stage in ("extent-revoke", "descriptors-revoke")
+    ) + (
         r"SLIME_MEM elastic complete case=failure-rollback stages=7 granted=\d+ reclaimed=\d+",
         HEALTHY_MARKER,
     )),
@@ -2917,6 +2923,24 @@ def check_failure_rollback(transcript: str) -> None:
         fail(prefix + "a failed cleanup was not owned, refusing and retryable exactly once")
     if injected[-1].start() >= quarantine[0].start():
         fail(prefix + "the quarantine case did not follow the injected stages")
+    paired = elastic_rows(
+        transcript,
+        "acquisition_quarantine",
+        r"stage=(\S+) committed=4 peer=8 sentinels=1 retained=(\d+) charged=(\d+) "
+        r"retry_refund=0 pre_acquire_refused=1 refund=(\d+) pool_held=(\d+) pool_after=(\d+) "
+        r"root_before=(\d+) root_after=(\d+) retired_once=1",
+        prefix,
+    )
+    if [row.group(1) for row in paired] != ["extent-revoke", "descriptors-revoke"]:
+        fail(prefix + "wrong paired acquisition quarantine population or order")
+    for row in paired:
+        retained, charged, refund, held, after, root_before, root_after = map(int, row.groups()[1:])
+        if retained <= 0 or retained != charged:
+            fail(prefix + "acquisition quarantine does not match its retained common charge")
+        if refund <= retained or after - held != refund:
+            fail(prefix + "acquisition retirement did not refund retained and committed ownership once")
+        if root_before != root_after:
+            fail(prefix + "acquisition retirement refunded root-owned capacity")
 
 
 def check_cross_holder_conservation(transcript: str) -> None:
@@ -4010,6 +4034,11 @@ MATRIX_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"pages=\d+ served=\d+ refused=\d+ final_delta=1",
             r"\[private-matrix\] resident schedule=mixed pages=\d+ bytes=\d+ guaranteed=1024 "
             r"bulk=\d+ small=\d+",
+            r"\[private-matrix\] mixed probe begin",
+            r"SLIME_MEM entitlement task=\d+ instance=private-matrix-probe " + ADAPTIVE_UNBOUND,
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=private-matrix-probe .*",
+            r"\[private-matrix:probe\] ran pages=0 base=0x0 refused=1",
+            r"\[private-matrix\] mixed probe complete resident=\d+ preserved=1",
             r"\[private-matrix\] cycles begin count=20 pages=4095",
             r"\[private-matrix\] cycle=19 victim=private-matrix-small incarnation=\d+ end=exit "
             r"reuser=private-matrix-bulk incarnation=\d+ pages=4095 zeroed=1 peer_pages=1024",
@@ -4028,7 +4057,15 @@ MATRIX_FAILURES: tuple[str, ...] = (
 )
 # Resources whose shortfall is a count running out. A refusal naming one must
 # report more required than available, or it refused a request that fit.
-MATRIX_COUNTED = ("ordinary-bytes", "extent-records", "transaction-extents")
+MATRIX_COUNTED = (
+    "ordinary-bytes", "extent-records", "root-funding", "operational-reserve",
+)
+# A final one-page request cannot exceed the transaction's 64-extent bound.
+# Arithmetic, funding-accounting failures and failed cleanup are not exhaustion.
+MATRIX_EXHAUSTION_RESOURCES = frozenset(MATRIX_COUNTED) | {
+    "ledger-pool", "ordinary-layout", "root-cslots", "allocation-descriptors",
+    "retained-prefix-records",
+}
 
 
 def matrix_policy(fixture: Path) -> dict:
@@ -4075,12 +4112,23 @@ def matrix_segment(transcript: str, schedule: str, prefix: str) -> str:
     return transcript[opening.end() : closing.start()]
 
 
-def matrix_walk(segment: str, instance: str, unit: int, prefix: str) -> dict[str, int | str]:
+MATRIX_FUNDING = (
+    r"SLIME_MEM funding reserve=(?P<reserve>\d+) root_owned=(?P<root_owned>\d+) "
+    r"system_owned=(?P<system_owned>\d+) common_held=(?P<common_held>\d+) "
+    r"inventory_bytes=(?P<inventory_bytes>\d+)"
+)
+
+
+def matrix_walk(
+    segment: str, instance: str, unit: int, prefix: str, *, reserve: int,
+) -> dict[str, int | str]:
     """One holder's exhaustion walk, reconstructed from the root's own lines.
 
     The walk's shape is the claim: a refused request is followed by one of
     half the size, a served one by the same size, and the walk ends at a
     refused single page whose limit line names the resource that ran out.
+    Funding has no task identity, so only the immediately following line can
+    witness that limit's inventory and declared reserve.
     """
     lines = [
         match
@@ -4107,6 +4155,15 @@ def matrix_walk(segment: str, instance: str, unit: int, prefix: str) -> dict[str
                 key: (value if key == "resource" else int(value))
                 for key, value in values.items()
             }
+            funding = re.match(r"\r?\n" + MATRIX_FUNDING + r"(?=\r?$)", segment[match.end():], re.MULTILINE)
+            if funding is None:
+                fail(prefix + f"{instance}: a limit carries no immediate funding evidence")
+            funded = {key: int(value) for key, value in funding.groupdict().items()}
+            if funded["inventory_bytes"] != limit["inventory_bytes"]:
+                fail(prefix + f"{instance}: funding inventory disagrees with its limit")
+            if funded["reserve"] != reserve:
+                fail(prefix + f"{instance}: funding reserve disagrees with the declaration")
+            limit.update(funded)
             if delta != 1:
                 delta //= 2
             continue
@@ -4137,20 +4194,27 @@ def matrix_walk(segment: str, instance: str, unit: int, prefix: str) -> dict[str
 def check_matrix_limit(walk: dict, instance: str, reserve: int, prefix: str) -> None:
     """The one-page refusal must be a real shortfall, not an invented one.
 
-    Whatever named it, a refused single page is only exhaustion if nothing
-    beyond the operational reserve is left: the allocator's residual may hold
-    the reserve (less what constructions since admission drew from it) and at
-    most one page and its table of ledger dust. More than that is ordinary
-    memory a fitting request could not reach.
+    The full declared reserve must survive every final refusal before the
+    operational probe. The upper bound additionally allows one page and its
+    table of ledger dust; memory beyond that remains unreachable capacity.
     """
     resource = walk["resource"]
+    if walk.get("reserve") != reserve:
+        fail(prefix + f"{instance}: funding reserve disagrees with the declaration")
+    if walk["inventory_bytes"] < reserve:
+        fail(
+            prefix + f"{instance}: allocator residual {walk['inventory_bytes']} bytes "
+            f"fell below the declared {reserve}-byte reserve"
+        )
     if walk["inventory_bytes"] > reserve + 2 * 4096:
         fail(
             prefix + f"{instance}: refused one page for {resource} while the allocator held "
             f"{walk['inventory_bytes']} bytes against a {reserve}-byte reserve"
         )
-    if resource in ("maximum", "reservation", "entitlement"):
-        fail(prefix + f"{instance}: exhaustion was a declaration ({resource}), not the inventory")
+    if walk["ledger_pool"] + reserve != walk["inventory_bytes"]:
+        fail(prefix + f"{instance}: ledger pool plus reserve disagrees with allocator residual")
+    if resource not in MATRIX_EXHAUSTION_RESOURCES:
+        fail(prefix + f"{instance}: {resource!r} is not a legitimate one-page exhaustion resource")
     if resource in MATRIX_COUNTED and walk["required"] <= walk["available"]:
         fail(
             prefix + f"{instance}: refused one page for {resource} with {walk['available']} "
@@ -4203,6 +4267,7 @@ def check_matrix_cycles(transcript: str, prefix: str) -> dict[str, int]:
     if [int(match.group(1)) for match in cycles] != list(range(MATRIX_CYCLES)):
         fail(prefix + "the reuse cycles did not run exactly once each, in order")
     faults = 0
+    prior = begin.end()
     for match in cycles:
         cycle = int(match.group(1))
         victim, end, reuser = match.group(2), match.group(4), match.group(5)
@@ -4214,7 +4279,10 @@ def check_matrix_cycles(transcript: str, prefix: str) -> dict[str, int]:
         faults += end == "fault"
         if int(match.group(7)) != MATRIX_CYCLE_PAGES or int(match.group(8)) != MATRIX_GUARANTEE:
             fail(prefix + f"cycle {cycle}: a holder or the peer reported the wrong extent")
-        after = [census for position, census in censuses if position < match.start()]
+        after = [census for position, census in censuses if prior < position < match.start()]
+        if not after:
+            fail(prefix + f"cycle {cycle}: no fresh reclamation census")
+        prior = match.end()
         drift = {
             key: (baseline.get(key), after[-1].get(key))
             for key in sorted(set(baseline) | set(after[-1]))
@@ -4247,6 +4315,70 @@ def check_matrix_inventory(transcript: str, kernel_memory: list[dict], prefix: s
             fail(prefix + f"ordinary range {start:#x}+{size} lies outside the kernel's memory")
 
 
+def check_matrix_probe(transcript: str, prefix: str) -> None:
+    """Join construction, denied execution and cleanup while all holders remain live."""
+    def one(pattern: str) -> re.Match[str]:
+        matches = list(re.finditer(pattern, transcript, re.MULTILINE))
+        if len(matches) != 1:
+            fail(prefix + f"mixed probe needs exactly one record: {pattern}")
+        return matches[0]
+
+    opening = one(r"^\[private-matrix\] mixed probe begin$")
+    closing = one(r"^\[private-matrix\] mixed probe complete resident=(\d+) preserved=1$")
+    resident = one(
+        r"^\[private-matrix\] resident schedule=mixed pages=(\d+) bytes=\d+ "
+        r"guaranteed=(\d+) bulk=(\d+) small=(\d+)$"
+    )
+    binding = one(
+        r"^SLIME_MEM entitlement task=(\d+) instance=private-matrix-probe " + ADAPTIVE_UNBOUND + "$"
+    )
+    task = binding.group(1)
+    spawned = one(
+        rf"^SLIME_GRAPH spawned task=\d+ child={task} component=private-matrix-probe "
+        r"grants=0 endpoints=0 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0$"
+    )
+    refused = one(
+        rf"^SLIME_MEM adaptive refused task={task} instance=private-matrix-probe "
+        r"entitlement=none delta=1 pages=0 cause=entitlement entitlement_committed=0 pool_bytes=\d+$"
+    )
+    ran = one(r"^\[private-matrix:probe\] ran pages=0 base=0x0 refused=1$")
+    exited = one(rf"^SLIME_GRAPH component exit task={task} status=0$")
+    reclaimed = one(rf"^SLIME_ROOT reclaim census task={task} .*$")
+    sequence = (resident, opening, binding, spawned, refused, ran, exited, reclaimed, closing)
+    if any(left.end() >= right.start() for left, right in zip(sequence, sequence[1:], strict=False)):
+        fail(prefix + "mixed probe construction, execution or cleanup was misordered")
+    if closing.group(1) != resident.group(1):
+        fail(prefix + "mixed probe changed the resident total")
+
+    mixed_start = one(MATRIX_SEGMENTS["mixed"][0])
+    protected = transcript[mixed_start.end():closing.end()]
+    if re.search(r"\[private-matrix:(?:bulk|small|guaranteed)\] end ", protected):
+        fail(prefix + "a pressure or guaranteed holder released before probe completion")
+    holder_tasks = set(re.findall(
+        r"SLIME_MEM adaptive (?:grant|refused) task=(\d+) instance=private-matrix-(?:bulk|small) ",
+        matrix_segment(transcript, "mixed", prefix),
+    ))
+    guaranteed = one(r"^SLIME_MEM entitlement task=(\d+) instance=private-matrix-guaranteed .*$")
+    holder_tasks.add(guaranteed.group(1))
+    if re.search(r"\[private-matrix:guaranteed\] end ", transcript[:closing.end()]):
+        fail(prefix + "the guaranteed holder released before probe completion")
+    for holder in holder_tasks:
+        lifetime = transcript[guaranteed.end():closing.end()] if holder == guaranteed.group(1) else protected
+        if re.search(
+            rf"SLIME_GRAPH component (?:exit|fault) task={holder} |"
+            rf"SLIME_MEM adaptive retired task={holder} |"
+            rf"SLIME_ROOT reclaim census task={holder} ", lifetime,
+        ):
+            fail(prefix + "a resident holder retired before probe completion")
+    for role, incarnation, pages in zip(("guaranteed", "bulk", "small"), (0, 1, 2), resident.groups()[1:], strict=True):
+        if re.search(
+            rf"^\[private-matrix:{role}\] verified incarnation={incarnation} "
+            rf"base=0x[0-9a-f]+ pages={pages} pattern=1 refused=\d+$",
+            transcript[reclaimed.end():closing.start()], re.MULTILINE,
+        ) is None:
+            fail(prefix + f"{role} did not verify its full contents after probe cleanup")
+
+
 def check_matrix_transcript(transcript: str, reserve: int, prefix: str) -> dict[str, object]:
     """Validate one inventory row's boot and return what it measured."""
     check_adaptive_markers(transcript, MATRIX_CHAINS, prefix)
@@ -4266,8 +4398,14 @@ def check_matrix_transcript(transcript: str, reserve: int, prefix: str) -> dict[
         segment = matrix_segment(transcript, schedule, prefix)
         walks = {}
         for instance, incarnation, unit in walkers:
-            walk = matrix_walk(segment, instance, unit, prefix + f"{schedule}: ")
+            walk = matrix_walk(segment, instance, unit, prefix + f"{schedule}: ", reserve=reserve)
             check_matrix_limit(walk, instance, reserve, prefix + f"{schedule}: ")
+            funded = sum(walk[field] for field in (
+                "root_owned", "system_owned", "common_held", "ledger_pool",
+            ))
+            if funded != result["pool"]:
+                fail(prefix + f"{schedule}: {instance}: final funding {funded} "
+                     f"does not conserve admitted pool {result['pool']}")
             reported = re.search(
                 rf"^\[private-matrix\] exhausted schedule={schedule} subject={instance} "
                 rf"incarnation={incarnation} pages=(\d+) served=(\d+) refused=(\d+) ",
@@ -4299,6 +4437,7 @@ def check_matrix_transcript(transcript: str, reserve: int, prefix: str) -> dict[
             if held[instance] != walk["pages"]:
                 fail(prefix + f"{schedule}: {instance} verified an extent it was not granted")
         result["schedules"][schedule] = {"resident": pages, "walks": walks}
+    check_matrix_probe(transcript, prefix)
     result["cycles"] = check_matrix_cycles(transcript, prefix)
     # Returned extents adopted for infrastructure must stay in one census
     # category, or conservation cannot close once every holder retired.

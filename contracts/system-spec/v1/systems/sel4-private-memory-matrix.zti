@@ -15,6 +15,7 @@
     "private-matrix-bulk";
     "private-matrix-coordinator";
     "private-matrix-guaranteed";
+    "private-matrix-probe";
     "private-matrix-small";
   ];
   defaultImageBytes = 65536;
@@ -89,6 +90,17 @@
       target = "private-matrix-small";
       transferable = false;
     };
+    {
+      capabilityKind = "executable";
+      name = "matrix-probe-executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "private-matrix-coordinator";
+      target = "private-matrix-probe";
+      transferable = false;
+    };
   ];
   imageSizes = [];
   instances = [
@@ -118,6 +130,12 @@
       executable = "private-matrix-small";
       health = "optional";
       name = "private-matrix-small";
+    };
+    {
+      autostart = false;
+      executable = "private-matrix-probe";
+      health = "optional";
+      name = "private-matrix-probe";
     };
   ];
   interfaceSchemas = [];

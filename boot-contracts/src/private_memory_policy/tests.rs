@@ -141,6 +141,722 @@ fn run_contention(policy: Policy<'_>) -> (Resources, Resources, Incarnation) {
 }
 
 #[test]
+fn unbegun_cleanup_charges_once_without_payload_and_refunds_only_after_revoke() {
+    let data = bytes(
+        std::vec![entitlement("shared", 1)],
+        std::vec![subject("a", "shared")],
+        resources(1),
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[resources(1)]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger.begin(a, 1, plan(1)).unwrap();
+    ledger.commit(a).unwrap();
+    let demand = resources(2);
+    let before = ledger.available();
+    ledger.can_fund_common(demand).unwrap();
+    let root = Resources {
+        bytes: before.bytes - demand.bytes,
+        ..Resources::ZERO
+    };
+    ledger.reserve_root(root).unwrap();
+    ledger.can_fund_common(demand).unwrap();
+    let retained = Resources {
+        bytes: PAGE_BYTES,
+        slots: 1,
+        extents: 1,
+        ..Resources::ZERO
+    };
+    assert_eq!(ledger.ensure_growable(a), Ok(()));
+    ledger.retain_unbegun(a, retained).unwrap();
+    assert_eq!(ledger.ensure_growable(a), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.ensure_growable(a), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.pages(a), Ok(1));
+    assert_eq!(
+        ledger.entitlement_pages(ledger.entitlement_of(a).unwrap()),
+        1
+    );
+    assert_eq!(ledger.common_held(), retained);
+    assert_eq!(ledger.guaranteed_held(a), Ok(resources(1)));
+    let charged = ledger.available();
+    assert_eq!(
+        ledger.retain_unbegun(a, retained),
+        Err(ledger::Error::Cleanup)
+    );
+    assert_eq!(ledger.begin(a, 1, plan(1)), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.retire(a, false), Err(ledger::Error::Cleanup));
+    assert_eq!(ledger.available(), charged);
+    ledger.settle_root(root).unwrap();
+    ledger.retire(a, true).unwrap();
+    assert_eq!(ledger.available(), before.subtract(root).unwrap());
+    assert_eq!(ledger.root_owned(), root);
+    assert_eq!(ledger.common_held(), Resources::ZERO);
+    assert_eq!(ledger.retire(a, true), Err(ledger::Error::Incarnation));
+    assert_eq!(ledger.ensure_growable(a), Err(ledger::Error::Incarnation));
+    let replacement = ledger.bind(&subject_identity("a")).unwrap();
+    assert_eq!(ledger.ensure_growable(replacement), Ok(()));
+    assert_eq!(ledger.ensure_growable(a), Err(ledger::Error::Incarnation));
+    assert_eq!(
+        ledger.retain_unbegun(a, retained),
+        Err(ledger::Error::Incarnation)
+    );
+}
+
+#[test]
+fn common_preflight_and_unbegun_retention_check_every_component_atomically() {
+    let data = bytes(
+        std::vec![entitlement("shared", 1)],
+        std::vec![subject("a", "shared")],
+        resources(1),
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(3), &[resources(1)]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    for excess in [
+        Resources {
+            bytes: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            slots: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            descriptors: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            extents: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            tables: 1,
+            ..Resources::ZERO
+        },
+    ] {
+        let too_much = resources(1).checked_add(excess).unwrap();
+        assert_eq!(
+            ledger.can_fund_common(too_much),
+            Err(ledger::Error::Unavailable)
+        );
+        assert_eq!(
+            ledger.retain_unbegun(a, too_much),
+            Err(ledger::Error::Unavailable)
+        );
+        assert_eq!(ledger.available(), resources(1));
+        assert_eq!(ledger.common_held(), Resources::ZERO);
+        assert_eq!(
+            ledger.guaranteed_available(&entitlement_identity("shared")),
+            Ok(resources(1))
+        );
+    }
+    ledger.begin(a, 1, plan(1)).unwrap();
+    assert_eq!(
+        ledger.retain_unbegun(a, Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+    ledger.abort(a, Resources::ZERO, true).unwrap();
+    ledger.retain_unbegun(a, Resources::ZERO).unwrap();
+    assert_eq!(ledger.pages(a), Ok(0));
+    assert_eq!(ledger.begin(a, 1, plan(1)), Err(ledger::Error::Cleanup));
+}
+
+#[test]
+fn unbegun_retention_after_begin_refusal_does_not_grant_payload() {
+    let mut member = subject("a", "shared");
+    member.maximum_mode = FIXED;
+    member.maximum_pages = 1;
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![member],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(4), &[Resources::ZERO]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger.can_fund_common(resources(2)).unwrap();
+    assert_eq!(ledger.begin(a, 2, plan(2)), Err(ledger::Error::Maximum));
+    ledger.retain_unbegun(a, resources(1)).unwrap();
+    assert_eq!(ledger.pages(a), Ok(0));
+    assert_eq!(ledger.entitlement_pages(0), 0);
+    assert_eq!(ledger.available(), resources(3));
+    ledger.retire(a, true).unwrap();
+    assert_eq!(ledger.available(), resources(4));
+}
+
+#[test]
+fn system_reconciliation_replaces_exact_census_and_preserves_other_owners() {
+    let data = bytes(
+        std::vec![entitlement("shared", 2)],
+        std::vec![subject("a", "shared")],
+        resources(1),
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(12), &[resources(2)]).unwrap();
+    ledger.reserve_root(resources(1)).unwrap();
+    ledger.settle_root(resources(1)).unwrap();
+    let initial = ledger.available();
+    assert_eq!(ledger.system_owned(), Resources::ZERO);
+    for census in [resources(2), resources(4), resources(1)] {
+        ledger.reconcile_system(census).unwrap();
+        assert_eq!(ledger.system_owned(), census);
+        assert_eq!(ledger.available(), initial.subtract(census).unwrap());
+        assert_eq!(ledger.root_owned(), resources(1));
+        assert_eq!(ledger.operational_reserve(), resources(1));
+        assert_eq!(
+            ledger.guaranteed_available(&entitlement_identity("shared")),
+            Ok(resources(2))
+        );
+    }
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger.begin(a, 3, plan(3)).unwrap();
+    ledger.commit(a).unwrap();
+    assert_eq!(ledger.common_held(), resources(1));
+    ledger.retire(a, true).unwrap();
+    assert_eq!(ledger.available(), initial.subtract(resources(1)).unwrap());
+    assert_eq!(ledger.system_owned(), resources(1));
+    assert_eq!(ledger.root_owned(), resources(1));
+    ledger.reconcile_system(Resources::ZERO).unwrap();
+    assert_eq!(ledger.available(), initial);
+}
+
+#[test]
+fn operational_censuses_spend_componentwise_and_cleanup_restores_reserve() {
+    let reserve = resources(3);
+    let data = bytes(std::vec![], std::vec![], reserve);
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger = Ledger::admit(policy, &[], resources(10), &[]).unwrap();
+    assert_eq!(ledger.operational_spent(), Resources::ZERO);
+    assert_eq!(ledger.remaining_operational_reserve(), reserve);
+    let root = resources(2);
+    let system = Resources {
+        bytes: 7 * PAGE_BYTES,
+        slots: 6,
+        descriptors: 5,
+        extents: 4,
+        tables: 8,
+    };
+    ledger.reconcile_ownership(root, system).unwrap();
+    let remaining = Resources {
+        bytes: PAGE_BYTES,
+        slots: 2,
+        descriptors: 3,
+        extents: 3,
+        tables: 0,
+    };
+    assert_eq!(ledger.root_owned(), root);
+    assert_eq!(ledger.system_owned(), system);
+    assert_eq!(ledger.remaining_operational_reserve(), remaining);
+    assert_eq!(
+        ledger.operational_spent(),
+        reserve.subtract(remaining).unwrap()
+    );
+    assert_eq!(
+        ledger.available(),
+        Resources {
+            extents: 1,
+            ..Resources::ZERO
+        }
+    );
+    let debt = ledger.operational_spent();
+    assert_eq!(
+        ledger.reserve_root(resources(1)),
+        Err(ledger::Error::Unavailable)
+    );
+    assert_eq!(
+        ledger.can_fund_common(resources(1)),
+        Err(ledger::Error::Unavailable)
+    );
+    ledger.reconcile_ownership(root, system).unwrap();
+    assert_eq!(ledger.operational_spent(), debt);
+    ledger.reconcile_system(Resources::ZERO).unwrap();
+    assert_eq!(ledger.operational_spent(), Resources::ZERO);
+    assert_eq!(ledger.remaining_operational_reserve(), reserve);
+    assert_eq!(ledger.available(), resources(5));
+    assert_eq!(ledger.root_owned(), root);
+}
+
+#[test]
+fn guarantees_redeem_and_refund_separately_while_common_retirement_repays_debt() {
+    let data = bytes(
+        std::vec![entitlement("common", 0), entitlement("protected", 2)],
+        std::vec![subject("a", "common"), subject("b", "protected")],
+        resources(3),
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let guarantees: Vec<_> = (0..policy.entitlement_count())
+        .map(|index| resources(policy.entitlement(index).unwrap().guarantee_pages))
+        .collect();
+    let mut ledger = Ledger::admit(policy, &instances(policy), resources(12), &guarantees).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    let b = ledger.bind(&subject_identity("b")).unwrap();
+    ledger.begin(a, 4, plan(4)).unwrap();
+    ledger.commit(a).unwrap();
+    ledger
+        .reconcile_ownership(resources(1), resources(4))
+        .unwrap();
+    assert_eq!(ledger.available(), Resources::ZERO);
+    assert_eq!(ledger.operational_spent(), resources(2));
+    assert_eq!(ledger.common_held(), resources(4));
+    ledger.begin(b, 2, plan(2)).unwrap();
+    ledger.abort(b, Resources::ZERO, true).unwrap();
+    assert_eq!(ledger.operational_spent(), resources(2));
+    ledger.begin(b, 2, plan(2)).unwrap();
+    ledger.commit(b).unwrap();
+    assert_eq!(ledger.guaranteed_held(b), Ok(resources(2)));
+    ledger.retire(b, true).unwrap();
+    assert_eq!(
+        ledger.guaranteed_available(&entitlement_identity("protected")),
+        Ok(resources(2))
+    );
+    assert_eq!(ledger.available(), Resources::ZERO);
+    assert_eq!(ledger.operational_spent(), resources(2));
+    ledger.retire(a, true).unwrap();
+    assert_eq!(ledger.available(), resources(2));
+    assert_eq!(ledger.operational_spent(), Resources::ZERO);
+    assert_eq!(ledger.remaining_operational_reserve(), resources(3));
+    assert_eq!(ledger.root_owned(), resources(1));
+    assert_eq!(ledger.system_owned(), resources(4));
+}
+
+#[test]
+fn ownership_shortage_root_decrease_and_pending_are_atomic_with_debt() {
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![subject("a", "shared")],
+        resources(3),
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger = Ledger::admit(
+        policy,
+        &instances(policy),
+        resources(10),
+        &[Resources::ZERO],
+    )
+    .unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger
+        .reconcile_ownership(resources(2), resources(7))
+        .unwrap();
+    for component in 0..5 {
+        let mut lower = resources(2);
+        let field = match component {
+            0 => &mut lower.bytes,
+            1 => &mut lower.slots,
+            2 => &mut lower.descriptors,
+            3 => &mut lower.extents,
+            _ => &mut lower.tables,
+        };
+        *field -= 1;
+        assert_eq!(
+            ledger.reconcile_ownership(lower, Resources::ZERO),
+            Err(ledger::Error::Unavailable)
+        );
+        let mut excess = resources(8);
+        let field = match component {
+            0 => &mut excess.bytes,
+            1 => &mut excess.slots,
+            2 => &mut excess.descriptors,
+            3 => &mut excess.extents,
+            _ => &mut excess.tables,
+        };
+        *field += 1;
+        assert_eq!(
+            ledger.reconcile_ownership(resources(2), excess),
+            Err(ledger::Error::Unavailable)
+        );
+        assert_eq!(ledger.root_owned(), resources(2));
+        assert_eq!(ledger.system_owned(), resources(7));
+        assert_eq!(ledger.operational_spent(), resources(2));
+        assert_eq!(ledger.remaining_operational_reserve(), resources(1));
+        assert_eq!(ledger.available(), Resources::ZERO);
+    }
+    ledger.reserve_root(Resources::ZERO).unwrap();
+    assert_eq!(
+        ledger.reconcile_ownership(resources(2), Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+    ledger.settle_root(Resources::ZERO).unwrap();
+    ledger.begin(a, 0, plan(0)).unwrap();
+    assert_eq!(
+        ledger.reconcile_ownership(resources(2), Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+    ledger.abort(a, Resources::ZERO, true).unwrap();
+    assert_eq!(ledger.root_owned(), resources(2));
+    assert_eq!(ledger.system_owned(), resources(7));
+    assert_eq!(ledger.operational_spent(), resources(2));
+    assert_eq!(ledger.available(), Resources::ZERO);
+}
+
+#[test]
+fn system_shortage_is_atomic_for_every_resource_component() {
+    let data = bytes(std::vec![], std::vec![], Resources::ZERO);
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger = Ledger::admit(policy, &[], resources(8), &[]).unwrap();
+    ledger.reconcile_system(resources(2)).unwrap();
+    for excess in [
+        Resources {
+            bytes: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            slots: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            descriptors: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            extents: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            tables: 1,
+            ..Resources::ZERO
+        },
+    ] {
+        assert_eq!(
+            ledger.reconcile_system(resources(8).checked_add(excess).unwrap()),
+            Err(ledger::Error::Unavailable)
+        );
+        assert_eq!(ledger.available(), resources(6));
+        assert_eq!(ledger.system_owned(), resources(2));
+    }
+}
+
+#[test]
+fn system_reconciliation_refuses_root_and_holder_pending_funding() {
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![subject("a", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[Resources::ZERO]).unwrap();
+    ledger.reconcile_system(resources(1)).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger.reserve_root(resources(1)).unwrap();
+    assert_eq!(ledger.common_held(), Resources::ZERO);
+    assert_eq!(
+        ledger.reconcile_system(Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+    assert_eq!(ledger.available(), resources(6));
+    assert_eq!(ledger.system_owned(), resources(1));
+    ledger.begin(a, 2, plan(2)).unwrap();
+    assert_eq!(ledger.common_held(), resources(2));
+    ledger.settle_root(resources(1)).unwrap();
+    assert_eq!(
+        ledger.reconcile_system(Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+    assert_eq!(ledger.available(), resources(4));
+    assert_eq!(ledger.system_owned(), resources(1));
+    ledger.commit(a).unwrap();
+    assert_eq!(ledger.common_held(), resources(2));
+    ledger.reconcile_system(Resources::ZERO).unwrap();
+    assert_eq!(ledger.available(), resources(5));
+}
+
+#[test]
+fn system_reconciliation_at_integer_limits_never_wraps() {
+    let data = bytes(std::vec![], std::vec![], Resources::ZERO);
+    let policy = Policy::decode(&data).unwrap();
+    let maximum = Resources {
+        bytes: u64::MAX,
+        slots: u64::MAX,
+        descriptors: u64::MAX,
+        extents: u64::MAX,
+        tables: u64::MAX,
+    };
+    let one = Resources {
+        bytes: 1,
+        slots: 1,
+        descriptors: 1,
+        extents: 1,
+        tables: 1,
+    };
+    let mut ledger = Ledger::admit(policy, &[], maximum, &[]).unwrap();
+    for census in [maximum, one, maximum, Resources::ZERO] {
+        ledger.reconcile_system(census).unwrap();
+        assert_eq!(ledger.available(), maximum.subtract(census).unwrap());
+        assert_eq!(ledger.system_owned(), census);
+    }
+    // Public transitions conserve the admitted tuple, so refunding an existing
+    // census cannot overflow even at the largest representable inventory.
+    assert_eq!(maximum.checked_add(one), Err(ledger::Error::Overflow));
+    ledger.reserve_root(one).unwrap();
+    ledger.settle_root(one).unwrap();
+    assert_eq!(
+        ledger.reconcile_system(maximum),
+        Err(ledger::Error::Unavailable)
+    );
+    assert_eq!(ledger.available(), maximum.subtract(one).unwrap());
+    assert_eq!(ledger.system_owned(), Resources::ZERO);
+}
+
+#[test]
+fn common_held_counts_pending_retained_and_quarantined_elastic_without_guarantees() {
+    let data = bytes(
+        std::vec![entitlement("shared", 1)],
+        std::vec![subject("a", "shared"), subject("b", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(12), &[resources(1)]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    let b = ledger.bind(&subject_identity("b")).unwrap();
+    assert_eq!(ledger.common_held(), Resources::ZERO);
+    ledger.begin(a, 2, plan(2)).unwrap();
+    assert_eq!(ledger.common_held(), resources(1));
+    ledger.abort(a, Resources::ZERO, false).unwrap();
+    assert_eq!(ledger.common_held(), resources(1));
+    assert_eq!(ledger.pages(a), Ok(0));
+    let table = Resources {
+        extents: 0,
+        ..resources(1)
+    };
+    ledger.begin(b, 2, plan(2)).unwrap();
+    assert_eq!(ledger.common_held(), resources(3));
+    ledger.abort(b, table, true).unwrap();
+    assert_eq!(
+        ledger.common_held(),
+        resources(1).checked_add(table).unwrap()
+    );
+    ledger.begin(b, 1, plan(1)).unwrap();
+    assert_eq!(
+        ledger.common_held(),
+        resources(2).checked_add(table).unwrap()
+    );
+    ledger.commit(b).unwrap();
+    assert_eq!(
+        ledger.common_held(),
+        resources(2).checked_add(table).unwrap()
+    );
+    assert_eq!(ledger.retire(a, false), Err(ledger::Error::Cleanup));
+    assert_eq!(
+        ledger.common_held(),
+        resources(2).checked_add(table).unwrap()
+    );
+    ledger.retire(a, true).unwrap();
+    ledger.retire(b, true).unwrap();
+    assert_eq!(ledger.common_held(), Resources::ZERO);
+    assert_eq!(ledger.available(), resources(11));
+}
+
+#[test]
+fn root_funding_preserves_protected_resources_and_refuses_each_unaffordable_component() {
+    let data = bytes(
+        std::vec![entitlement("shared", 2)],
+        std::vec![subject("a", "shared")],
+        resources(1),
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[resources(2)]).unwrap();
+    let initial = resources(5);
+    for requested in [
+        Resources {
+            bytes: initial.bytes + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            slots: initial.slots + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            descriptors: initial.descriptors + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            extents: initial.extents + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            tables: initial.tables + 1,
+            ..Resources::ZERO
+        },
+    ] {
+        assert_eq!(
+            ledger.reserve_root(requested),
+            Err(ledger::Error::Unavailable)
+        );
+        assert_eq!(ledger.available(), initial);
+        assert_eq!(ledger.root_owned(), Resources::ZERO);
+    }
+    ledger.reserve_root(initial).unwrap();
+    assert_eq!(ledger.available(), Resources::ZERO);
+    assert_eq!(ledger.root_owned(), Resources::ZERO);
+    assert_eq!(
+        ledger.reserve_root(Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+    assert_eq!(
+        ledger.guaranteed_available(&entitlement_identity("shared")),
+        Ok(resources(2))
+    );
+    ledger.settle_root(Resources::ZERO).unwrap();
+    assert_eq!(ledger.available(), initial);
+    assert_eq!(
+        ledger.settle_root(Resources::ZERO),
+        Err(ledger::Error::Transaction)
+    );
+}
+
+#[test]
+fn root_partial_settlement_checks_every_component_and_keeps_invalid_funding() {
+    let data = bytes(std::vec![], std::vec![], Resources::ZERO);
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger = Ledger::admit(policy, &[], resources(8), &[]).unwrap();
+    let reserved = resources(4);
+    ledger.reserve_root(reserved).unwrap();
+    for used in [
+        Resources {
+            bytes: reserved.bytes + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            slots: reserved.slots + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            descriptors: reserved.descriptors + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            extents: reserved.extents + 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            tables: reserved.tables + 1,
+            ..Resources::ZERO
+        },
+    ] {
+        assert_eq!(ledger.settle_root(used), Err(ledger::Error::Unavailable));
+        assert_eq!(ledger.available(), resources(4));
+        assert_eq!(ledger.root_owned(), Resources::ZERO);
+        assert_eq!(
+            ledger.reserve_root(Resources::ZERO),
+            Err(ledger::Error::Transaction)
+        );
+    }
+    let used = Resources {
+        bytes: PAGE_BYTES,
+        slots: 2,
+        descriptors: 3,
+        extents: 4,
+        tables: 0,
+    };
+    ledger.settle_root(used).unwrap();
+    assert_eq!(ledger.root_owned(), used);
+    assert_eq!(ledger.available(), resources(8).subtract(used).unwrap());
+    assert_eq!(ledger.settle_root(used), Err(ledger::Error::Transaction));
+}
+
+#[test]
+fn root_funding_at_integer_limits_never_wraps_or_partially_charges() {
+    let data = bytes(std::vec![], std::vec![], Resources::ZERO);
+    let policy = Policy::decode(&data).unwrap();
+    let maximum = Resources {
+        bytes: u64::MAX,
+        slots: u64::MAX,
+        descriptors: u64::MAX,
+        extents: u64::MAX,
+        tables: u64::MAX,
+    };
+    let one = Resources {
+        bytes: 1,
+        slots: 1,
+        descriptors: 1,
+        extents: 1,
+        tables: 1,
+    };
+    for extra in [
+        Resources {
+            bytes: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            slots: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            descriptors: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            extents: 1,
+            ..Resources::ZERO
+        },
+        Resources {
+            tables: 1,
+            ..Resources::ZERO
+        },
+    ] {
+        assert_eq!(maximum.checked_add(extra), Err(ledger::Error::Overflow));
+    }
+    let mut ledger = Ledger::admit(policy, &[], maximum, &[]).unwrap();
+    ledger.reserve_root(maximum).unwrap();
+    ledger.settle_root(maximum.subtract(one).unwrap()).unwrap();
+    assert_eq!(ledger.available(), one);
+    assert_eq!(
+        ledger.reserve_root(resources(1)),
+        Err(ledger::Error::Unavailable)
+    );
+    assert_eq!(ledger.available(), one);
+    assert_eq!(ledger.root_owned(), maximum.subtract(one).unwrap());
+    ledger.reserve_root(one).unwrap();
+    ledger.settle_root(one).unwrap();
+    assert_eq!(ledger.root_owned(), maximum);
+    assert_eq!(ledger.reserve_root(one), Err(ledger::Error::Unavailable));
+    assert_eq!(ledger.available(), Resources::ZERO);
+    assert_eq!(ledger.root_owned(), maximum);
+}
+
+#[test]
+fn holder_transactions_and_retirement_never_refund_root_and_reuse_is_not_charged() {
+    let data = bytes(
+        std::vec![entitlement("shared", 0)],
+        std::vec![subject("a", "shared")],
+        Resources::ZERO,
+    );
+    let policy = Policy::decode(&data).unwrap();
+    let mut ledger =
+        Ledger::admit(policy, &instances(policy), resources(8), &[Resources::ZERO]).unwrap();
+    let a = ledger.bind(&subject_identity("a")).unwrap();
+    ledger.begin(a, 2, plan(2)).unwrap();
+    ledger.reserve_root(resources(3)).unwrap();
+    ledger.abort(a, Resources::ZERO, true).unwrap();
+    ledger.retire(a, true).unwrap();
+    assert_eq!(ledger.available(), resources(5));
+    ledger.settle_root(resources(2)).unwrap();
+    assert_eq!(ledger.available(), resources(6));
+    assert_eq!(ledger.root_owned(), resources(2));
+    for _ in 0..20 {
+        let a = ledger.bind(&subject_identity("a")).unwrap();
+        // Mapping reuses the root backing already owned: no new acquisition.
+        ledger.reserve_root(Resources::ZERO).unwrap();
+        ledger.begin(a, 2, plan(2)).unwrap();
+        ledger.settle_root(Resources::ZERO).unwrap();
+        ledger.commit(a).unwrap();
+        assert_eq!(ledger.available(), resources(4));
+        assert_eq!(ledger.retire(a, false), Err(ledger::Error::Cleanup));
+        assert_eq!(ledger.available(), resources(4));
+        ledger.retire(a, true).unwrap();
+        assert_eq!(ledger.available(), resources(6));
+        assert_eq!(ledger.root_owned(), resources(2));
+    }
+}
+
+#[test]
 fn binding_reports_fixed_and_pool_address_maxima_and_quarantines_duplicates() {
     let mut fixed = subject("fixed", "shared");
     fixed.maximum_mode = FIXED;

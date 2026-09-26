@@ -1151,8 +1151,129 @@ pub fn exercise_failure_rollback(
     }
 
     for holder in [&mut holder, &mut peer] {
-        let _ = holder.retire(&mut table, allocator, &mut ledger);
+        holder.retire(&mut table, allocator, &mut ledger)?;
     }
+
+    // Each acquisition failure needs a fresh incarnation: a quarantined
+    // incarnation cannot grow again even after its backing has been returned.
+    let mut peer = Holder::admit(
+        allocator,
+        &mut ledger,
+        "qualification-peer",
+        1,
+        HOLDER_WINDOW_PAGES,
+    )?;
+    peer.grow(&mut table, allocator, &mut ledger, 8)
+        .map_err(QualificationError::Growth)?;
+    peer.write_pattern(0, 8);
+    for stage in ["extent-revoke", "descriptors-revoke"] {
+        let mut holder = Holder::admit(
+            allocator,
+            &mut ledger,
+            "qualification-injected",
+            0,
+            HOLDER_WINDOW_PAGES,
+        )?;
+        let common_baseline = ledger.common_held();
+        holder
+            .grow(&mut table, allocator, &mut ledger, 4)
+            .map_err(QualificationError::Growth)?;
+        holder.write_pattern(0, 4);
+        let common_before = ledger.common_held();
+        let pages_before = table.total_pages();
+        if stage == "extent-revoke" {
+            inject::fail_extent(1);
+        } else {
+            inject::fail_descriptors();
+        }
+        inject::fail_revoke();
+        let delta = LARGE_FRAME_PAGES - holder.region.pages() + 1;
+        let outcome = holder.grow(&mut table, allocator, &mut ledger, delta);
+        let retained = allocator.elastic_quarantine_resources(holder.arena);
+        if !matches!(outcome, Err(elastic::ElasticGrowError::Quarantined { .. }))
+            || inject::armed()
+            || !allocator.elastic_quarantined(holder.arena)
+            || retained.bytes == 0
+            || ledger.common_held().subtract(common_before)? != retained
+            || holder.region.pages() != 4
+            || ledger.pages(holder.token)? != 4
+            || peer.region.pages() != 8
+            || ledger.pages(peer.token)? != 8
+            || table.total_pages() != pages_before
+            || !holder.pattern_holds(0, 4)
+            || !peer.pattern_holds(0, 8)
+        {
+            return Err(QualificationError::Unmet(
+                "acquisition quarantine lost ownership or committed state",
+            ));
+        }
+        let held = ledger.available();
+        let common_held = ledger.common_held();
+        let root_owned = ledger.root_owned();
+        allocator.retry_elastic_quarantine(holder.arena)?;
+        if allocator.elastic_quarantined(holder.arena)
+            || ledger.available() != held
+            || ledger.common_held() != common_held
+            || ledger.root_owned() != root_owned
+        {
+            return Err(QualificationError::Unmet(
+                "quarantine retry refunded ownership",
+            ));
+        }
+        let inventory = allocator.elastic_inventory();
+        let reused = allocator.extents_reused();
+        let refused = holder.grow(&mut table, allocator, &mut ledger, 1);
+        if refused != Err(elastic::ElasticGrowError::Policy(ledger::Error::Cleanup))
+            || allocator.elastic_inventory() != inventory
+            || allocator.extents_reused() != reused
+            || ledger.available() != held
+            || ledger.common_held() != common_held
+            || ledger.root_owned() != root_owned
+            || holder.region.pages() != 4
+            || ledger.pages(holder.token)? != 4
+            || peer.region.pages() != 8
+            || ledger.pages(peer.token)? != 8
+            || table.total_pages() != pages_before
+            || !holder.pattern_holds(0, 4)
+            || !peer.pattern_holds(0, 8)
+        {
+            return Err(QualificationError::Unmet(
+                "quarantined incarnation reached acquisition after retry",
+            ));
+        }
+        let refund = common_held.subtract(common_baseline)?;
+        if holder.retire(&mut table, allocator, &mut ledger)? != 4
+            || ledger.available() != held.checked_add(refund)?
+            || ledger.common_held() != common_baseline
+            || ledger.root_owned() != root_owned
+        {
+            return Err(QualificationError::Unmet(
+                "retirement refunded the wrong ownership",
+            ));
+        }
+        let refunded = ledger.available();
+        if ledger.retire(holder.token, true) != Err(ledger::Error::Incarnation)
+            || ledger.available() != refunded
+            || ledger.root_owned() != root_owned
+            || !peer.pattern_holds(0, 8)
+        {
+            return Err(QualificationError::Unmet(
+                "retirement refunded twice or damaged peer",
+            ));
+        }
+        sel4::debug_println!(
+            "SLIME_MEM elastic acquisition_quarantine stage={} committed=4 peer=8 sentinels=1 retained={} charged={} retry_refund=0 pre_acquire_refused=1 refund={} pool_held={} pool_after={} root_before={} root_after={} retired_once=1",
+            stage,
+            retained.bytes,
+            common_held.subtract(common_before)?.bytes,
+            refund.bytes,
+            held.bytes,
+            refunded.bytes,
+            root_owned.bytes,
+            ledger.root_owned().bytes,
+        );
+    }
+    peer.retire(&mut table, allocator, &mut ledger)?;
     allocator.report_elastic_census("retired");
     sel4::debug_println!(
         "SLIME_MEM elastic complete case=failure-rollback stages={} granted={} reclaimed={}",

@@ -1286,6 +1286,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-private-matrix-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-private-matrix-small"
 version = "0.1.0"
 dependencies = [

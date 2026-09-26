@@ -9,6 +9,9 @@
 //! the corresponding capability is known to be gone.
 
 pub mod elastic;
+mod funding;
+#[cfg(test)]
+mod funding_tests;
 mod global_backing;
 pub mod guarantee_vault;
 mod infrastructure;
@@ -321,6 +324,11 @@ const PROVENANCE_SLOTS: usize = (2 * MAX_PHYSICAL_PROVENANCE).next_power_of_two(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocError {
     NoKernelUntyped,
+    AdaptiveFunding {
+        resource: &'static str,
+        required: u64,
+        available: u64,
+    },
     UntypedTableFull {
         limit: usize,
         declared: usize,
@@ -406,6 +414,7 @@ impl AllocError {
     /// The allocator resource this error names, in a refusal report's words.
     pub const fn resource(self) -> &'static str {
         match self {
+            Self::AdaptiveFunding { resource, .. } => resource,
             Self::NoKernelUntyped | Self::UntypedExhausted { .. } => "ordinary-layout",
             Self::UntypedTableFull { .. } => "retained-prefix-records",
             Self::SlotsExhausted { .. } | Self::SlotRangeTooLarge { .. } => "root-cslots",
@@ -1342,6 +1351,12 @@ struct PrivateRecordVisits {
 pub struct ObjectAllocator {
     slots: SlotPool,
     infrastructure: infrastructure::Infrastructure,
+    adaptive_funding: Option<funding::Funding>,
+    adaptive_reserve: Option<u64>,
+    #[cfg(slime_private_fragmentation)]
+    physically_withheld_ordinary: Option<u64>,
+    operational_resources: boot_contracts::private_memory_policy::ledger::Resources,
+    operational_lent: bool,
     metadata_ledger: segmented::Segmented<Option<infrastructure::MappingOwnership>>,
     metadata_next: usize,
     infrastructure_slot_next: usize,
@@ -1366,6 +1381,7 @@ pub struct ObjectAllocator {
     slots_allocated: usize,
     objects_allocated: usize,
     bytes_allocated: usize,
+    global_object_backing_bytes: u64,
     live_objects: usize,
     live_bytes: usize,
     slots_reused: usize,
@@ -1390,6 +1406,12 @@ impl ObjectAllocator {
         Self {
             slots: SlotPool::EMPTY,
             infrastructure: infrastructure::Infrastructure::new(),
+            adaptive_funding: None,
+            adaptive_reserve: None,
+            #[cfg(slime_private_fragmentation)]
+            physically_withheld_ordinary: None,
+            operational_resources: boot_contracts::private_memory_policy::ledger::Resources::ZERO,
+            operational_lent: false,
             metadata_ledger: segmented::Segmented::new(),
             metadata_next: infrastructure::METADATA_BASE,
             infrastructure_slot_next: 0,
@@ -1412,6 +1434,7 @@ impl ObjectAllocator {
             slots_allocated: 0,
             objects_allocated: 0,
             bytes_allocated: 0,
+            global_object_backing_bytes: 0,
             live_objects: 0,
             live_bytes: 0,
             slots_reused: 0,
@@ -1670,7 +1693,7 @@ impl ObjectAllocator {
             .enumerate()
             .filter_map(|(index, source)| {
                 source
-                    .filter(|source| source.remaining() >= bytes)
+                    .filter(|source| source.watermark != 0 && source.remaining() >= bytes)
                     .map(|source| (index, source))
             })
             .min_by_key(|(_, source)| source.remaining());
@@ -1681,9 +1704,16 @@ impl ObjectAllocator {
                 size_bits: 12,
                 remaining: self.untyped_bytes_remaining(),
             };
-            return self.adopt_returned_extent(bytes).map_err(|_| refusal);
+            return self
+                .adopt_returned_extent(bytes)
+                .map_err(|error| match error {
+                    AllocError::AdaptiveFunding { .. } => error,
+                    _ => refusal,
+                });
         };
+        self.check_root_funding(source.remaining())?;
         self.infrastructure.adopt_pinned_source(source)?;
+        self.consume_root_funding(source.remaining())?;
         self.untypeds[index]
             .as_mut()
             .expect("adopted source")
@@ -2132,6 +2162,7 @@ impl ObjectAllocator {
                 allocated: self.slots_allocated,
             });
         }
+        self.ensure_root_slots(count)?;
         if self.slots.first_contiguous(count, None).is_none() {
             let required = self
                 .free_slots()
@@ -2197,6 +2228,11 @@ impl ObjectAllocator {
         // physical base, or a slot released while still holding one — the
         // `DeleteFirst` hazard [`Self::release_slot`] documents.
         self.preserve_global_prefix(region_index, start)?;
+        if self.untypeds[region_index].is_none_or(|current| current.watermark != start) {
+            // Funding prefix records can adopt this tail for infrastructure.
+            return self.allocate_from_global(blueprint, slot_index);
+        }
+        self.check_common_funding(1usize << size_bits)?;
         let recorded = records_provenance(blueprint);
         if recorded {
             self.physical.insert(slot_index, paddr)?;
@@ -2210,6 +2246,7 @@ impl ObjectAllocator {
         if let Some(region) = self.untypeds[region_index].as_mut() {
             region.watermark = watermark;
         }
+        self.consume_payload_funding(1usize << size_bits)?;
         self.last_paddr = paddr;
         self.objects_allocated += 1;
         self.live_objects += 1;
@@ -2240,11 +2277,20 @@ impl ObjectAllocator {
         &mut self,
         blueprint: sel4::ObjectBlueprint,
     ) -> Result<crate::root_cspace::RootSlot<sel4::cap_type::Unspecified>, AllocError> {
+        let global_bytes = self
+            .global_object_backing_bytes
+            .checked_add(1u64 << blueprint.physical_size_bits())
+            .ok_or(AllocError::AdaptiveFunding {
+                resource: "arithmetic",
+                required: 0,
+                available: 0,
+            })?;
         let slot = self.take_slot()?;
         if let Err(error) = self.allocate_from_global(blueprint, slot) {
             self.slots.release(slot);
             return Err(error);
         }
+        self.global_object_backing_bytes = global_bytes;
         Ok(crate::root_cspace::RootSlot::from_address(slot))
     }
 
@@ -2267,6 +2313,14 @@ impl ObjectAllocator {
         let blueprint =
             <sel4::cap_type::Granule as sel4::CapTypeForObjectOfFixedSize>::object_blueprint();
         let size_bits = blueprint.physical_size_bits();
+        let global_bytes = self
+            .global_object_backing_bytes
+            .checked_add(1u64 << size_bits)
+            .ok_or(AllocError::AdaptiveFunding {
+                resource: "arithmetic",
+                required: 0,
+                available: 0,
+            })?;
         if let Some(index) = (0..self.preserved.len())
             .filter_map(|index| {
                 self.preserved
@@ -2292,6 +2346,7 @@ impl ObjectAllocator {
                 self.slots.release(slot);
                 return Err(error);
             }
+            self.global_object_backing_bytes = global_bytes;
             return Ok(crate::root_cspace::RootSlot::from_address(slot));
         }
         let (region_index, start, watermark) = self
@@ -2319,6 +2374,10 @@ impl ObjectAllocator {
             self.slots.release(slot);
             return Err(error);
         }
+        if let Err(error) = self.check_common_funding(1usize << size_bits) {
+            self.slots.release(slot);
+            return Err(error);
+        }
         let paddr = region.paddr.saturating_add(start);
         if let Err(error) = self.physical.insert(slot, paddr) {
             self.slots.release(slot);
@@ -2332,6 +2391,7 @@ impl ObjectAllocator {
         if let Some(region) = self.untypeds[region_index].as_mut() {
             region.watermark = watermark;
         }
+        self.consume_payload_funding(1usize << size_bits)?;
         self.last_paddr = paddr;
         self.objects_allocated += 1;
         self.live_objects += 1;
@@ -2344,6 +2404,7 @@ impl ObjectAllocator {
             paddr,
             1usize << size_bits,
         );
+        self.global_object_backing_bytes = global_bytes;
         Ok(crate::root_cspace::RootSlot::from_address(slot))
     }
 
@@ -2369,6 +2430,14 @@ impl ObjectAllocator {
             .ok_or(AllocError::UntypedExhausted {
                 size_bits,
                 remaining: self.untyped_bytes_remaining(),
+            })?;
+        let global_bytes = self
+            .global_object_backing_bytes
+            .checked_add(total as u64)
+            .ok_or(AllocError::AdaptiveFunding {
+                resource: "arithmetic",
+                required: 0,
+                available: 0,
             })?;
         let (region_index, start, watermark) = self
             .untypeds
@@ -2398,6 +2467,12 @@ impl ObjectAllocator {
             }
             return Err(error);
         }
+        if let Err(error) = self.check_common_funding(total) {
+            for slot in first..first + count {
+                self.slots.release(slot);
+            }
+            return Err(error);
+        }
         let paddr = region.paddr.saturating_add(start);
         for index in 0..count {
             if let Err(error) = self
@@ -2421,6 +2496,7 @@ impl ObjectAllocator {
             return Err(AllocError::Retype { size_bits, error });
         }
         self.untypeds[region_index].as_mut().unwrap().watermark = watermark;
+        self.consume_payload_funding(total)?;
         self.slots_allocated += count;
         self.slots_reused += reused;
         self.objects_allocated += count;
@@ -2436,6 +2512,7 @@ impl ObjectAllocator {
             total,
             count,
         );
+        self.global_object_backing_bytes = global_bytes;
         Ok((first, paddr))
     }
 
@@ -2633,7 +2710,9 @@ impl ObjectAllocator {
     /// Reuse selects only common free capacity, so a record a reservation owns
     /// is never re-served to a task arena or an elastic transaction.
     fn acquire_extent_record(&mut self, size_bits: usize) -> Result<usize, AllocError> {
+        self.check_common_funding(1usize << size_bits)?;
         if let Some(index) = self.reusable_extent(size_bits) {
+            self.consume_payload_funding(1usize << size_bits)?;
             self.extents_reused += 1;
             return Ok(index);
         }
@@ -2649,6 +2728,9 @@ impl ObjectAllocator {
         let blueprint = sel4::ObjectBlueprint::Untyped { size_bits };
         if let Err(error) = self.allocate_from_global(blueprint, parent_slot) {
             self.slots.release(parent_slot);
+            if matches!(error, AllocError::AdaptiveFunding { .. }) {
+                return Err(error);
+            }
             // Ordinary tails cannot place it, but returned capacity may: a
             // larger free extent is split rather than left unreachable to a
             // smaller request. The original refusal stands if none exists.
@@ -2659,7 +2741,10 @@ impl ObjectAllocator {
                 sel4::debug_println!(
                     "SLIME_MEM extent split refused size_bits={size_bits} error={split:?}"
                 );
-                error
+                match split {
+                    AllocError::AdaptiveFunding { .. } => split,
+                    _ => error,
+                }
             });
             #[cfg(test)]
             return Err(error);
@@ -2906,7 +2991,10 @@ impl ObjectAllocator {
     /// inventory — sees the same reduced figure, and a guarantee cannot be
     /// spent by an unrelated consumer between admission and redemption.
     pub fn free_slots(&self) -> usize {
-        self.slots.free().saturating_sub(self.reserved_slots())
+        self.slots
+            .free()
+            .saturating_sub(self.reserved_slots())
+            .saturating_sub(self.operational_floor(self.operational_resources.slots))
     }
 
     pub fn ensure_allocation_descriptors(&mut self, free: usize) -> Result<(), AllocError> {
@@ -3000,6 +3088,7 @@ impl ObjectAllocator {
                 .filter(|entry| entry.owner != u16::MAX)
                 .count())
         .saturating_sub(self.reserved_descriptors())
+        .saturating_sub(self.operational_floor(self.operational_resources.descriptors))
     }
 
     #[cfg(any(slime_private_stress, slime_private_rollback, test))]
@@ -3090,7 +3179,11 @@ impl ObjectAllocator {
     }
 
     pub fn extent_descriptors_free(&self) -> usize {
-        self.extents.iter().filter(|entry| entry.is_none()).count()
+        self.extents
+            .iter()
+            .filter(|entry| entry.is_none())
+            .count()
+            .saturating_sub(self.operational_floor(self.operational_resources.extents))
     }
 
     pub fn release_slot(&mut self, slot: usize) -> bool {
@@ -3631,7 +3724,7 @@ impl ObjectAllocator {
             let chunk_len = device_retype_plan(
                 region.retyped + planned,
                 target,
-                self.slots.free(),
+                self.free_slots(),
                 planned_anchor.is_some(),
             )
             .map(|(_, batch)| batch)
@@ -3661,7 +3754,7 @@ impl ObjectAllocator {
             let chunk_len = device_retype_plan(
                 region.retyped + completed,
                 target,
-                self.slots.free(),
+                self.free_slots(),
                 anchor.is_some(),
             )
             .map(|(_, batch)| batch)

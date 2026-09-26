@@ -1111,7 +1111,16 @@ pub(super) fn serve_instance_graph(
                     (Some(policy), Some(binding)) => Some(serve_adaptive_growth(
                         generation, tasks, allocator, policy, binding, id, delta,
                     )),
-                    (Some(policy), None) if delta != 0 => {
+                    (Some(_), None) if delta == 0 => {
+                        let region = tasks
+                            .get(id)
+                            .map_or(private_memory::Region::DENIED, |task| task.private_memory);
+                        Some(Response::success(
+                            region.pages() as i64,
+                            region.base() as sel4::Word,
+                        ))
+                    }
+                    (Some(policy), None) => {
                         let instance = tasks
                             .get(id)
                             .and_then(|task| task.instance)
@@ -1855,8 +1864,15 @@ fn serve_adaptive_growth(
     // must be the same number the transaction is priced against.
     let redeemable = policy.redeemable(&binding);
     let guaranteed = delta.min(redeemable);
-    let outcome =
-        tasks.grow_private_memory_adaptive(allocator, policy.ledger_mut(), id, delta, redeemable);
+    let outcome = (if delta == 0 {
+        Ok(())
+    } else {
+        policy.reconcile_ownership(allocator)
+    })
+    .map_err(private_memory::elastic::ElasticGrowError::Policy)
+    .and_then(|()| {
+        tasks.grow_private_memory_adaptive(allocator, policy.ledger_mut(), id, delta, redeemable)
+    });
     let region = tasks
         .get(id)
         .map_or(private_memory::Region::DENIED, |task| task.private_memory);

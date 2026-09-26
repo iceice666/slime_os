@@ -301,6 +301,7 @@ pub struct ElasticAcquisition {
 #[derive(Clone, Copy)]
 pub struct Quarantine {
     serial: u32,
+    failed: bool,
     extents: [u32; MAX_ELASTIC_EXTENTS],
     len: usize,
 }
@@ -308,6 +309,7 @@ pub struct Quarantine {
 impl Quarantine {
     pub const EMPTY: Self = Self {
         serial: 0,
+        failed: false,
         extents: [0; MAX_ELASTIC_EXTENTS],
         len: 0,
     };
@@ -375,7 +377,11 @@ impl ObjectAllocator {
     pub fn elastic_inventory(&self) -> ledger::Resources {
         let bytes = self.untyped_bytes_remaining()
             + self.preserved_bytes_remaining()
-            + self.reusable_private_extent_bytes();
+            + self.reusable_extent_bytes();
+        // Tails a fragmentation scenario withholds are still owned by no
+        // holder: they are unplaceable, not consumed, so funding keeps them.
+        #[cfg(slime_private_fragmentation)]
+        let bytes = bytes + self.physically_withheld_ordinary.unwrap_or(0) as usize;
         ledger::Resources {
             bytes: bytes as u64,
             slots: (self.free_slots() + self.fundable_slots(bytes)) as u64,
@@ -459,10 +465,10 @@ impl ObjectAllocator {
 
     /// Take exactly the demanded extents, descriptors and slots.
     ///
-    /// Partial acquisition is never left behind: the first failure returns
-    /// every extent and descriptor this call took, so the caller sees either
-    /// the whole tuple or an unchanged pool. Nothing here retypes a frame or
-    /// touches a page table.
+    /// Failure attempts to return every acquired resource. If cleanup fails,
+    /// `elastic_quarantine_resources` reports ownership the caller must charge
+    /// before returning the error. Nothing here retypes a frame or touches a
+    /// page table.
     pub fn acquire_elastic(
         &mut self,
         id: TaskArenaId,
@@ -621,7 +627,9 @@ impl ObjectAllocator {
         // the positions this call cleared, and walking a stale head is how a
         // later growth would acquire a capability the kernel has destroyed.
         self.rebuild_reusable_chains(id);
-        self.drain_private_empty_records(id)?;
+        if let Err(error) = self.drain_private_empty_records(id) {
+            failure = Some(error);
+        }
         match failure {
             Some(error) => {
                 // Ownership stays with this holder and the extents stay named
@@ -641,6 +649,7 @@ impl ObjectAllocator {
             *record = Quarantine::EMPTY;
             record.serial = id.serial;
         }
+        record.failed = true;
         for &index in extents {
             let owned = self.extents[index as usize]
                 .is_some_and(|extent| extent.belongs_to(id) && !extent.revoked);
@@ -659,7 +668,44 @@ impl ObjectAllocator {
     /// Whether a rollback left resources owned but unreturned in `id`.
     pub fn elastic_quarantined(&self, id: TaskArenaId) -> bool {
         let record = &self.elastic_quarantine[id.index()];
-        record.serial == id.serial && record.len != 0
+        record.serial == id.serial && record.failed
+    }
+
+    /// Actual named ownership left by failed acquisition cleanup, not its demand.
+    /// Extent parents cost one slot each; surviving object and empty records
+    /// cost one descriptor and slot each. Empty records have no extent yet and
+    /// must remain charged even when every extent was successfully returned.
+    /// Before `begin` none of these resources authorizes mapped payload pages.
+    pub fn elastic_quarantine_resources(&self, id: TaskArenaId) -> ledger::Resources {
+        if !self.elastic_quarantined(id) {
+            return ledger::Resources::ZERO;
+        }
+        let quarantine = &self.elastic_quarantine[id.index()];
+        let named = &quarantine.extents[..quarantine.len];
+        let mut resources = ledger::Resources::ZERO;
+        for &index in named {
+            if let Some(extent) = self.extents[index as usize]
+                .filter(|extent| extent.belongs_to(id) && !extent.revoked)
+            {
+                resources.bytes += 1u64 << extent.size_bits;
+                resources.extents += 1;
+                resources.slots += 1;
+                if extent.kind == ExtentKind::PrivateTables {
+                    resources.tables += (1u64 << extent.size_bits) / GRANULE_BYTES as u64;
+                }
+            }
+        }
+        for record in self.allocations.iter() {
+            if record.belongs_to(id)
+                && record.allocation.is_private()
+                && (record.allocation.private_kind() == PrivateObjectKind::Empty
+                    || named.contains(&record.extent))
+            {
+                resources.descriptors += 1;
+                resources.slots += 1;
+            }
+        }
+        resources
     }
 
     /// Retry the return a failed cleanup could not complete in `id`.
@@ -766,17 +812,20 @@ impl ObjectAllocator {
     #[cfg(slime_private_fragmentation)]
     pub fn hold_ordinary_tails(&mut self) -> [usize; super::MAX_KERNEL_UNTYPEDS] {
         let mut watermarks = [0; super::MAX_KERNEL_UNTYPEDS];
+        let withheld = self.untyped_bytes_remaining() as u64;
         for (index, region) in self.untypeds[..self.untyped_len].iter_mut().enumerate() {
             if let Some(region) = region.as_mut() {
                 watermarks[index] = region.watermark;
                 region.watermark = region.capacity();
             }
         }
+        self.physically_withheld_ordinary = Some(withheld);
         watermarks
     }
 
     #[cfg(slime_private_fragmentation)]
     pub fn restore_ordinary_tails(&mut self, watermarks: &[usize; super::MAX_KERNEL_UNTYPEDS]) {
+        self.physically_withheld_ordinary = None;
         for (index, region) in self.untypeds[..self.untyped_len].iter_mut().enumerate() {
             if let Some(region) = region.as_mut() {
                 region.watermark = watermarks[index];
@@ -835,7 +884,7 @@ impl ObjectAllocator {
             phase,
             self.untyped_bytes_remaining(),
             self.preserved_bytes_remaining(),
-            self.reusable_private_extent_bytes(),
+            self.reusable_extent_bytes(),
             self.live_bytes(),
             self.active_extent_bytes(),
             self.reusable_extent_anchors(),
@@ -882,6 +931,37 @@ mod tests {
                 assert!(allocator.elastic_quarantined(a));
                 assert!(allocator.elastic_quarantined(b));
                 assert!(!allocator.elastic_quarantined(TaskArenaId::from_raw(2, 8)));
+                assert_eq!(
+                    allocator.elastic_quarantine_resources(a),
+                    ledger::Resources {
+                        bytes: 2 * GRANULE_BYTES as u64,
+                        slots: 2,
+                        extents: 2,
+                        ..ledger::Resources::ZERO
+                    }
+                );
+                allocator.extents[1] = None;
+                assert_eq!(
+                    allocator.elastic_quarantine_resources(a).bytes,
+                    GRANULE_BYTES as u64
+                );
+                assert_eq!(allocator.elastic_quarantine_resources(b).extents, 1);
+                assert_eq!(
+                    allocator.elastic_quarantine_resources(TaskArenaId::from_raw(2, 8)),
+                    ledger::Resources::ZERO
+                );
+                // Drain failure with no live extents must still mark quarantine.
+                let invalid = TaskArenaId::from_raw(4, 7);
+                assert!(
+                    allocator
+                        .release_elastic(&ElasticAcquisition::empty(invalid), false)
+                        .is_err()
+                );
+                assert!(allocator.elastic_quarantined(invalid));
+                assert_eq!(
+                    allocator.elastic_quarantine_resources(invalid),
+                    ledger::Resources::ZERO
+                );
                 // An extent that no longer belongs to the arena is not named.
                 allocator.quarantine_extents(b, &[0]);
                 let record = allocator.elastic_quarantine[b.index()];
