@@ -3,17 +3,17 @@
     "devloop": {
       "flake": false,
       "locked": {
-        "lastModified": 1789494337,
-        "narHash": "sha256-Yt49MTezyPr0ZexQVn+h7cngx81El6zzzb1TOksElf0=",
+        "lastModified": 1790396403,
+        "narHash": "sha256-FqTDuAnyUN/TtYEvVE1AH2HZMZ3jJwbQ5JReahGosP0=",
         "owner": "mozufu",
         "repo": "devloop",
-        "rev": "c78fcf345de424469196297d2be7b479fbb31a71",
+        "rev": "bfa76c2abd3d1716bd207aa168cbca091cf8563a",
         "type": "github"
       },
       "original": {
         "owner": "mozufu",
         "repo": "devloop",
-        "rev": "c78fcf345de424469196297d2be7b479fbb31a71",
+        "rev": "bfa76c2abd3d1716bd207aa168cbca091cf8563a",
         "type": "github"
       }
     },
@@ -131,17 +131,17 @@
     "zutai": {
       "flake": false,
       "locked": {
-        "lastModified": 1787659589,
-        "narHash": "sha256-cY7O+axK8Mmr0dMltEJWiS8podWIxdcWi7O6jf8fNW0=",
+        "lastModified": 1790381826,
+        "narHash": "sha256-laDmoC2hAUyW7Plwv4O+e6NJVyoh65gjm275xYM7LmI=",
         "owner": "iceice666",
         "repo": "zutai",
-        "rev": "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a",
+        "rev": "b667e3c5018e69a3f8e39948a73a6c57c514de6e",
         "type": "github"
       },
       "original": {
         "owner": "iceice666",
         "repo": "zutai",
-        "rev": "9026fcff5f12e7b2377c25b3d389c2eb06d98e5a",
+        "rev": "b667e3c5018e69a3f8e39948a73a6c57c514de6e",
         "type": "github"
       }
     }
