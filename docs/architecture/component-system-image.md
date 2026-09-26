@@ -22,8 +22,12 @@ fabric graph, resource objects, boot profile, and target requirement. System
 grants are the irreducible authority facts.
 
 `scripts/generate/generate-generation-from-spec.py` derives the generation
-manifest from this record and the referenced component specs. A slot pin is an
-exception with a declared reason; the default is deterministic assignment.
+manifest from this record and the referenced component specs. Selected compositions
+are authored as pure computed `.zt` sources, with byte-stable committed `.zti`
+outputs; [system-spec authoring ownership](../../contracts/system-spec/README.md)
+names the mapping, typed helpers, import/effect boundary and regeneration command.
+Unmapped `.zti` remain inert hand-authored sources. A slot pin is an exception
+with a declared reason; the default is deterministic assignment.
 
 ## Generation and component image
 
