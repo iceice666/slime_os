@@ -428,24 +428,84 @@ def check_gate_controls() -> None:
     module = _gate_module()
     with tempfile.TemporaryDirectory(prefix="gate-controls-") as temporary:
         inputs = _Path(temporary) / "inputs.json"
+        # devloop's execution identity, spelled out independently of the
+        # adapter so a run key that drops a field is caught here.
+        fields = ("requirements", "helper", "code", "policy", "inputs", "target", "image", "epoch")
+        identity = {field: f"fixture-{field}" for field in fields}
 
-        def request(payload: object) -> dict:
+        def request(payload: object, **changed: str) -> dict:
             inputs.write_text(json.dumps(payload))
-            return {"inputs": str(inputs), "acceptance": {"id": "A1"}}
+            return {
+                "inputs": str(inputs),
+                "acceptance": {"id": "A1"},
+                "execution": {"identity": identity | changed, "now": 0},
+            }
 
+        runs: list[str] = []
+        outcome = [False]
+
+        def recipe(target: str) -> tuple[bool, str]:
+            runs.append(target)
+            return outcome[0], "fixture output"
+
+        fingerprints = iter(())
+
+        def passed(observations: list[dict]) -> list[bool]:
+            return [o["value"]["boolValue"] for o in observations]
+
+        fixture = {"justTarget": "fixture_target"}
         # The adapter narrates what it ran to stderr. That is wanted under
         # devloop and misleading here, where a deliberately failing fixture
         # would print `failed` inside a passing `just tasks_check`.
         with (
             patch.object(module, "declared_targets", lambda: {"fixture_target"}),
-            patch.object(module, "recipe", lambda target: (False, "fixture failure")),
+            patch.object(module, "recipe", recipe),
+            patch.object(module, "RUNS", _Path(temporary) / "runs"),
+            patch.object(module, "code_fingerprint", lambda: next(fingerprints, "fixture-code")),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            observations = module.just_target(request({"justTarget": "fixture_target"}))
-        if [o["value"]["boolValue"] for o in observations] != [False]:
-            fail("control: a failing target was not reported as passed=false")
-        if [o["id"] for o in observations] != ["passed"]:
-            fail("control: the generic gate reported observations policy does not declare")
+            observations = module.just_target(request(fixture))
+            if passed(observations) != [False]:
+                fail("control: a failing target was not reported as passed=false")
+            if [o["id"] for o in observations] != ["passed"]:
+                fail("control: the generic gate reported observations policy does not declare")
+
+            # A second acceptance under the same identity is answered by the
+            # first run, failure included: repeating a request is not a retry.
+            outcome[0] = True
+            if passed(module.just_target(request(fixture))) != [False] or len(runs) != 1:
+                fail("control: a repeat request reran the recipe or retried a failure")
+
+            # Any identity field that differs is a different claim.
+            for field in fields:
+                before = len(runs)
+                module.just_target(request(fixture, **{field: "changed"}))
+                if len(runs) != before + 1:
+                    fail(f"control: a run was reused across a different {field}")
+
+            # A run whose code closure changed underneath it is not kept.
+            fingerprints = iter(("start", "end"))
+            module.just_target(request(fixture, inputs="drifted"))
+            fingerprints = iter(())
+            before = len(runs)
+            module.just_target(request(fixture, inputs="drifted"))
+            if len(runs) != before + 1:
+                fail("control: a run was kept although the code closure changed during it")
+
+            # Nor is a run reused once its window has passed.
+            with patch.object(module.time, "time", lambda: 10.0**12):
+                before = len(runs)
+                module.just_target(request(fixture))
+                if len(runs) != before + 1:
+                    fail("control: a run was reused after its reuse window")
+
+            try:
+                inputs.write_text(json.dumps(fixture))
+                module.just_target({"inputs": str(inputs), "acceptance": {"id": "A1"}})
+            except module.CannotRun:
+                pass
+            else:
+                fail("control: the generic gate ran with no execution identity to bind")
 
         with patch.object(module, "declared_targets", lambda: {"fixture_target"}):
             for name, payload in {

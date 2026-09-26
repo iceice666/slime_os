@@ -124,7 +124,12 @@ for this repository's gates.
    the general gate: name the recipe in the execution inputs
    (`{"justTarget": "sel4_qos_check"}`) and it reports one `passed` boolean.
    devloop binds the inputs digest into the evidence identity, so evidence
-   recorded for one target never transfers to another. A check needing richer
+   recorded for one target never transfers to another. Completion needs every
+   acceptance's evidence under the same inputs, so acceptances that share one
+   qualification recipe each gate it; `just-target` runs the recipe once per
+   execution identity and answers the others from that run for up to an hour,
+   failures included, from `build/devloop-gate-runs/`. Gate them one after
+   another, and delete that directory to force a fresh run. A check needing richer
    observations gets its own gate identity in
    [`.devloop/policy.json`](../../.devloop/policy.json).
 
