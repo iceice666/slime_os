@@ -174,6 +174,7 @@ impl ObjectAllocator {
         if leaf.watermark != 0 || leaf.size_bits != bits {
             return Err(AllocError::NoKernelUntyped);
         }
+        self.check_common_funding(1usize << bits)?;
         let recorded = super::records_provenance(blueprint);
         if recorded {
             self.physical.insert(destination, leaf.paddr)?;
@@ -194,6 +195,7 @@ impl ObjectAllocator {
                 ..leaf
             },
         );
+        self.consume_payload_funding(1usize << bits)?;
         self.last_paddr = leaf.paddr;
         self.objects_allocated += 1;
         self.live_objects += 1;
@@ -246,6 +248,9 @@ impl ObjectAllocator {
             .filter(|_| end <= region.capacity())
             .ok_or(AllocError::NoKernelUntyped)?;
         self.ensure_preserved_records(count)?;
+        if self.untypeds[index] != Some(region) {
+            return Err(AllocError::NoKernelUntyped);
+        }
         if count > self.free_slots() {
             return Err(AllocError::SlotsExhausted {
                 allocated: self.slots_allocated,

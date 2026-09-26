@@ -209,6 +209,7 @@
     "scripts/lib/work_item_retirement_publish_controls.py",
     "scripts/lib/work_items.py",
     "scripts/lib/zutai_cli.py",
+    "scripts/tools/system-spec-source",
     "sel4",
     "just",
     "Justfile",

@@ -34,6 +34,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import os
+import subprocess
+import tempfile
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -42,7 +46,7 @@ import private_memory_policy
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
-from zutai_cli import ZutaiError, evaluate, prefetch
+from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch
 from boot_contracts import (
     PRIVATE_MEMORY_CAPACITY_PROFILES,
     PRIVATE_MEMORY_DEFAULT_REGION_PAGES,
@@ -53,6 +57,20 @@ CONTRACT_ROOT = ROOT / "contracts" / "system-spec" / "v1"
 CHECKER = CONTRACT_ROOT / "check.zt"
 SYSTEM_ROOT = CONTRACT_ROOT / "systems"
 INTERFACE_SCHEMA_ROOT = ROOT / "contracts" / "interface-schema" / "v1" / "interfaces"
+
+# A mapped .zti is an output, never a competing hand-authored source.
+COMPUTED_SYSTEM_SOURCES = {
+    name: f"sources/{name}.zt"
+    for name in (
+        "sel4-call",
+        "sel4-private-memory-adaptive-rv64",
+        "sel4-private-memory-matrix-rv64",
+        "sel4-private-memory-stress-rv64",
+        "sel4-private-memory-heap-stress-rv64",
+    )
+}
+_SOURCE_TOOL = ROOT / "scripts" / "tools" / "system-spec-source" / "Cargo.toml"
+_SOURCE_TARGET = ROOT / "build" / "system-spec-source-target"
 
 # Which committed `contracts/generation-manifest/v1` fixture each system spec derives.
 #
@@ -1294,6 +1312,95 @@ def derive_manifest(system: CompiledSystem) -> dict:
     return manifest
 
 
+@lru_cache(maxsize=1)
+def source_tool() -> Path:
+    """Build the pinned semantic/evaluator adapter outside identity-bearing trees."""
+    # Building the pinned compiler also obtains the registry dependencies shared
+    # by this adapter's lockfile, so a clean checkout needs no second resolution.
+    zutai_binary()
+    process = subprocess.run(
+        ["cargo", "build", "--locked", "--offline", "--release", "--manifest-path",
+         str(_SOURCE_TOOL), "--target-dir", str(_SOURCE_TARGET)],
+        cwd=ROOT, text=True, capture_output=True,
+    )
+    if process.returncode:
+        _fail(f"computed system-spec adapter build failed: {process.stderr.strip()}")
+    return _SOURCE_TARGET / "release" / "system-spec-source"
+
+
+def validate_source_mapping(root: Path = CONTRACT_ROOT) -> None:
+    """Refuse orphan, competing or missing authoring sources before derivation."""
+    sources = root / "sources"
+    declared = {root / path for path in COMPUTED_SYSTEM_SOURCES.values()}
+    for name, relative in COMPUTED_SYSTEM_SOURCES.items():
+        source = root / relative
+        if (root / "systems" / f"{name}.zti").is_symlink():
+            _fail(f"{name}: derived system output must not be a symlink")
+        if not source.is_file():
+            _fail(f"{name}: computed source missing: {source}")
+    for path in sorted(sources.glob("*")):
+        if path.suffix in {".zt", ".zti"} and path not in declared:
+            _fail(f"{path.stem}: ambiguous or undeclared system authoring source: {path}")
+    for path in sorted((root / "systems").glob("*.zt")):
+        _fail(f"{path.stem}: ambiguous system source; computed sources belong in sources/")
+
+
+def render_computed_system(name: str, root: Path = CONTRACT_ROOT) -> str:
+    """Evaluate a confined, pure source; callers admit the rendered inert record."""
+    if name not in COMPUTED_SYSTEM_SOURCES:
+        _fail(f"{name}: no computed source declared")
+    source = root / COMPUTED_SYSTEM_SOURCES[name]
+    if not source.is_file():
+        _fail(f"{name}: computed source missing: {source}")
+    environment = dict(os.environ, ZUTAI_STDLIB_ROOT=str(STDLIB))
+    try:
+        process = subprocess.run(
+            [str(source_tool()), str(root.parents[1]), str(source),
+             *(str(root / "systems" / f"{entry}.zti") for entry in COMPUTED_SYSTEM_SOURCES)],
+            cwd=ROOT, env=environment, text=True, capture_output=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        _fail(f"{name}: computed source evaluation exceeded 120 seconds")
+    except OSError as error:
+        _fail(f"{name}: cannot execute computed source adapter: {error}")
+    if process.returncode:
+        _fail(f"{name}: computed source refused: {process.stderr.strip()}")
+    rendered = process.stdout
+    if len(rendered.encode("utf-8")) > default_contract.MAX_SOURCE_BYTES:
+        _fail(f"{name}: computed output exceeds source bound")
+    return rendered
+
+
+def computed_system_outputs(root: Path = CONTRACT_ROOT) -> dict[Path, str]:
+    validate_source_mapping(root)
+    return {root / "systems" / f"{name}.zti": render_computed_system(name, root)
+            for name in COMPUTED_SYSTEM_SOURCES}
+
+
+def compile_rendered_system(
+    name: str, contents: str, *, components: dict[str, dict],
+) -> CompiledSystem:
+    with tempfile.TemporaryDirectory(prefix="slime-computed-system-") as scope:
+        path = Path(scope) / f"{name}.zti"
+        path.write_text(contents, encoding="utf-8")
+        try:
+            return compile_system(path, components=components)
+        except SystemSpecError as error:
+            _fail(f"{name}: computed result refused: {error}")
+
+
+def check_computed_systems(
+    *, components: dict[str, dict], root: Path = CONTRACT_ROOT,
+) -> dict[Path, str]:
+    outputs = computed_system_outputs(root)
+    for path, contents in outputs.items():
+        compile_rendered_system(path.stem, contents, components=components)
+        if not path.is_file() or path.read_bytes() != contents.encode("utf-8"):
+            _fail(f"{path.stem}: derived system spec drift; run "
+                  "python3 scripts/generate/generate-generation-from-spec.py")
+    return outputs
+
+
 def compile_system(
     path: Path,
     *,
@@ -1304,6 +1411,12 @@ def compile_system(
     if table is None:
         catalogue = interface_catalogue()
         table = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
+    if path.parent.resolve() == SYSTEM_ROOT.resolve() and path.stem in COMPUTED_SYSTEM_SOURCES:
+        validate_source_mapping()
+        contents = render_computed_system(path.stem)
+        if not path.is_file() or path.read_bytes() != contents.encode("utf-8"):
+            _fail(f"{path.stem}: derived system spec drift; run "
+                  "python3 scripts/generate/generate-generation-from-spec.py")
     spec = _load(path.resolve(), contract)
     if spec["name"] != path.stem:
         _fail(f"{path}: declares system {spec['name']!r}, so its file name must match")
@@ -1322,6 +1435,11 @@ def compile_system(
 
 
 def system_paths(root: Path = SYSTEM_ROOT) -> list[Path]:
+    if root.resolve() == SYSTEM_ROOT.resolve():
+        validate_source_mapping()
+        return sorted(set(root.glob("*.zti")) | {
+            root / f"{name}.zti" for name in COMPUTED_SYSTEM_SOURCES
+        })
     return sorted(root.glob("*.zti"))
 
 

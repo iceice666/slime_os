@@ -54,6 +54,9 @@ THRE = "THRE"
 # under `contracts/system-image-closure/v1/inputs/sel4-prefix/` and in devlog
 # prose citing it.
 empted = "empted"
+# Zutai typed high-level intermediate representation API names.
+thir = "thir"
+Thir = "Thir"
 
 [default.extend-identifiers]
 # `ser2net`, the serial-over-TCP bridge a remote board console is reached

@@ -76,6 +76,8 @@ pub struct AdaptivePolicy<'a> {
     ledger: Ledger<'a>,
     reservations: GuaranteeReservations,
     live: usize,
+    root_baseline: u64,
+    system_baseline: u64,
 }
 
 impl<'a> AdaptivePolicy<'a> {
@@ -116,7 +118,21 @@ impl<'a> AdaptivePolicy<'a> {
                 required,
                 available: available.bytes / policy::PAGE_BYTES,
             })?;
-        let residual = allocator.elastic_inventory();
+        allocator
+            .reserve_operational_resources(policy.reserve())
+            .map_err(|_| AdmissionFailure::Unfundable {
+                required,
+                available: allocator.elastic_inventory().bytes / policy::PAGE_BYTES,
+            })?;
+        let residual = allocator
+            .elastic_inventory()
+            .checked_add(ledger::Resources {
+                slots: policy.reserve().slots,
+                descriptors: policy.reserve().descriptors,
+                extents: policy.reserve().extents,
+                ..ledger::Resources::ZERO
+            })
+            .map_err(|_| AdmissionFailure::Overflow)?;
         let ledger =
             generation::admit_private_memory_ledger(policy, instances, residual).map_err(|_| {
                 AdmissionFailure::Unfundable {
@@ -124,11 +140,14 @@ impl<'a> AdaptivePolicy<'a> {
                     available: residual.bytes / policy::PAGE_BYTES,
                 }
             })?;
+        allocator.enable_adaptive_reserve(policy.reserve().bytes);
         Ok(Self {
             policy,
             ledger,
             reservations,
             live: 0,
+            root_baseline: allocator.infrastructure_owned_bytes() as u64,
+            system_baseline: allocator.system_backing_bytes(),
         })
     }
 
@@ -267,6 +286,31 @@ impl<'a> AdaptivePolicy<'a> {
         &mut self.ledger
     }
 
+    /// Read independent ownership censuses; never balance an unexplained
+    /// inventory difference into a system charge.
+    pub fn reconcile_ownership(
+        &mut self,
+        allocator: &ObjectAllocator,
+    ) -> Result<(), ledger::Error> {
+        let root = (allocator.infrastructure_owned_bytes() as u64)
+            .checked_sub(self.root_baseline)
+            .ok_or(ledger::Error::Inventory)?;
+        let system = allocator
+            .system_backing_bytes()
+            .checked_sub(self.system_baseline)
+            .ok_or(ledger::Error::Inventory)?;
+        self.ledger.reconcile_ownership(
+            ledger::Resources {
+                bytes: root,
+                ..ledger::Resources::ZERO
+            },
+            ledger::Resources {
+                bytes: system,
+                ..ledger::Resources::ZERO
+            },
+        )
+    }
+
     fn token_for(&self, entitlement: usize) -> Option<EntitlementToken> {
         self.policy
             .entitlement(entitlement)
@@ -355,6 +399,19 @@ impl<'a> AdaptivePolicy<'a> {
             inventory.bytes,
             inventory.slots,
             allocator.largest_aligned_ordinary_block(),
+        );
+        sel4::debug_println!(
+            "SLIME_MEM funding reserve={} root_owned={} system_owned={} common_held={} inventory_bytes={}",
+            self.ledger.operational_reserve().bytes,
+            self.ledger.root_owned().bytes,
+            self.ledger.system_owned().bytes,
+            self.ledger.common_held().bytes,
+            inventory.bytes,
+        );
+        sel4::debug_println!(
+            "SLIME_MEM operational remaining={} spent={}",
+            self.ledger.remaining_operational_reserve().bytes,
+            self.ledger.operational_spent().bytes,
         );
         allocator.report_elastic_census("limit");
     }

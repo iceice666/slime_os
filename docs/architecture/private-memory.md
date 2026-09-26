@@ -86,7 +86,8 @@ sixty-four emergency slots, and every transaction retained after a failed
 mapping, installation or delete. Growth is charged, reported as
 `infrastructure_owned`, and reusable: released records return to the pool
 rather than to the platform, and the pool never exceeds the high-water demand
-that funded it.
+that funded it. Here ownership means the complete adopted source, including
+unused backing, not just the metadata pages currently mapped from it.
 
 Capacity is therefore not a constant. The qualification report names the
 resource that refuses a plan — allocation descriptors, extent descriptors,
@@ -237,7 +238,9 @@ soon as its abort settles, since the abort charged the entitlement nothing.
 An adaptive subject's window is its declared address maximum rather than the
 target's per-region capacity, so a policy may declare a window no power of two
 fits; the base is still aligned independently and never moves. Backing arrives
-only on demand, so construction reserves address space and nothing else.
+only on demand for the elastic maximum: reserving that window does not acquire
+its maximum payload. Construction still funds the task's static arena and root
+metadata, and guaranteed backing has already been protected at admission.
 
 Each incarnation is bound between construction and publication, on the boot path
 and the dynamic spawn path alike: a staged task can neither be dispatched nor
@@ -268,9 +271,10 @@ pool, and only then is a frame retyped or a page mapped.
 Extents are sized to the request rather than to a quota. Large frames each take
 their own aligned 2 MiB extent; base pages take an exact power-of-two
 decomposition capped at 2 MiB; each new leaf table takes its own granule
-extent. A growth's reserved bytes therefore equal its payload plus its tables,
-which is what lets a fragmented machine serve page-granular growth from blocks
-no aligned span would fit. Elastic arenas select backing best-fit, so a base
+extent. The holder demand's backing bytes therefore equal its payload plus its
+tables; this is not the complete cost of any root infrastructure growth that
+acquisition triggers. Page-granular growth can use blocks no aligned span would
+fit. Elastic arenas select backing best-fit, so a base
 page cannot consume the aligned extent a large frame in the same transaction
 was planned to occupy.
 
@@ -290,16 +294,63 @@ unreturned extents stay named in their arena's record, the holder keeps
 ownership, and the ledger member is quarantined on every failure path. Each
 later request retries the return and is refused; the ledger keeps the charge
 until the incarnation retires, and the arena's revoke at retirement recovers
-anything a retry could not. Guarantees are
-reserved in the ledger at admission rather than pre-provisioned physically, so
-an exhausted elastic pool refuses elastic transactions while a guaranteed
-holder's first growth still finds its bytes.
+anything a retry could not. Guarantees are physically protected at admission by
+the guarantee vault described above; they are not merely ledger promises against
+the elastic pool. Exhausting that pool does not make guaranteed backing common
+or authorize an elastic transaction to consume it.
 
 The qualification roles run their holders in windows of the root's own address
 space before any component is published. That exercises the same allocator,
 ledger, retypes and kernel mappings a component's growth would take, and
 deliberately not the spawn, admission or window-placement path, which the next
 stage owns.
+
+### Root and system funding — implementation in progress
+
+Qualification of the current funding changes is pending under the
+[canonical reserve-accounting follow-up](../../.tasks/items/01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981.md).
+The mechanisms below describe the current implementation, not completed QEMU
+matrix evidence or closure of that work item. Earlier qualification does not
+establish the new reserve floor or mixed-pressure construction claim.
+
+The allocator's [funding owner](../../slime-root/src/object_allocator/funding.rs)
+checks funding before common backing is consumed. Holder demand and root source
+adoption have separate allowances. Adoption costs the entire remaining ordinary
+tail or entire returned extent removed from common inventory, including its
+unused bytes; pricing only the triggering metadata page would undercount it.
+Root adoption must leave both outstanding holder backing and the operational
+floor fundable. The ledger reserves root funding separately, settles actual
+new ownership, and refunds only unused allowance. Once adopted, backing remains
+root-owned through holder abort, quarantine and retirement. Reusing metadata
+storage within an already charged source does not charge that source again.
+
+System commitments are also explicit, not an unexplained difference between two
+free-byte counters. The allocator census counts rounded active static and
+mapping-table extents, retained shared-buffer backing, and standalone global
+objects recorded at successful allocation, separately from
+protected guarantees, private holder charges and permanent root infrastructure.
+The adaptive policy records admission baselines and reconciles subsequent
+ownership against these independent censuses, without deducting boot ownership
+twice. System backing stays committed until cleanup actually returns it to the
+common pool; reconciliation itself is not a pre-effect funding guard.
+
+Construction funding protects the complete rounded task arena before metadata
+can adopt a source. Admission materializes operational CSlot, allocation-record
+and extent-record floors separately from guarantee reservations. Ordinary
+allocation withholds these counts; an authorized dynamic spawn borrows them only
+inside its serialized construction scope. Child translation tables are funded by
+the rounded construction arena, not a separate table pool.
+
+Boot construction protects the full byte floor. An authorized dynamic spawn may
+spend operational bytes; atomic root/system census reconciliation records the
+outstanding reserve debt without touching guarantees. Common refunds replenish
+that debt before becoming lendable again. Ordinary adaptive growth protects the
+remaining operational reserve and cannot spend it. Construction consumption and
+cleanup are reported separately. This does not prove that a reserve byte count
+alone can place a task: CSlots, descriptors, extents, tables and their supporting
+metadata must also fit. Failed acquisition before ledger judgment retains and
+charges actual named unreturned resources, without inventing mapped payload or
+refunding retained root ownership.
 
 ## Device-derived capacity
 
@@ -324,6 +375,12 @@ directory through directory pages funded on demand
 (`object_allocator/segmented.rs`), so the number of base pages a machine can
 track follows its memory rather than a compile-time table size.
 
+Common allocator inventory includes ordinary tails, preserved free leaves and
+all eligible reusable extents, including returned static task extents, not only
+private-memory extents. Protected, active, split-parent and infrastructure-owned
+backing is not common free capacity. The elastic census uses the same reusable
+extent population as allocation.
+
 Returned capacity is reusable at any size. A task's extents come back at the
 size they were taken; once ordinary tails are spent, a smaller request splits
 the smallest larger free extent in halves (`object_allocator/extent_buddy.rs`)
@@ -340,9 +397,18 @@ needs, from capacity that holder returned.
 Every refused adaptive growth is followed by a `SLIME_MEM adaptive limit` line
 naming the resource that refused, the ledger's residual, the allocator's
 residual and the largest placeable block, and by an elastic census of that
-residual by owner. Exhaustion is therefore reconcilable: a refused single page
-whose allocator residual exceeds the operational reserve is a request that
-fitted and was refused.
+residual by owner. The current funding diagnostic also reports the protected
+reserve, root-owned growth, explicit system commitments and common holder
+charges. At every final matrix refusal the checker requires ledger free plus
+reserve to equal allocator free bytes, and root plus system plus common-holder
+ownership plus ledger free to equal the admitted pool. It rejects missing funding
+evidence and unknown refusal resources. These distinguish accounting from physical
+placement: free bytes alone
+do not establish that every required resource fits. The pending matrix checks
+require the final single-page refusal before the operational probe to leave at
+least the full declared reserve, and at most that reserve plus 8 KiB (one page
+and its table). This is the checker's current exhaustion allowance, not newly
+observed evidence that every inventory row satisfies it.
 
 ### Inventory rows
 
@@ -418,15 +484,19 @@ dumps are identical.
   rather than a second live one. The first adaptive holder to die is then
   quarantined, refunds nothing, and is returned by exactly one retry, while its
   peers finish their own schedule.
-- `just private_memory_matrix_check` boots one root and component set against
-  every pinned inventory row on both QEMU architectures. Pool-relative bulk,
-  all-small and mixed holders each walk to a refused single page whose
-  allocator residual is no more than the operational reserve; an idle maximum
-  takes nothing from a peer's walk; a guarantee is redeemed at exhaustion and a
-  spawn under pressure is funded by the reserve; twenty coordinated deaths are
-  each followed by a different holder's zeroed reuse with an unchanged census;
-  verified residency grows with the row; and a launcher-only boot of the
-  pinned row's kernel with the largest row's RAM changes nothing root sees.
+- `just private_memory_matrix_check` is the qualification gate for one root and
+  component set against every pinned inventory row on both QEMU architectures.
+  Its current, not yet qualified, extensions require pool-relative bulk,
+  all-small and both mixed holders' final single-page refusals to retain the
+  full reserve, subject to the upper allowance described above. After mixed
+  exhaustion an independently declared, unentitled probe must be constructed,
+  run, refuse unauthorized private growth and exit with cleanup complete before
+  either pressure holder or the guaranteed holder releases capacity. All three
+  holders must then re-verify their full contents. The gate retains idle-maximum,
+  guarantee-redemption, twenty-cycle zeroed reuse, census conservation,
+  residency-scaling and launcher-only RAM controls. Successful runs of these new
+  checks, tied to tested image identities, remain pending under the
+  [reserve-accounting follow-up](../../.tasks/items/01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981.md).
 - `just private_memory_phase4_check` runs both over the whole phase-3 surface,
   because adaptive binding changes construction, growth and reclamation for
   fixed holders too.
