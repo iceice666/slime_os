@@ -33,7 +33,7 @@
     # evidence contracts; Slime OS only configures it. It publishes no flake,
     # so `nix/devloop.nix` builds the pinned release's two programs.
     devloop = {
-      url = "github:mozufu/devloop/bfa76c2abd3d1716bd207aa168cbca091cf8563a";
+      url = "github:mozufu/devloop/f15302c27a7225ff247b27706307f4744d1a20ba";
       flake = false;
     };
     # The Zutai revision `deps/zutai` is pinned to, packaged for the work-item

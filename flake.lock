@@ -3,17 +3,17 @@
     "devloop": {
       "flake": false,
       "locked": {
-        "lastModified": 1790396403,
+        "lastModified": 1790419196,
         "narHash": "sha256-FqTDuAnyUN/TtYEvVE1AH2HZMZ3jJwbQ5JReahGosP0=",
         "owner": "mozufu",
         "repo": "devloop",
-        "rev": "bfa76c2abd3d1716bd207aa168cbca091cf8563a",
+        "rev": "f15302c27a7225ff247b27706307f4744d1a20ba",
         "type": "github"
       },
       "original": {
         "owner": "mozufu",
         "repo": "devloop",
-        "rev": "bfa76c2abd3d1716bd207aa168cbca091cf8563a",
+        "rev": "f15302c27a7225ff247b27706307f4744d1a20ba",
         "type": "github"
       }
     },
