@@ -1,9 +1,9 @@
 name: Save the Zutai evaluation store
 description: >
   Prune the Zutai evaluation store to the entries this job read or wrote, then
-  save it under the key `slime-env` exported. Run after the job's checks, with
-  `if: "!cancelled()"`: only zero-exit evaluations are ever stored, so a store
-  from a failed check is as sound as one from a passing check.
+  save it under the key `slime-env` exported. Run after the job's checks with
+  `if: always()`: only zero-exit evaluations are ever stored, so a store from a
+  failed or cancelled job is as sound as one from a passing job.
 
 runs:
   using: composite
@@ -13,7 +13,10 @@ runs:
       run: |
         set -euo pipefail
         store=build/zutai-cache
-        test -n "${SLIME_ZUTAI_STORE_KEY:-}" || { echo "slime-env did not run" >&2; exit 1; }
+        if [ -z "${SLIME_ZUTAI_STORE_KEY:-}" ]; then
+          echo "slime-env exported no store key; nothing to save"
+          exit 0
+        fi
         [ -d "$store" ] || exit 0
         before="$(find "$store" -type f | wc -l)"
         if [ "${SLIME_ZUTAI_STORE_PRUNE:-}" = 1 ]; then
@@ -23,6 +26,7 @@ runs:
         echo "Zutai store: $before entries, $(find "$store" -type f | wc -l) kept, $(du -sh "$store" | cut -f1)"
 
     - name: Save Zutai evaluation store
+      if: env.SLIME_ZUTAI_STORE_KEY != ''
       uses: actions/cache/save@v4
       with:
         path: build/zutai-cache

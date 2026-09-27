@@ -59,25 +59,11 @@ runs:
         } | git hash-object --stdin)"
         echo "gitlinks=$gitlinks" >> "$GITHUB_OUTPUT"
 
-    - name: Restore persistent Cargo build outputs
-      uses: actions/cache@v4
-      with:
-        path: |
-          deps/zutai/target
-          target/components
-          build/sel4-cargo
-        key: >-
-          slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
-            inputs.build-cache-key || github.job
-          }}-${{
-            hashFiles('flake.lock', 'flake.nix', 'rust-toolchain.toml',
-                      'deps/zutai/.cargo/config.toml',
-                      'deps/rust-sel4/rust-toolchain.toml',
-                      'deps/rust-sel4/.cargo/config.toml',
-                      'sel4/pins.toml', 'sel4/config/*.cmake',
-                      'components/**/*.ld', '**/Cargo.lock')
-          }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-${{ github.sha }}
-        restore-keys: >-
+    - name: Build-cache key
+      id: build-cache-key
+      shell: bash
+      env:
+        PREFIX: >-
           slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
             inputs.build-cache-key || github.job
           }}-${{
@@ -88,6 +74,35 @@ runs:
                       'sel4/pins.toml', 'sel4/config/*.cmake',
                       'components/**/*.ld', '**/Cargo.lock')
           }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-
+      run: |
+        echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+        echo "key=$PREFIX${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+    # Each save is about 1.1 GB per job, past the repository's 10 GB cache
+    # budget in one run, so least-recently-used eviction removes other caches,
+    # the Zutai evaluation store among them. Only the base branch saves; a pull
+    # request restores the base branch's outputs and lets Cargo rebuild the rest.
+    - name: Restore and save persistent Cargo build outputs
+      if: github.event_name != 'pull_request'
+      uses: actions/cache@v4
+      with:
+        path: |
+          deps/zutai/target
+          target/components
+          build/sel4-cargo
+        key: ${{ steps.build-cache-key.outputs.key }}
+        restore-keys: ${{ steps.build-cache-key.outputs.prefix }}
+
+    - name: Restore persistent Cargo build outputs
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          deps/zutai/target
+          target/components
+          build/sel4-cargo
+        key: ${{ steps.build-cache-key.outputs.key }}
+        restore-keys: ${{ steps.build-cache-key.outputs.prefix }}
 
     # The Zutai evaluation store is content-addressed (`scripts/lib/zutai_cli.py`):
     # an entry whose inputs changed is never looked up, so a stale restore costs
