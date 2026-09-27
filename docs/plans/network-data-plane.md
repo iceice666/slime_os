@@ -13,18 +13,37 @@ interface data configures smoltcp, the service exchanges Ethernet/ARP/IPv4/ICMP
 traffic, and shutdown resets/releases the link. An authority-only composition
 may omit the interface.
 
-The unfinished boundary is the application payload stream. TCP capability
-creation does not yet open a socket transport, and the linked gate expects
-`tcp=0`. TCP/UDP payloads, DNS, listen/accept, payload-path reset/restart
-qualification, and backend independence remain to be implemented and observed.
-The first TCP stream item is `01a08ff0-0bae-741e-9318-331fdafe0b96`.
+The external TCP-client slice now connects actual application IO0 payloads to
+bounded smoltcp sockets. Its QEMU gate compares a 4096-byte stream with an external
+frame peer, including handshake, close, refusal and forbidden-egress checks;
+[the current architecture](../architecture/io-substrate.md#network-boundary)
+and [protocol semantics](../../contracts/network-service/README.md) own that
+implementation and its limits. The first stream item is
+`01a08ff0-0bae-741e-9318-331fdafe0b96`; state remains in the work-item store.
+
+Generation-declared application bindings, separate exact local listener/peer
+authority, real loopback connect/listen/accept and notification-backed bounded
+waiting are now implemented. Local QEMU has observed bidirectional bytes, EOF,
+normal teardown and coalesced readiness. The supervised lifetime path has observed
+client death, socket/session-buffer reclamation, a reset at the surviving peer,
+and same-boot restart followed by a fresh exchange. The AArch64 QEMU service-fault
+profile additionally observes a service VM fault with payload work pending, root
+reclamation, client faults on revoked mappings, and fresh-incarnation recovery.
+Both restart paths reject predecessor handles. A separate external-driver-reset
+QEMU gate now observes pending receive reset, queued IO0 settlement, device epoch
+advance and supervised recovery with a fresh 4096-byte stream. Its controlled peer
+abandons the first acknowledged, unechoed 1024-byte session on a new SYN; this is
+not transparent continuation or ordinary-server interoperability across reset.
+Local qualification also observes authority refusals and a typed receive timeout
+followed by resumed traffic. Physical-device recovery, UDP payloads, DNS,
+arbitrary external listeners and broader backends remain separate work.
 
 ## Planned scope
 
 Complete bounded application transport inside `network-service`, consuming the
 existing LinkDevice attachment and preserving its interface contract:
 
-1. implement external TCP payload transport, then exact listener/accept and local
+1. extend the external TCP payload transport with exact listener/accept and local
    TCP for the short-term Zenoh demo; broaden to authority-compatible smoltcp
    facilities afterward, with versioned Zutai contracts and bounded state;
 2. exact-name or exact-address destination authority with independent CONNECT,
@@ -46,7 +65,9 @@ general listener/accept service are not implied by the first TCP slice.
 The [format-2 demo contract](../../contracts/rpi5-ros2-demo/v2/README.md)
 selects a static peer session: one connect endpoint and one listen endpoint at
 `127.0.0.1:7447`. The external TCP-client slice alone cannot satisfy it. The
-follow-on network item must provide:
+local implementation now supplies the byte-transport and readiness foundation;
+the following obligations remain the qualification boundary, not an implication
+that the ROS/Zenoh integration itself is complete:
 
 - real TCP listen/accept and local loopback between separately authorized
   components, with no external NIC dependency or loopback traffic escape;

@@ -15,6 +15,7 @@ use boot_contracts::generation::{
 };
 use boot_contracts::io_resource::{self, IoResourceBudget};
 use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
+use boot_contracts::network_application::{self, NetworkApplications};
 use boot_contracts::network_destination::{self, NetworkDestinations};
 use boot_contracts::network_interface::{self, NetworkInterfaces};
 use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
@@ -726,6 +727,19 @@ pub(crate) fn network_interface_object<'a>(
     }
     None
 }
+/// Locate authenticated application rows without interpreting userspace policy.
+pub(crate) fn network_application_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<NetworkApplications<'a>, network_application::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE && object.bytes.starts_with(&network_application::MAGIC) {
+            return Some(NetworkApplications::decode(object.bytes));
+        }
+    }
+    None
+}
+
 /// Locate the authenticated B83 per-ring block authority table. Decoded here
 /// only to bound and page authenticated bytes; which ring may write is the
 /// driver's decision, because that is device policy.

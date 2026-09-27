@@ -203,6 +203,7 @@ pub struct TxSide {
     slots: TxSlots<TX_FRAMES>,
     pub counts: FrameCounts,
     control: Option<Control>,
+    pending: [Option<usize>; TX_FRAMES],
 }
 
 pub struct Link {
@@ -212,7 +213,42 @@ pub struct Link {
     state_changed: u32,
 }
 
+impl TxSide {
+    fn free_slot(&self) -> Option<usize> {
+        (0..TX_FRAMES).find(|slot| self.pending[*slot].is_none() && self.slots.is_free(*slot))
+    }
+}
+
 impl Link {
+    pub fn flush(&mut self, engine: &mut super::tcp::Engine<'_>) -> bool {
+        let mut sent = false;
+        for slot in 0..TX_FRAMES {
+            let Some(length) = self.tx.pending[slot].take() else {
+                continue;
+            };
+            if !engine.permit_egress(&self.tx.side.pages[slot].bytes()[..length]) {
+                continue;
+            }
+            self.tx
+                .counts
+                .count(&self.tx.side.pages[slot].bytes()[..length]);
+            let request_id = self
+                .tx
+                .side
+                .submit_frame(slot, OP_TRANSMIT, length, DIRECTION_DEVICE_READ)
+                .unwrap_or_else(|_| fail(b"transmit submit"));
+            self.tx
+                .slots
+                .retain(slot, request_id)
+                .unwrap_or_else(|_| fail(b"transmit retain"));
+            sent = true;
+        }
+        if sent {
+            self.tx.side.signal();
+        }
+        sent
+    }
+
     /// Create the queues and frame pages, lend them to the driver over
     /// `peer_slot`, and wait for its ready message.
     pub fn attach(factory_slot: u32, peer_slot: u32) -> Self {
@@ -260,6 +296,12 @@ impl Link {
             };
         }
         await_ready(peer_slot);
+        let rx_queue = Queue::attach(rx_bytes, SLOTS).unwrap_or_else(|_| fail(b"rx attach"));
+        let tx_queue = Queue::attach(tx_bytes, SLOTS).unwrap_or_else(|_| fail(b"tx attach"));
+        let epoch = rx_queue.epoch();
+        if tx_queue.epoch() != epoch {
+            fail(b"link duplex epoch");
+        }
         let mut rx_pages = [pages[0]; RX_FRAMES];
         rx_pages.copy_from_slice(&pages[..RX_FRAMES]);
         let mut tx_pages = [pages[0]; TX_FRAMES];
@@ -267,8 +309,8 @@ impl Link {
         Self {
             rx: RxSide {
                 side: Side {
-                    queue: Queue::attach(rx_bytes, SLOTS).unwrap_or_else(|_| fail(b"rx attach")),
-                    outstanding: Outstanding::new(EPOCH),
+                    queue: rx_queue,
+                    outstanding: Outstanding::new(epoch),
                     request_ready: rx_request_ready,
                     pages: rx_pages,
                     // Even ids on the receive queue, odd on transmit: both
@@ -281,8 +323,8 @@ impl Link {
             },
             tx: TxSide {
                 side: Side {
-                    queue: Queue::attach(tx_bytes, SLOTS).unwrap_or_else(|_| fail(b"tx attach")),
-                    outstanding: Outstanding::new(EPOCH),
+                    queue: tx_queue,
+                    outstanding: Outstanding::new(epoch),
                     request_ready: tx_request_ready,
                     pages: tx_pages,
                     next_request_id: 1,
@@ -290,6 +332,7 @@ impl Link {
                 slots: TxSlots::new(),
                 counts: FrameCounts::default(),
                 control: None,
+                pending: [None; TX_FRAMES],
             },
             peer: peer_slot,
             state_changed,
@@ -484,7 +527,7 @@ impl phy::Device for Link {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if !self.rx.slots.has_ready() || self.tx.slots.free_slot().is_none() {
+        if !self.rx.slots.has_ready() || self.tx.free_slot().is_none() {
             return None;
         }
         let (slot, len) = self.rx.slots.take_ready()?;
@@ -499,10 +542,7 @@ impl phy::Device for Link {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        self.tx
-            .slots
-            .free_slot()
-            .map(|_| TxToken { tx: &mut self.tx })
+        self.tx.free_slot().map(|_| TxToken { tx: &mut self.tx })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -542,7 +582,6 @@ impl phy::TxToken for TxToken<'_> {
     {
         let slot = self
             .tx
-            .slots
             .free_slot()
             .unwrap_or_else(|| fail(b"transmit slot"));
         let page = self.tx.side.pages[slot].bytes();
@@ -556,17 +595,9 @@ impl phy::TxToken for TxToken<'_> {
         } else {
             len
         };
-        self.tx.counts.count(&page[..frame_len]);
-        let request_id = self
-            .tx
-            .side
-            .submit_frame(slot, OP_TRANSMIT, frame_len, DIRECTION_DEVICE_READ)
-            .unwrap_or_else(|_| fail(b"transmit submit"));
-        self.tx
-            .slots
-            .retain(slot, request_id)
-            .unwrap_or_else(|_| fail(b"transmit retain"));
-        self.tx.side.signal();
+        // Keep the frame private until the engine has checked retransmission
+        // charges; socket polling borrows the engine until this token returns.
+        self.tx.pending[slot] = Some(frame_len);
         result
     }
 }

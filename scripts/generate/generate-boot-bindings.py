@@ -102,6 +102,11 @@ GENERATORS = (
         "io_resource.rs",
     ),
     (
+        ROOT / "contracts" / "network-application" / "v1" / "schema.zt",
+        "network_application.py",
+        "network_application.rs",
+    ),
+    (
         ROOT / "contracts" / "network-destination" / "v1" / "schema.zt",
         "network_destination.py",
         "network_destination.rs",

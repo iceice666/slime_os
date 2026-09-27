@@ -30,6 +30,8 @@ use slime_rt::{
     notification_poll, notification_signal, resolve_binding, shared_buffer_loan_map, yield_now,
 };
 
+mod reset;
+
 slime_rt::entry!(main);
 
 const PEER_SLOT: u32 = 0;
@@ -205,6 +207,23 @@ fn main(_startup_arg: u32) {
     let state_changed = binding(b"notification:io-link-state-changed+signal");
     let (tx_bytes, rx_bytes, loans) = receive_resources();
     let device = io_device_bind(DEVICE_SLOT).unwrap_or_else(|_| fail(b"device bind"));
+    // The client waits for readiness before publishing work. Bind both empty
+    // bootstrap rings to the root-assigned device incarnation before that reply.
+    for bytes in [&mut *tx_bytes, &mut *rx_bytes] {
+        {
+            let queue =
+                Queue::attach(bytes, IO_SLOTS).unwrap_or_else(|_| fail(b"bootstrap attach"));
+            if queue.epoch() != 1
+                || queue.driver_state() != slime_proto::io_queue::DRIVER_ACTIVE
+                || queue.submitted() != 0
+                || queue.completions_pending() != 0
+            {
+                fail(b"bootstrap queue not empty");
+            }
+        }
+        slime_proto::io_queue_ring::format(bytes, IO_SLOTS, device.epoch)
+            .unwrap_or_else(|_| fail(b"device queue epoch"));
+    }
     let tx_dma = io_queue_map(DMA_SLOT, device.epoch, TX_QUEUE_BASE, QUEUE_PAGES)
         .unwrap_or_else(|_| fail(b"tx queue dma"));
     let rx_dma = io_queue_map(DMA_SLOT, device.epoch, RX_QUEUE_BASE, QUEUE_PAGES)
@@ -784,8 +803,17 @@ fn reset(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_changed: u
     signal(state_changed);
     // Quiesce the device before releasing any IOVA named by a published chain.
     driver.mmio.reset();
+    let tx_ids = driver.tx.request_ids;
+    let rx_ids = driver.rx.request_ids;
     let tx = settle_all(&mut driver.tx, &mut driver.charges);
     let rx = settle_all(&mut driver.rx, &mut driver.charges);
+    let queued_tx = reset::settle_queued(&mut driver.tx.queue, &tx_ids, PAGE)
+        .unwrap_or_else(|_| fail(b"queued tx reset"));
+    let queued_rx = reset::settle_queued(&mut driver.rx.queue, &rx_ids, PAGE)
+        .unwrap_or_else(|_| fail(b"queued rx reset"));
+    write_number(b"[virtio-net-driver] reset queued tx=", queued_tx as u64);
+    write_number(b" rx=", queued_rx as u64);
+    debug_write(b"\n");
     signal(tx_ready);
     signal(rx_ready);
     write_number(b"[virtio-net-driver] reset settled tx=", tx as u64);

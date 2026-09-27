@@ -1,0 +1,545 @@
+{
+  acceptanceCriteria = "Interrupted receive reports reset, client resources are reclaimed, and fresh incarnations exchange new bytes.";
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  bootAction = "wait-set";
+  bootAttempts = 3;
+  bootLayoutObject = true;
+  bootProfiles = [];
+  bootstrapInstance = "init";
+  clockAuthority = [
+    {
+      holder = "network-service";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 2;
+      timerNotification = "lifetime-network-request";
+      timerQuota = 1;
+      timerUse = true;
+    };
+    {
+      holder = "publisher-session";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 3;
+      timerNotification = "lifetime-victim-done";
+      timerQuota = 1;
+      timerUse = true;
+    };
+    {
+      holder = "subscriber-session";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 3;
+      timerNotification = "lifetime-survivor-done";
+      timerQuota = 1;
+      timerUse = true;
+    };
+    {
+      holder = "network-supervisor";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerUse = true;
+      timerQuota = 1;
+      timerNotification = "lifetime-supervisor-wake";
+      timerBadgeBit = 3;
+    };
+  ];
+  clockAuthorityObject = true;
+  commandBindings = [];
+  components = [
+    "init";
+    "io-local-network-probe";
+    "io-network-lifetime-probe";
+    "network-service";
+  ];
+  defaultImageBytes = 65536;
+  deploymentConstraint = "AArch64 seL4 QEMU: actual client fault, supervised service and client restart, no NIC.";
+  extraBindings = [];
+  formatVersion = 1;
+  generation = 156;
+  grants = [
+    {
+      capabilityKind = "endpoint";
+      name = "lifetime-victim-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "publisher-session";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "lifetime-victim-provision";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "publisher-session";
+      transferable = true;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "lifetime-survivor-control";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "subscriber-session";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "lifetime-survivor-provision";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "subscriber-session";
+      transferable = true;
+    };
+    {
+      capabilityKind = "sharedBufferFactory";
+      name = "network-service-buffer-factory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "network-service";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      name = "lifetime-victim-executable";
+      capabilityKind = "executable";
+      source = "network-supervisor";
+      target = "io-network-lifetime-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "lifetime-survivor-executable";
+      capabilityKind = "executable";
+      source = "network-supervisor";
+      target = "io-local-network-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "lifetime-service-executable";
+      capabilityKind = "executable";
+      source = "network-supervisor";
+      target = "network-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  imageSizes = [
+    {
+      bytes = 262144;
+      component = "network-service";
+    };
+  ];
+  instances = [
+    {
+      executable = "init";
+      name = "init";
+    };
+    {
+      name = "network-supervisor";
+      executable = "io-network-lifetime-probe";
+      dependencies = [];
+    };
+    {
+      bufferBytePages = 4;
+      bufferCount = 4;
+      dependencies = [];
+      executable = "network-service";
+      loanCount = 4;
+      mappingCount = 4;
+      name = "network-service";
+      owner = "network-supervisor";
+      autostart = false;
+      health = "optional";
+    };
+    {
+      dependencies = [];
+      executable = "io-network-lifetime-probe";
+      loanCount = 2;
+      mappingCount = 2;
+      name = "publisher-session";
+      owner = "network-supervisor";
+      autostart = false;
+      health = "optional";
+    };
+    {
+      dependencies = [];
+      executable = "io-local-network-probe";
+      loanCount = 2;
+      mappingCount = 2;
+      name = "subscriber-session";
+      owner = "network-supervisor";
+      autostart = false;
+      health = "optional";
+    };
+  ];
+  interfaceSchemas = [];
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "network-service";
+        read = true;
+        subject = "network-service";
+        write = true;
+      };
+      {
+        holder = "publisher-session";
+        subject = "publisher-session";
+        read = true;
+        write = true;
+      };
+      {
+        holder = "subscriber-session";
+        subject = "subscriber-session";
+        read = true;
+        write = true;
+      };
+    ];
+    restarts = [
+      {
+        instance = "publisher-session";
+        attempts = 1;
+        causes = [
+          "fault";
+        ];
+        backoffNs = 0;
+      };
+      {
+        instance = "subscriber-session";
+        attempts = 1;
+        causes = [
+          "exit";
+        ];
+        backoffNs = 0;
+      };
+      {
+        instance = "network-service";
+        attempts = 1;
+        causes = [
+          "exit";
+        ];
+        backoffNs = 0;
+      };
+    ];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+    ];
+  };
+  mintedBindings = [
+    {
+      name = "publisher-session-supervision";
+      owner = "network-supervisor";
+      holder = "network-service";
+      capabilityKind = "supervision";
+      slot = 10;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+    {
+      name = "subscriber-session-supervision";
+      owner = "network-supervisor";
+      holder = "network-service";
+      capabilityKind = "supervision";
+      slot = 11;
+      rights = [
+        "supervise";
+      ];
+      transferable = false;
+    };
+  ];
+  name = "sel4-io-lifetime";
+  networkApplications = [
+    {
+      acceptedSocketLimit = 0;
+      admittedPeer = "";
+      backend = "loopback";
+      backlog = 0;
+      byteBudget = 0;
+      completionNotification = "lifetime-victim-done";
+      controlBinding = "lifetime-victim-control";
+      holder = "publisher-session";
+      localAddress = "0.0.0.0";
+      localPort = 0;
+      provisionBinding = "lifetime-victim-provision";
+      queueDepth = 0;
+      reconnectLimit = 0;
+      requestNotification = "lifetime-network-request";
+      retryLimit = 0;
+      rights = [];
+      role = "client";
+      supervisionBinding = "publisher-session-supervision";
+      timerBudget = 0;
+    };
+    {
+      acceptedSocketLimit = 1;
+      admittedPeer = "publisher-session";
+      backend = "loopback";
+      backlog = 1;
+      byteBudget = 8192;
+      completionNotification = "lifetime-survivor-done";
+      controlBinding = "lifetime-survivor-control";
+      holder = "subscriber-session";
+      localAddress = "127.0.0.1";
+      localPort = 7447;
+      provisionBinding = "lifetime-survivor-provision";
+      queueDepth = 4;
+      reconnectLimit = 0;
+      requestNotification = "lifetime-network-request";
+      retryLimit = 2;
+      rights = [
+        "listen";
+        "send";
+        "recv";
+      ];
+      role = "listener";
+      supervisionBinding = "subscriber-session-supervision";
+      timerBudget = 2;
+    };
+  ];
+  networkApplicationsObject = true;
+  networkDestinations = [
+    {
+      address = "127.0.0.1";
+      addressKind = "ipv4";
+      byteBudget = 4096;
+      dnsRecordLimit = 0;
+      holder = "publisher-session";
+      listenerLimit = 0;
+      port = 7447;
+      queueDepth = 4;
+      reconnectLimit = 0;
+      retryLimit = 2;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 1;
+      transport = "tcp";
+    };
+  ];
+  networkDestinationsObject = true;
+  networkInterfaces = [];
+  networkInterfacesObject = false;
+  notificationBindings = [
+    {
+      grant = "lifetime-network-request";
+      holder = "publisher-session";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "lifetime-network-request";
+      holder = "subscriber-session";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "lifetime-network-request";
+      holder = "network-service";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "lifetime-victim-done";
+      holder = "network-service";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "lifetime-victim-done";
+      holder = "publisher-session";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "lifetime-survivor-done";
+      holder = "network-service";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "lifetime-survivor-done";
+      holder = "subscriber-session";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "lifetime-supervisor-wake";
+      holder = "init";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "lifetime-supervisor-wake";
+      holder = "network-supervisor";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  notifications = [
+    {
+      name = "lifetime-network-request";
+      source = "publisher-session";
+      target = "network-service";
+    };
+    {
+      name = "lifetime-victim-done";
+      source = "network-service";
+      target = "publisher-session";
+    };
+    {
+      name = "lifetime-survivor-done";
+      source = "network-service";
+      target = "subscriber-session";
+    };
+    {
+      name = "lifetime-supervisor-wake";
+      source = "init";
+      target = "network-supervisor";
+    };
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "network-service";
+      dependencies = [];
+    };
+    {
+      component = "io-network-lifetime-probe";
+      dependencies = [];
+      spawnBudget = 6;
+    };
+  ];
+  recording = [];
+  recordingObject = false;
+  sharedBufferBudgetObject = true;
+  slotPins = [
+    {
+      grant = "lifetime-victim-control";
+      holder = "network-service";
+      reason = "encodedLayout";
+      slot = 2;
+    };
+    {
+      grant = "lifetime-survivor-control";
+      holder = "network-service";
+      reason = "encodedLayout";
+      slot = 3;
+    };
+    {
+      grant = "network-service-buffer-factory";
+      holder = "network-service";
+      reason = "encodedLayout";
+      slot = 1;
+    };
+    {
+      grant = "lifetime-victim-provision";
+      holder = "network-service";
+      reason = "encodedLayout";
+      slot = 29;
+    };
+    {
+      grant = "lifetime-survivor-provision";
+      holder = "network-service";
+      reason = "encodedLayout";
+      slot = 30;
+    };
+  ];
+  state = [];
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  waitSet = [
+    {
+      badgeBit = 0;
+      drainSlot = 2;
+      kind = "stream";
+      notification = "lifetime-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 1;
+      drainSlot = 3;
+      kind = "stream";
+      notification = "lifetime-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 2;
+      kind = "timer";
+      notification = "lifetime-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 1;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "lifetime-victim-done";
+      waiter = "publisher-session";
+    };
+    {
+      badgeBit = 3;
+      kind = "timer";
+      notification = "lifetime-victim-done";
+      waiter = "publisher-session";
+    };
+    {
+      badgeBit = 2;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "lifetime-survivor-done";
+      waiter = "subscriber-session";
+    };
+    {
+      badgeBit = 3;
+      kind = "timer";
+      notification = "lifetime-survivor-done";
+      waiter = "subscriber-session";
+    };
+  ];
+  waitSetObject = true;
+}

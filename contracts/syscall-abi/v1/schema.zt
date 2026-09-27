@@ -372,6 +372,9 @@ operations :: List Operation = {
   -- rows to the declared network service, which configures its own stack
   -- from its own row. The root learns no address.
   operation "capabilityTable" "NETWORK_INTERFACE_READ" 71;
+  -- Authenticated application rows use the same reader identity and paging.
+  -- The root copies bytes; binding names and protocol policy remain userspace.
+  operation "capabilityTable" "NETWORK_APPLICATION_READ" 72;
   -- IO1's root-brokered hardware-resource mechanism. Every object operand is a
   -- logical capability slot from the authenticated caller's own authority
   -- table; no task, driver, device, physical address, or interrupt number is

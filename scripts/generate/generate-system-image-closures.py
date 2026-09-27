@@ -107,6 +107,16 @@ EXCLUDED = {"reference"}
 # same knobs per variant from `FAULT_VARIANT`/`STREAM_DEATH_VARIANTS`, so the
 # ELF bytes are unchanged by the selection becoming closure data.
 SCENARIOS: dict[str, tuple[str, dict[str, str], dict[str, str]]] = {
+    "sel4-io-driver-reset-in-flight": (
+        "sel4-io-driver-reset",
+        {},
+        {"network-service": "networkDriverResetInFlight"},
+    ),
+    "sel4-io-service-fault-in-flight": (
+        "sel4-io-service-fault",
+        {},
+        {"network-service": "networkFaultInFlight"},
+    ),
     "sel4-saturation": (
         "sel4-traffic",
         {"generationNumber": "39", "fabricLimitOverride": "inFlightOperations=2"},

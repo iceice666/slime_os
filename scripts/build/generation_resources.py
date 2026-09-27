@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 import ipaddress
+import boot_contracts as wire_contracts
 
 from boot_contracts import (
     BLOCK_AUTHORITY_ENTRY,
@@ -393,6 +394,102 @@ def build_network_interfaces(declarations: list[dict]) -> bytes:
         NETWORK_INTERFACE_MAGIC, NETWORK_INTERFACE_VERSION, NETWORK_INTERFACE_HEADER_BYTES, 0, len(entries), total_len
     )
     return header + b"".join(entry for _, entry in entries)
+
+
+def build_network_applications(manifest: dict) -> bytes:
+    """Encode exact application bindings and local listener policy."""
+    c = wire_contracts
+    declarations = manifest.get("networkApplications") or []
+    if len(declarations) > c.NETWORK_APPLICATION_MAX_APPLICATIONS:
+        fail("network applications exceed entry bound")
+    instances = {entry["name"]: entry for entry in manifest["instances"]}
+    grants = {entry["name"]: entry for entry in manifest["grants"]}
+    rows = {entry["holder"]: entry for entry in declarations}
+    if len(rows) != len(declarations):
+        fail("network application: duplicate holder")
+    if declarations and "network-service" not in instances:
+        fail("network application: missing service instance")
+    bindings_used: set[str] = set()
+    listener_endpoints: set[tuple[bytes, int]] = set()
+    entries = []
+    name_fields = ("controlBinding", "provisionBinding", "supervisionBinding", "requestNotification", "completionNotification")
+    limit_fields = ("backlog", "acceptedSocketLimit", "byteBudget", "timerBudget", "queueDepth", "retryLimit", "reconnectLimit")
+    for declaration in declarations:
+        holder = declaration["holder"]
+        if holder not in instances or holder == "network-service":
+            fail("network application: holder is not a distinct admitted instance")
+        encoded_names = []
+        for field in name_fields:
+            value = declaration[field]
+            if not isinstance(value, str) or len(value) > c.NETWORK_APPLICATION_BINDING_BYTES or any(
+                character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in value
+            ) or (field in name_fields[:2] and not value):
+                fail(f"network application: invalid {field}")
+            encoded_names.append(value.encode().ljust(c.NETWORK_APPLICATION_BINDING_BYTES, b"\0"))
+        for field, transferable in (("controlBinding", False), ("provisionBinding", True)):
+            name = declaration[field]
+            grant = grants.get(name)
+            if name in bindings_used or grant is None or grant["capabilityKind"] != "endpoint" or set(grant["rights"]) != {"send", "recv"} or grant["transferable"] != transferable or {grant["source"], grant["target"]} != {holder, "network-service"}:
+                fail(f"network application: {field} is not an exclusive declared endpoint with exact rights")
+            bindings_used.add(name)
+        if bool(declaration["requestNotification"]) != bool(declaration["completionNotification"]):
+            fail("network application: notification bindings must be paired")
+        for field, source, target in (("requestNotification", holder, "network-service"), ("completionNotification", "network-service", holder)):
+            if declaration[field]:
+                name = declaration[field]
+                declared = any(entry["name"] == name and entry["target"] == target for entry in manifest.get("notificationGrants", []))
+                signaller = any(entry["grant"] == name and entry["holder"] == source and entry["role"] == "signal" for entry in manifest.get("notificationBindings", []))
+                waiter = any(entry["grant"] == name and entry["holder"] == target and entry["role"] == "wait" for entry in manifest.get("notificationBindings", []))
+                if not declared or not signaller or not waiter:
+                    fail(f"network application: {field} is not the declared notification edge")
+        if declaration["supervisionBinding"] and not any(
+            entry.get("name") == declaration["supervisionBinding"] == f"{holder}-supervision" and entry.get("holder") == "network-service" and entry.get("capabilityKind") == "supervision" and set(entry.get("rights", [])) == {"supervise"} and not entry.get("transferable", True)
+            for entry in manifest.get("mintedBindings", [])
+        ):
+            fail("network application: supervision is not a declared nontransferable service capability")
+        role = {"client": c.NETWORK_APPLICATION_ROLE_CLIENT, "listener": c.NETWORK_APPLICATION_ROLE_LISTENER}.get(declaration["role"])
+        backend = {"external": c.NETWORK_APPLICATION_BACKEND_EXTERNAL, "loopback": c.NETWORK_APPLICATION_BACKEND_LOOPBACK}.get(declaration["backend"])
+        if role is None or backend is None:
+            fail("network application: unknown role or backend")
+        rights = 0
+        bits = {"listen": c.NETWORK_APPLICATION_RIGHT_LISTEN, "send": c.NETWORK_APPLICATION_RIGHT_SEND, "recv": c.NETWORK_APPLICATION_RIGHT_RECV}
+        for right in declaration["rights"]:
+            bit = bits.get(right)
+            if bit is None or rights & bit:
+                fail("network application: unknown or duplicate right")
+            rights |= bit
+        try:
+            address = ipaddress.IPv4Address(declaration["localAddress"]).packed
+        except ipaddress.AddressValueError:
+            fail("network application: invalid local IPv4 address")
+        port = declaration["localPort"]
+        limits = tuple(declaration[field] for field in limit_fields)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in (port, *limits)):
+            fail("network application: invalid numeric bound")
+        peer = declaration["admittedPeer"]
+        if role == c.NETWORK_APPLICATION_ROLE_CLIENT:
+            if address != bytes(4) or port or peer or rights or any(limits):
+                fail("network application: client row carries listener authority")
+        else:
+            backlog, sockets, byte_budget, timers, queue, retries, reconnects = limits
+            if backend != c.NETWORK_APPLICATION_BACKEND_LOOPBACK or address != ipaddress.IPv4Address("127.0.0.1").packed or not 1 <= port <= 65535 or not rights & c.NETWORK_APPLICATION_RIGHT_LISTEN:
+                fail("network application: listener is not an exact authorized loopback endpoint")
+            if not (backlog == 1 and 1 <= sockets <= c.NETWORK_APPLICATION_MAX_ACCEPTED_SOCKETS and sockets * c.NETWORK_APPLICATION_BYTES_PER_ACCEPTED_SOCKET <= byte_budget <= c.NETWORK_APPLICATION_MAX_BYTE_BUDGET and 1 <= timers <= c.NETWORK_APPLICATION_MAX_TIMER_BUDGET and c.NETWORK_APPLICATION_MIN_QUEUE_DEPTH <= queue <= c.NETWORK_APPLICATION_MAX_QUEUE_DEPTH and queue & (queue - 1) == 0 and retries <= c.NETWORK_APPLICATION_MAX_RETRY_LIMIT and reconnects <= c.NETWORK_APPLICATION_MAX_RECONNECT_LIMIT):
+                fail("network application: listener bounds exceed contract")
+            endpoint = (address, port)
+            if endpoint in listener_endpoints:
+                fail("network application: duplicate listener endpoint")
+            listener_endpoints.add(endpoint)
+            admitted = rows.get(peer)
+            if peer == holder or admitted is None or admitted["role"] != "client" or admitted["backend"] != "loopback":
+                fail("network application: admitted peer is not a distinct declared local client")
+        identity = network_destination_holder_identity(holder)
+        peer_identity = network_destination_holder_identity(peer) if peer else bytes(32)
+        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, bytes(2), *limits, bytes(56))
+        entries.append((identity, packed))
+    entries.sort(key=lambda entry: entry[0])
+    total = c.NETWORK_APPLICATION_HEADER_BYTES + len(entries) * c.NETWORK_APPLICATION_ENTRY_BYTES
+    return c.NETWORK_APPLICATION_HEADER.pack(c.NETWORK_APPLICATION_MAGIC, c.NETWORK_APPLICATION_FORMAT_VERSION, c.NETWORK_APPLICATION_HEADER_BYTES, 0, len(entries), total) + b"".join(entry for _, entry in entries)
 
 
 def block_ring_holder_identity(name: str) -> bytes:

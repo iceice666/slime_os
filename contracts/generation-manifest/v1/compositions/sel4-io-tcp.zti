@@ -29,6 +29,7 @@
       object = "sha256:network-service";
       role = "service";
       spawnBudget = 0;
+      stackBytes = 131072;
     };
     {
       commandProfile = [];
@@ -71,6 +72,17 @@
       ];
       source = "network-service";
       target = "virtio-net-driver";
+      transferable = true;
+    };
+    {
+      name = "network-tcp-probe-provision";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "io-tcp-probe";
       transferable = true;
     };
     {
@@ -165,6 +177,11 @@
       autostart = true;
       bindings = [
         {
+          grant = "network-tcp-probe-provision";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
           grant = "network-tcp-probe-service";
           slot = 0;
           slotReason = "componentAbi";
@@ -190,6 +207,11 @@
         {
           grant = "network-service-link-peer";
           slot = 0;
+          slotReason = "allocatorOrder";
+        };
+        {
+          grant = "network-tcp-probe-provision";
+          slot = 30;
           slotReason = "allocatorOrder";
         };
         {
@@ -259,6 +281,16 @@
       size = 4096;
     };
     {
+      id = "lifecycle-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "network-application";
+      kind = "resource";
+      size = 4096;
+    };
+    {
       id = "network-destinations";
       kind = "resource";
       size = 4096;
@@ -307,10 +339,17 @@
   privateMemoryBudget = [];
   sharedBufferBudget = [
     {
-      bufferCount = 10;
-      bytePages = 10;
+      bufferCount = 0;
+      bytePages = 0;
+      holder = "io-tcp-probe";
+      loanCount = 2;
+      mappingCount = 2;
+    };
+    {
+      bufferCount = 12;
+      bytePages = 12;
       holder = "network-service";
-      loanCount = 10;
+      loanCount = 12;
       mappingCount = 12;
     };
     {
@@ -549,5 +588,52 @@
       prefixLen = 24;
     };
   ];
+  networkApplications = [
+    {
+      acceptedSocketLimit = 0;
+      admittedPeer = "";
+      backend = "external";
+      backlog = 0;
+      byteBudget = 0;
+      completionNotification = "";
+      controlBinding = "network-tcp-probe-service";
+      holder = "io-tcp-probe";
+      localAddress = "0.0.0.0";
+      localPort = 0;
+      provisionBinding = "network-tcp-probe-provision";
+      queueDepth = 0;
+      reconnectLimit = 0;
+      requestNotification = "";
+      retryLimit = 0;
+      rights = [];
+      role = "client";
+      supervisionBinding = "";
+      timerBudget = 0;
+    };
+  ];
   waitSet = [];
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "network-service";
+        read = true;
+        subject = "network-service";
+        write = true;
+      };
+    ];
+    restarts = [];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+    ];
+  };
 }

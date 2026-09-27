@@ -1081,10 +1081,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-io-local-network-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-io-network-intruder"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-io-network-lifetime-probe"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]
@@ -1654,6 +1675,15 @@ dependencies = [
  "boot-contracts",
  "slime-proto",
  "slime-rt",
+]
+
+[[package]]
+name = "slime-network-tcp-tests"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-proto",
+ "smoltcp",
 ]
 
 [[package]]

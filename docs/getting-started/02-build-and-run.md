@@ -94,7 +94,7 @@ change area). The ones you will meet first:
 
 ```sh
 just test_sel4_root      # slime-root's host unit tests (needs the built seL4 prefix)
-just test_host           # host unit tests for boot-contracts and slime-proto
+just test_host           # contracts, protocol, helpers and production TCP engine
 just contracts_check     # every Zutai contract and generated binding
 just fmt_check_all       # formatting, all workspace crates
 just lint_all            # clippy, warnings denied

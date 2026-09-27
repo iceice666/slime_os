@@ -63,6 +63,7 @@ COMPUTED_SYSTEM_SOURCES = {
     name: f"sources/{name}.zt"
     for name in (
         "sel4-call",
+        "sel4-io-service-fault",
         "sel4-private-memory-adaptive-rv64",
         "sel4-private-memory-matrix-rv64",
         "sel4-private-memory-stress-rv64",
@@ -96,6 +97,10 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-io-link": "sel4-io-link.zti",
     "sel4-io-network": "sel4-io-network.zti",
     "sel4-io-tcp": "sel4-io-tcp.zti",
+    "sel4-io-local": "sel4-io-local.zti",
+    "sel4-io-lifetime": "sel4-io-lifetime.zti",
+    "sel4-io-service-fault": "sel4-io-service-fault.zti",
+    "sel4-io-driver-reset": "sel4-io-driver-reset.zti",
     "sel4-io-queue": "sel4-io-queue.zti",
     "sel4-lifecycle-restart": "sel4-lifecycle-restart.zti",
     "sel4-loan": "sel4-loan.zti",
@@ -203,6 +208,8 @@ _SPEC_FIELDS = {
     "networkDestinationsObject",
     "networkInterfaces",
     "networkInterfacesObject",
+    "networkApplications",
+    "networkApplicationsObject",
     "blockRingAuthority",
     "blockRingAuthorityObject",
     "waitSet",
@@ -266,7 +273,8 @@ def _load(path: Path, contract: ModuleType) -> dict:
     _OPTIONAL_FIELDS = {"fabricGraph", "schedulingClass", "lifecyclePolicy", "privateMemoryPolicy"}
     # The IO11 interface table postdates every earlier spec; an absent field is
     # the same declaration as an empty one without an object.
-    _DEFAULTED_FIELDS = {"networkInterfaces": [], "networkInterfacesObject": False}
+    _DEFAULTED_FIELDS = {"networkInterfaces": [], "networkInterfacesObject": False,
+                         "networkApplications": [], "networkApplicationsObject": False}
     unexpected = set(value) - _SPEC_FIELDS
     missing = _SPEC_FIELDS - set(value) - _OPTIONAL_FIELDS - set(_DEFAULTED_FIELDS)
     if unexpected or missing:
@@ -637,6 +645,7 @@ def _validate_bounds(spec: dict, contract: ModuleType) -> None:
         ("ioResourceBudget", contract.MAX_IO_RESOURCE_BUDGET),
         ("networkDestinations", contract.MAX_NETWORK_DESTINATIONS),
         ("networkInterfaces", contract.MAX_NETWORK_INTERFACES),
+        ("networkApplications", contract.MAX_NETWORK_APPLICATIONS),
         ("blockRingAuthority", contract.MAX_BLOCK_RING_AUTHORITY),
         ("waitSet", contract.MAX_WAIT_SET_SOURCES),
         ("recording", contract.MAX_RECORDING_ENTRIES),
@@ -899,6 +908,9 @@ def _validate_authority_sections(spec: dict, admitted: set[str]) -> None:
     for entry in spec["networkInterfaces"]:
         if entry["holder"] not in admitted:
             _fail(f"networkInterfaces: holder {entry['holder']!r} is not admitted")
+    for entry in spec["networkApplications"]:
+        if entry["holder"] not in admitted or (entry["admittedPeer"] and entry["admittedPeer"] not in admitted):
+            _fail("networkApplications: holder or admitted peer is not admitted")
     for entry in spec["blockRingAuthority"]:
         if entry["holder"] not in admitted:
             _fail(f"blockRingAuthority: holder {entry['holder']!r} is not admitted")
@@ -1212,6 +1224,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
         ("ioResourceBudgetObject", "io-resource-budget"),
         ("networkDestinationsObject", "network-destinations"),
         ("networkInterfacesObject", "network-interface"),
+        ("networkApplicationsObject", "network-application"),
         ("blockRingAuthorityObject", "block-ring-authority"),
         ("waitSetObject", "wait-set"),
         ("recordingObject", "recording-policy"),
@@ -1297,6 +1310,10 @@ def derive_manifest(system: CompiledSystem) -> dict:
         manifest["networkDestinations"] = spec["networkDestinations"]
     if spec["networkInterfacesObject"]:
         manifest["networkInterfaces"] = spec["networkInterfaces"]
+    if spec["networkApplicationsObject"]:
+        manifest["networkApplications"] = spec["networkApplications"]
+    elif spec["networkApplications"]:
+        _fail("networkApplications: populated authority requires its resource object")
     if spec["blockRingAuthorityObject"]:
         manifest["blockRingAuthority"] = spec["blockRingAuthority"]
     if spec["waitSetObject"]:

@@ -30,6 +30,100 @@ pub const KNOWN_REQUEST_FLAGS: u32 = 1;
 pub const FLAG_END_OF_STREAM: u32 = 1;
 pub const KNOWN_COMPLETION_FLAGS: u32 = 1;
 
+pub const LOAN_BYTES: usize = 64;
+pub const LOAN_ROLE_RING: u8 = 1;
+pub const LOAN_ROLE_DATA: u8 = 2;
+pub const QUEUE_SLOTS: usize = 4;
+pub const RING_PAGES: usize = 1;
+pub const DATA_PAGES: usize = 1;
+pub const RING_BYTES: usize = 4096;
+pub const DATA_BYTES: usize = 4096;
+pub const OP_ATTACH: u8 = 8;
+pub const STATUS_SUCCESS: i32 = 0;
+pub const STATUS_DENIED: i32 = -1;
+pub const STATUS_MALFORMED: i32 = -2;
+pub const STATUS_UNSUPPORTED: i32 = -3;
+pub const STATUS_WOULD_BLOCK: i32 = -4;
+pub const STATUS_EXHAUSTED: i32 = -5;
+pub const STATUS_REFUSED: i32 = -6;
+pub const STATUS_TIMEOUT: i32 = -7;
+pub const STATUS_RESET: i32 = -8;
+pub const OFF_LOAN_MAGIC: usize = 0;
+pub const OFF_LOAN_VERSION: usize = 4;
+pub const OFF_LOAN_ROLE: usize = 6;
+pub const OFF_LOAN_RESERVED0: usize = 7;
+pub const OFF_LOAN_BUFFER: usize = 8;
+pub const OFF_LOAN_LEASE: usize = 16;
+pub const OFF_LOAN_LENGTH: usize = 24;
+pub const OFF_LOAN_RESERVED: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireNetworkLoan {
+    pub magic: u32,
+    pub version: u16,
+    pub role: u8,
+    pub reserved0: [u8; 1],
+    pub buffer: u64,
+    pub lease: u64,
+    pub length: u64,
+    pub reserved: [u8; 32],
+}
+
+impl WireNetworkLoan {
+    pub fn decode(buf: &[u8]) -> Option<Self> {
+        if buf.len() < LOAN_BYTES {
+            return None;
+        }
+        Some(Self {
+            magic: u32::from_le_bytes(
+                buf[OFF_LOAN_MAGIC..OFF_LOAN_MAGIC + 4]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            version: u16::from_le_bytes(
+                buf[OFF_LOAN_VERSION..OFF_LOAN_VERSION + 2]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            role: buf[OFF_LOAN_ROLE],
+            reserved0: buf[OFF_LOAN_RESERVED0..OFF_LOAN_RESERVED0 + 1]
+                .try_into()
+                .expect("generated network-service layout"),
+            buffer: u64::from_le_bytes(
+                buf[OFF_LOAN_BUFFER..OFF_LOAN_BUFFER + 8]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            lease: u64::from_le_bytes(
+                buf[OFF_LOAN_LEASE..OFF_LOAN_LEASE + 8]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            length: u64::from_le_bytes(
+                buf[OFF_LOAN_LENGTH..OFF_LOAN_LENGTH + 8]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            reserved: buf[OFF_LOAN_RESERVED..OFF_LOAN_RESERVED + 32]
+                .try_into()
+                .expect("generated network-service layout"),
+        })
+    }
+
+    pub fn encode(self) -> [u8; LOAN_BYTES] {
+        let mut buf = [0u8; LOAN_BYTES];
+        buf[OFF_LOAN_MAGIC..OFF_LOAN_MAGIC + 4].copy_from_slice(&self.magic.to_le_bytes());
+        buf[OFF_LOAN_VERSION..OFF_LOAN_VERSION + 2].copy_from_slice(&self.version.to_le_bytes());
+        buf[OFF_LOAN_ROLE] = self.role;
+        buf[OFF_LOAN_RESERVED0..OFF_LOAN_RESERVED0 + 1].copy_from_slice(&self.reserved0);
+        buf[OFF_LOAN_BUFFER..OFF_LOAN_BUFFER + 8].copy_from_slice(&self.buffer.to_le_bytes());
+        buf[OFF_LOAN_LEASE..OFF_LOAN_LEASE + 8].copy_from_slice(&self.lease.to_le_bytes());
+        buf[OFF_LOAN_LENGTH..OFF_LOAN_LENGTH + 8].copy_from_slice(&self.length.to_le_bytes());
+        buf[OFF_LOAN_RESERVED..OFF_LOAN_RESERVED + 32].copy_from_slice(&self.reserved);
+        buf
+    }
+}
+
 pub const OFF_REQUEST_MAGIC: usize = 0;
 pub const OFF_REQUEST_VERSION: usize = 4;
 pub const OFF_REQUEST_OP: usize = 6;

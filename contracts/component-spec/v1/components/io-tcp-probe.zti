@@ -4,7 +4,7 @@
   componentType = "application";
   version = "1.0.0";
   owner = "root";
-  purpose = "Opens its one declared TCP destination through the network service, holds the service on its link for the peer, and closes what it opened.";
+  purpose = "Exchanges and compares 4096 TCP stream bytes through network-service IO0 payloads, checks exact-destination refusals, and closes its connection and loans.";
   implementation =  {
     provider = "workspace";
     binary = "io-tcp-probe";
@@ -59,7 +59,7 @@
   };
   test =  {
     testCondition = "io_tcp_check boots sel4-io-tcp";
-    expectedResult = "the granted client opens exactly its declared destination, the service answers the peer's ARP and ICMP on the declared interface meanwhile, and the client closes what it opened";
+    expectedResult = "a real TCP handshake and 4096 byte-identical echoed bytes with partial I/O, peer refusal and undeclared destination denial, retained ARP/ICMP, and connection and buffer cleanup";
     passFailCriteria = "[io-tcp-probe] closed capabilities=1 shutdown=1";
     requiredTestEnvironment = "io_tcp_check";
   };

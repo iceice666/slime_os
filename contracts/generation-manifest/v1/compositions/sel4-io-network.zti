@@ -36,6 +36,7 @@
       object = "sha256:network-service";
       role = "service";
       spawnBudget = 0;
+      stackBytes = 131072;
     };
   ];
   formatVersion = 1;

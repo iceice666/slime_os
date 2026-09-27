@@ -1338,6 +1338,27 @@ pub fn valid_link_reply(reply: &link_device::WireLinkReply) -> bool {
     }
 }
 
+/// Validate a NetworkService provisioning loan before importing or mapping it.
+/// The expected role comes from the receiver; each role has one contract-defined size.
+pub fn valid_network_loan(
+    descriptor: &network_service::WireNetworkLoan,
+    expected_role: u8,
+) -> bool {
+    let length = match expected_role {
+        network_service::LOAN_ROLE_RING => network_service::RING_BYTES,
+        network_service::LOAN_ROLE_DATA => network_service::DATA_BYTES,
+        _ => return false,
+    };
+    descriptor.magic == network_service::NETWORK_MAGIC
+        && descriptor.version == network_service::FORMAT_VERSION
+        && descriptor.role == expected_role
+        && descriptor.reserved0 == [0; 1]
+        && descriptor.reserved == [0; 32]
+        && descriptor.length == length as u64
+        && descriptor.buffer != 0
+        && descriptor.lease != 0
+}
+
 /// Structural and operation-specific validity of a NetworkService IO0 request payload.
 pub fn valid_network_request(request: &network_service::WireNetworkRequest) -> bool {
     if request.magic != network_service::NETWORK_MAGIC
@@ -1406,6 +1427,38 @@ pub fn valid_network_request(request: &network_service::WireNetworkRequest) -> b
     }
 }
 
+/// Reserve a terminal request identity before judging its envelope or payload.
+/// Malformed requests consume identities too; old epochs must not be completed
+/// as if they belonged to the current session.
+pub fn admit_network_request_id(last: &mut u64, id: u64, epoch: u64, current_epoch: u64) -> bool {
+    if id <= *last || epoch != current_epoch || current_epoch == 0 {
+        return false;
+    }
+    *last = id;
+    true
+}
+
+/// Bind a network request's payload to the service-owned session mapping.
+/// Expected identities and mapping length come from root allocation/loan results,
+/// never from the application's request or provisioning descriptor claims.
+pub fn valid_network_payload_slice(
+    request: &network_service::WireNetworkRequest,
+    slice: &io_queue::WireBufferSlice,
+    expected_buffer: u64,
+    expected_lease: u64,
+    mapped_len: u64,
+) -> bool {
+    if !valid_network_request(request) || !valid_buffer_slice(slice, mapped_len) {
+        return false;
+    }
+    let direction = match request.op {
+        network_service::OP_SEND => io_queue::DIRECTION_DEVICE_READ,
+        network_service::OP_RECV => io_queue::DIRECTION_DEVICE_WRITE,
+        _ => return slice.direction == io_queue::DIRECTION_NONE,
+    };
+    slice.direction == direction && slice.buffer == expected_buffer && slice.lease == expected_lease
+}
+
 fn valid_network_name(name: &[u8]) -> bool {
     !name.is_empty()
         && name[0] != b'.'
@@ -1421,6 +1474,10 @@ pub fn valid_network_completion(completion: &network_service::WireNetworkComplet
     if completion.magic != network_service::NETWORK_MAGIC
         || completion.version != network_service::FORMAT_VERSION
         || completion.flags & !network_service::KNOWN_COMPLETION_FLAGS != 0
+        || !(network_service::STATUS_RESET..=network_service::STATUS_SUCCESS)
+            .contains(&completion.status_detail)
+        || (completion.flags != 0
+            && (completion.op != network_service::OP_RECV || completion.status_detail != 0))
     {
         return false;
     }
@@ -1449,7 +1506,10 @@ pub fn valid_network_completion(completion: &network_service::WireNetworkComplet
             completion.capability != 0
                 && completion.capability_kind == network_service::CAPABILITY_DNS_RECORD
         }
-        network_service::OP_SEND | network_service::OP_RECV | network_service::OP_CLOSE => {
+        network_service::OP_SEND
+        | network_service::OP_RECV
+        | network_service::OP_CLOSE
+        | network_service::OP_ATTACH => {
             completion.capability == 0
                 && completion.capability_kind == network_service::CAPABILITY_NONE
         }

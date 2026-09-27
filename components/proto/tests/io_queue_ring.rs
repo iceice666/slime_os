@@ -200,6 +200,86 @@ fn a_completion_for_an_unknown_or_already_settled_request_is_rejected() {
 }
 
 #[test]
+fn a_predecessor_completion_cannot_settle_a_reused_id_and_fresh_bytes_still_complete() {
+    let mut bytes = buffer();
+    format(&mut bytes, SLOTS, EPOCH).expect("old format");
+    {
+        let mut queue = Queue::attach(&mut bytes, SLOTS).expect("old attach");
+        queue
+            .submit(42, &slice(0, 4), b"old request", false, MAPPED)
+            .expect("old submit");
+        let mut request = [0; REQUEST_PAYLOAD_BYTES];
+        queue
+            .take_request(&mut request, MAPPED)
+            .expect("old request");
+        queue
+            .complete(42, io_queue::STATUS_OK, 4, b"old reply", false)
+            .expect("predecessor completion");
+    }
+    let fresh_epoch = EPOCH + 1;
+    bytes[io_queue::OFF_HEADER_EPOCH..io_queue::OFF_HEADER_EPOCH + 8]
+        .copy_from_slice(&fresh_epoch.to_le_bytes());
+    let mut queue = Queue::attach(&mut bytes, SLOTS).expect("fresh attach");
+    let mut outstanding: Outstanding<SLOTS> = Outstanding::new(fresh_epoch);
+    outstanding.admit(42, 19, 32).expect("fresh identity");
+    outstanding.start(42).expect("fresh executing request");
+    let live_before = outstanding.find(42, fresh_epoch).expect("live request");
+    let mut out = [0xa5; COMPLETION_PAYLOAD_BYTES];
+    assert_eq!(
+        queue.take_completion(&outstanding, &mut out),
+        Err(QueueError::Unknown)
+    );
+    assert_eq!(out, [0xa5; COMPLETION_PAYLOAD_BYTES]);
+    assert_eq!(queue.completions_pending(), 0);
+    assert_eq!(outstanding.len(), 1);
+    assert_eq!(outstanding.find(42, fresh_epoch), Some(live_before));
+
+    let mut fresh_slice = slice(0, 32);
+    fresh_slice.lease = 19;
+    let request_bytes = b"fresh request bytes";
+    queue
+        .submit(42, &fresh_slice, request_bytes, false, MAPPED)
+        .expect("fresh submit");
+    let mut received = [0; REQUEST_PAYLOAD_BYTES];
+    let request = queue
+        .take_request(&mut received, MAPPED)
+        .expect("fresh request");
+    assert_eq!(request.epoch, fresh_epoch);
+    assert_eq!(&received[..request.payload_len], request_bytes);
+    let reply_bytes = b"fresh reply bytes";
+    queue
+        .complete(
+            42,
+            io_queue::STATUS_OK,
+            reply_bytes.len() as u64,
+            reply_bytes,
+            false,
+        )
+        .expect("fresh completion");
+    let completion = queue
+        .take_completion(&outstanding, &mut out)
+        .expect("fresh accepted");
+    assert_eq!(completion.request_id, 42);
+    assert_eq!(completion.epoch, fresh_epoch);
+    assert_eq!(completion.transferred, reply_bytes.len() as u64);
+    assert_eq!(&out[..completion.payload_len], reply_bytes);
+    assert!(out[completion.payload_len..].iter().all(|byte| *byte == 0));
+    let settled = outstanding
+        .settle(42, completion.status)
+        .expect("settle current request once");
+    assert_eq!(settled.lease, 19);
+    assert!(outstanding.is_empty());
+    assert_eq!(
+        outstanding.settle(42, completion.status),
+        Err(QueueError::Unknown)
+    );
+    assert_eq!(
+        queue.take_completion(&outstanding, &mut out),
+        Err(QueueError::Empty)
+    );
+}
+
+#[test]
 fn a_stale_epoch_submission_is_refused_by_the_driver() {
     let mut bytes = buffer();
     format(&mut bytes, SLOTS, EPOCH).expect("format");

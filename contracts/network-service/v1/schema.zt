@@ -15,6 +15,23 @@ requestBytes :: Int = 56;
 completionBytes :: Int = 24;
 maxNameBytes :: Int = 24;
 networkMagic :: Int = 1414745678;
+loanBytes :: Int = 64;
+loanRoleRing :: Int = 1;
+loanRoleData :: Int = 2;
+queueSlots :: Int = 4;
+ringPages :: Int = 1;
+dataPages :: Int = 1;
+ringBytes :: Int = 4096;
+dataBytes :: Int = 4096;
+statusSuccess :: Int = 0;
+statusDenied :: Int = -1;
+statusMalformed :: Int = -2;
+statusUnsupported :: Int = -3;
+statusWouldBlock :: Int = -4;
+statusExhausted :: Int = -5;
+statusRefused :: Int = -6;
+statusTimeout :: Int = -7;
+statusReset :: Int = -8;
 
 opConnect :: Int = 1;
 opSend :: Int = 2;
@@ -23,6 +40,7 @@ opClose :: Int = 4;
 opListen :: Int = 5;
 opAccept :: Int = 6;
 opResolve :: Int = 7;
+opAttach :: Int = 8;
 
 transportNone :: Int = 0;
 transportTcp :: Int = 1;
@@ -70,6 +88,29 @@ NetworkCompletion :: type {
   capability : Int;
 };
 
+NetworkLoan :: type {
+  magic : Int;
+  version : Int;
+  role : Int;
+  reserved0 : Int;
+  buffer : Int;
+  lease : Int;
+  length : Int;
+  reserved : Int;
+};
+
+loanSchema ::= schema NetworkLoan;
+loanLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "role"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 1; signed = false; byteArray = true; };
+  { name = "buffer"; width = 8; signed = false; byteArray = false; };
+  { name = "lease"; width = 8; signed = false; byteArray = false; };
+  { name = "length"; width = 8; signed = false; byteArray = false; };
+  { name = "reserved"; width = 32; signed = false; byteArray = true; };
+};
+
 requestSchema ::= schema NetworkRequest;
 completionSchema ::= schema NetworkCompletion;
 
@@ -103,6 +144,13 @@ protocol ::= {
   completionBytes =;
   maxNameBytes =;
   networkMagic =;
+  loanBytes =; loanRoleRing =; loanRoleData =;
+  queueSlots =; ringPages =; dataPages =; ringBytes =; dataBytes =;
+  statusSuccess =; statusDenied =; statusMalformed =; statusUnsupported =;
+  statusWouldBlock =; statusExhausted =; statusRefused =; statusTimeout =; statusReset =;
+  opAttach =;
+  loanFields = loanSchema.fields ?? {;};
+  loanLayout =;
   opConnect =; opSend =; opRecv =; opClose =; opListen =; opAccept =; opResolve =;
   transportNone =; transportTcp =; transportUdp =;
   addressNone =; addressIpv4 =; addressIpv6 =; addressDns =;

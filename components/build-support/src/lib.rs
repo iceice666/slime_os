@@ -64,6 +64,8 @@ const COMPILE_TIME_KNOBS: &[&str] = &[
     "SLIME_GENERATION_CMD_SCENARIO",
     "SLIME_BOOT_SELECTION_FAIL",
     "SLIME_RECOVERY_IMAGE",
+    "SLIME_NETWORK_FAULT_IN_FLIGHT",
+    "SLIME_NETWORK_DRIVER_RESET_IN_FLIGHT",
 ];
 
 /// Select the component target's linker script and propagate the build knobs.

@@ -44,6 +44,8 @@ render :: Text = t.join "" {
     schema.buildProfileGenerationCmdBadRelease;
     schema.buildProfileBootSelectionFail;
     schema.buildProfileRecoveryImage;
+    schema.buildProfileNetworkFaultInFlight;
+    schema.buildProfileNetworkDriverResetInFlight;
   };
   text "BUILD_PROFILE_DEFAULT" schema.buildProfileDefault;
   text "BUILD_PROFILE_PROXY_EARLY_EXIT" schema.buildProfileProxyEarlyExit;
@@ -52,6 +54,8 @@ render :: Text = t.join "" {
   text "BUILD_PROFILE_GENERATION_CMD_BAD_RELEASE" schema.buildProfileGenerationCmdBadRelease;
   text "BUILD_PROFILE_BOOT_SELECTION_FAIL" schema.buildProfileBootSelectionFail;
   text "BUILD_PROFILE_RECOVERY_IMAGE" schema.buildProfileRecoveryImage;
+  text "BUILD_PROFILE_NETWORK_FAULT_IN_FLIGHT" schema.buildProfileNetworkFaultInFlight;
+  text "BUILD_PROFILE_NETWORK_DRIVER_RESET_IN_FLIGHT" schema.buildProfileNetworkDriverResetInFlight;
   tuple "ROOT_ROLES" {
     schema.rootRoleEmbeddedGeneration;
     schema.rootRoleBootSelector;

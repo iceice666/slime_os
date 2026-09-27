@@ -151,6 +151,8 @@ def check_profile_vocabulary() -> None:
         "generationCmdBadRelease",
         "bootSelectionFail",
         "recoveryImage",
+        "networkFaultInFlight",
+        "networkDriverResetInFlight",
     )
     if tuple(CONTRACT.BUILD_PROFILES) != expected:
         fail(
@@ -165,6 +167,18 @@ def check_profile_vocabulary() -> None:
     )
     if unmapped:
         fail(f"build profile(s) {unmapped} map to no compile-time knob")
+    network_fault = BUILDER.profile_environment(
+        {"network-service": CONTRACT.BUILD_PROFILE_NETWORK_FAULT_IN_FLIGHT}
+    )
+    if network_fault != {"SLIME_NETWORK_FAULT_IN_FLIGHT": "1"}:
+        fail(f"network fault profile did not select its exact compile-time knob: {network_fault}")
+    network_reset = BUILDER.profile_environment(
+        {"network-service": CONTRACT.BUILD_PROFILE_NETWORK_DRIVER_RESET_IN_FLIGHT}
+    )
+    if network_reset != {"SLIME_NETWORK_DRIVER_RESET_IN_FLIGHT": "1"}:
+        fail(f"network reset profile did not select its exact compile-time knob: {network_reset}")
+    if BUILDER.profile_environment({"network-service": CONTRACT.BUILD_PROFILE_DEFAULT}):
+        fail("default network service profile enabled a scenario knob")
     # Distinct knobs coexist; the same knob at two values is refused.
     both = BUILDER.profile_environment(
         {"a": CONTRACT.BUILD_PROFILE_PROXY_EARLY_EXIT, "b": CONTRACT.BUILD_PROFILE_STREAM_EARLY_EXIT}

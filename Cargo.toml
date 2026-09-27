@@ -11,6 +11,7 @@ members = [
     "components/proto",
     "components/runtime",
     "slime-root",
+    "verification/network-tcp",
 ]
 
 # Inherited by every member via `[lints] workspace = true`. Only lints the
@@ -548,6 +549,16 @@ codegen-units = 1
 debug = false
 
 [profile.release.package.slime-component-io-link-loopback]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-local-network-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-io-network-lifetime-probe]
 opt-level = "s"
 codegen-units = 1
 debug = false

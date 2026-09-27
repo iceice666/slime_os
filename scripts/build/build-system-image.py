@@ -136,6 +136,14 @@ def clean_environment(*, toolchain: str, prefix: Path, target_profile: str) -> d
 # ELF and a legacy one are the same bytes; what changes is that the selection
 # is now in the build key rather than in the caller's environment.
 PROFILE_KNOBS: dict[str, tuple[str, str]] = {
+    CLOSURE_CONTRACT.BUILD_PROFILE_NETWORK_DRIVER_RESET_IN_FLIGHT: (
+        "SLIME_NETWORK_DRIVER_RESET_IN_FLIGHT",
+        "1",
+    ),
+    CLOSURE_CONTRACT.BUILD_PROFILE_NETWORK_FAULT_IN_FLIGHT: (
+        "SLIME_NETWORK_FAULT_IN_FLIGHT",
+        "1",
+    ),
     CLOSURE_CONTRACT.BUILD_PROFILE_PROXY_EARLY_EXIT: (
         "SLIME_FABRIC_PROXY_EARLY_EXIT",
         "1",

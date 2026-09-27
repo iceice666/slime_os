@@ -105,6 +105,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::GRAPH_READ
         | capability_table_labels::NETWORK_DESTINATIONS_READ
         | capability_table_labels::NETWORK_INTERFACE_READ
+        | capability_table_labels::NETWORK_APPLICATION_READ
         | capability_table_labels::BLOCK_RING_AUTHORITY_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_table_labels::GRAPH_QUERY
@@ -1285,6 +1286,50 @@ pub fn read_network_interface(
     Some(written / NETWORK_INTERFACE_ROW_BYTES)
 }
 
+pub const NETWORK_APPLICATION_ROW_BYTES: usize = boot_contracts::network_application::ENTRY_BYTES;
+pub const NETWORK_APPLICATION_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / NETWORK_APPLICATION_ROW_BYTES;
+
+/// Copy authenticated application rows only to the badge-derived network service.
+/// Binding resolution and application policy belong to that userspace service.
+pub fn read_network_application(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let applications = crate::generation::network_application_object(generation)?;
+    let caller = generation.instance(instance).ok()?;
+    page_network_application(caller.name, applications, cursor, out)
+}
+
+fn page_network_application(
+    reader: &str,
+    applications: Result<
+        boot_contracts::network_application::NetworkApplications<'_>,
+        boot_contracts::network_application::DecodeError,
+    >,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    if reader != "network-service" {
+        return None;
+    }
+    let applications = applications.ok()?;
+    let mut written = 0;
+    for index in cursor..applications.application_count() {
+        let end = written + NETWORK_APPLICATION_ROW_BYTES;
+        if end > out.len()
+            || written / NETWORK_APPLICATION_ROW_BYTES >= NETWORK_APPLICATION_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(applications.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / NETWORK_APPLICATION_ROW_BYTES)
+}
+
 /// Copy authenticated IO4 entries only to the generation's declared
 /// `network-service`. This is identity gating, not destination policy.
 pub fn read_network_destinations(
@@ -1621,6 +1666,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn network_application_reads_are_identity_gated_bounded_and_exact() {
+        use boot_contracts::network_application::*;
+        let mut bytes = [0u8; MAX_BYTES];
+        bytes[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC_END].copy_from_slice(&MAGIC);
+        for (offset, value) in [
+            (OFF_HEADER_FORMAT_VERSION, FORMAT_VERSION),
+            (OFF_HEADER_HEADER_SIZE, HEADER_BYTES as u32),
+            (OFF_HEADER_APPLICATION_COUNT, MAX_APPLICATIONS as u32),
+            (OFF_HEADER_TOTAL_LEN, MAX_BYTES as u32),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for index in 0..MAX_APPLICATIONS {
+            let start = HEADER_BYTES + index * ENTRY_BYTES;
+            let row = &mut bytes[start..start + ENTRY_BYTES];
+            row[OFF_ENTRY_HOLDER_IDENTITY..OFF_ENTRY_HOLDER_IDENTITY_END].fill(index as u8 + 1);
+            row[OFF_ENTRY_CONTROL_BINDING..OFF_ENTRY_CONTROL_BINDING + 11]
+                .copy_from_slice(b"app-control");
+            row[OFF_ENTRY_PROVISION_BINDING..OFF_ENTRY_PROVISION_BINDING + 13]
+                .copy_from_slice(b"app-provision");
+            row[OFF_ENTRY_ROLE] = ROLE_CLIENT;
+            row[OFF_ENTRY_BACKEND] = BACKEND_EXTERNAL;
+        }
+        let table = NetworkApplications::decode(&bytes).unwrap();
+        let mut out = [0xa5; MAX_APPLICATIONS * ENTRY_BYTES];
+        assert_eq!(
+            page_network_application("network-service", Ok(table), 0, &mut out),
+            Some(NETWORK_APPLICATION_ROWS_PER_CALL)
+        );
+        let copied = NETWORK_APPLICATION_ROWS_PER_CALL * ENTRY_BYTES;
+        assert_eq!(&out[..copied], &bytes[HEADER_BYTES..HEADER_BYTES + copied]);
+        assert!(out[copied..].iter().all(|byte| *byte == 0xa5));
+        assert_eq!(
+            page_network_application("network-service", Ok(table), 3, &mut out),
+            Some(1)
+        );
+        assert_eq!(&out[..ENTRY_BYTES], table.entry_bytes(3).unwrap());
+        for cursor in [MAX_APPLICATIONS, usize::MAX] {
+            assert_eq!(
+                page_network_application("network-service", Ok(table), cursor, &mut out),
+                Some(0)
+            );
+        }
+        let before = out;
+        assert_eq!(
+            page_network_application("ungranted-reader", Ok(table), 0, &mut out),
+            None
+        );
+        assert_eq!(out, before);
+        assert_eq!(
+            page_network_application("network-service", Ok(table), 0, &mut out[..ENTRY_BYTES - 1]),
+            Some(0)
+        );
+        assert_eq!(out, before);
+        bytes[OFF_HEADER_REQUIRED_FLAGS] = 1;
+        assert_eq!(
+            page_network_application(
+                "network-service",
+                NetworkApplications::decode(&bytes),
+                0,
+                &mut out
+            ),
+            None
+        );
+        assert_eq!(out, before);
+    }
+
     /// Every declared operation routes to the mechanism that owns it. B61 moved
     /// this out of the binary so the routing is checkable without a boot; before
     /// that, a label mapped to the wrong service was observable only as a
@@ -1652,6 +1765,10 @@ mod tests {
             ),
             (
                 capability_table_labels::NETWORK_INTERFACE_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
+                capability_table_labels::NETWORK_APPLICATION_READ,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
             (

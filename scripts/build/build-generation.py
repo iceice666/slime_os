@@ -127,6 +127,7 @@ from generation_resources import (
     build_io_resource_budget,
     build_network_destinations,
     build_network_interfaces,
+    build_network_applications,
     build_lifecycle_policy,
     build_private_memory_budget,
     build_recording_policy,
@@ -1651,6 +1652,7 @@ def declared_services(
     minted_bindings: list[dict],
     shared_buffer_holders: set[str],
     clock_holders: set[str],
+    parameter_holders: frozenset[str] = frozenset(),
 ) -> set[int]:
     services = {SERVICE_LIFECYCLE, SERVICE_CONSOLE}
     if executable["role"] == "init" or executable["spawnBudget"] > 0:
@@ -1664,6 +1666,10 @@ def declared_services(
         # authenticated per-holder budget is the declaration that authorizes
         # that receiver-side shared-buffer mechanism.
         services.add(SERVICE_SHARED_BUFFER)
+    if instance["name"] in parameter_holders:
+        # Parameter edges authorize the mediated supervision transport; the root
+        # still enforces each exact subject and independent read/write right.
+        services.add(SERVICE_SUPERVISION)
     if instance["name"] in clock_holders:
         # The authenticated clock-authority resource is the service declaration:
         # holders get the shared root transport, while absent instances have no
@@ -1894,6 +1900,7 @@ def build_sel4_plan(
                 manifest.get("mintedBindings", []),
                 {entry["holder"] for entry in manifest.get("sharedBufferBudget", [])},
                 {entry["holder"] for entry in manifest.get("clockAuthority") or []},
+                frozenset(entry["holder"] for entry in (manifest.get("lifecyclePolicy") or {}).get("parameters", []) if entry["read"] or entry["write"]),
             )
         ):
             if service == SERVICE_CONSOLE:
@@ -3081,6 +3088,11 @@ def build_sel4_generation(
         payloads["network-interface"] = build_network_interfaces(declared_network_interfaces)
     elif declared_network_interfaces:
         fail("networkInterfaces declared without a network-interface resource object")
+    declared_network_applications = manifest.get("networkApplications") or []
+    if "network-application" in object_ids:
+        payloads["network-application"] = build_network_applications(manifest)
+    elif declared_network_applications:
+        fail("networkApplications declared without a network-application resource object")
     declared_block_rings = manifest.get("blockRingAuthority") or []
     if "block-ring-authority" in object_ids:
         payloads["block-ring-authority"] = build_block_ring_authority(declared_block_rings)
