@@ -17,7 +17,7 @@ may omit the interface.
 The external TCP-client slice now connects actual application IO0 payloads to
 bounded smoltcp sockets. Its QEMU gate compares a 4096-byte stream with an external
 frame peer, including handshake, close, refusal and forbidden-egress checks;
-[the current architecture](../architecture/io-substrate.md#network-boundary)
+[the current architecture](../architecture/network-service.md)
 and [protocol semantics](../../contracts/network-service/README.md) own that
 implementation and its limits. The first stream item is
 `01a08ff0-0bae-741e-9318-331fdafe0b96`; state remains in the work-item store.

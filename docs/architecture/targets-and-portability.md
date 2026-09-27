@@ -108,15 +108,18 @@ explains why display output or a debugger cannot replace its ordered transcript.
 The named Framework 13 cold-booted the exact P6 removable image twice on
 2026-09-13 and rendered the resident readiness record through the firmware
 framebuffer without internal-storage write authority. That observation qualifies
-the CPU/product boot path only. The current observation is retained but its gate
-is temporarily unbound from the rebuildable root image: `slime-root.elf` changed,
-while the pc99 kernel remains byte-identical to its pin. A new operator boot is
-required to rebind it; neither QEMU nor re-stamping the frozen record can do so.
+the CPU/product boot path only, for the image identified in the retained record.
 The [observation contract](../../contracts/cpu-boot-observation/v1/schema.zt) and
 [gate](../../scripts/check/check-framework-cpu-boot.py) bind the exact medium,
 generation, machine, firmware, USB device, and protected internal-NVMe comparison
-region. No device inventory, NVMe, USB, input, network, display, audio, suspend,
-IOMMU, or daily-driver claim follows.
+region, so any change to the root, the product composition, or the pinned kernel
+unbinds the record until an operator repeats the
+[runbook](../operations/framework-cpu-boot-runbook.md) on the rebuilt image;
+neither QEMU nor re-stamping the record can. Whether the gate currently passes
+or refuses is a fact about the working tree, reported by
+`just framework_cpu_boot_check`, not a fact this page records. No device
+inventory, NVMe, USB, input, network, display, audio, suspend, IOMMU, or
+daily-driver claim follows.
 
 ## Target-specific non-equivalence
 
@@ -157,6 +160,6 @@ Current unimplemented target qualifications live in
 - `just x86_64_sel4_root_boot_check`
 - `just x86_64_qemu_check`
 - `just framework_media_check`
-- `just framework_cpu_boot_check` — currently expected to refuse the stale image
-  binding rather than manufacture a physical pass
+- `just framework_cpu_boot_check` — judges the retained observation against the
+  current image; refuses, never manufactures, when the image has moved
 - the Milk-V Duo and Raspberry Pi 5 targets in `just/hardware.just`

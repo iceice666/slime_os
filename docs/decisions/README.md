@@ -28,7 +28,9 @@ readable and link to the decision that replaced them.
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
 - [Adaptive memory guarantee reservation](adaptive-memory-guarantee-reservation.md)
-  — proposed; physical reservation ownership, guaranteed mapping, and safe
-  admission before adaptive task publication.
-- [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed;
-  target-specific assurance and the required Reply/scheduling-context cutover.
+  — accepted; physical reservation ownership, guaranteed mapping, and safe
+  admission before adaptive task publication. The record lists the required
+  observations; the private-memory adaptive planes are where they are observed.
+- [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed; keep
+  `KernelIsMCS OFF` (as every pinned profile is today) until one
+  target-specific cutover covers API, resources, admission, and assurance.
