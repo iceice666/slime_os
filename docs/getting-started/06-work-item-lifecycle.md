@@ -353,3 +353,8 @@ history.
 Never use GitHub auto-close keywords against projected Issues, and never
 hand-edit `myque:*` markers or the `myque-gh` PR trailer.
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) owns the full PR workflow.
+
+## Next
+
+[Add a gate](07-add-a-gate.md) — the evidence a spec-driven item binds to is a
+plane gate; this is how one is built.

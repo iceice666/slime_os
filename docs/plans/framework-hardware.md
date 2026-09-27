@@ -96,9 +96,10 @@ framebuffer output, or one driver cannot satisfy completion.
 ## Current first step
 
 The next qualification surface is the evidence-backed hardware inventory. The
-historical CPU boot remains observed but its current gate refuses because the
-recorded root image is no longer rebuildable byte-for-byte. A new operator boot
-of the rebuilt image is required; documentation cannot re-stamp the record.
+historical CPU boot remains observed; whenever the rebuilt image no longer
+matches the retained record, an operator boot per the
+[runbook](../operations/framework-cpu-boot-runbook.md) is required to rebind
+it. Documentation cannot re-stamp the record.
 
 ## Owning references
 
