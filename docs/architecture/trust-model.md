@@ -115,8 +115,11 @@ Read these as the current attacker envelope, each with its owner:
 
 - **DMA containment.** QEMU DMA is trusted; no IOMMU/SMMU claim exists for any
   target. A hostile or buggy driver with DMA authority is not contained by
-  hardware. ([targets](targets-and-portability.md); [Framework
-  plan](../plans/framework-hardware.md))
+  hardware. On the Framework's AMD platform the kernel cannot supply it either:
+  seL4's `KernelIOMMU` drives Intel VT-d only, so containment is pending Slime
+  mechanism. ([targets](targets-and-portability.md); [Framework
+  plan](../plans/framework-hardware.md); [AMD IOMMU
+  ownership](../decisions/amd-iommu-ownership.md))
 - **x86-64 W^X.** seL4's x86-64 mapping attributes expose no NX bit, so
   data-page execute prevention is unenforced there; the probe reports
   `wx_execute=unenforced` rather than passing vacuously. AArch64 and RISC-V

@@ -66,6 +66,8 @@ implemented by extracting it here.
 
 X2 MUST NOT begin hardware-backed guest execution until H4 IOMMU containment and AMD-V enablement have been observed on the target.
 
+**Kernel prerequisite:** seL4 has no AMD SVM support. x86 virtualization is `KernelVTX`, which is Intel VMX, VMCS, and EPT only, in both the pinned fork (`fea36b2`) and upstream master (`0f10829`, 2026-09-22). No public SVM port was found. X2 therefore first needs an AMD SVM kernel extension (VMCB, nested paging, VM-exit handling) carried outside every verified configuration. It also needs a Slime-written VMM, since rust-sel4 has no x86 VMM and any existing seL4 x86 VMM can only build on `KernelVTX`, plus H4's AMD IOMMU containment, which the kernel also lacks ([AMD IOMMU ownership](../docs/decisions/amd-iommu-ownership.md)). Without interrupt remapping, passing a physical device such as the GPU to a guest stays out of scope.
+
 **Architecture boundary:** X2 applies only to the x86-64 Framework/AMD-V profile. It is not a generic `X2` release dependency for AArch64 or RV64.
 
 X2 reuses X1's generation-level foreign-workload contract rather than creating another authority model. The backend choice may change fidelity and cost, but never the workload's grants.
