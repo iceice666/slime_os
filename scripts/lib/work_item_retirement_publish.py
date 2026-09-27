@@ -139,6 +139,38 @@ def current_main(root: Path) -> str:
     return value[0]
 
 
+def close_stale_retirement_prs(root: Path, current: str) -> None:
+    """Close and delete an open retirement PR whose branch names a superseded main.
+
+    A branch is named ``PREFIX + base``, so staleness is exactly "the branch
+    name's base does not match the current main" and needs no extra state.
+    Closing here (never in the untrusted PR-triggered check) keeps publication
+    credentials confined to this canonical, schedule/workflow_dispatch-only
+    path. Deleting the branch also keeps it out of the "closed without
+    merging" review guard below, which is keyed on the exact stale branch name
+    a fresh batch never reuses.
+    """
+    for pr in open_retirement_prs(root):
+        branch = pr["head"]["ref"]
+        if branch == PREFIX + current:
+            continue
+        command(
+            root,
+            "gh",
+            "pr",
+            "close",
+            str(pr["number"]),
+            "--repo",
+            REPOSITORY,
+            "--delete-branch",
+            "--comment",
+            "main advanced past `"
+            + branch.removeprefix(PREFIX)
+            + "`; superseded by a fresh retirement batch.",
+        )
+        report(f"Closed stale retirement PR #{pr['number']} ({branch})")
+
+
 def require_current_main(root: Path, base: str) -> None:
     if current_main(root) != base:
         raise RetirementError("main advanced; discard this unpublished batch and retry")
@@ -269,6 +301,7 @@ def run(source: Path, apply: bool) -> None:
                 command(root, "just", "tasks_check")
             report("Preview only; canonical store and remote refs are unchanged.")
             return
+        close_stale_retirement_prs(root, base)
         existing = open_retirement_prs(root)
         if existing:
             report(
