@@ -87,6 +87,8 @@ Exit condition: QEMU xHCI keyboard and pointer input survive malformed devices, 
 
 ### H4: AMD IOMMU containment and Framework USB HID promotion
 
+**Kernel boundary:** seL4 has no AMD IOMMU support. `KernelIOMMU` drives Intel VT-d only, found through ACPI DMAR, in both the pinned fork (`fea36b2`) and upstream master (`0f10829`, 2026-09-22). On the Framework it finds no IOMMU, and DMA is untranslated. Where AMD-Vi programming lives is the open [AMD IOMMU ownership](../docs/decisions/amd-iommu-ownership.md) decision, not a kernel configuration choice. Interrupt remapping is absent under either option.
+
 Deliverables:
 
 - parse the target's ACPI IVRS data with strict bounds and identify the AMD IOMMU and device aliases from H1 evidence;
