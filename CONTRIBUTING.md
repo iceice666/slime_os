@@ -136,17 +136,53 @@ acceptance.
 
 Most acceptances bind the general `just-target` gate, which runs one declared
 recipe and reports a single `passed` boolean. Name the recipe in the execution
-inputs, never in requirement text:
+inputs, never in requirement text, and commit the inputs file under
+`.devloop/inputs/` in the planning PR:
 
 ```sh
-echo '{"justTarget": "sel4_qos_check"}' > inputs.json
-just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs inputs.json --target sel4-qos --image qemu-arm-virt
+echo '{"justTarget": "sel4_qos_check"}' > .devloop/inputs/<item>.json
+just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs .devloop/inputs/<item>.json --target sel4-qos --image qemu-arm-virt
 ```
 
 The gate refuses a recipe `just` does not publish, and devloop binds the inputs
 digest into the evidence identity, so evidence recorded for one recipe never
-transfers to another. A check that deserves richer observations gets its own
-gate identity in policy instead. Evidence is recorded into the `devloop` record bound to the exact
+transfers to another.
+
+**The exam is landed before the implementation is graded.** At `eligible`
+and `complete`, approval (`scripts/check/devloop-approval.py`) resolves the
+inputs digest to a tracked file under `.devloop/inputs/` and refuses unless
+that file, the named recipe and every recipe in its dependency chain, the
+scripts those recipes invoke, and the `scripts/lib` modules they import are
+byte-for-byte what `origin/main` carries. An implementation branch may add
+recipes and checkers for other work, but it cannot rewrite the ones that
+decide its own acceptances: a checker that needs to change is a planning
+change and lands first. Inputs that name no recipe (`work-item-store`) are
+only required to be landed.
+
+When a requirement is a number — attempts refused, controls exercised, bytes
+delivered — bind `just-observations` instead. It runs the same named recipe,
+and the recipe's checker reports what it counted through
+`scripts/lib/devloop_observations.py`:
+
+```python
+from devloop_observations import record
+record(staleHandlesRejected=refusals, negativeControlsRefused=len(controls))
+```
+
+The gate adds `passed` and a `transcriptDigest` of its own, refuses an
+observation the policy does not declare or a checker that reports `passed`
+for itself, and the acceptance's predicate states the expected value. The
+planning PR owns that number and the checker that counts it: an implementation
+PR that changes either is changing its own exam, and the review skill in
+[`.agents/skills/spec-review/SKILL.md`](.agents/skills/spec-review/SKILL.md)
+asks why. [`.devloop/examples/`](.devloop/examples/) holds a worked spec and
+its inputs. A check that needs observations the policy does not yet declare
+adds them to `just-observations` in the planning PR.
+
+`just tasks_check` also refuses a tracked file that no `codePaths` entry
+covers, unless `scripts/check/check-work-items.py` exempts it by decision:
+a change to a checker, recipe, pin, or fixture must stale the evidence recorded
+against it. Evidence is recorded into the `devloop` record bound to the exact
 requirements, helpers, code, policy, execution inputs, target, image, and run
 epoch that were tested, and the newest entry for an obligation decides it — a
 later failing run is never satisfied by an earlier pass. A human obligation

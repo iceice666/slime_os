@@ -150,10 +150,13 @@
     "scripts/generate/generate-interface-schema-bindings.py",
     "scripts/generate/generate-io-queue-bindings.py",
     "scripts/generate/generate-link-device-bindings.py",
+    "scripts/generate/generate-mavlink-heartbeat-bindings.py",
     "scripts/generate/generate-network-service-bindings.py",
     "scripts/generate/generate-powerbox-bindings.py",
     "scripts/generate/generate-private-memory-probe-bindings.py",
+    "scripts/generate/generate-pwm-servo-bindings.py",
     "scripts/generate/generate-sample-descriptor-bindings.py",
+    "scripts/generate/generate-serial-device-bindings.py",
     "scripts/generate/generate-spawn-bindings.py",
     "scripts/generate/generate-store-bindings.py",
     "scripts/generate/generate-syscall-abi-bindings.py",
@@ -177,6 +180,7 @@
     "scripts/lib/cpu_boot_observation.py",
     "scripts/lib/cpu_boot_observation_contract.py",
     "scripts/lib/devloop.py",
+    "scripts/lib/devloop_observations.py",
     "scripts/lib/elf_delivery.py",
     "scripts/lib/fabric_graph_limits.py",
     "scripts/lib/fabric_trace_contract.py",
@@ -192,6 +196,7 @@
     "scripts/lib/link_peer.py",
     "scripts/lib/markdown_anchors.py",
     "scripts/lib/mavlink.py",
+    "scripts/lib/mavlink_heartbeat_contract.py",
     "scripts/lib/network_launch.py",
     "scripts/lib/pc99_media.py",
     "scripts/lib/private_memory_policy.py",
@@ -214,6 +219,11 @@
     "scripts/lib/zutai_cli.py",
     "scripts/tools/system-spec-source",
     "verification/network-tcp",
+    "verification/io-proofs/Cargo.toml",
+    "verification/io-proofs/Cargo.lock",
+    "verification/virtio-proofs/Cargo.toml",
+    "verification/virtio-proofs/Cargo.lock",
+    "verification/virtio-proofs/build.rs",
     "sel4",
     "just",
     "Justfile",
@@ -227,7 +237,15 @@
     "deps/zutai/crates",
     "deps/zutai/stdlib",
     "deps/zutai/Cargo.toml",
-    "deps/zutai/Cargo.lock"
+    "deps/zutai/Cargo.lock",
+    "sdk",
+    "tools",
+    "evidence",
+    "nix",
+    "clippy.toml",
+    "deny.toml",
+    "ruff.toml",
+    "_typos.toml"
   ],
   "approvalArgv": [
     "python3",
@@ -279,6 +297,50 @@
         {
           "id": "passed",
           "kind": "bool"
+        }
+      ]
+    },
+    {
+      "id": "just-observations",
+      "mode": "automated",
+      "argv": [
+        "python3",
+        "scripts/check/devloop-gate.py",
+        "just-observations"
+      ],
+      "ttlSeconds": 86400,
+      "observations": [
+        {
+          "id": "passed",
+          "kind": "bool"
+        },
+        {
+          "id": "transcriptDigest",
+          "kind": "text"
+        },
+        {
+          "id": "casesObserved",
+          "kind": "int"
+        },
+        {
+          "id": "negativeControlsRefused",
+          "kind": "int"
+        },
+        {
+          "id": "bytesObserved",
+          "kind": "int"
+        },
+        {
+          "id": "staleHandlesRejected",
+          "kind": "int"
+        },
+        {
+          "id": "resourcesReclaimed",
+          "kind": "int"
+        },
+        {
+          "id": "faultsIsolated",
+          "kind": "int"
         }
       ]
     },

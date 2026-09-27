@@ -31,6 +31,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import contextlib
 import datetime
+import hashlib
 import importlib.util
 import io
 import json
@@ -38,10 +39,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from unittest.mock import patch
 
 from harness import ROOT
 import devloop
+import devloop_observations
 import work_items
 from work_items import ITEMS, identities, items, open_backlog
 from work_item_retirement import RetirementError
@@ -408,13 +411,285 @@ def check_cutoff_controls() -> None:
             fail(f"control: the cutoff reported {len(findings)} findings, expected exactly 1")
 
 
-def _gate_module():
-    """The gate adapter, loaded by path because its filename is not an identifier."""
-    location = _Path(__file__).resolve().parent / "devloop-gate.py"
-    spec = importlib.util.spec_from_file_location("devloop_gate", location)
+# Tracked files a gate's outcome does not depend on, so they stay outside
+# devloop's code identity by decision rather than by omission. Everything else
+# `git ls-files` reports must be covered by `codePaths`: a checker, recipe,
+# pin, or fixture that is not covered can change without staling evidence
+# recorded against it. Prefixes end in `/`; other entries are exact paths.
+CODE_IDENTITY_EXEMPT = (
+    ".agents/",  # agent skills: instructions, not inputs to a gate
+    ".claude/",
+    ".devloop/",  # policy and inputs are bound by their own digests
+    ".github/",  # CI orchestration runs the gates; it is not one
+    ".tasks/",  # the store is the subject of evidence, not its input
+    "assets/",
+    "docs/",  # `docs_check` validates docs; that gate is `work-item-store`
+    "roadmap/",
+    ".envrc",
+    ".gitignore",
+    ".gitmodules",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "README.md",
+)
+
+
+# Submodules whose content reaches a gate only through the commit
+# `sel4/pins.toml` records and `just sel4_pin_check` asserts; that file is
+# under `codePaths`, so re-pinning them stales evidence without walking a
+# kernel tree into every identity. The pin is verified here, not assumed.
+CODE_IDENTITY_PINNED = ("deps/sel4", "deps/rust-sel4-bcm2712-rpi5", "deps/rust-sel4-cv1800b-duo")
+PINS = ROOT / "sel4" / "pins.toml"
+
+
+def _tracked_files() -> list[tuple[str, str, str]]:
+    """Every path Git tracks at the superproject: mode, object id, path."""
+    finished = subprocess.run(
+        ["git", "ls-files", "--stage"], cwd=ROOT, capture_output=True, text=True
+    )
+    if finished.returncode:
+        raise RuntimeError(finished.stderr.strip() or "git ls-files failed")
+    rows = []
+    for line in finished.stdout.splitlines():
+        meta, _, path = line.partition("\t")
+        mode, object_id, _ = meta.split()
+        rows.append((mode, object_id, path))
+    return rows
+
+
+def _pinned_commits() -> set[str]:
+    with PINS.open("rb") as handle:
+        pins = tomllib.load(handle)
+    return {
+        section["commit"]
+        for section in pins.values()
+        if isinstance(section, dict) and isinstance(section.get("commit"), str)
+    }
+
+
+def code_paths_coverage(
+    code_paths: list[str],
+    tracked: list[tuple[str, str, str]],
+    exempt: tuple[str, ...] = CODE_IDENTITY_EXEMPT,
+    pinned: tuple[str, ...] = CODE_IDENTITY_PINNED,
+    pinned_commits: set[str] = frozenset(),
+) -> list[str]:
+    """Findings for tracked files outside both `codePaths` and the exemptions.
+
+    A submodule gitlink is covered when a `codePaths` entry lies inside it —
+    the superproject's tree does not enumerate the submodule's files, and the
+    entries pin which of them the identity walks — or when its recorded commit
+    is one `sel4/pins.toml` carries.
+    """
+
+    def under(path: str, prefix: str) -> bool:
+        return path == prefix or path.startswith(prefix.rstrip("/") + "/")
+
+    findings = []
+    for mode, object_id, path in tracked:
+        if mode == "160000":
+            if any(under(entry, path) for entry in code_paths):
+                continue
+            if path in pinned:
+                if object_id not in pinned_commits:
+                    findings.append(
+                        f"submodule {path} is at {object_id}, which sel4/pins.toml does not "
+                        "pin: its content is outside devloop's code identity"
+                    )
+                continue
+            findings.append(
+                f"submodule {path} contributes nothing to devloop's code identity: "
+                "list the directories a gate reads under codePaths, pin it in "
+                "sel4/pins.toml and CODE_IDENTITY_PINNED, or exempt it"
+            )
+            continue
+        if any(under(path, entry) for entry in code_paths):
+            continue
+        if any(under(path, e) if e.endswith("/") else path == e for e in exempt):
+            continue
+        findings.append(
+            f"{path} is tracked but outside .devloop/policy.json codePaths: a change to it "
+            "would not stale recorded evidence; cover it or exempt it in "
+            "CODE_IDENTITY_EXEMPT with a reason"
+        )
+    return findings
+
+
+def check_code_paths_coverage() -> list[str]:
+    """Every tracked input a gate can read is inside devloop's code identity."""
+    try:
+        code_paths = json.loads((ROOT / ".devloop" / "policy.json").read_text())["codePaths"]
+        tracked = _tracked_files()
+        pinned_commits = _pinned_commits()
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        return [f"cannot read codePaths coverage inputs: {error}"]
+    findings = code_paths_coverage(code_paths, tracked, pinned_commits=pinned_commits)
+    for entry in code_paths:
+        if not (ROOT / entry).exists():
+            findings.append(f"codePaths names {entry}, which does not exist")
+    # devloop walks the filesystem, so an ignored file under a covered
+    # directory would enter the identity and no other checkout could
+    # reproduce it.
+    finished = subprocess.run(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--", *code_paths],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    for ignored in finished.stdout.split():
+        findings.append(
+            f"{ignored} is gitignored but under a codePaths entry, so devloop's code "
+            "identity would record bytes no clone reproduces: remove it or narrow the entry"
+        )
+    return findings
+
+
+def check_code_paths_controls() -> None:
+    """The coverage rule catches the gaps it exists for and nothing else."""
+    tracked = [
+        ("100644", "b1", "scripts/check/check-new.py"),
+        ("100644", "b2", "docs/plans/x.md"),
+        ("100644", "b3", "slime-root/src/main.rs"),
+        ("160000", "c1", "deps/other"),
+        ("160000", "c2", "deps/zutai"),
+        ("160000", "c3", "deps/sel4"),
+        ("160000", "c4", "deps/rust-sel4-cv1800b-duo"),
+        ("100644", "b4", "README.md"),
+    ]
+    paths = ["slime-root", "scripts/check/check-old.py", "deps/zutai/crates"]
+    findings = code_paths_coverage(paths, tracked, pinned_commits={"c3"})
+    flagged = {f.split(" ", 1)[0] for f in findings} | {
+        f.split(" ")[1] for f in findings if f.startswith("submodule ")
+    }
+    if "scripts/check/check-new.py" not in flagged:
+        fail("control: an uncovered checker was not reported")
+    if "deps/other" not in flagged:
+        fail("control: a submodule with no covered entry was not reported")
+    if "deps/rust-sel4-cv1800b-duo" not in flagged:
+        fail("control: a pinned submodule whose commit is not in sel4/pins.toml passed")
+    covered_paths = (
+        "docs/plans/x.md",
+        "slime-root/src/main.rs",
+        "deps/zutai",
+        "deps/sel4",
+        "README.md",
+    )
+    for covered in covered_paths:
+        if covered in flagged:
+            fail(f"control: {covered} was reported although covered, pinned, or exempt")
+    if len(findings) != 3:
+        fail(f"control: coverage reported {len(findings)} findings, expected 3")
+
+
+def _script_module(filename: str):
+    """A sibling script loaded by path, because its filename is not an identifier."""
+    location = _Path(__file__).resolve().parent / filename
+    spec = importlib.util.spec_from_file_location(filename.replace("-", "_")[:-3], location)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _gate_module():
+    return _script_module("devloop-gate.py")
+
+
+def check_approval_controls() -> None:
+    """Completion approval refuses a branch that rewrote its own exam.
+
+    Offline: recipes and blobs are fixtures, so the controls pin what the rule
+    compares — the inputs file, the recipe definitions in the dependency
+    closure, the scripts they invoke and the `scripts/lib` modules those
+    import — rather than whether Git happens to be reachable.
+    """
+    module = _script_module("devloop-approval.py")
+    recipe = lambda body, deps=(): {  # noqa: E731
+        "body": [[body]],
+        "dependencies": [{"recipe": d, "arguments": [], "star": None} for d in deps],
+        "parameters": [],
+        "shebang": False,
+    }
+    canonical = {
+        "plane_check": recipe("python3 scripts/check/check-sel4-qos-plane.py", ["pin_check"]),
+        "pin_check": recipe("python3 scripts/check/check-sel4-pins.py"),
+        "unrelated": recipe("echo unrelated"),
+    }
+    tree = json.loads(json.dumps(canonical))
+    tree["added_later"] = recipe("echo new")
+
+    if module.recipe_closure("plane_check", tree) != ["pin_check", "plane_check"]:
+        fail("control: the recipe closure did not follow dependencies")
+    if module.drifted_recipes("plane_check", tree, canonical):
+        fail("control: an unchanged recipe closure was reported as drifted")
+    tree["pin_check"]["body"] = [["true"]]
+    if module.drifted_recipes("plane_check", tree, canonical) != [
+        "recipe pin_check differs from origin/main"
+    ]:
+        fail("control: a weakened dependency recipe was not reported")
+    tree["pin_check"] = canonical["pin_check"]
+    tree["plane_check"]["dependencies"] = []
+    if not module.drifted_recipes("plane_check", tree, canonical):
+        fail("control: a dropped dependency was not reported")
+    try:
+        module.drifted_recipes("added_later", tree, {})
+    except KeyError:
+        fail("control: a recipe present in the tree raised instead of being reported")
+    if module.drifted_recipes("added_later", tree, canonical) != [
+        "recipe added_later is not on origin/main"
+    ]:
+        fail("control: a recipe absent from canonical main was not reported")
+
+    scripts = module.recipe_scripts("plane_check", canonical)
+    expected = {"scripts/check/check-sel4-qos-plane.py", "scripts/check/check-sel4-pins.py"}
+    if scripts != expected:
+        fail(f"control: recipe scripts resolved to {sorted(scripts)}")
+    closure = module.lib_imports({"scripts/check/check-sel4-qos-plane.py"})
+    # sel4_gate_markers is a direct import; system_image_closure is reached only
+    # through closure_image, so it proves the walk is transitive.
+    for expected_module in ("sel4_gate_markers", "closure_image", "system_image_closure"):
+        if f"scripts/lib/{expected_module}.py" not in closure:
+            fail(f"control: {expected_module} was not followed from the checker's imports")
+
+    blobs = {"a.py": "1", "b.py": "2"}
+    at_main = lambda p: {"a.py": "1", "b.py": "9"}.get(p)  # noqa: E731
+    in_tree = lambda p: blobs.get(p)  # noqa: E731
+    findings = module.drifted({"a.py", "b.py", "c.py"}, at_main, in_tree)
+    if findings != ["b.py differs from origin/main", "c.py is not on origin/main"]:
+        fail(f"control: blob drift reported {findings}")
+
+    if module.named_recipes({"justTarget": "x"}) != ["x"]:
+        fail("control: justTarget was not resolved as the named recipe")
+    if module.named_recipes({"recipes": ["tasks_check", "docs_check"]}) != [
+        "tasks_check",
+        "docs_check",
+    ]:
+        fail("control: a fixed recipe list was not resolved")
+    if module.named_recipes({"scenario": "none"}) != []:
+        fail("control: inputs naming no recipe were not treated as exempt")
+    for bad in ({"recipes": "x"}, ["x"], {"recipes": [1]}):
+        try:
+            module.named_recipes(bad)
+        except ValueError:
+            continue
+        fail(f"control: malformed inputs {bad!r} were accepted")
+
+    # The inputs digest must resolve to a tracked file; an untracked path with
+    # the same bytes is not the landed decision.
+    with tempfile.TemporaryDirectory(prefix="approval-controls-") as temporary:
+        with patch.object(module, "ROOT", _Path(temporary)):
+            (_Path(temporary) / "landed.json").write_text('{"justTarget": "x"}')
+            digest = hashlib.sha256(b'{"justTarget": "x"}').hexdigest()
+            if module.inputs_named(digest, ["landed.json"]) != "landed.json":
+                fail("control: a tracked inputs file was not found by digest")
+            if module.inputs_named(digest, []) is not None:
+                fail("control: an untracked inputs file resolved by digest")
+        with (
+            patch.object(module, "tracked_inputs", lambda: []),
+        ):
+            reasons = module.exam_landed({"identity": {"inputs": digest}})
+            if len(reasons) != 1 or ".devloop/inputs/" not in reasons[0]:
+                fail("control: untracked execution inputs were approved")
 
 
 def check_gate_controls() -> None:
@@ -444,7 +719,7 @@ def check_gate_controls() -> None:
         runs: list[str] = []
         outcome = [False]
 
-        def recipe(target: str) -> tuple[bool, str]:
+        def recipe(target: str, environment: dict | None = None) -> tuple[bool, str]:
             runs.append(target)
             return outcome[0], "fixture output"
 
@@ -520,6 +795,139 @@ def check_gate_controls() -> None:
                 fail(f"control: the generic gate ran with {name}")
 
 
+def check_observation_gate_controls() -> None:
+    """`just-observations` reports only what policy declares, from this run only.
+
+    The report is what lets a predicate name a count instead of a pass, so the
+    controls pin where a count can come from: the checker that the recipe ran,
+    under the gate's environment, typed as declared. A leftover report, an
+    undeclared id, a mistyped value, or a checker vouching for `passed` are
+    each refused as a gate that could not run, never recorded as evidence.
+    """
+    module = _gate_module()
+    declared = {
+        "passed": "bool",
+        "transcriptDigest": "text",
+        "casesObserved": "int",
+        "negativeControlsRefused": "int",
+    }
+    with tempfile.TemporaryDirectory(prefix="observation-controls-") as temporary:
+        inputs = _Path(temporary) / "inputs.json"
+        inputs.write_text(json.dumps({"justTarget": "fixture_target"}))
+        reports = _Path(temporary) / "reports"
+        fields = ("requirements", "helper", "code", "policy", "inputs", "target", "image", "epoch")
+        identity = {field: f"fixture-{field}" for field in fields}
+
+        def request(**changed: str) -> dict:
+            return {
+                "inputs": str(inputs),
+                "acceptance": {"id": "A1"},
+                "execution": {"identity": identity | changed, "now": 0},
+            }
+
+        report: dict[str, object] = {}
+        outcome = [True]
+        seen_environment: list[dict | None] = []
+
+        def recipe(target: str, environment: dict | None = None) -> tuple[bool, str]:
+            seen_environment.append(environment)
+            if report:
+                with patch.dict(module.os.environ, environment or {}):
+                    devloop_observations.record(**report)
+            return outcome[0], "fixture output"
+
+        def values(observations: list[dict]) -> dict[str, object]:
+            out = {}
+            for o in observations:
+                kind = o["value"]["kind"]
+                out[o["id"]] = o["value"][
+                    {"bool": "boolValue", "int": "intValue", "text": "textValue"}[kind]
+                ]
+            return out
+
+        with (
+            patch.object(module, "declared_targets", lambda: {"fixture_target"}),
+            patch.object(module, "declared_observations", lambda gate: dict(declared)),
+            patch.object(module, "recipe", recipe),
+            patch.object(module, "RUNS", _Path(temporary) / "runs"),
+            patch.object(module, "code_fingerprint", lambda: "fixture-code"),
+            patch.object(devloop_observations, "REPORTS", reports),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            # A passing recipe that reported nothing is not wired up: unresolved.
+            try:
+                module.just_observations(request())
+            except module.CannotRun:
+                pass
+            else:
+                fail("control: a passing recipe with no report was accepted")
+            if seen_environment[-1].get(devloop_observations.ENVIRONMENT) != "fixture_target":
+                fail("control: the recipe was not told which target it answers for")
+
+            # A failing recipe may report nothing; passed is false and that is evidence.
+            outcome[0] = False
+            observed = values(module.just_observations(request(epoch="fail")))
+            silent = {"passed", "transcriptDigest"}
+            if observed.get("passed") is not False or set(observed) != silent:
+                fail(f"control: a failing silent recipe reported {observed}")
+
+            # A report is typed as declared and joined to the adapter's own fields.
+            outcome[0] = True
+            report.update({"casesObserved": 7, "negativeControlsRefused": 3})
+            observed = values(module.just_observations(request(epoch="report")))
+            expected = {"passed": True, "casesObserved": 7, "negativeControlsRefused": 3}
+            if {k: observed.get(k) for k in expected} != expected:
+                fail(f"control: a typed report was not passed through: {observed}")
+            if observed.get("transcriptDigest") != hashlib.sha256(b"fixture output").hexdigest():
+                fail("control: the transcript digest does not bind the recipe output")
+
+            # The same identity is answered from the kept run, report included.
+            runs = len(seen_environment)
+            report.clear()
+            report.update({"casesObserved": 999})
+            again = values(module.just_observations(request(epoch="report")))
+            if len(seen_environment) != runs or again.get("casesObserved") != 7:
+                fail("control: a reused run did not answer with its own report")
+
+            # A leftover report from another run cannot answer for this one.
+            gate_environment = {devloop_observations.ENVIRONMENT: "fixture_target"}
+            with patch.dict(module.os.environ, gate_environment):
+                devloop_observations.record(casesObserved=123)
+            report.clear()
+            outcome[0] = True
+            try:
+                module.just_observations(request(epoch="stale"))
+            except module.CannotRun:
+                pass
+            else:
+                fail("control: a stale report answered for a recipe that reported nothing")
+
+            for name, bad in {
+                "an undeclared observation": {"undeclared": 1},
+                "a mistyped observation": {"casesObserved": True},
+                "a checker vouching for passed": {"passed": True},
+                "a checker supplying the transcript digest": {"transcriptDigest": "x"},
+            }.items():
+                report.clear()
+                report.update(bad)
+                try:
+                    module.just_observations(request(epoch=name))
+                except module.CannotRun:
+                    continue
+                fail(f"control: the observation gate recorded {name}")
+
+        # A different gate's run of the same recipe is not this gate's evidence.
+        if module.run_key(request(), "just-target", "fixture_target") == module.run_key(
+            request(), "just-observations", "fixture_target"
+        ):
+            fail("control: a just-target run would answer a just-observations acceptance")
+
+    # Outside the gate the helper is inert, so a checker reports unconditionally.
+    with patch.dict(module.os.environ, {}, clear=True):
+        if devloop_observations.record(casesObserved=1) is not None:
+            fail("control: the observations helper wrote a report outside the gate")
+
+
 def check_terminal_controls() -> None:
     """A corrupt or non-terminal record is reported, never counted as done."""
     with tempfile.TemporaryDirectory(prefix="terminal-controls-") as temporary:
@@ -585,6 +993,9 @@ def main() -> int:
     check_controls()
     check_cutoff_controls()
     check_gate_controls()
+    check_observation_gate_controls()
+    check_approval_controls()
+    check_code_paths_controls()
     check_terminal_controls()
     failures.extend(check_retirement_controls())
     try:
@@ -596,6 +1007,7 @@ def main() -> int:
     failures.extend(check_spec_driven_required())
     failures.extend(check_terminal_records())
     failures.extend(check_devloop_bodies())
+    failures.extend(check_code_paths_coverage())
     check_profile_controls()
 
     if failures:
