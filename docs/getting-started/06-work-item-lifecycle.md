@@ -129,9 +129,23 @@ for this repository's gates.
    qualification recipe each gate it; `just-target` runs the recipe once per
    execution identity and answers the others from that run for up to an hour,
    failures included, from `build/devloop-gate-runs/`. Gate them one after
-   another, and delete that directory to force a fresh run. A check needing richer
-   observations gets its own gate identity in
-   [`.devloop/policy.json`](../../.devloop/policy.json).
+   another, and delete that directory to force a fresh run.
+
+   `just-observations` is the same recipe run with a typed answer. The
+   checker the recipe invokes reports what it counted with
+   `devloop_observations.record(...)` from `scripts/lib`; outside the gate
+   that call is inert, so the checker behaves the same for a person. The gate
+   deletes any earlier report before the recipe starts, adds `passed` and
+   `transcriptDigest` itself, and refuses an id the policy does not declare
+   for it or a value of the wrong kind — as a gate that could not run, never
+   as evidence. A predicate then reads one observation by id: `equal` for
+   the exact number a fixture produces, `bounds` for a floor. A passing
+   recipe that reported nothing is refused too: the recipe is not wired to
+   report, which is a harness fault, not a failed check.
+   [`.devloop/examples/stale-handle-rejection.zti`](../../.devloop/examples/stale-handle-rejection.zti)
+   and its `.inputs.json` are a complete worked example. A check needing an
+   observation the policy does not yet declare adds it to the gate's list in
+   [`.devloop/policy.json`](../../.devloop/policy.json) in the planning PR.
 
    ```sh
    just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
@@ -148,7 +162,11 @@ for this repository's gates.
    of them and that evidence no longer applies.
 
 5. **Complete it.** Eligibility is checked, then the item closes under the
-   revision that was checked:
+   revision that was checked. Approval runs again here with the execution
+   context, and refuses unless the inputs file is tracked under
+   `.devloop/inputs/` and it, the recipe closure it names, and the scripts
+   and `scripts/lib` modules that recipe runs all match `origin/main`
+   exactly — the branch being graded may not have changed its own grader.
 
    ```sh
    just devloop complete <ITEM> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>

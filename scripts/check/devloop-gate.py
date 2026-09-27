@@ -24,15 +24,21 @@ applies.
 
 devloop requires every acceptance's evidence to carry the identity it
 completes under, inputs digest included, so the acceptances of one item that
-share a qualification recipe each gate that same recipe. `just-target` runs it
-once per execution identity and answers the later acceptances from that run;
-see `just_target` for the bounds on reuse.
+share a qualification recipe each gate that same recipe. `just-target` and
+`just-observations` run it once per execution identity and answer the later
+acceptances from that run; see `run_once` for the bounds on reuse.
+
+`just-target` reports one boolean: the recipe's exit. `just-observations`
+additionally reports what the recipe's checker recorded through
+`scripts/lib/devloop_observations.py`, typed as policy declares, so an
+acceptance's predicate can name an expected count rather than a pass.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -41,6 +47,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import ROOT  # noqa: E402
+import devloop_observations  # noqa: E402
 import work_items  # noqa: E402
 
 # A terminal record that cannot be read as a finished item. The gate proves the
@@ -76,16 +83,18 @@ class CannotRun(Exception):
     """
 
 
-def observation(identity: str, kind: str, *, integer: int = 0, boolean: bool = False) -> dict:
+def observation(
+    identity: str, kind: str, *, integer: int = 0, boolean: bool = False, text: str = ""
+) -> dict:
     return {
         "id": identity,
-        "value": {"kind": kind, "intValue": integer, "boolValue": boolean, "textValue": ""},
+        "value": {"kind": kind, "intValue": integer, "boolValue": boolean, "textValue": text},
     }
 
 
-def recipe(target: str) -> tuple[bool, str]:
+def recipe(target: str, environment: dict[str, str] | None = None) -> tuple[bool, str]:
     finished = subprocess.run(
-        ["just", target], cwd=ROOT, capture_output=True, text=True
+        ["just", target], cwd=ROOT, capture_output=True, text=True, env=environment
     )
     return finished.returncode == 0, finished.stdout + finished.stderr
 
@@ -122,20 +131,26 @@ def code_fingerprint() -> str:
     return digest.hexdigest()
 
 
-def run_key(request: dict, target: str) -> str:
-    """The execution identity a run answers for, as a stable file name."""
+def run_key(request: dict, gate: str, target: str) -> str:
+    """The execution identity a run answers for, as a stable file name.
+
+    The gate is part of it: a `just-target` run of a recipe carries no
+    observations report, so it cannot answer a `just-observations` acceptance
+    for the same recipe.
+    """
     execution = request.get("execution")
     identity = execution.get("identity") if isinstance(execution, dict) else None
     if not isinstance(identity, dict) or not all(
         isinstance(identity.get(field), str) and identity[field] for field in IDENTITY_FIELDS
     ):
         raise CannotRun("the request carries no complete execution identity to bind a run to")
-    bound = {field: identity[field] for field in IDENTITY_FIELDS} | {"justTarget": target}
+    bound = {field: identity[field] for field in IDENTITY_FIELDS}
+    bound |= {"gate": gate, "justTarget": target}
     return hashlib.sha256(json.dumps(bound, sort_keys=True).encode()).hexdigest()
 
 
-def reusable(key: str, now: float) -> bool | None:
-    """The recorded outcome for `key`, or None when there is no usable run."""
+def reusable(key: str, now: float) -> dict | None:
+    """The recorded run for `key`, or None when there is no usable run."""
     try:
         run = json.loads((RUNS / f"{key}.json").read_text())
     except (OSError, ValueError):
@@ -147,28 +162,16 @@ def reusable(key: str, now: float) -> bool | None:
         return None
     if not 0 <= now - finished <= REUSE_SECONDS:
         return None
-    return passed
+    return run
 
 
-def just_target(request: dict) -> list[dict]:
-    """Run one named `just` target and report whether it passed.
+def named_target(request: dict) -> str:
+    """The recipe the execution inputs name, checked against what `just` publishes.
 
-    The target is named in the execution inputs rather than in policy, because
-    declaring typed observations for every check in this repository ahead of
-    time is not practical and would block the policy behind adapters nobody
-    needs yet. What policy keeps is the shape of the answer: one boolean.
-
-    The name is checked against what `just` actually publishes before anything
-    runs. This adapter executes what it is handed, so an unknown or malformed
-    name is refused as a gate that could not run (exit 2) rather than recorded
-    as a check that failed — the two are different claims, and only the second
-    is evidence about the repository.
-
-    A run answers every acceptance gated under the same complete execution
-    identity within `REUSE_SECONDS` of finishing, failing runs included, so a
-    repeat request cannot be used to retry a failure. A run is kept only when
-    the code closure was unchanged from its start to its end. Delete its file
-    under `RUNS` to force the recipe to run again.
+    This adapter executes what it is handed, so an unknown or malformed name is
+    refused as a gate that could not run (exit 2) rather than recorded as a
+    check that failed — the two are different claims, and only the second is
+    evidence about the repository.
     """
     location = request.get("inputs")
     if not isinstance(location, str) or not location:
@@ -189,25 +192,176 @@ def just_target(request: dict) -> list[dict]:
         raise CannotRun(
             f"{target!r} is not a recipe `just` publishes; gates run declared targets only"
         )
-    key = run_key(request, target)
+    return target
+
+
+def run_once(
+    request: dict, gate: str, target: str, *, environment: dict[str, str] | None = None
+) -> tuple[dict, str | None]:
+    """Run `target` under this execution identity, or answer from a kept run.
+
+    A run answers every acceptance gated under the same complete execution
+    identity within `REUSE_SECONDS` of finishing, failing runs included, so a
+    repeat request cannot be used to retry a failure. A run is kept only when
+    the code closure was unchanged from its start to its end. Delete its file
+    under `RUNS` to force the recipe to run again.
+
+    Returns the run record and the recipe output, which is None for a reused
+    run. The record's `report` field holds whatever `observations_report` read
+    for a gate that collects one; `just-target` leaves it absent.
+    """
+    key = run_key(request, gate, target)
     previous = reusable(key, time.time())
     if previous is not None:
         sys.stderr.write(
-            f"devloop gate just-target reused the `just {target}` run {key[:12]} "
-            f"under this execution identity: {'passed' if previous else 'failed'}\n"
+            f"devloop gate {gate} reused the `just {target}` run {key[:12]} "
+            f"under this execution identity: {'passed' if previous['passed'] else 'failed'}\n"
         )
-        return [observation("passed", "bool", boolean=previous)]
+        return previous, None
     before = code_fingerprint()
-    passed, output = recipe(target)
+    passed, output = recipe(target, environment)
+    record = {"key": key, "justTarget": target, "passed": passed, "finishedAt": time.time()}
+    if environment is not None:
+        record["report"] = observations_report(target, passed)
+        record["transcriptDigest"] = hashlib.sha256(output.encode()).hexdigest()
     if code_fingerprint() == before:
         RUNS.mkdir(parents=True, exist_ok=True)
-        record = {"key": key, "justTarget": target, "passed": passed, "finishedAt": time.time()}
         partial = RUNS / f"{key}.json.partial"
         partial.write_text(json.dumps(record) + "\n")
         partial.replace(RUNS / f"{key}.json")
-    sys.stderr.write(f"devloop gate just-target ran `just {target}`: ")
+    sys.stderr.write(f"devloop gate {gate} ran `just {target}`: ")
     sys.stderr.write("passed\n" if passed else f"failed\n{output}")
-    return [observation("passed", "bool", boolean=passed)]
+    return record, output
+
+
+def just_target(request: dict) -> list[dict]:
+    """Run one named `just` target and report whether it passed.
+
+    The target is named in the execution inputs rather than in policy, because
+    declaring typed observations for every check in this repository ahead of
+    time is not practical and would block the policy behind adapters nobody
+    needs yet. What policy keeps is the shape of the answer: one boolean.
+    """
+    target = named_target(request)
+    record, _ = run_once(request, "just-target", target)
+    return [observation("passed", "bool", boolean=record["passed"])]
+
+
+def declared_observations(gate: str) -> dict[str, str]:
+    """The observation ids and kinds policy declares for `gate`."""
+    try:
+        gates = json.loads(POLICY.read_text())["gates"]
+        declared = next(g for g in gates if g["id"] == gate)["observations"]
+        return {d["id"]: d["kind"] for d in declared}
+    except (OSError, ValueError, KeyError, StopIteration, TypeError) as error:
+        raise CannotRun(f"cannot read the policy declarations for gate {gate}: {error}") from error
+
+
+def clear_observations_report(target: str) -> None:
+    """Remove a stale report so only this run's checker can produce one."""
+    try:
+        devloop_observations.report_path(target).unlink(missing_ok=True)
+    except (OSError, ValueError) as error:
+        raise CannotRun(f"cannot clear the observations report for {target}: {error}") from error
+
+
+def observations_report(target: str, passed: bool) -> dict[str, object] | None:
+    """Read what the recipe's checker recorded, if it recorded anything.
+
+    A passing recipe that recorded nothing is a harness fault — the recipe is
+    not wired to report — and is refused as a gate that could not run. A
+    failing recipe may legitimately stop before it reports; its `passed` is
+    false and every predicate over a missing observation fails with it.
+    """
+    try:
+        raw = devloop_observations.report_path(target).read_text()
+    except FileNotFoundError:
+        if passed:
+            raise CannotRun(
+                f"`just {target}` passed but recorded no observations; its checker must "
+                "call devloop_observations.record(...) with what it observed"
+            ) from None
+        return None
+    except (OSError, ValueError) as error:
+        raise CannotRun(f"cannot read the observations report for {target}: {error}") from error
+    try:
+        report = json.loads(raw)
+    except ValueError as error:
+        raise CannotRun(f"the observations report for {target} is not JSON: {error}") from error
+    if not isinstance(report, dict):
+        raise CannotRun(f"the observations report for {target} is not a JSON object")
+    return report
+
+
+def typed_observations(
+    gate: str, report: dict[str, object] | None, reserved: dict[str, object]
+) -> list[dict]:
+    """Encode a report as the typed observations policy declares for `gate`.
+
+    `reserved` are observations the adapter itself owns; a checker that reports
+    one of them is refused, because a checker cannot vouch for its own exit
+    code or transcript. Every reported id must be declared with the matching
+    kind: an unknown or mistyped observation is an unresolved gate, not a
+    failed check.
+    """
+    declared = declared_observations(gate)
+    observations: list[dict] = []
+    for identifier, value in sorted((report or {}).items()):
+        if identifier in reserved:
+            raise CannotRun(f"observation {identifier!r} is recorded by the gate, not the checker")
+        kind = declared.get(identifier)
+        if kind is None:
+            raise CannotRun(
+                f"observation {identifier!r} is not declared for gate {gate} in "
+                f"{POLICY.relative_to(ROOT)}; declare it there before a checker reports it"
+            )
+        if kind == "bool" and type(value) is bool:
+            observations.append(observation(identifier, "bool", boolean=value))
+        elif kind == "int" and type(value) is int:
+            observations.append(observation(identifier, "int", integer=value))
+        elif kind == "text" and isinstance(value, str):
+            observations.append(observation(identifier, "text", text=value))
+        else:
+            raise CannotRun(
+                f"observation {identifier!r} is declared {kind} but the checker reported "
+                f"{type(value).__name__}"
+            )
+    for identifier, value in reserved.items():
+        kind = declared.get(identifier)
+        if kind == "bool":
+            observations.append(observation(identifier, "bool", boolean=bool(value)))
+        elif kind == "text":
+            observations.append(observation(identifier, "text", text=str(value)))
+        else:
+            raise CannotRun(
+                f"gate {gate} must declare {identifier!r} in {POLICY.relative_to(ROOT)}"
+            )
+    return observations
+
+
+def just_observations(request: dict) -> list[dict]:
+    """Run one named `just` target and report what its checker observed.
+
+    Like `just-target`, but the recipe's checker reports typed observations
+    through `scripts/lib/devloop_observations.py` — counts of cases observed,
+    negative controls refused, bytes delivered, handles rejected — and an
+    acceptance's predicate reads the one it needs. That is what lets a
+    planning item state an expected number rather than "the recipe passed":
+    an implementation that satisfies the predicate has to produce the number
+    from a checker under `codePaths`, where a review can see how it was
+    counted.
+
+    The adapter owns `passed` (the recipe's exit) and `transcriptDigest` (the
+    recipe's combined output), so a reviewer can tie recorded evidence to a
+    transcript. The report is deleted before the recipe starts, so a leftover
+    from an earlier run cannot answer for this one.
+    """
+    target = named_target(request)
+    clear_observations_report(target)
+    environment = dict(os.environ) | {devloop_observations.ENVIRONMENT: target}
+    record, _ = run_once(request, "just-observations", target, environment=environment)
+    reserved = {"passed": record["passed"], "transcriptDigest": record.get("transcriptDigest", "")}
+    return typed_observations("just-observations", record.get("report"), reserved)
 
 
 def work_item_store(request: dict) -> list[dict]:
@@ -251,7 +405,11 @@ def work_item_store(request: dict) -> list[dict]:
     ]
 
 
-GATES = {"work-item-store": work_item_store, "just-target": just_target}
+GATES = {
+    "work-item-store": work_item_store,
+    "just-target": just_target,
+    "just-observations": just_observations,
+}
 
 
 def main() -> int:
