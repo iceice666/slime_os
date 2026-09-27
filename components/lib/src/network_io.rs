@@ -11,7 +11,11 @@ use slime_proto::network_service::{
 };
 use slime_rt::{ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG};
 
+#[cfg(not(test))]
 const ANSWER_YIELDS: u32 = 2_000_000;
+// Tests exercise retry exhaustion without a live peer, including under Miri.
+#[cfg(test)]
+const ANSWER_YIELDS: u32 = 4;
 
 /// Explicitly granted wake slots and a per-request monotonic tick budget.
 #[derive(Clone, Copy)]
