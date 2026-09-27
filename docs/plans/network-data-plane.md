@@ -197,6 +197,19 @@ skip it and record the violated invariant, considered bounded alternative and
 executable denial or build-time exclusion. Raw-IP framing inside an authorized
 stack is not the same thing as raw-packet authority for an application.
 
+The epic is decomposed into small independently trackable children in the
+work-item store, each binding the `just-target` gate: the matrix and its
+feature-delta check (`01a0e239-5106-7bb7-b6a3-a83ab346c183`, first, because
+every other slice records its row there); TCP options, external listener with
+half-close, and loss/reorder/window bounds; UDP endpoints, then UDP bounds with
+the static DDS endpoint profile; DNS generalization; ICMP probes and error
+mapping; IPv4 fragmentation; static IPv6/NDP, then IPv6 transport and SLAAC;
+DHCPv4; a multicast-capable peer backend, then multicast grants with IGMP;
+media/backend classification; saturation bounds; and last the aggregate
+qualification (`01a0e239-eb09-7748-811b-3302fb4b9fa0`), which depends on every
+other child and is the epic's closing gate. Dependency edges and state live only
+in the store.
+
 UDP and multicast facilities do not implement DDSI-RTPS discovery, reliability,
 history, CDR or QoS matching. Those remain middleware work. Likewise, TLS/DDS
 Security and physical NIC/IOMMU qualification are separate from smoltcp feature
