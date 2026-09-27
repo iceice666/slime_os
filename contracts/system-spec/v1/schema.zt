@@ -264,6 +264,29 @@ SystemNetworkInterface :: type {
   mac : Text;
 };
 
+-- Application bindings and exact local listener policy, distinct from remote destinations.
+SystemNetworkApplication :: type {
+  holder : Text;
+  controlBinding : Text;
+  provisionBinding : Text;
+  supervisionBinding : Text;
+  requestNotification : Text;
+  completionNotification : Text;
+  role : Text;
+  backend : Text;
+  localAddress : Text;
+  localPort : Int;
+  admittedPeer : Text;
+  rights : List Text;
+  backlog : Int;
+  acceptedSocketLimit : Int;
+  byteBudget : Int;
+  timerBudget : Int;
+  queueDepth : Int;
+  retryLimit : Int;
+  reconnectLimit : Int;
+};
+
 -- B83 exact per-ring block authority, as `BlockRingAuthorityEntry`.
 SystemBlockRingAuthority :: type {
   holder : Text;
@@ -594,6 +617,8 @@ SystemSpec :: type {
   networkDestinationsObject : Bool;
   networkInterfaces? : List SystemNetworkInterface;
   networkInterfacesObject? : Bool;
+  networkApplications? : List SystemNetworkApplication;
+  networkApplicationsObject? : Bool;
   blockRingAuthority : List SystemBlockRingAuthority;
   blockRingAuthorityObject : Bool;
   waitSet : List SystemWaitSetSource;
@@ -610,6 +635,7 @@ FromData @SystemClockAuthority :: derive
 FromData @SystemIoResourceBudget :: derive
 FromData @SystemNetworkDestination :: derive
 FromData @SystemNetworkInterface :: derive
+FromData @SystemNetworkApplication :: derive
 FromData @SystemBlockRingAuthority :: derive
 FromData @SystemWaitSetSource :: derive
 FromData @SystemSchedulingClassBand :: derive
@@ -672,6 +698,7 @@ maxClockAuthority :: Int = 64;
 maxIoResourceBudget :: Int = 48;
 maxNetworkDestinations :: Int = 128;
 maxNetworkInterfaces :: Int = 8;
+maxNetworkApplications :: Int = 4;
 maxBlockRingAuthority :: Int = 128;
 maxWaitSetSources :: Int = 128;
 maxSchedulingClassBands :: Int = 8;
@@ -709,6 +736,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   SystemIoResourceBudget =;
   SystemNetworkDestination =;
   SystemNetworkInterface =;
+  SystemNetworkApplication =;
   SystemBlockRingAuthority =;
   SystemWaitSetSource =;
   SystemSchedulingClassBand =;
@@ -748,6 +776,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   maxIoResourceBudget =;
   maxNetworkDestinations =;
   maxNetworkInterfaces =;
+  maxNetworkApplications =;
   maxBlockRingAuthority =;
   maxWaitSetSources =;
   maxSchedulingClassBands =;

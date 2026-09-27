@@ -113,12 +113,36 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-io-driver-authority.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-io-driver-reset";
+      deferralReason = "";
+      owningGate = "io_network_driver_reset_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-driver-reset.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-io-lifetime";
+      deferralReason = "";
+      owningGate = "io_network_lifetime_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-lifetime.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-io-link.zti";
       composition = "sel4-io-link";
       deferralReason = "";
       owningGate = "io_link_check";
       state = "derived";
       systemSpec = "contracts/system-spec/v1/systems/sel4-io-link.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-io-local";
+      deferralReason = "";
+      owningGate = "io_local_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-local.zti";
     };
     {
       baseline = "contracts/system-spec/v1/baselines/sel4-io-network.zti";
@@ -135,6 +159,14 @@
       owningGate = "io_queue_check";
       state = "derived";
       systemSpec = "contracts/system-spec/v1/systems/sel4-io-queue.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-io-service-fault";
+      deferralReason = "";
+      owningGate = "io_network_service_fault_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-service-fault.zti";
     };
     {
       baseline = "contracts/system-spec/v1/baselines/sel4-io-tcp.zti";

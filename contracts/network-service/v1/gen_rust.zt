@@ -10,6 +10,12 @@ WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; }
 Protocol :: type {
   formatVersion : Int; requestBytes : Int; completionBytes : Int; maxNameBytes : Int;
   networkMagic : Int;
+  loanBytes : Int; loanRoleRing : Int; loanRoleData : Int;
+  queueSlots : Int; ringPages : Int; dataPages : Int; ringBytes : Int; dataBytes : Int;
+  statusSuccess : Int; statusDenied : Int; statusMalformed : Int; statusUnsupported : Int;
+  statusWouldBlock : Int; statusExhausted : Int; statusRefused : Int; statusTimeout : Int; statusReset : Int;
+  opAttach : Int;
+  loanFields : List refl.SchemaField; loanLayout : List WireField;
   opConnect : Int; opSend : Int; opRecv : Int; opClose : Int; opListen : Int; opAccept : Int; opResolve : Int;
   transportNone : Int; transportTcp : Int; transportUdp : Int;
   addressNone : Int; addressIpv4 : Int; addressIpv6 : Int; addressDns : Int;
@@ -57,6 +63,25 @@ rustBindings :: Protocol -> Text = p => w.join {
   "pub const ADDRESS_NONE: u8 = "; n.toText p.addressNone; ";\npub const ADDRESS_IPV4: u8 = "; n.toText p.addressIpv4; ";\npub const ADDRESS_IPV6: u8 = "; n.toText p.addressIpv6; ";\npub const ADDRESS_DNS: u8 = "; n.toText p.addressDns; ";\n";
   "pub const CAPABILITY_NONE: u8 = "; n.toText p.capabilityNone; ";\npub const CAPABILITY_TCP_CONNECTION: u8 = "; n.toText p.capabilityTcpConnection; ";\npub const CAPABILITY_UDP_ENDPOINT: u8 = "; n.toText p.capabilityUdpEndpoint; ";\npub const CAPABILITY_TCP_LISTENER: u8 = "; n.toText p.capabilityTcpListener; ";\npub const CAPABILITY_DNS_RECORD: u8 = "; n.toText p.capabilityDnsRecord; ";\n";
   "pub const FLAG_NONBLOCKING: u32 = "; n.toText p.flagNonblocking; ";\npub const KNOWN_REQUEST_FLAGS: u32 = "; n.toText p.knownRequestFlags; ";\npub const FLAG_END_OF_STREAM: u32 = "; n.toText p.flagEndOfStream; ";\npub const KNOWN_COMPLETION_FLAGS: u32 = "; n.toText p.knownCompletionFlags; ";\n\n";
+  "pub const LOAN_BYTES: usize = "; n.toText p.loanBytes; ";\n";
+  "pub const LOAN_ROLE_RING: u8 = "; n.toText p.loanRoleRing; ";\n";
+  "pub const LOAN_ROLE_DATA: u8 = "; n.toText p.loanRoleData; ";\n";
+  "pub const QUEUE_SLOTS: usize = "; n.toText p.queueSlots; ";\n";
+  "pub const RING_PAGES: usize = "; n.toText p.ringPages; ";\n";
+  "pub const DATA_PAGES: usize = "; n.toText p.dataPages; ";\n";
+  "pub const RING_BYTES: usize = "; n.toText p.ringBytes; ";\n";
+  "pub const DATA_BYTES: usize = "; n.toText p.dataBytes; ";\n";
+  "pub const OP_ATTACH: u8 = "; n.toText p.opAttach; ";\n";
+  "pub const STATUS_SUCCESS: i32 = "; n.toText p.statusSuccess; ";\n";
+  "pub const STATUS_DENIED: i32 = "; n.toText p.statusDenied; ";\n";
+  "pub const STATUS_MALFORMED: i32 = "; n.toText p.statusMalformed; ";\n";
+  "pub const STATUS_UNSUPPORTED: i32 = "; n.toText p.statusUnsupported; ";\n";
+  "pub const STATUS_WOULD_BLOCK: i32 = "; n.toText p.statusWouldBlock; ";\n";
+  "pub const STATUS_EXHAUSTED: i32 = "; n.toText p.statusExhausted; ";\n";
+  "pub const STATUS_REFUSED: i32 = "; n.toText p.statusRefused; ";\n";
+  "pub const STATUS_TIMEOUT: i32 = "; n.toText p.statusTimeout; ";\n";
+  "pub const STATUS_RESET: i32 = "; n.toText p.statusReset; ";\n";
+  offsetConsts "LOAN" 0 p.loanLayout; "\n"; wireStruct "WireNetworkLoan" "LOAN" "LOAN_BYTES" p.loanLayout; "\n";
   offsetConsts "REQUEST" 0 p.requestLayout; "\n"; wireStruct "WireNetworkRequest" "REQUEST" "REQUEST_BYTES" p.requestLayout; "\n";
   offsetConsts "COMPLETION" 0 p.completionLayout; "\n"; wireStruct "WireNetworkCompletion" "COMPLETION" "COMPLETION_BYTES" p.completionLayout;
 };
@@ -70,6 +95,11 @@ valid :: Protocol -> Bool = p =>
     && allValid p.completionLayout
     && wireBytes p.requestLayout == p.requestBytes
     && wireBytes p.completionLayout == p.completionBytes
+    && w.schemaFieldsValid p.loanFields
+    && w.schemaNames p.loanFields == layoutNames p.loanLayout
+    && allValid p.loanLayout
+    && wireBytes p.loanLayout == p.loanBytes
+    && p.loanBytes == 64
     && p.maxNameBytes <= 24;
 render :: Protocol -> { rust : Text; } = p => if valid p then { rust = rustBindings p; } else { rust = "INVALID_NETWORK_SERVICE_SCHEMA"; };
 { render =; }

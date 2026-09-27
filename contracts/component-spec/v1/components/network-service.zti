@@ -38,7 +38,7 @@
   runtime =  {
     executionEnvironment = "aarch64-sel4-qemu-virt";
     resource = {
-      stackBytes = 16384;
+      stackBytes = 131072;
       spawnBudget = 0;
       extraThreads = 0;
       bufferBytePages = 0;

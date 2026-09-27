@@ -715,6 +715,17 @@ pub fn network_interface_read(cursor: usize, out: &mut [u8]) -> Result<usize, i6
     }
 }
 
+/// Read authenticated application rows for this generation's network service.
+/// The root derives the reader from its badge; application policy stays userspace.
+pub fn network_application_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::network_application_read(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// Read the authenticated B83 per-ring block authority entries served to this
 /// generation's block driver. The request is self-scoped and names no holder,
 /// device, or ring; the root reads no block right, so refusing a write on a

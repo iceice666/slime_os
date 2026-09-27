@@ -1,4 +1,5 @@
 use crate::clock_authority::{self, ClockAuthority};
+use crate::lifecycle_policy::{self, LifecyclePolicy, ParameterGrant};
 use crate::sha256::Sha256;
 use crate::shared_buffer_budget::{self, SharedBufferBudget};
 
@@ -32,6 +33,13 @@ const KERNEL_OBJECT_NOTIFICATION: u32 = 7;
 const ROOT_SERVICE_SLOT: usize = crate::component_runtime_abi::ROOT_SERVICE_SLOT as usize;
 const CONSOLE_SERVICE_SLOT: usize = crate::component_runtime_abi::CONSOLE_SERVICE_SLOT as usize;
 const SERVICE_SEND_RIGHT: Rights = 1;
+
+fn parameter_transport_holder(grant: ParameterGrant, holder: &[u8; 32]) -> bool {
+    grant.holder_identity == *holder
+        && grant.authority_flags
+            & (lifecycle_policy::PARAMETER_READ | lifecycle_policy::PARAMETER_WRITE)
+            != 0
+}
 
 fn service_for_capability(kind: CapabilityKind) -> Option<u32> {
     match kind {
@@ -2234,6 +2242,25 @@ impl<'a> Generation<'a> {
             if authorized_for_clock {
                 required[SERVICE_CLOCK as usize] = true;
             }
+            let parameter_holder = lifecycle_policy::instance_identity(instance.name);
+            let authorized_for_parameters = (0..self.object_count).any(|object_index| {
+                self.object(object_index).is_ok_and(|object| {
+                    object.kind == KIND_RESOURCE
+                        && object.bytes.starts_with(&lifecycle_policy::MAGIC)
+                        && LifecyclePolicy::decode(object.bytes).is_ok_and(|policy| {
+                            (0..policy.parameter_count()).any(|index| {
+                                policy.parameter(index).is_some_and(|grant| {
+                                    parameter_transport_holder(grant, &parameter_holder)
+                                })
+                            })
+                        })
+                })
+            });
+            if authorized_for_parameters {
+                // This declares the transport only; root still enforces the
+                // exact parameter holder/subject and read/write authority.
+                required[SERVICE_SUPERVISION as usize] = true;
+            }
             if executable.role == ROLE_INIT || executable.spawn_budget != 0 {
                 // Spawn returns a supervision capability, so declaring spawn
                 // also declares the narrow table service needed to drop it.
@@ -2674,6 +2701,57 @@ fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameter_transport_requires_an_explicit_holder_with_read_or_write_authority() {
+        let holder = lifecycle_policy::instance_identity("network-service");
+        let other = lifecycle_policy::instance_identity("other");
+        let grant = ParameterGrant {
+            holder_identity: holder,
+            subject_identity: holder,
+            authority_flags: lifecycle_policy::PARAMETER_READ | lifecycle_policy::PARAMETER_WRITE,
+        };
+        for authority_flags in [
+            lifecycle_policy::PARAMETER_READ,
+            lifecycle_policy::PARAMETER_WRITE,
+            grant.authority_flags,
+        ] {
+            assert!(parameter_transport_holder(
+                ParameterGrant {
+                    authority_flags,
+                    ..grant
+                },
+                &holder
+            ));
+        }
+        assert!(!parameter_transport_holder(grant, &other));
+        assert!(!parameter_transport_holder(
+            ParameterGrant {
+                holder_identity: other,
+                ..grant
+            },
+            &holder
+        ));
+        for authority_flags in [0, 4] {
+            assert!(!parameter_transport_holder(
+                ParameterGrant {
+                    authority_flags,
+                    ..grant
+                },
+                &holder
+            ));
+        }
+        let absent: Option<ParameterGrant> = None;
+        assert!(!absent.is_some_and(|entry| parameter_transport_holder(entry, &holder)));
+        // Subject authority remains a root operation gate, not a transport prerequisite.
+        assert!(parameter_transport_holder(
+            ParameterGrant {
+                subject_identity: other,
+                ..grant
+            },
+            &holder
+        ));
+    }
 
     #[test]
     fn rejects_v4_product_generations() {

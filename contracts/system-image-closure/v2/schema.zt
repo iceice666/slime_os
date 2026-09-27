@@ -43,6 +43,12 @@ ArtifactReference :: type {
 --                               unhealthy so the selector must roll back.
 --   `recoveryImage`          -- `SLIME_RECOVERY_IMAGE`: the recovery build of
 --                               the graph.
+--   `networkFaultInFlight`   -- `SLIME_NETWORK_FAULT_IN_FLIGHT`: first service
+--                               incarnation faults with application work pending;
+--                               the default profile never injects this fault.
+--   `networkDriverResetInFlight` -- `SLIME_NETWORK_DRIVER_RESET_IN_FLIGHT`:
+--                               reset the external link with payload work pending;
+--                               the default profile never injects this reset.
 --
 -- A profile is per implementation rather than per closure because exactly one
 -- component's bytes change: naming it on the closure would make every other
@@ -62,6 +68,8 @@ buildProfileGenerationCmdBadClosure :: Text = "generationCmdBadClosure";
 buildProfileGenerationCmdBadRelease :: Text = "generationCmdBadRelease";
 buildProfileBootSelectionFail :: Text = "bootSelectionFail";
 buildProfileRecoveryImage :: Text = "recoveryImage";
+buildProfileNetworkFaultInFlight :: Text = "networkFaultInFlight";
+buildProfileNetworkDriverResetInFlight :: Text = "networkDriverResetInFlight";
 
 TargetSelection :: type {
   profile : Text;
@@ -342,6 +350,8 @@ decodeSystemImageBuildResult :: Data -> Validation DecodeIssue SystemImageBuildR
   buildProfileGenerationCmdBadRelease =;
   buildProfileBootSelectionFail =;
   buildProfileRecoveryImage =;
+  buildProfileNetworkFaultInFlight =;
+  buildProfileNetworkDriverResetInFlight =;
   rootRoleEmbeddedGeneration =;
   rootRoleBootSelector =;
   rootRoleFixture =;

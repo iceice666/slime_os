@@ -11,8 +11,34 @@ io_network_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-network-plane.py
 
 [group('planes / mechanism')]
-io_tcp_check: sel4_pin_check
+io_tcp_check: sel4_pin_check io_tcp_host_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp
+
+[group('planes / mechanism')]
+io_tcp_host_check:
+    cargo test --manifest-path verification/network-tcp/Cargo.toml --target-dir build/network-tcp-tests --locked
+
+[group('planes / mechanism')]
+io_local_check: sel4_pin_check io_tcp_host_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm local
+
+[group('planes / mechanism')]
+io_network_lifetime_check: sel4_pin_check io_tcp_host_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm lifetime
+
+[group('planes / mechanism')]
+io_network_service_fault_check: sel4_pin_check io_tcp_host_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm service-fault
+
+[group('planes / mechanism')]
+io_network_driver_reset_check: sel4_pin_check io_tcp_host_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm driver-reset
+
+[group('planes / mechanism')]
+io_network_qualification_check: contracts_check system_spec_check system_image_builder_check io_tcp_host_check test_host test_sel4_root io_network_check io_link_check link_peer_check sel4_gate_control_check fmt_check_all lint_all
+    just docs_check
+    just ruff
+    just typos
 
 [group('planes / mechanism')]
 io_queue_check: sel4_pin_check

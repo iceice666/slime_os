@@ -126,6 +126,9 @@ impl<const N: usize> TxSlots<N> {
     pub fn free_slot(&self) -> Option<usize> {
         self.slots.iter().position(|slot| *slot == TxSlot::Free)
     }
+    pub fn is_free(&self, slot: usize) -> bool {
+        self.slots.get(slot) == Some(&TxSlot::Free)
+    }
     /// The frame in `slot` was submitted under `request_id`; the device owns
     /// the page until the completion.
     pub fn retain(&mut self, slot: usize, request_id: u64) -> Result<(), SlotError> {
@@ -182,7 +185,10 @@ mod tests {
     fn transmit_slots_are_retained_until_their_completion() {
         let mut tx = TxSlots::<2>::new();
         assert_eq!(tx.free_slot(), Some(0));
+        assert!(tx.is_free(0));
+        assert!(!tx.is_free(2));
         assert_eq!(tx.retain(0, 20), Ok(()));
+        assert!(!tx.is_free(0));
         assert_eq!(tx.retain(0, 21), Err(SlotError::State));
         assert_eq!(tx.retain(5, 21), Err(SlotError::State));
         assert_eq!(tx.free_slot(), Some(1));

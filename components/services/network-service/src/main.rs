@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use boot_contracts::network_application::{self, Backend, NetworkApplications};
 use boot_contracts::network_destination::{
     Address, Destination, ENTRY_BYTES, FORMAT_VERSION, HEADER_BYTES, MAGIC, MAX_DESTINATIONS,
     NetworkDestinations, OFF_HEADER_DESTINATION_COUNT, OFF_HEADER_FORMAT_VERSION,
@@ -15,16 +16,31 @@ use slime_rt::{
     ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, monotonic_frequency,
     monotonic_read, network_destinations_read, network_interface_read, resolve_binding, yield_now,
 };
-use smoltcp::iface::{Config, Interface, PollResult, SocketSet, SocketStorage};
+use smoltcp::iface::{Config, Interface, PollIngressSingleResult, PollResult, SocketStorage};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
+mod application;
 mod link;
+mod loopback;
+mod tcp;
 use link::Link;
 
 slime_rt::entry!(main);
 
 const MAX_ROWS: usize = MAX_DESTINATIONS;
+// These bounded arenas are borrowed once by the sole service thread. Keeping
+// their backing storage out of the call frame preserves the runtime stack bound.
+static mut DESTINATION_STORAGE: [u8; HEADER_BYTES + MAX_ROWS * ENTRY_BYTES] =
+    [0; HEADER_BYTES + MAX_ROWS * ENTRY_BYTES];
+static mut EXTERNAL_RX: [[u8; tcp::BUFFER_BYTES]; tcp::SOCKETS] =
+    [[0; tcp::BUFFER_BYTES]; tcp::SOCKETS];
+static mut EXTERNAL_TX: [[u8; tcp::BUFFER_BYTES]; tcp::SOCKETS] =
+    [[0; tcp::BUFFER_BYTES]; tcp::SOCKETS];
+static mut LOCAL_RX: [[u8; tcp::BUFFER_BYTES]; tcp::SOCKETS] =
+    [[0; tcp::BUFFER_BYTES]; tcp::SOCKETS];
+static mut LOCAL_TX: [[u8; tcp::BUFFER_BYTES]; tcp::SOCKETS] =
+    [[0; tcp::BUFFER_BYTES]; tcp::SOCKETS];
 const PAGE_ROWS: usize = 6;
 const INTERFACE_PAGE_ROWS: usize = 4;
 /// The link peer endpoint and the buffer factory sit at fixed slots, as the
@@ -33,18 +49,18 @@ const INTERFACE_PAGE_ROWS: usize = 4;
 /// occupies it, so both must sit below the first buffer this service creates.
 const LINK_PEER_SLOT: u32 = 0;
 const FACTORY_SLOT: u32 = 1;
+// The declared application provisioning endpoint is pinned to 30: above the
+// factory, twelve retained buffer handles, and one transient moved loan. Native
+// endpoint receiver lookup must not be shadowed by a logical buffer slot.
 const MAX_CAPABILITIES: usize = 8;
-/// TCP sockets the stack can hold at once. The contract's `maxSockets` is a
-/// ceiling on declarations; this is the storage one service instance carries.
-const TCP_SOCKETS: usize = 4;
 /// The clients a generation may bind to this service, by the grant name each
 /// resolves and the instance name its holder identity derives from. A grant
 /// the generation does not declare simply resolves to no client.
-const CLIENTS: [(&[u8], &str); 3] = [
+const LEGACY_CLIENTS: [(&[u8], &str); 2] = [
     (b"network-probe-service", "io-network-probe"),
     (b"network-intruder-service", "io-network-intruder"),
-    (b"network-tcp-probe-service", "io-tcp-probe"),
 ];
+const MAX_CLIENTS: usize = network_application::MAX_APPLICATIONS + LEGACY_CLIENTS.len();
 const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
 const STATUS_DENIED: i32 = -1;
 const STATUS_MALFORMED: i32 = -2;
@@ -54,6 +70,10 @@ const STATUS_UNSUPPORTED: i32 = -3;
 struct Client {
     slot: u32,
     holder: [u8; 32],
+    provision: Option<u32>,
+    completion_signal: Option<u32>,
+    supervision: Option<u32>,
+    backend: Backend,
     closed: bool,
 }
 
@@ -73,12 +93,53 @@ struct Stack {
     link: Link,
     iface: Interface,
     clock: TickClock,
+    active: bool,
 }
 
 impl Stack {
     fn now(&self) -> Instant {
         let ticks = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
         Instant::from_millis(self.clock.millis(ticks))
+    }
+}
+
+struct LocalStack {
+    device: loopback::Loopback,
+    iface: Interface,
+    clock: TickClock,
+}
+
+impl LocalStack {
+    fn new() -> Self {
+        let rate = monotonic_frequency().unwrap_or_else(|_| fail(b"loopback clock rate"));
+        let base = monotonic_read().unwrap_or_else(|_| fail(b"loopback clock"));
+        let clock = TickClock::new(rate, base).unwrap_or_else(|_| fail(b"loopback clock rate"));
+        let mut device = loopback::Loopback::new();
+        let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress([
+            2, 0, 0, 0, 0, 1,
+        ])));
+        config.random_seed = base;
+        let mut iface = Interface::new(config, &mut device, Instant::from_millis(0));
+        iface.update_ip_addrs(|addresses| {
+            addresses
+                .push(IpCidr::new(
+                    IpAddress::Ipv4(Ipv4Address::new(127, 0, 0, 1)),
+                    8,
+                ))
+                .unwrap_or_else(|_| fail(b"loopback address"));
+        });
+        debug_write(b"[network-service] loopback interface=127.0.0.1 external_nic=none\n");
+        Self {
+            device,
+            iface,
+            clock,
+        }
+    }
+    fn now(&self) -> Instant {
+        Instant::from_millis(
+            self.clock
+                .millis(monotonic_read().unwrap_or_else(|_| fail(b"loopback clock"))),
+        )
     }
 }
 
@@ -93,7 +154,8 @@ struct Observed {
 }
 
 fn main(_: u32) {
-    let mut object = [0u8; HEADER_BYTES + MAX_ROWS * ENTRY_BYTES];
+    // SAFETY: main runs once and no worker or callback accesses this arena.
+    let object = unsafe { &mut *core::ptr::addr_of_mut!(DESTINATION_STORAGE) };
     object[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC + MAGIC.len()].copy_from_slice(&MAGIC);
     object[OFF_HEADER_FORMAT_VERSION..OFF_HEADER_FORMAT_VERSION + 4]
         .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
@@ -130,12 +192,45 @@ fn main(_: u32) {
         .unwrap_or_else(|_| fail(b"destination resource decode"));
     report_authority(&destinations);
 
-    let mut clients: [Option<Client>; CLIENTS.len()] = [None; CLIENTS.len()];
-    for (entry, (grant, name)) in clients.iter_mut().zip(CLIENTS) {
+    let mut application_object = [0; network_application::MAX_BYTES];
+    let application_table = read_applications(&mut application_object);
+    let mut clients: [Option<Client>; MAX_CLIENTS] = [None; MAX_CLIENTS];
+    for (entry, (grant, name)) in clients.iter_mut().zip(LEGACY_CLIENTS) {
         if let Ok(slot) = resolve_binding(grant) {
             *entry = Some(Client {
                 slot,
                 holder: boot_contracts::network_destination::holder_identity(name),
+                provision: None,
+                completion_signal: None,
+                supervision: None,
+                backend: Backend::External,
+                closed: false,
+            });
+        }
+    }
+    if let Some(table) = application_table.as_ref() {
+        for index in 0..table.application_count() {
+            let declaration = table.application(index).unwrap();
+            let slot = resolve_binding(declaration.control_binding)
+                .unwrap_or_else(|_| fail(b"application control binding"));
+            let provision = resolve_binding(declaration.provision_binding)
+                .unwrap_or_else(|_| fail(b"application provision binding"));
+            if slot == provision
+                || clients.iter().flatten().any(|client| {
+                    client.slot == slot || client.holder == declaration.holder_identity
+                })
+            {
+                fail(b"application binding alias");
+            }
+            clients[LEGACY_CLIENTS.len() + index] = Some(Client {
+                slot,
+                holder: declaration.holder_identity,
+                provision: Some(provision),
+                completion_signal: (!declaration.completion_notification.is_empty())
+                    .then(|| notification_binding(declaration.completion_notification, b"+signal")),
+                supervision: (!declaration.supervision_binding.is_empty())
+                    .then(|| minted_binding(declaration.supervision_binding)),
+                backend: declaration.backend,
                 closed: false,
             });
         }
@@ -151,13 +246,119 @@ fn main(_: u32) {
     let mut observed = Observed::default();
 
     let mut stack = attach_stack();
-    let mut socket_storage: [SocketStorage; TCP_SOCKETS] = [SocketStorage::EMPTY; TCP_SOCKETS];
-    let mut sockets = SocketSet::new(&mut socket_storage[..]);
+    let mut socket_storage: [SocketStorage; tcp::SOCKETS] = [SocketStorage::EMPTY; tcp::SOCKETS];
+    // SAFETY: each engine exclusively borrows its own arena for this service lifetime.
+    let rx_storage = unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_RX) };
+    let tx_storage = unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_TX) };
+    let incarnation = if application_table.is_some() {
+        allocate_incarnation()
+    } else {
+        1
+    };
+    let mut engine = tcp::Engine::new(&mut socket_storage, rx_storage, tx_storage, incarnation, 0)
+        .unwrap_or_else(|_| fail(b"external engine incarnation"));
+    let mut local_storage: [SocketStorage; tcp::SOCKETS] = [SocketStorage::EMPTY; tcp::SOCKETS];
+    // SAFETY: disjoint from the external engine and borrowed only by this main.
+    let local_rx = unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_RX) };
+    let local_tx = unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_TX) };
+    let mut local_engine = tcp::Engine::new(&mut local_storage, local_rx, local_tx, incarnation, 1)
+        .unwrap_or_else(|_| fail(b"local engine incarnation"));
+    let mut local = application_table
+        .as_ref()
+        .filter(|table| {
+            (0..table.application_count())
+                .any(|index| table.application(index).unwrap().backend == Backend::Loopback)
+        })
+        .map(|_| LocalStack::new());
+    let mut applications: [Option<application::Application>; MAX_CLIENTS] =
+        core::array::from_fn(|_| None);
+    let mut waiting = service_wait_set(application_table.as_ref(), &clients);
+    let wait_rate = waiting
+        .as_ref()
+        .map(|_| monotonic_frequency().unwrap_or_else(|_| fail(b"wait clock rate")));
+    let mut coalesced = 0u64;
 
     while clients.iter().flatten().any(|client| !client.closed) {
         let mut progress = false;
-        for client in clients.iter_mut().flatten() {
+        for (index, client) in clients.iter_mut().enumerate() {
+            let Some(client) = client else { continue };
             if client.closed {
+                continue;
+            }
+            if let Some(slot) = client.supervision {
+                match slime_rt::supervision_status(slot) {
+                    Ok(Some(_)) => {
+                        client.supervision = None;
+                        let reclaimed = match client.backend {
+                            Backend::External => engine.release_holder(client.holder),
+                            Backend::Loopback => local_engine.release_holder(client.holder),
+                        };
+                        let mut buffers = 0;
+                        if let Some(application) = applications[index].take() {
+                            if !application.release() {
+                                fail(b"dead client buffers");
+                            }
+                            buffers = 2;
+                        }
+                        write_number(
+                            b"[network-service] client death handles=",
+                            reclaimed.handles as u64,
+                        );
+                        write_number(b" sockets=", reclaimed.sockets as u64);
+                        write_number(b" bytes=", reclaimed.bytes as u64);
+                        write_number(b" buffers=", buffers);
+                        debug_write(b"\n");
+                        client.closed = true;
+                        progress = true;
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(_) => fail(b"client supervision"),
+                }
+            }
+            if let Some(application) = applications[index].as_mut() {
+                progress |= match client.backend {
+                    Backend::External => {
+                        let stack = stack
+                            .as_mut()
+                            .unwrap_or_else(|| fail(b"application without stack"));
+                        let now = stack.now();
+                        application.drive(
+                            client.holder,
+                            &destinations,
+                            None,
+                            &mut engine,
+                            &mut stack.iface,
+                            now,
+                        )
+                    }
+                    Backend::Loopback => {
+                        let stack = local
+                            .as_mut()
+                            .unwrap_or_else(|| fail(b"application without loopback"));
+                        let now = stack.now();
+                        application.drive(
+                            client.holder,
+                            &destinations,
+                            application_table.as_ref(),
+                            &mut local_engine,
+                            &mut stack.iface,
+                            now,
+                        )
+                    }
+                };
+            }
+            if applications[index]
+                .as_ref()
+                .is_some_and(application::Application::failed)
+            {
+                engine.release_holder(client.holder);
+                local_engine.release_holder(client.holder);
+                if let Some(application) = applications[index].take() {
+                    application.release();
+                }
+                client.closed = true;
+                debug_write(b"[network-service] application session invalidated\n");
                 continue;
             }
             let mut bytes = [0u8; MAX_MSG];
@@ -167,6 +368,57 @@ fn main(_: u32) {
                 result if result < 0 => fail(b"client receive"),
                 result => {
                     progress = true;
+                    if result as usize == network_service::REQUEST_BYTES
+                        && WireNetworkRequest::decode(&bytes[..result as usize])
+                            .is_some_and(|request| request.op == network_service::OP_ATTACH)
+                    {
+                        let request =
+                            WireNetworkRequest::decode(&bytes[..result as usize]).unwrap();
+                        let valid = request.magic == network_service::NETWORK_MAGIC
+                            && request.version == network_service::FORMAT_VERSION
+                            && request.transport == network_service::TRANSPORT_NONE
+                            && request.flags == 0
+                            && request.port == 0
+                            && request.name_len == 0
+                            && request.capability == 0
+                            && request.address_kind == network_service::ADDRESS_NONE
+                            && request.reserved == [0; 7]
+                            && request.endpoint == [0; 24];
+                        let status = if !valid {
+                            network_service::STATUS_MALFORMED
+                        } else if client.provision.is_none()
+                            || applications[index].is_some()
+                            || (client.backend == Backend::External
+                                && !stack.as_ref().is_some_and(|stack| stack.active))
+                        {
+                            network_service::STATUS_DENIED
+                        } else {
+                            match application::Application::attach(
+                                index,
+                                FACTORY_SLOT,
+                                client.provision.unwrap(),
+                                incarnation,
+                                client.completion_signal,
+                            ) {
+                                Ok(application) => {
+                                    applications[index] = Some(application);
+                                    network_service::STATUS_SUCCESS
+                                }
+                                Err(()) => network_service::STATUS_EXHAUSTED,
+                            }
+                        };
+                        let reply = WireNetworkCompletion {
+                            magic: network_service::NETWORK_MAGIC,
+                            version: network_service::FORMAT_VERSION,
+                            op: network_service::OP_ATTACH,
+                            capability_kind: network_service::CAPABILITY_NONE,
+                            status_detail: status,
+                            flags: 0,
+                            capability: 0,
+                        };
+                        send(client.slot, &reply.encode());
+                        continue;
+                    }
                     observed.requests += 1;
                     let request = WireNetworkRequest::decode(&bytes[..result as usize]);
                     let op = request.map_or(0, |value| value.op);
@@ -174,10 +426,41 @@ fn main(_: u32) {
                         Some(request)
                             if valid_network_request(&request)
                                 && request.op == network_service::OP_CLOSE
+                                && request.capability == SHUTDOWN_CAPABILITY
+                                && applications[index]
+                                    .as_ref()
+                                    .is_some_and(|application| !application.quiescent()) =>
+                        {
+                            (
+                                network_service::STATUS_WOULD_BLOCK,
+                                network_service::CAPABILITY_NONE,
+                                0,
+                            )
+                        }
+                        Some(request)
+                            if valid_network_request(&request)
+                                && request.op == network_service::OP_CLOSE
                                 && request.capability == SHUTDOWN_CAPABILITY =>
                         {
+                            if let Some(application) = applications[index].take() {
+                                engine.release_holder(client.holder);
+                                local_engine.release_holder(client.holder);
+                                write_number(
+                                    b"[network-service] application bytes sent=",
+                                    application.sent,
+                                );
+                                write_number(b" received=", application.received);
+                                debug_write(b"\n");
+                                if !application.release() {
+                                    fail(b"application buffer release");
+                                }
+                                debug_write(b"[network-service] application buffers released=2\n");
+                            }
                             client.closed = true;
                             (0, network_service::CAPABILITY_NONE, 0)
+                        }
+                        Some(_) if client.provision.is_some() => {
+                            (STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0)
                         }
                         Some(request) if valid_network_request(&request) => dispatch(
                             &destinations,
@@ -203,19 +486,152 @@ fn main(_: u32) {
                 }
             }
         }
-        if let Some(stack) = stack.as_mut() {
+        if let Some(stack) = stack.as_mut().filter(|stack| stack.active) {
             progress |= stack.link.drain();
             let now = stack.now();
-            progress |= stack.iface.poll(now, &mut stack.link, &mut sockets)
+            engine.tick(now);
+            progress |= stack.iface.poll(now, &mut stack.link, engine.sockets())
                 == PollResult::SocketStateChanged;
+            progress |= stack.link.flush(&mut engine);
             progress |= stack.link.replenish();
         }
+        if let Some(stack) = local.as_mut() {
+            let now = stack.now();
+            local_engine.tick(now);
+            stack.iface.poll_maintenance(now);
+            for _ in 0..loopback::FRAME_SLOTS {
+                if stack
+                    .iface
+                    .poll_ingress_single(now, &mut stack.device, local_engine.sockets())
+                    == PollIngressSingleResult::None
+                {
+                    break;
+                }
+                progress = true;
+            }
+            progress |= stack
+                .iface
+                .poll_egress(now, &mut stack.device, local_engine.sockets())
+                == PollResult::SocketStateChanged;
+            progress |= stack
+                .device
+                .flush(|frame| local_engine.permit_egress(frame));
+            progress |= stack.device.ready_count() != 0 || stack.device.staged_count() != 0;
+        }
+        if option_env!("SLIME_NETWORK_DRIVER_RESET_IN_FLIGHT") == Some("1")
+            && incarnation == 1
+            && stack.as_ref().is_some_and(|stack| stack.active)
+            && engine.transmit_drained()
+            && applications
+                .iter()
+                .flatten()
+                .any(|application| application.in_flight_payload() && application.sent >= 1024)
+        {
+            let stack = stack.as_mut().unwrap();
+            stack.link.release();
+            stack.active = false;
+            let reclaimed = engine.reset_all(stack.now());
+            let settled: usize = applications
+                .iter_mut()
+                .flatten()
+                .map(application::Application::reset_requests)
+                .sum();
+            write_number(b"[network-service] driver reset requests=", settled as u64);
+            write_number(b" handles=", reclaimed.handles as u64);
+            write_number(b" sockets=", reclaimed.sockets as u64);
+            write_number(b" bytes=", reclaimed.bytes as u64);
+            debug_write(b"\n");
+        }
+        if option_env!("SLIME_NETWORK_FAULT_IN_FLIGHT") == Some("1")
+            && incarnation == 1
+            && applications
+                .iter()
+                .flatten()
+                .map(|application| application.received)
+                .sum::<u64>()
+                >= 1024
+            && applications
+                .iter()
+                .flatten()
+                .any(application::Application::in_flight_payload)
+        {
+            debug_write(b"[network-service] injected in-flight fault incarnation=1\n");
+            inject_fault();
+        }
         if !progress {
-            yield_now();
+            if let Some(wait) = waiting.as_mut() {
+                // A short control deadline also covers native attach/finish rendezvous,
+                // which are not themselves notification events.
+                let mut delay_ms = 10u64;
+                if let Some(stack) = stack.as_mut()
+                    && let Some(delay) = stack.iface.poll_delay(stack.now(), engine.sockets())
+                {
+                    delay_ms = delay_ms.min(delay.total_millis().max(1));
+                }
+                if let Some(stack) = local.as_mut()
+                    && let Some(delay) = stack.iface.poll_delay(stack.now(), local_engine.sockets())
+                {
+                    delay_ms = delay_ms.min(delay.total_millis().max(1));
+                }
+                let rate = wait_rate.unwrap();
+                let ticks = (rate / 1000).saturating_mul(delay_ms).max(1);
+                let armed_at = monotonic_read().unwrap_or_else(|_| fail(b"network timer clock"));
+                let deadline = armed_at
+                    .checked_add(ticks)
+                    .unwrap_or_else(|| fail(b"network timer overflow"));
+                let timer = slime_rt::timer_arm(ticks).unwrap_or_else(|_| fail(b"network timer"));
+                let ready = wait.wait().unwrap_or_else(|_| fail(b"network wait"));
+                coalesced += u64::from(ready > 1);
+                while wait.next_ready().is_some() {}
+                let cancelled = slime_rt::timer_cancel(timer);
+                if cancelled != ERR_SUCCESS
+                    && !(cancelled == slime_rt::ERR_BAD_CAP
+                        && monotonic_read().unwrap_or_else(|_| fail(b"network timer clock"))
+                            >= deadline)
+                {
+                    fail(b"network timer cancellation");
+                }
+            } else {
+                yield_now();
+            }
         }
     }
+    let cleanup_time = local.as_ref().map_or_else(
+        || stack.as_ref().map_or(Instant::from_millis(0), Stack::now),
+        LocalStack::now,
+    );
+    let _ = engine.reset_all(cleanup_time);
+    let _ = local_engine.reset_all(cleanup_time);
+    if let Some(wait) = waiting {
+        write_number(b"[network-service] wait wakes=", wait.wakes() as u64);
+        write_number(b" coalesced=", coalesced);
+        debug_write(b" timers_live=0\n");
+    }
+    let external_frames = stack
+        .as_ref()
+        .map_or(0, |stack| u64::from(stack.link.tx.counts.frames));
+    if let Some(stack) = local {
+        write_number(
+            b"[network-service] loopback frames=",
+            stack.device.egress_count(),
+        );
+        write_number(b" rejected=", stack.device.rejected_count());
+        write_number(b" handles=", local_engine.allocated() as u64);
+        write_number(b" external_frames=", external_frames);
+        write_number(b" resets=", stack.device.reset_count());
+        write_number(b" syns=", stack.device.syn_count());
+        write_number(b" fins=", stack.device.fin_count());
+        debug_write(b"\n");
+    }
     if let Some(mut stack) = stack {
-        release_stack(&mut stack);
+        write_number(
+            b"[network-service] application connection handles live=",
+            engine.allocated() as u64,
+        );
+        debug_write(b"\n");
+        if stack.active {
+            release_stack(&mut stack);
+        }
     }
     report_observed(&observed);
     exit(0)
@@ -262,7 +678,12 @@ fn attach_stack() -> Option<Stack> {
             .add_default_ipv4_route(Ipv4Address::from(gateway))
             .unwrap_or_else(|_| fail(b"default route"));
     }
-    Some(Stack { link, iface, clock })
+    Some(Stack {
+        link,
+        iface,
+        clock,
+        active: true,
+    })
 }
 
 /// Hand the link back: reset the driver, acknowledge its settled completions,
@@ -296,6 +717,120 @@ fn release_stack(stack: &mut Stack) {
     debug_write(b"\n");
     stack.link.release();
     debug_write(b"[network-service] link released\n");
+}
+
+fn service_wait_set(
+    table: Option<&NetworkApplications<'_>>,
+    clients: &[Option<Client>; MAX_CLIENTS],
+) -> Option<slime_rt::wait_set::WaitSet> {
+    let table = table?;
+    let mut name = None;
+    for index in 0..table.application_count() {
+        let entry = table.application(index).unwrap();
+        if entry.request_notification.is_empty() {
+            continue;
+        }
+        if name.is_some_and(|name| name != entry.request_notification) {
+            fail(b"network wait fan-in");
+        }
+        name = Some(entry.request_notification);
+    }
+    let slot = notification_binding(name?, b"+wait");
+    let mut wait = slime_rt::wait_set::WaitSet::declared(slot)
+        .unwrap_or_else(|_| fail(b"network wait declaration"));
+    for client in clients
+        .iter()
+        .flatten()
+        .filter(|client| client.completion_signal.is_some())
+    {
+        wait.register_slot(slime_rt::wait_set::Kind::Stream, client.slot)
+            .unwrap_or_else(|_| fail(b"network wait source"));
+    }
+    wait.register_timer()
+        .unwrap_or_else(|_| fail(b"network wait timer"));
+    Some(wait)
+}
+
+fn allocate_incarnation() -> u64 {
+    let key = network_application::INCARNATION_PARAMETER_KEY;
+    let previous = match slime_rt::lifecycle_parameter_read(slime_rt::PARAMETER_SELF_SLOT, key) {
+        Ok(value) => value,
+        Err(slime_rt::ERR_INVALID_ARG) => 0,
+        Err(_) => fail(b"incarnation authority"),
+    };
+    let next = previous
+        .checked_add(1)
+        .filter(|next| *next <= tcp::MAX_INCARNATION)
+        .unwrap_or_else(|| fail(b"incarnation exhausted"));
+    let observed = slime_rt::lifecycle_parameter_write(slime_rt::PARAMETER_SELF_SLOT, key, next)
+        .unwrap_or_else(|_| fail(b"incarnation write"));
+    if observed != previous {
+        fail(b"incarnation concurrent writer");
+    }
+    write_number(b"[network-service] incarnation=", next);
+    debug_write(b"\n");
+    next
+}
+
+fn minted_binding(name: &[u8]) -> u32 {
+    let mut query = [0; 64];
+    let prefix = b"minted:";
+    let length = prefix.len() + name.len();
+    query[..prefix.len()].copy_from_slice(prefix);
+    query[prefix.len()..length].copy_from_slice(name);
+    resolve_binding(&query[..length]).unwrap_or_else(|_| fail(b"supervision binding"))
+}
+
+fn notification_binding(name: &[u8], role: &[u8]) -> u32 {
+    let mut query = [0; 64];
+    let prefix = b"notification:";
+    let length = prefix.len() + name.len() + role.len();
+    if length > query.len() {
+        fail(b"notification binding length");
+    }
+    query[..prefix.len()].copy_from_slice(prefix);
+    query[prefix.len()..prefix.len() + name.len()].copy_from_slice(name);
+    query[prefix.len() + name.len()..length].copy_from_slice(role);
+    resolve_binding(&query[..length]).unwrap_or_else(|_| fail(b"notification binding"))
+}
+
+fn read_applications(
+    object: &mut [u8; network_application::MAX_BYTES],
+) -> Option<NetworkApplications<'_>> {
+    use network_application as c;
+    object[c::OFF_HEADER_MAGIC..c::OFF_HEADER_MAGIC_END].copy_from_slice(&c::MAGIC);
+    object[c::OFF_HEADER_FORMAT_VERSION..c::OFF_HEADER_FORMAT_VERSION_END]
+        .copy_from_slice(&c::FORMAT_VERSION.to_le_bytes());
+    object[c::OFF_HEADER_HEADER_SIZE..c::OFF_HEADER_HEADER_SIZE_END]
+        .copy_from_slice(&(c::HEADER_BYTES as u32).to_le_bytes());
+    let mut count = 0;
+    loop {
+        let mut page = [0; 3 * c::ENTRY_BYTES];
+        let read = match slime_rt::network_application_read(count, &mut page) {
+            Ok(read) => read,
+            Err(_) if count == 0 => return None,
+            Err(_) => fail(b"application resource read"),
+        };
+        if read == 0 {
+            break;
+        }
+        if read > 3 || count + read > c::MAX_APPLICATIONS {
+            fail(b"application resource bounds");
+        }
+        let start = c::HEADER_BYTES + count * c::ENTRY_BYTES;
+        object[start..start + read * c::ENTRY_BYTES]
+            .copy_from_slice(&page[..read * c::ENTRY_BYTES]);
+        count += read;
+    }
+    let total = c::HEADER_BYTES + count * c::ENTRY_BYTES;
+    object[c::OFF_HEADER_APPLICATION_COUNT..c::OFF_HEADER_APPLICATION_COUNT_END]
+        .copy_from_slice(&(count as u32).to_le_bytes());
+    object[c::OFF_HEADER_TOTAL_LEN..c::OFF_HEADER_TOTAL_LEN_END]
+        .copy_from_slice(&(total as u32).to_le_bytes());
+    Some(
+        NetworkApplications::decode(&object[..total])
+            .unwrap_or_else(|_| fail(b"application resource decode")),
+    )
 }
 
 fn read_interface() -> Option<DeclaredInterface> {
@@ -682,6 +1217,24 @@ fn write_number(prefix: &[u8], mut value: u64) {
     }
     debug_write(prefix);
     debug_write(&digits[offset..]);
+}
+
+fn inject_fault() -> ! {
+    // This diagnostic path is reachable only in a closure-selected profile.
+    // The instruction faults in the component VSpace without a Rust dereference.
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("str xzr, [{address}]", address = in(reg) 0usize, options(nostack));
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("mov qword ptr [{address}], 0", address = in(reg) 0usize, options(nostack));
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!("sd zero, 0({address})", address = in(reg) 0usize, options(nostack));
+    }
+    fail(b"fault injection returned")
 }
 
 fn fail(reason: &[u8]) -> ! {

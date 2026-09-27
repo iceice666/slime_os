@@ -25,16 +25,18 @@
     {
       component = "io-tcp-probe";
       dependencies = [];
+      mappingCount = 2;
+      loanCount = 2;
     };
     {
       component = "network-service";
       dependencies = [
         "virtio-net-driver";
       ];
-      bufferBytePages = 10;
-      bufferCount = 10;
+      bufferBytePages = 12;
+      bufferCount = 12;
       mappingCount = 12;
-      loanCount = 10;
+      loanCount = 12;
     };
     {
       component = "virtio-net-driver";
@@ -54,6 +56,17 @@
         "recv";
       ];
       transferable = false;
+    };
+    {
+      name = "network-tcp-probe-provision";
+      capabilityKind = "endpoint";
+      source = "network-service";
+      target = "io-tcp-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = true;
     };
     {
       name = "network-intruder-service";
@@ -130,6 +143,18 @@
     };
   ];
   slotPins = [
+    {
+      holder = "io-tcp-probe";
+      grant = "network-tcp-probe-provision";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "network-service";
+      grant = "network-tcp-probe-provision";
+      slot = 30;
+      reason = "allocatorOrder";
+    };
     {
       holder = "network-service";
       grant = "network-service-link-peer";
@@ -420,6 +445,30 @@
     };
   ];
   networkDestinationsObject = true;
+  networkApplications = [
+    {
+      holder = "io-tcp-probe";
+      controlBinding = "network-tcp-probe-service";
+      provisionBinding = "network-tcp-probe-provision";
+      supervisionBinding = "";
+      requestNotification = "";
+      completionNotification = "";
+      role = "client";
+      backend = "external";
+      localAddress = "0.0.0.0";
+      localPort = 0;
+      admittedPeer = "";
+      rights = [];
+      backlog = 0;
+      acceptedSocketLimit = 0;
+      byteBudget = 0;
+      timerBudget = 0;
+      queueDepth = 0;
+      retryLimit = 0;
+      reconnectLimit = 0;
+    };
+  ];
+  networkApplicationsObject = true;
   networkInterfaces = [
     {
       holder = "network-service";
@@ -434,6 +483,14 @@
   blockRingAuthorityObject = false;
   waitSet = [];
   waitSetObject = true;
+  lifecyclePolicy = {
+    initialState = "Initialize";
+    terminalState = "Error";
+    transitions = [ { from = "Initialize"; to = "Running"; }; { from = "Running"; to = "Error"; }; ];
+    restarts = [];
+    dependencies = [];
+    parameters = [ { holder = "network-service"; subject = "network-service"; read = true; write = true; }; ];
+  };
   recording = [];
   recordingObject = false;
   deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";

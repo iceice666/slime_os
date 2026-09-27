@@ -278,6 +278,29 @@ NetworkInterfaceEntry :: type {
   mac : Text;
 };
 
+-- Application bindings and exact local listener policy, distinct from remote destinations.
+NetworkApplicationEntry :: type {
+  holder : Text;
+  controlBinding : Text;
+  provisionBinding : Text;
+  supervisionBinding : Text;
+  requestNotification : Text;
+  completionNotification : Text;
+  role : Text;
+  backend : Text;
+  localAddress : Text;
+  localPort : Int;
+  admittedPeer : Text;
+  rights : List Text;
+  backlog : Int;
+  acceptedSocketLimit : Int;
+  byteBudget : Int;
+  timerBudget : Int;
+  queueDepth : Int;
+  retryLimit : Int;
+  reconnectLimit : Int;
+};
+
 -- One instance's C9.1 root-brokered clock service authority. The four
 -- booleans are independent: a timer-only holder need not read either clock,
 -- and simulated time has separate read and advance authority so a consumer
@@ -630,6 +653,7 @@ GenerationManifest :: type {
   -- Optional IO11 interface table. Absent and empty both declare no interface,
   -- so a network service with a link and no row configures nothing.
   networkInterfaces? : List NetworkInterfaceEntry;
+  networkApplications? : List NetworkApplicationEntry;
   -- Optional B83 exact per-ring block authority table. Absent and empty both
   -- grant no ring any block right, so a userspace block driver refuses every
   -- submission rather than defaulting open. Readable only by the declared
@@ -692,6 +716,7 @@ FromData @SharedBufferBudgetEntry :: derive
 FromData @PrivateMemoryBudgetEntry :: derive
 FromData @NetworkDestinationEntry :: derive
 FromData @NetworkInterfaceEntry :: derive
+FromData @NetworkApplicationEntry :: derive
 FromData @BlockRingAuthorityEntry :: derive
 FromData @FabricProfileInterposition :: derive
 FromData @FabricProfile :: derive
@@ -727,6 +752,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   PrivateMemoryBudgetEntry =;
   NetworkDestinationEntry =;
   NetworkInterfaceEntry =;
+  NetworkApplicationEntry =;
   BlockRingAuthorityEntry =;
   ClockAuthorityEntry =;
   SchedulingClassBand =;

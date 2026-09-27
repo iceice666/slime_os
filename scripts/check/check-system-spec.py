@@ -100,10 +100,14 @@ POST_BASELINE_OBJECTS = ("private-memory-budget",)
 # `POST_BASELINE_INSTANCE_FIELDS`/`POST_BASELINE_GRANTS` below: an equivalent
 # fact in another system stays baseline-visible, because other systems carry
 # real `notificationGrants`/`notificationBindings` content their baselines can
-# still compare. `check_post_baseline` independently compares exactly the
-# sections named here against the system spec's own declared notifications.
+# still compare. `check_post_baseline` independently checks the live notification
+# declarations and exact application authority behind these exceptions.
 POST_BASELINE_SYSTEM_SECTIONS: dict[str, frozenset[str]] = {
     "sel4-private-memory": frozenset({"notificationGrants", "notificationBindings"}),
+    "sel4-io-tcp": frozenset({"networkApplications", "lifecyclePolicy"}),
+}
+POST_BASELINE_SYSTEM_OBJECTS = {
+    "sel4-io-tcp": frozenset({"network-application", "lifecycle-policy"}),
 }
 
 # Instance fields and capability edges added after a system's frozen pre-CP1
@@ -115,11 +119,23 @@ POST_BASELINE_INSTANCE_FIELDS = {
 }
 POST_BASELINE_GRANTS = {
     "sel4-private-memory": frozenset({"private-memory-worker-rpc"}),
+    "sel4-io-tcp": frozenset({"network-tcp-probe-provision"}),
 }
 
-# Lift only the reciprocal borrower's loan ceiling; every other budget field
-# and holder remains frozen-baseline-visible. The live instance must declare it.
+# Executable-level exceptions are scoped by both system and executable name.
+POST_BASELINE_EXECUTABLE_FIELDS = {
+    name: {"network-service": frozenset({"stackBytes"})}
+    for name in ("sel4-io-network", "sel4-io-tcp")
+}
+# This holder had no budget row in the baseline. Every field is checked below.
+POST_BASELINE_SHARED_BUFFER_HOLDERS = {"sel4-io-tcp": frozenset({"io-tcp-probe"})}
+
+# Lift only these ceilings; every other budget field and holder stays visible
+# to the frozen comparison. Each lifted ceiling must match its live declaration.
 POST_BASELINE_SHARED_BUFFER_FIELDS = {
+    "sel4-io-tcp": {
+        "network-service": frozenset({"bytePages", "bufferCount", "loanCount"}),
+    },
     "sel4-private-memory-isolation": {
         "private-memory-1g-holder-c": frozenset({"loanCount"}),
     },
@@ -208,6 +224,10 @@ def _decode(path: Path, label: str) -> dict:
 # These compositions were authored as system specs, not migrated from a
 # hand-authored manifest. Their contracts and derived-byte drift remain checked.
 SPEC_NATIVE_SYSTEMS = frozenset({
+    "sel4-io-local",
+    "sel4-io-lifetime",
+    "sel4-io-service-fault",
+    "sel4-io-driver-reset",
     "sel4-private-memory-stress",
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",
@@ -366,7 +386,8 @@ def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
     if "objects" in value:
         kept, removed = [], []
         for entry in value["objects"]:
-            (removed if entry["id"] in POST_BASELINE_OBJECTS else kept).append(entry)
+            post_objects = (*POST_BASELINE_OBJECTS, *POST_BASELINE_SYSTEM_OBJECTS.get(name, ()))
+            (removed if entry["id"] in post_objects else kept).append(entry)
         value["objects"] = kept
         added["objects"] = removed
     post_grants = POST_BASELINE_GRANTS.get(name, frozenset())
@@ -386,6 +407,13 @@ def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
                 else:
                     kept.append(binding)
             instance["bindings"] = kept
+    for executable in value.get("executables", []):
+        for field in POST_BASELINE_EXECUTABLE_FIELDS.get(name, {}).get(executable["name"], ()):
+            executable.pop(field, None)
+    new_holders = POST_BASELINE_SHARED_BUFFER_HOLDERS.get(name, frozenset())
+    value["sharedBufferBudget"] = [
+        entry for entry in value.get("sharedBufferBudget", []) if entry["holder"] not in new_holders
+    ]
     post_budget_fields = POST_BASELINE_SHARED_BUFFER_FIELDS.get(name, {})
     added_budget = []
     for entry in value.get("sharedBufferBudget", []):
@@ -531,20 +559,107 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
         if len(declarations) != 1 or len(budgets) != 1:
             fail(f"{name}: post-baseline sharedBufferBudget requires exactly one live holder {holder}")
         for field in fields:
+            declared_field = "bufferBytePages" if field == "bytePages" else field
             if (
-                field not in declarations[0]
+                declared_field not in declarations[0]
                 or field not in budgets[0]
-                or budgets[0][field] != declarations[0][field]
+                or budgets[0][field] != declarations[0][declared_field]
             ):
                 fail(
                     f"{name}: post-baseline sharedBufferBudget {holder}.{field} "
                     "does not match the live instance declaration"
                 )
+    check_network_post_baseline(name, derived, system)
     # B91: every pin the derivation emits carries the reason its system spec
     # declared, and that reason is what the derived manifest itself implies. The
     # builder's own predicate is reused rather than restated, so this gate cannot
     # disagree with the product build about which label is correct.
     BUILDER.validate_slot_reasons(source, f"{name} derived manifest")
+
+
+def check_network_post_baseline(name: str, derived: dict, system) -> None:
+    """Only the enumerated network stack and IO0 provisioning changes are lifted."""
+    if name not in POST_BASELINE_EXECUTABLE_FIELDS:
+        return
+
+    def exact(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            fail(f"{name}: network post-baseline {label}: {actual!r} != {expected!r}")
+
+    placements = [entry for entry in system.spec["placements"]
+                  if entry["component"] == "network-service"]
+    exact("network-service placement count", len(placements), 1)
+    resource = COMPONENTS["network-service"]["runtime"]["resource"]
+    stack = placements[0].get("stackBytes", resource["stackBytes"])
+    exact("declared stackBytes", stack, 131072)
+    exact("derived stackBytes", [entry.get("stackBytes") for entry in derived["executables"]
+                                if entry["name"] == "network-service"], [stack])
+    if name != "sel4-io-tcp":
+        return
+    lifecycle_policy = {
+        "initialState": "Initialize", "terminalState": "Error",
+        "transitions": [{"from": "Initialize", "to": "Running"}, {"from": "Running", "to": "Error"}],
+        "restarts": [], "dependencies": [],
+        "parameters": [{"holder": "network-service", "subject": "network-service", "read": True, "write": True}],
+    }
+    exact("declared lifecycle policy", system.spec.get("lifecyclePolicy"), lifecycle_policy)
+    exact("derived lifecycle policy", derived.get("lifecyclePolicy"), lifecycle_policy)
+    exact("derived lifecycle resource", [entry for entry in derived["objects"]
+          if entry["id"] == "lifecycle-policy"],
+          [{"id": "lifecycle-policy", "kind": "resource", "size": 4096}])
+    application_rows = [{
+        "holder": "io-tcp-probe", "controlBinding": "network-tcp-probe-service",
+        "provisionBinding": "network-tcp-probe-provision", "supervisionBinding": "",
+        "requestNotification": "", "completionNotification": "", "role": "client",
+        "backend": "external", "localAddress": "0.0.0.0", "localPort": 0,
+        "admittedPeer": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
+        "byteBudget": 0, "timerBudget": 0, "queueDepth": 0, "retryLimit": 0,
+        "reconnectLimit": 0,
+    }]
+    exact("declared applications", system.spec.get("networkApplications"), application_rows)
+    exact("declared application resource", system.spec.get("networkApplicationsObject"), True)
+    exact("derived applications", derived.get("networkApplications"), application_rows)
+    exact("derived application resource", [entry for entry in derived["objects"]
+          if entry["id"] == "network-application"],
+          [{"id": "network-application", "kind": "resource", "size": 4096}])
+    expected_grant = {
+        "name": "network-tcp-probe-provision", "capabilityKind": "endpoint",
+        "source": "network-service", "target": "io-tcp-probe",
+        "rights": ["send", "recv"], "transferable": True,
+    }
+    for label, grants in (("declared", system.spec["grants"]), ("derived", derived["grants"])):
+        exact(f"{label} provisioning grant",
+              [entry for entry in grants if entry["name"] == expected_grant["name"]],
+              [expected_grant])
+        exact(f"{label} nontransferable control",
+              [entry["transferable"] for entry in grants
+               if entry["name"] == "network-tcp-probe-service"], [False])
+    pins = [("io-tcp-probe", 1, "componentAbi"), ("network-service", 30, "allocatorOrder")]
+    for holder, slot, reason in pins:
+        exact(f"declared provisioning pin {holder}",
+              [entry for entry in system.spec["slotPins"]
+               if entry["holder"] == holder and entry["grant"] == expected_grant["name"]],
+              [{"holder": holder, "grant": expected_grant["name"], "slot": slot, "reason": reason}])
+    exact("derived provisioning bindings", sorted(
+        (instance["name"], binding["slot"], binding.get("slotReason"))
+        for instance in derived["instances"] for binding in instance["bindings"]
+        if binding["grant"] == expected_grant["name"]), pins)
+    budget_fields = {"bytePages": "bufferBytePages", "bufferCount": "bufferCount",
+                     "mappingCount": "mappingCount", "loanCount": "loanCount"}
+    instances = resolved_instances(system.spec)
+    for holder, amounts in (("network-service", (12, 12, 12, 12)),
+                            ("io-tcp-probe", (0, 0, 2, 2))):
+        expected = {"holder": holder, **dict(zip(budget_fields, amounts, strict=True))}
+        declarations = [entry for entry in instances if entry["name"] == holder]
+        exact(f"declared budget holder {holder}", len(declarations), 1)
+        defaults = COMPONENTS[holder]["runtime"]["resource"]
+        declared = {"holder": holder, **{field: declarations[0].get(key, defaults[key])
+                                        for field, key in budget_fields.items()}}
+        exact(f"declared buffer budget {holder}", declared, expected)
+        exact(f"derived buffer budget {holder}",
+              [entry for entry in derived["sharedBufferBudget"] if entry["holder"] == holder],
+              [expected])
+    BUILDER.build_network_applications(derived)
 
 
 def first_difference(left: object, right: object, label: str) -> str:
@@ -559,6 +674,164 @@ def first_difference(left: object, right: object, label: str) -> str:
             if left.get(key) != right.get(key):
                 return first_difference(left.get(key), right.get(key), f"{label}.{key}")
     return f"{label}: {left!r} != {right!r}"
+
+
+def network_application_controls(source: dict) -> int:
+    """Exercise the production application encoder independently of fixtures."""
+    import boot_contracts as wire
+
+    manifest = copy.deepcopy(source)
+    client = {
+        "holder": "io-tcp-probe", "controlBinding": "network-tcp-probe-service",
+        "provisionBinding": "network-tcp-probe-provision", "supervisionBinding": "",
+        "requestNotification": "", "completionNotification": "", "role": "client",
+        "backend": "loopback", "localAddress": "0.0.0.0", "localPort": 0,
+        "admittedPeer": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
+        "byteBudget": 0, "timerBudget": 0, "queueDepth": 0, "retryLimit": 0,
+        "reconnectLimit": 0,
+    }
+    listener = dict(client, holder="io-network-intruder", controlBinding="local-control",
+                    provisionBinding="local-provision", role="listener", localAddress="127.0.0.1",
+                    localPort=8080, admittedPeer="io-tcp-probe", rights=["listen", "send", "recv"],
+                    backlog=1, acceptedSocketLimit=1, byteBudget=4096, timerBudget=1, queueDepth=4)
+    manifest["networkApplications"] = [client, listener]
+    for name, transferable in (("local-control", False), ("local-provision", True)):
+        manifest["grants"].append({"name": name, "capabilityKind": "endpoint",
+                                   "source": "network-service", "target": "io-network-intruder",
+                                   "rights": ["send", "recv"], "transferable": transferable})
+    encoded = BUILDER.build_network_applications(manifest)
+    expected_length = wire.NETWORK_APPLICATION_HEADER_BYTES + 2 * wire.NETWORK_APPLICATION_ENTRY_BYTES
+    header = wire.NETWORK_APPLICATION_HEADER.unpack_from(encoded)
+    if header != (wire.NETWORK_APPLICATION_MAGIC, wire.NETWORK_APPLICATION_FORMAT_VERSION,
+                  wire.NETWORK_APPLICATION_HEADER_BYTES, 0, 2, expected_length) or len(encoded) != expected_length:
+        fail("network application encoder changed exact generated header or entry bounds")
+    identities = [wire.NETWORK_APPLICATION_ENTRY.unpack_from(
+        encoded, wire.NETWORK_APPLICATION_HEADER_BYTES + index * wire.NETWORK_APPLICATION_ENTRY_BYTES)[0]
+        for index in range(2)]
+    if identities != sorted(set(identities)):
+        fail("network application encoder did not emit strictly ordered holders")
+    reverse = copy.deepcopy(manifest)
+    reverse["networkApplications"].reverse()
+    if BUILDER.build_network_applications(reverse) != encoded:
+        fail("network application encoding depends on authoring row order")
+
+    refused = 0
+
+    def reject(label: str, mutate, reason: str) -> None:
+        nonlocal refused
+        altered = copy.deepcopy(manifest)
+        mutate(altered)
+        try:
+            BUILDER.build_network_applications(altered)
+        except SystemExit as error:
+            if reason not in str(error):
+                fail(f"network application {label} refused at wrong boundary: {error}")
+        else:
+            fail(f"network application accepted {label}")
+        refused += 1
+
+    for field, value, reason in (
+        ("holder", "missing", "holder is not a distinct admitted instance"),
+        ("controlBinding", "missing", "controlBinding is not an exclusive"),
+        ("provisionBinding", "missing", "provisionBinding is not an exclusive"),
+        ("controlBinding", "", "invalid controlBinding"),
+        ("provisionBinding", "A", "invalid provisionBinding"),
+        ("controlBinding", "x" * (wire.NETWORK_APPLICATION_BINDING_BYTES + 1), "invalid controlBinding"),
+        ("supervisionBinding", "missing", "supervision is not a declared"),
+        ("requestNotification", "request", "notification bindings must be paired"),
+        ("role", "unknown", "unknown role or backend"),
+        ("backend", "unknown", "unknown role or backend"),
+        ("rights", ["listen"], "client row carries listener authority"),
+        ("localPort", True, "invalid numeric bound"),
+        ("byteBudget", 1, "client row carries listener authority"),
+    ):
+        reject(f"client {field}={value!r}",
+               lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][0].update({field: value}), reason)
+    for grant_name in ("network-tcp-probe-service", "network-tcp-probe-provision"):
+        for field, value in (("target", "init"), ("capabilityKind", "supervision"),
+                             ("rights", ["send"]), ("transferable", grant_name.endswith("service"))):
+            reject(f"{grant_name}.{field}",
+                   lambda value_manifest, field=field, value=value, grant_name=grant_name:
+                   next(entry for entry in value_manifest["grants"] if entry["name"] == grant_name).update({field: value}),
+                   "is not an exclusive declared endpoint with exact rights")
+    reject("duplicate application holder", lambda value: value["networkApplications"].append(
+        copy.deepcopy(value["networkApplications"][0])), "duplicate holder")
+    reject("reused control grant", lambda value: value["networkApplications"][1].update(
+        controlBinding="network-tcp-probe-service"), "controlBinding is not an exclusive")
+    reject("missing service", lambda value: value.update(instances=[entry for entry in value["instances"]
+           if entry["name"] != "network-service"]), "missing service instance")
+    reject("unbound notifications", lambda value: value["networkApplications"][0].update(
+        requestNotification="request", completionNotification="complete"), "requestNotification is not the declared")
+    for field, value, reason in (
+        ("admittedPeer", "missing", "admitted peer is not a distinct declared local client"),
+        ("admittedPeer", "io-network-intruder", "admitted peer is not a distinct declared local client"),
+        ("localAddress", "0.0.0.0", "not an exact authorized loopback endpoint"),
+        ("localAddress", "127.0.0.2", "not an exact authorized loopback endpoint"),
+        ("localAddress", "127.*", "invalid local IPv4 address"),
+        ("localPort", 0, "not an exact authorized loopback endpoint"),
+        ("localPort", 65536, "not an exact authorized loopback endpoint"),
+        ("backend", "external", "not an exact authorized loopback endpoint"),
+        ("rights", ["send"], "not an exact authorized loopback endpoint"),
+        ("rights", ["listen", "listen"], "unknown or duplicate right"),
+        ("rights", ["connect"], "unknown or duplicate right"),
+        ("backlog", 2, "listener bounds exceed contract"),
+        ("acceptedSocketLimit", 0, "listener bounds exceed contract"),
+        ("acceptedSocketLimit", 5, "listener bounds exceed contract"),
+        ("byteBudget", 4095, "listener bounds exceed contract"),
+        ("byteBudget", 16385, "listener bounds exceed contract"),
+        ("timerBudget", 0, "listener bounds exceed contract"),
+        ("timerBudget", 5, "listener bounds exceed contract"),
+        ("queueDepth", 1, "listener bounds exceed contract"),
+        ("queueDepth", 3, "listener bounds exceed contract"),
+        ("retryLimit", 17, "listener bounds exceed contract"),
+        ("reconnectLimit", 17, "listener bounds exceed contract"),
+    ):
+        reject(f"listener {field}={value!r}",
+               lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][1].update({field: value}), reason)
+    fan_in = copy.deepcopy(manifest)
+    fan_in["networkApplications"][0].update(requestNotification="app-requests", completionNotification="client-complete")
+    fan_in["notificationGrants"] = [
+        {"name": "app-requests", "source": "io-network-intruder", "target": "network-service"},
+        {"name": "client-complete", "source": "network-service", "target": "io-tcp-probe"},
+    ]
+    fan_in["notificationBindings"] = [
+        {"grant": "app-requests", "holder": "io-network-intruder", "role": "signal"},
+        {"grant": "app-requests", "holder": "io-tcp-probe", "role": "signal"},
+        {"grant": "app-requests", "holder": "network-service", "role": "wait"},
+        {"grant": "client-complete", "holder": "network-service", "role": "signal"},
+        {"grant": "client-complete", "holder": "io-tcp-probe", "role": "wait"},
+    ]
+    BUILDER.build_network_applications(fan_in)
+    for binding_index in range(1, len(fan_in["notificationBindings"])):
+        altered = copy.deepcopy(fan_in)
+        del altered["notificationBindings"][binding_index]
+        try:
+            BUILDER.build_network_applications(altered)
+        except SystemExit as error:
+            if "is not the declared notification edge" not in str(error):
+                fail(f"network application fan-in refused at wrong boundary: {error}")
+        else:
+            fail(f"network application accepted missing fan-in binding {binding_index}")
+        refused += 1
+    duplicate_listener = copy.deepcopy(manifest)
+    duplicate_listener["instances"].append({"name": "local-second-listener"})
+    duplicate_listener["networkApplications"].append(dict(
+        listener, holder="local-second-listener", controlBinding="second-control", provisionBinding="second-provision"))
+    for name, transferable in (("second-control", False), ("second-provision", True)):
+        duplicate_listener["grants"].append({"name": name, "capabilityKind": "endpoint",
+                                            "source": "network-service", "target": "local-second-listener",
+                                            "rights": ["send", "recv"], "transferable": transferable})
+    try:
+        BUILDER.build_network_applications(duplicate_listener)
+    except SystemExit as error:
+        if "duplicate listener endpoint" not in str(error):
+            fail(f"network application duplicate endpoint refused at wrong boundary: {error}")
+    else:
+        fail("network application accepted two holders with the same listener endpoint")
+    refused += 1
+    duplicate_listener["networkApplications"][-1]["localPort"] += 1
+    BUILDER.build_network_applications(duplicate_listener)
+    return refused
 
 
 def computed_source_controls(components: dict[str, dict]) -> int:
@@ -1244,6 +1517,153 @@ for name, holder, field in (
     if split_post_baseline(altered, name)[0] == split_post_baseline(loan_manifest, name)[0]:
         fail(f"post-baseline exception concealed unrelated {name}/{holder}.{field} drift")
     refusals += 1
+
+# Network exceptions must reject both derivation drift and changes to their
+# independently pinned live declarations, while retaining all unrelated facts.
+network_name = "sel4-io-tcp"
+network_system = systems[network_name]
+network_manifest = normalized(derive_manifest(network_system))
+network_cases = (
+    ("stack", "executables", "name", "network-service", "stackBytes", 262144),
+    ("provision rights", "grants", "name", "network-tcp-probe-provision", "rights", ["send"]),
+    ("control transfer", "grants", "name", "network-tcp-probe-service", "transferable", True),
+    ("service pages", "sharedBufferBudget", "holder", "network-service", "bytePages", 13),
+    ("client mapping", "sharedBufferBudget", "holder", "io-tcp-probe", "mappingCount", 3),
+)
+for label, section, key, identity, field, value in network_cases:
+    altered = copy.deepcopy(network_manifest)
+    next(entry for entry in altered[section] if entry[key] == identity)[field] = value
+    try:
+        check_network_post_baseline(network_name, altered, network_system)
+    except SystemExit as error:
+        if "network post-baseline" not in str(error):
+            raise
+    else:
+        fail(f"network post-baseline accepted {label} drift")
+    refusals += 1
+
+for mutation in ("missing grant", "missing budget", "duplicate budget", "pin", "live grant", "live budget"):
+    altered = copy.deepcopy(network_manifest)
+    altered_system = copy.deepcopy(network_system)
+    if mutation == "missing grant":
+        altered["grants"] = [entry for entry in altered["grants"]
+                             if entry["name"] != "network-tcp-probe-provision"]
+    elif mutation == "missing budget":
+        altered["sharedBufferBudget"] = [entry for entry in altered["sharedBufferBudget"]
+                                         if entry["holder"] != "io-tcp-probe"]
+    elif mutation == "duplicate budget":
+        altered["sharedBufferBudget"].append(copy.deepcopy(next(
+            entry for entry in altered["sharedBufferBudget"] if entry["holder"] == "io-tcp-probe")))
+    elif mutation == "pin":
+        next(binding for instance in altered["instances"] if instance["name"] == "network-service"
+             for binding in instance["bindings"] if binding["grant"] == "network-tcp-probe-provision")["slot"] = 29
+    elif mutation == "live grant":
+        next(entry for entry in altered_system.spec["grants"]
+             if entry["name"] == "network-tcp-probe-provision")["transferable"] = False
+    else:
+        next(entry for entry in altered_system.spec["placements"]
+             if entry["component"] == "io-tcp-probe")["loanCount"] = 3
+    try:
+        check_network_post_baseline(network_name, altered, altered_system)
+    except SystemExit as error:
+        if "network post-baseline" not in str(error):
+            raise
+    else:
+        fail(f"network post-baseline accepted {mutation}")
+    refusals += 1
+
+for name, section, key, identity, field in (
+    (network_name, "executables", "name", "io-tcp-probe", "stackBytes"),
+    (network_name, "executables", "name", "network-service", "spawnBudget"),
+    (network_name, "sharedBufferBudget", "holder", "network-service", "mappingCount"),
+    (network_name, "grants", "name", "network-tcp-probe-service", "transferable"),
+    ("sel4-io-network", "sharedBufferBudget", "holder", "network-service", "loanCount"),
+    ("sel4-product", "executables", "name", "network-service", "stackBytes"),
+):
+    altered = copy.deepcopy(network_manifest)
+    entry = next(entry for entry in altered[section] if entry[key] == identity)
+    entry[field] = 999
+    if split_post_baseline(altered, name)[0] == split_post_baseline(network_manifest, name)[0]:
+        fail(f"network post-baseline concealed unrelated {name}/{identity}.{field} drift")
+    refusals += 1
+
+for mutation in ("missing application", "changed application", "missing object", "changed object", "live resource"):
+    altered = copy.deepcopy(network_manifest)
+    altered_system = copy.deepcopy(network_system)
+    if mutation == "missing application":
+        del altered["networkApplications"]
+    elif mutation == "changed application":
+        altered["networkApplications"][0]["backend"] = "loopback"
+    elif mutation == "missing object":
+        altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "network-application"]
+    elif mutation == "changed object":
+        next(entry for entry in altered["objects"] if entry["id"] == "network-application")["size"] = 8192
+    else:
+        altered_system.spec["networkApplicationsObject"] = False
+    try:
+        check_network_post_baseline(network_name, altered, altered_system)
+    except SystemExit as error:
+        if "network post-baseline" not in str(error):
+            raise
+    else:
+        fail(f"network post-baseline accepted {mutation}")
+    refusals += 1
+for section in ("networkApplications", "objects"):
+    altered = copy.deepcopy(network_manifest)
+    if section == "networkApplications":
+        altered[section][0]["backend"] = "loopback"
+    else:
+        next(entry for entry in altered[section] if entry["id"] == "network-application")["size"] = 8192
+    if split_post_baseline(altered, "sel4-io-network")[0] == split_post_baseline(network_manifest, "sel4-io-network")[0]:
+        fail(f"network application exception concealed another system's {section}")
+    refusals += 1
+
+for mutation in ("foreign holder", "foreign subject", "read-only", "added dependency", "missing policy", "missing lifecycle object"):
+    altered = copy.deepcopy(network_manifest)
+    if mutation == "missing policy":
+        del altered["lifecyclePolicy"]
+    elif mutation == "missing lifecycle object":
+        altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "lifecycle-policy"]
+    elif mutation == "added dependency":
+        altered["lifecyclePolicy"]["dependencies"].append({"subject": "init", "dependsOn": "network-service"})
+    else:
+        key, value = {"foreign holder": ("holder", "io-tcp-probe"),
+                      "foreign subject": ("subject", "io-tcp-probe"), "read-only": ("write", False)}[mutation]
+        altered["lifecyclePolicy"]["parameters"][0][key] = value
+    try:
+        check_network_post_baseline(network_name, altered, network_system)
+    except SystemExit as error:
+        if "network post-baseline" not in str(error):
+            raise
+    else:
+        fail(f"network post-baseline accepted lifecycle {mutation}")
+    refusals += 1
+for section in ("lifecyclePolicy", "objects"):
+    altered = copy.deepcopy(network_manifest)
+    if section == "lifecyclePolicy":
+        altered[section]["parameters"][0]["write"] = False
+    else:
+        next(entry for entry in altered[section] if entry["id"] == "lifecycle-policy")["size"] = 8192
+    if split_post_baseline(altered, "sel4-io-network")[0] == split_post_baseline(network_manifest, "sel4-io-network")[0]:
+        fail(f"network lifecycle exception concealed another system's {section}")
+    refusals += 1
+
+refusals += network_application_controls(derive_manifest(systems["sel4-io-tcp"]))
+
+parameter_instance = {"name": "network-service", "bindings": []}
+parameter_executable = {"role": "service", "spawnBudget": 0}
+base_services = {BUILDER.SERVICE_LIFECYCLE, BUILDER.SERVICE_CONSOLE}
+for parameter_holders, expected in (
+    (frozenset(), base_services),
+    (frozenset({"other"}), base_services),
+    (frozenset({"network-service"}), base_services | {BUILDER.SERVICE_SUPERVISION}),
+):
+    actual = BUILDER.declared_services(parameter_instance, parameter_executable, {}, [], set(), set(), parameter_holders)
+    if actual != expected:
+        fail(f"parameter transport declaration widened or omitted services: {actual} != {expected}")
+    refusals += 1
+if BUILDER.declared_services(parameter_instance, parameter_executable, {}, [], set(), set()) != base_services:
+    fail("absent parameter declarations implicitly granted supervision transport")
 
 print(
     f"system spec derivation: {len(systems)} systems compiled and "
