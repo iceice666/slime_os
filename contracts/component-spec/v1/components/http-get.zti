@@ -1,0 +1,59 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "none";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [];
+  formatVersion = 1;
+  health = "optional";
+  implementation = {
+    binary = "http-get";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "http-get";
+  owner = "root";
+  provides = [];
+  purpose = "Performs one bounded launch-supplied native HTTP GET through declared NetworkIo authority and streams binary body records with explicit completion and cleanup.";
+  requires = [
+    "endpoint";
+  ];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 65536;
+    };
+  };
+  test = {
+    testCondition = "io_http_check boots sel4-http";
+    expectedResult = "bounded native HTTP completion and explicit cleanup with independently observed host-server traffic";
+    passFailCriteria = "[http-get] cleanup close=1 detach=1";
+    requiredTestEnvironment = "io_http_check";
+  };
+  version = "1.0.0";
+}

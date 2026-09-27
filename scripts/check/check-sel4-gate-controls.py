@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import sys as _sys
 import tempfile
 from collections.abc import Callable
@@ -29,7 +30,7 @@ from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 # silently weaken a gate. Boot-layout fixture equality is controlled separately.
 GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
-    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 105),
+    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 114),
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 109),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
@@ -377,6 +378,118 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
     return evaluated + len(failures)
 
 
+def check_http_evidence_controls() -> int:
+    """Body equality, byte accounting and cleanup cannot be replaced by markers."""
+    gate = load_script("sel4_http_evidence_controls", "check/check-sel4-io-network-plane.py")
+    case = gate.http_peer.cases()[0]
+    body = "".join(
+        "[http-get] body hex=" + case.body[offset:offset + 64].hex() + "\n"
+        for offset in range(0, len(case.body), 64)
+    )
+    cleanup = "[http-get] cleanup close=1 detach=1\n"
+    completion = f"[http-get] complete success=1 status=200 bytes={len(case.body)} error=none\n"
+    baseline = body + cleanup + completion
+    if gate.check_http_body(baseline, case) != (200, len(case.body)):
+        fail("HTTP validator rejected its independent body baseline")
+    mutations = (
+        ("wrong body", baseline.replace("hex=0b", "hex=0c", 1)),
+        ("wrong byte count", baseline.replace("bytes=12289", "bytes=12288")),
+        ("missing cleanup", baseline.replace(cleanup, "")),
+        ("failed cleanup", baseline.replace("detach=1", "detach=0")),
+        ("missing completion", baseline.replace(completion, "")),
+        ("duplicate completion", baseline + completion),
+        ("body after completion", baseline + body),
+        ("completion before cleanup", body + completion + cleanup),
+        ("odd hex body", baseline.replace("hex=0b", "hex=b", 1)),
+        ("oversized body record", "[http-get] body hex=" + "aa" * 65 + "\n" + cleanup + completion),
+        ("false success", baseline.replace("success=1", "success=0")),
+        ("wrong status", baseline.replace("status=200", "status=404")),
+    )
+    for description, transcript in mutations:
+        try:
+            gate.check_http_body(transcript, case)
+        except SystemExit:
+            continue
+        fail(f"HTTP evidence accepted {description}")
+    failure_case = next(case for case in gate.http_peer.cases() if case.name == "url-scheme")
+    aborted = "[http-get] cleanup close=0 detach=1 abort=1\n[http-get] complete success=0 status=0 bytes=0 error=url\n"
+    gate.check_http_body(aborted, failure_case)
+    for bad in (aborted.replace("detach=1", "detach=0"), aborted.replace(" abort=1", ""), aborted.replace("error=url", "error=none")):
+        try:
+            gate.check_http_body(bad, failure_case)
+        except SystemExit:
+            continue
+        fail("HTTP abort evidence accepted absent/failed abort acknowledgment")
+    count = len(mutations) + 3
+    print(f"seL4 gate control check: HTTP body/status/cleanup rejected {count} mutations")
+    return count
+
+
+def check_http_capture_controls() -> int:
+    """Synthetic packets test the observer; only QEMU qualifies actual HTTP."""
+    gate = load_script("sel4_http_capture_controls", "check/check-sel4-io-network-plane.py")
+    peer, capture = gate.link_peer, gate.http_capture
+    guest, server = bytes([10, 0, 2, 15]), bytes([10, 0, 2, 2])
+    query = b"\x12\x34\x01\x00\x00\x01\0\0\0\0\0\0\x07example\x04test\0\0\x01\0\x01"
+
+    def frame(source: bytes, destination: bytes, protocol: int, payload: bytes) -> bytes:
+        return peer.ethernet(b"\x52\x54\0\0\0\x02", b"\x52\x54\0\0\0\x01", 0x0800,
+                             peer.ipv4(source, destination, protocol, payload))
+
+    def udp(source: bytes, destination: bytes, source_port: int, destination_port: int, packet: bytes) -> bytes:
+        return frame(source, destination, 17, struct.pack("!HHHH", source_port, destination_port, 8 + len(packet), 0) + packet)
+
+    outgoing = udp(guest, server, 53000, 1053, query)
+    syn = frame(guest, server, 6, peer.tcp(guest, server, 54000, 18080, 123, 0, peer.TCP_SYN))
+
+    def encoded(frames: list[bytes], endian: str = "<") -> bytes:
+        return struct.pack(endian + "IHHiiII", 0xA1B2C3D4, 2, 4, 0, 0, 65536, 1) + b"".join(
+            struct.pack(endian + "IIII", index + 1, 0, len(packet), len(packet)) + packet
+            for index, packet in enumerate(frames)
+        )
+
+    def verify(data: bytes, *, connect: bool = True):
+        return capture.verify_capture(data, hostname="example.test", resolver=("10.0.2.2", 1053),
+                                      port=18080, expected_destination="10.0.2.2", expect_connect=connect)
+
+    for mode in ("a", "cname"):
+        answer = gate.http_peer.dns_response(query, query[12:], mode)
+        incoming = udp(server, guest, 1053, 53000, answer)
+        for endian in ("<", ">"):
+            verify(encoded([outgoing, incoming, syn], endian))
+    normal = gate.http_peer.dns_response(query, query[12:], "a")
+    incoming = udp(server, guest, 1053, 53000, normal)
+    mutations = [
+        b"", encoded([]), encoded([outgoing, incoming, syn])[:-1],
+        encoded([outgoing, incoming, syn]) + b"x", encoded([outgoing, syn]),
+        encoded([incoming, outgoing, syn]),
+        encoded([outgoing, udp(server, guest, 1054, 53000, normal), syn]),
+        encoded([outgoing, udp(server, guest, 1053, 53001, normal), syn]),
+    ]
+    for mode in ("nxdomain", "truncated", "loop", "mismatched-id", "forbidden", "wrong-question", "excessive-records", "excessive-aliases", "zero-ttl"):
+        answer = udp(server, guest, 1053, 53000, gate.http_peer.dns_response(query, query[12:], mode))
+        verify(encoded([outgoing, answer]), connect=False)
+        mutations.append(encoded([outgoing, answer, syn]))
+    capture.verify_capture(encoded([]), hostname=None, resolver=("10.0.2.2", 1053), port=18080,
+                           expect_connect=False, expect_no_application_traffic=True)
+    for data in mutations:
+        try:
+            verify(data)
+        except ValueError:
+            continue
+        fail("HTTP packet observer accepted corrupted or unbound DNS/TCP evidence")
+    for data in (encoded([outgoing]), encoded([syn]), encoded([])[:-1]):
+        try:
+            capture.verify_capture(data, hostname=None, resolver=("10.0.2.2", 1053), port=18080,
+                                   expect_connect=False, expect_no_application_traffic=True)
+        except ValueError:
+            continue
+        fail("HTTP no-application-traffic control accepted packets or a malformed capture")
+    count = len(mutations) + 3
+    print(f"seL4 gate control check: independent HTTP/DNS packet observer rejected {count} mutations")
+    return count
+
+
 def check_root_memory_runtime_control() -> int:
     """A larger launcher alone cannot manufacture kernel-visible high RAM.
 
@@ -677,6 +790,11 @@ signal.signal(signal.SIGTERM, stop)
 mode = os.environ["SLIME_QEMU_CONTROL_MODE"]
 if mode == "terminal":
     print("SLIME CONTROL TERMINAL", flush=True)
+elif mode == "input":
+    print("SLIME CONTROL READY", flush=True)
+    if sys.stdin.readline() != "private launch control\\n":
+        raise SystemExit(9)
+    print("SLIME CONTROL TERMINAL", flush=True)
 elif mode == "failure":
     print("SLIME CONTROL EARLY FAILURE", flush=True)
     raise SystemExit(7)
@@ -734,7 +852,7 @@ memory_mib = 64
     )
     terminal = re.compile(r"SLIME CONTROL TERMINAL")
 
-    def run(mode: str, timeout: int) -> str:
+    def run(mode: str, timeout: int, *, launch_input: bool = False) -> str:
         pid_path = root / f"{mode}.pid"
         stop_path = root / f"{mode}.stopped"
         try:
@@ -752,16 +870,27 @@ memory_mib = 64
                     fail=reject_control,
                     pins_path=pins,
                     cwd=root,
+                    input_trigger=re.compile("SLIME CONTROL READY") if launch_input else None,
+                    input_text="private launch control\n" if launch_input else None,
+                    input_character_delay=0,
                 ),
             )
             return str(result)
         finally:
-            if mode in {"terminal", "timeout"} and pid_path.is_file():
+            if mode in {"terminal", "timeout", "input"} and pid_path.is_file():
                 require_stopped(pid_path, stop_path, f"{mode} runtime control")
 
     transcript = run("terminal", 2)
     if "SLIME CONTROL TERMINAL" not in transcript:
         fail("terminal runtime control returned no terminal evidence")
+    transcript = run("input", 2, launch_input=True)
+    if transcript != "SLIME CONTROL READY\nSLIME CONTROL TERMINAL":
+        fail("launch input was not readiness-gated or leaked into the transcript")
+    require_rejection(
+        "missing launch readiness control",
+        "without accepting launch input",
+        lambda: run("terminal", 2, launch_input=True),
+    )
 
     require_rejection(
         "timeout runtime control",
@@ -798,9 +927,10 @@ memory_mib = 64
 
     print(
         "seL4 gate control check: runtime returned terminal evidence and rejected "
-        "timeout, early process failure/success, and missing QEMU"
+        "timeout, early process failure/success, missing QEMU and missing launch readiness; "
+        "readiness-gated input was not logged"
     )
-    return 5
+    return 7
 
 
 def capacity_workload_transcript() -> str:
@@ -2662,6 +2792,8 @@ def main() -> None:
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
     total += check_root_memory_runtime_control()
+    total += check_http_evidence_controls()
+    total += check_http_capture_controls()
     total += check_layout_gate()
     total += check_private_memory_capacity_controls()
     with tempfile.TemporaryDirectory(prefix="slime-sel4-gate-controls-") as temporary:

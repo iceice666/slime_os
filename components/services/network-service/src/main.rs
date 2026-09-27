@@ -21,8 +21,10 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
 mod application;
+mod dns;
 mod link;
 mod loopback;
+mod resolver;
 mod tcp;
 use link::Link;
 
@@ -243,7 +245,8 @@ fn main(_: u32) {
     let mut observed = Observed::default();
 
     let mut stack = attach_stack();
-    let mut socket_storage: [SocketStorage; tcp::SOCKETS] = [SocketStorage::EMPTY; tcp::SOCKETS];
+    let mut socket_storage: [SocketStorage; tcp::SOCKETS + 1] =
+        [SocketStorage::EMPTY; tcp::SOCKETS + 1];
     // SAFETY: each engine exclusively borrows its own arena for this service lifetime.
     let rx_storage = unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_RX) };
     let tx_storage = unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_TX) };
@@ -254,6 +257,23 @@ fn main(_: u32) {
     };
     let mut engine = tcp::Engine::new(&mut socket_storage, rx_storage, tx_storage, incarnation, 0)
         .unwrap_or_else(|_| fail(b"external engine incarnation"));
+    let mut dns_rx = [0; resolver::BUFFER_BYTES];
+    let mut dns_tx = [0; resolver::BUFFER_BYTES];
+    let mut dns_rx_meta = [smoltcp::socket::udp::PacketMetadata::EMPTY];
+    let mut dns_tx_meta = [smoltcp::socket::udp::PacketMetadata::EMPTY];
+    if let Some(seed) = dns_seed() {
+        engine
+            .enable_dns(
+                &destinations,
+                seed,
+                &mut dns_rx_meta,
+                &mut dns_rx,
+                &mut dns_tx_meta,
+                &mut dns_tx,
+            )
+            .unwrap_or_else(|_| fail(b"DNS resolver authority"));
+        debug_write(b"[network-service] DNS seed admitted source=launch resolver=declared\n");
+    }
     let mut local_storage: [SocketStorage; tcp::SOCKETS] = [SocketStorage::EMPTY; tcp::SOCKETS];
     // SAFETY: disjoint from the external engine and borrowed only by this main.
     let local_rx = unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_RX) };
@@ -458,6 +478,30 @@ fn main(_: u32) {
                             client.closed = true;
                             (0, network_service::CAPABILITY_NONE, 0)
                         }
+                        Some(request)
+                            if client.provision.is_some()
+                                && slime_proto::valid_network_abort(&request) =>
+                        {
+                            // The control endpoint fixes the holder. No application
+                            // view survives release, including an abandoned completion.
+                            engine.release_holder(client.holder);
+                            local_engine.release_holder(client.holder);
+                            let released = if let Some(application) = applications[index].take() {
+                                if !application.release() {
+                                    fail(b"application abort release");
+                                }
+                                1
+                            } else {
+                                0
+                            };
+                            write_number(
+                                b"[network-service] application aborted sessions_released=",
+                                released,
+                            );
+                            debug_write(b"\n");
+                            client.closed = true;
+                            (0, network_service::CAPABILITY_NONE, 0)
+                        }
                         Some(_) if client.provision.is_some() => {
                             (STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0)
                         }
@@ -488,6 +532,10 @@ fn main(_: u32) {
         if let Some(stack) = stack.as_mut().filter(|stack| stack.active) {
             progress |= stack.link.drain();
             let now = stack.now();
+            engine.advance_dns(&destinations, &mut stack.iface, now);
+            if let Some(observation) = engine.take_dns_observation() {
+                report_dns(observation);
+            }
             engine.tick(now);
             progress |= stack.iface.poll(now, &mut stack.link, engine.sockets())
                 == PollResult::SocketStateChanged;
@@ -830,6 +878,55 @@ fn read_applications(
         NetworkApplications::decode(&object[..total])
             .unwrap_or_else(|_| fail(b"application resource decode")),
     )
+}
+
+fn report_dns(observation: tcp::DnsObservation) {
+    for address in &observation.addresses[..observation.count] {
+        debug_write(b"[network-service] DNS name=");
+        debug_write(&observation.name[..observation.name_len]);
+        debug_write(b" answer=");
+        write_ipv4(*address);
+        write_number(b" ttl=", u64::from(observation.ttl_seconds));
+        debug_write(b"\n");
+    }
+    debug_write(b"[network-service] DNS name=");
+    debug_write(&observation.name[..observation.name_len]);
+    debug_write(b" selected=");
+    write_ipv4(observation.selected);
+    write_number(b" port=", u64::from(observation.port));
+    write_number(b" attempt=", observation.attempt as u64);
+    debug_write(b"\n");
+}
+
+fn dns_seed() -> Option<[u8; 32]> {
+    let slot = resolve_binding(b"http-launch-service").ok()?;
+    let rate = monotonic_frequency().ok()?;
+    let start = monotonic_read().ok()?;
+    let deadline = start.checked_add(rate.checked_mul(10)?)?;
+    loop {
+        let mut bytes = [0; MAX_MSG];
+        let mut caps = [0; MAX_CAPS_PER_MSG];
+        match slime_rt::recv(slot, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => {
+                if monotonic_read().ok()? >= deadline {
+                    return None;
+                }
+                yield_now();
+            }
+            size if size == network_service::LAUNCH_BYTES as i64 => {
+                let frame = network_service::WireNetworkLaunch::decode(&bytes[..size as usize])?;
+                if !slime_proto::valid_network_launch(&frame)
+                    || frame.kind != network_service::LAUNCH_SEED
+                    || frame.payload[..32].iter().all(|byte| *byte == 0)
+                    || caps.iter().any(|cap| *cap != 0)
+                {
+                    return None;
+                }
+                return frame.payload[..32].try_into().ok();
+            }
+            _ => return None,
+        }
+    }
 }
 
 fn read_interface() -> Option<DeclaredInterface> {

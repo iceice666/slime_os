@@ -16,6 +16,11 @@ completionBytes :: Int = 24;
 maxNameBytes :: Int = 24;
 networkMagic :: Int = 1414745678;
 loanBytes :: Int = 64;
+launchBytes :: Int = 64;
+launchPayloadBytes :: Int = 48;
+launchUrlBytes :: Int = 2048;
+launchSeed :: Int = 1;
+launchUrl :: Int = 2;
 loanRoleRing :: Int = 1;
 loanRoleData :: Int = 2;
 queueSlots :: Int = 4;
@@ -41,6 +46,7 @@ opListen :: Int = 5;
 opAccept :: Int = 6;
 opResolve :: Int = 7;
 opAttach :: Int = 8;
+opAbort :: Int = 9;
 
 transportNone :: Int = 0;
 transportTcp :: Int = 1;
@@ -99,6 +105,25 @@ NetworkLoan :: type {
   reserved : Int;
 };
 
+-- A trusted launcher supplies fresh host entropy only to the service and URL
+-- chunks only to the client. Endpoints, not message fields, grant that authority.
+NetworkLaunch :: type {
+  magic : Int; version : Int; kind : Int; reserved : Int;
+  total_len : Int; offset : Int; length : Int; reserved2 : Int; payload : Int;
+};
+launchSchema ::= schema NetworkLaunch;
+launchLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "kind"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 1; signed = false; byteArray = false; };
+  { name = "total_len"; width = 2; signed = false; byteArray = false; };
+  { name = "offset"; width = 2; signed = false; byteArray = false; };
+  { name = "length"; width = 2; signed = false; byteArray = false; };
+  { name = "reserved2"; width = 2; signed = false; byteArray = true; };
+  { name = "payload"; width = 48; signed = false; byteArray = true; };
+};
+
 loanSchema ::= schema NetworkLoan;
 loanLayout :: List WireField = {
   { name = "magic"; width = 4; signed = false; byteArray = false; };
@@ -145,10 +170,12 @@ protocol ::= {
   maxNameBytes =;
   networkMagic =;
   loanBytes =; loanRoleRing =; loanRoleData =;
+  launchBytes =; launchPayloadBytes =; launchUrlBytes =; launchSeed =; launchUrl =;
+  launchFields = launchSchema.fields ?? {;}; launchLayout =;
   queueSlots =; ringPages =; dataPages =; ringBytes =; dataBytes =;
   statusSuccess =; statusDenied =; statusMalformed =; statusUnsupported =;
   statusWouldBlock =; statusExhausted =; statusRefused =; statusTimeout =; statusReset =;
-  opAttach =;
+  opAttach =; opAbort =;
   loanFields = loanSchema.fields ?? {;};
   loanLayout =;
   opConnect =; opSend =; opRecv =; opClose =; opListen =; opAccept =; opResolve =;
@@ -168,7 +195,8 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
     root := env.get caps.env "SLIME_NETWORK_SERVICE_BINDINGS_ROOT" ?? ".";
     bindings := gen.render protocol;
     path := t.join "" { root; "/components/proto/src/network_service.rs"; };
-    fs.writeAll caps.write path bindings.rust
+    fs.writeAll caps.write path bindings.rust;
+    fs.writeAll caps.write (t.join "" { root; "/network_launch.py"; }) bindings.python
   ];
 
 main

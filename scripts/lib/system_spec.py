@@ -92,6 +92,8 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-filesystem": "sel4-filesystem.zti",
     "sel4-generation": "sel4-generation.zti",
     "sel4-input": "sel4-input.zti",
+    "sel4-http": "sel4-http.zti",
+    "sel4-http-public": "sel4-http-public.zti",
     "sel4-io-block": "sel4-io-block.zti",
     "sel4-io-driver-authority": "sel4-io-driver-authority.zti",
     "sel4-io-link": "sel4-io-link.zti",

@@ -188,10 +188,12 @@ impl Region {
         role: u8,
         base: u64,
         length: usize,
+        deadline: Option<u64>,
     ) -> Result<Self, NetworkError> {
         let mut bytes = [0; MAX_MSG];
         let mut caps = [0; MAX_CAPS_PER_MSG];
         for _ in 0..ANSWER_YIELDS {
+            check_deadline(deadline)?;
             match slime_rt::recv(peer, &mut bytes, &mut caps) {
                 slime_rt::ERR_WOULDBLOCK => match slime_rt::recv(control, &mut bytes, &mut caps) {
                     slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
@@ -223,10 +225,12 @@ impl Region {
                         descriptor,
                         live: true,
                     };
+                    check_deadline(deadline)?;
                     if slime_rt::shared_buffer_loan_map(slot, base, 0, length as u64) != ERR_SUCCESS
                     {
                         return Err(NetworkError::Setup);
                     }
+                    check_deadline(deadline)?;
                     return Ok(region);
                 }
                 count if count < 0 => return Err(NetworkError::Lost),
@@ -254,8 +258,9 @@ impl Drop for Region {
 /// A session borrows both mappings exclusively until finish or drop.
 ///
 /// Dropping or poisoning returns client loans but does not detach the service
-/// session. Use [`Self::finish`] for normal service-side buffer reclamation;
-/// automatic client-death/session cleanup requires supervision integration.
+/// session. Use [`Self::finish`] for normal reclamation or acknowledged
+/// [`Self::abort_with_deadline`] after failure. Automatic client-death cleanup
+/// requires supervision integration.
 pub struct NetworkIo<'a> {
     queue: Option<Queue<'a>>,
     data: Option<&'a mut [u8]>,
@@ -265,6 +270,7 @@ pub struct NetworkIo<'a> {
     peer: u32,
     next_id: u64,
     notifications: Option<NotificationWait>,
+    deadline: Option<u64>,
 }
 
 impl<'a> NetworkIo<'a> {
@@ -285,7 +291,7 @@ impl<'a> NetworkIo<'a> {
         data_base: u64,
     ) -> Result<Self, NetworkError> {
         // SAFETY: the caller supplies the mapping and endpoint guarantees above.
-        unsafe { Self::attach_configured(peer, provision, ring_base, data_base, None) }
+        unsafe { Self::attach_configured(peer, provision, ring_base, data_base, None, None) }
     }
 
     /// Attach with declared completion readiness and a bounded request timer.
@@ -303,7 +309,45 @@ impl<'a> NetworkIo<'a> {
         let notifications = NotificationWait::new(peer, config)?;
         // SAFETY: the caller supplies the same mapping and endpoint guarantees.
         unsafe {
-            Self::attach_configured(peer, provision, ring_base, data_base, Some(notifications))
+            Self::attach_configured(
+                peer,
+                provision,
+                ring_base,
+                data_base,
+                Some(notifications),
+                None,
+            )
+        }
+    }
+
+    /// Attach and bound all provisioning polls and subsequent transactions by
+    /// one absolute deadline. Native endpoint sends remain rendezvous operations;
+    /// the composition must supervise a dead peer rather than promise interruption.
+    ///
+    /// # Safety
+    /// The mapping and endpoint requirements are identical to [`Self::attach`].
+    pub unsafe fn attach_with_deadline(
+        peer: u32,
+        provision: u32,
+        ring_base: u64,
+        data_base: u64,
+        config: Option<NetworkNotifications>,
+        deadline: u64,
+    ) -> Result<Self, NetworkError> {
+        check_deadline(Some(deadline))?;
+        let notifications = config
+            .map(|config| NotificationWait::new(peer, config))
+            .transpose()?;
+        // SAFETY: the caller supplies the same mapping and endpoint guarantees.
+        unsafe {
+            Self::attach_configured(
+                peer,
+                provision,
+                ring_base,
+                data_base,
+                notifications,
+                Some(deadline),
+            )
         }
     }
 
@@ -313,6 +357,7 @@ impl<'a> NetworkIo<'a> {
         ring_base: u64,
         data_base: u64,
         notifications: Option<NotificationWait>,
+        deadline: Option<u64>,
     ) -> Result<Self, NetworkError> {
         if peer == provision
             || !ring_base.is_multiple_of(net::RING_BYTES as u64)
@@ -325,6 +370,7 @@ impl<'a> NetworkIo<'a> {
         {
             return Err(NetworkError::BadRequest);
         }
+        check_deadline(deadline)?;
         if let Some(wake) = &notifications {
             wake.signal()?;
         }
@@ -337,6 +383,7 @@ impl<'a> NetworkIo<'a> {
             net::LOAN_ROLE_RING,
             ring_base,
             net::RING_BYTES,
+            deadline,
         )?;
         let payload = Region::receive(
             peer,
@@ -344,6 +391,7 @@ impl<'a> NetworkIo<'a> {
             net::LOAN_ROLE_DATA,
             data_base,
             net::DATA_BYTES,
+            deadline,
         )?;
         if ring.descriptor.buffer == payload.descriptor.buffer
             || ring.descriptor.lease == payload.descriptor.lease
@@ -360,7 +408,7 @@ impl<'a> NetworkIo<'a> {
         let queue =
             Queue::attach(ring_bytes, net::QUEUE_SLOTS).map_err(|_| NetworkError::Malformed)?;
         let outstanding = Outstanding::new(queue.epoch());
-        await_control(peer, net::OP_ATTACH)?;
+        await_control(peer, net::OP_ATTACH, deadline)?;
         Ok(Self {
             queue: Some(queue),
             data: Some(data),
@@ -370,7 +418,20 @@ impl<'a> NetworkIo<'a> {
             peer,
             next_id: 1,
             notifications,
+            deadline,
         })
+    }
+
+    /// Bound subsequent transactions by one absolute monotonic deadline.
+    /// A deadline can be shortened, never extended, after it has been installed.
+    pub fn set_deadline(&mut self, deadline: u64) -> Result<(), NetworkError> {
+        if deadline <= slime_rt::monotonic_read().map_err(|_| NetworkError::Lost)?
+            || self.deadline.is_some_and(|old| deadline > old)
+        {
+            return Err(NetworkError::BadRequest);
+        }
+        self.deadline = Some(deadline);
+        Ok(())
     }
 
     pub fn notification_wakes(&self) -> usize {
@@ -392,6 +453,28 @@ impl<'a> NetworkIo<'a> {
         request.address_kind = net::ADDRESS_IPV4;
         request.endpoint[..4].copy_from_slice(&address);
         request.port = port;
+        self.transact_raw(request, io_queue::DIRECTION_NONE, 0)
+    }
+
+    /// Resolve and connect under one exact holder/name/TCP/port grant.
+    /// The service retains the answer; this never grants numeric-IP authority.
+    pub fn connect_hostname(
+        &mut self,
+        name: &[u8],
+        port: u16,
+    ) -> Result<NetworkReply, NetworkError> {
+        if name.is_empty() || name.len() > net::MAX_NAME_BYTES || port == 0 {
+            return Err(NetworkError::BadRequest);
+        }
+        let mut request = request(net::OP_CONNECT, 0);
+        request.transport = net::TRANSPORT_TCP;
+        request.address_kind = net::ADDRESS_DNS;
+        request.endpoint[..name.len()].copy_from_slice(name);
+        request.name_len = name.len() as u16;
+        request.port = port;
+        if !slime_proto::valid_network_request(&request) {
+            return Err(NetworkError::BadRequest);
+        }
         self.transact_raw(request, io_queue::DIRECTION_NONE, 0)
     }
 
@@ -537,6 +620,11 @@ impl<'a> NetworkIo<'a> {
                 reserved: [0; 4],
             }
         };
+        if let Some(deadline) = self.deadline
+            && slime_rt::monotonic_read().map_err(|_| NetworkError::Lost)? >= deadline
+        {
+            return Err(NetworkError::Lost);
+        }
         let queue = self.queue.as_mut().ok_or(NetworkError::Lost)?;
         let id = self.next_id;
         self.next_id = id.checked_add(1).ok_or(NetworkError::Lost)?;
@@ -555,12 +643,19 @@ impl<'a> NetworkIo<'a> {
                 })?;
             published = true;
             let deadline = if let Some(wake) = &self.notifications {
-                let deadline = slime_rt::monotonic_read()
-                    .map_err(|_| NetworkError::Lost)?
+                let now = slime_rt::monotonic_read().map_err(|_| NetworkError::Lost)?;
+                let requested = now
                     .checked_add(wake.timeout_ticks)
                     .ok_or(NetworkError::BadRequest)?;
+                let deadline = self
+                    .deadline
+                    .map_or(requested, |limit| limit.min(requested));
+                let remaining = deadline
+                    .checked_sub(now)
+                    .filter(|ticks| *ticks > 0)
+                    .ok_or(NetworkError::Lost)?;
                 timer = Some(RequestTimer {
-                    id: slime_rt::timer_arm(wake.timeout_ticks).map_err(|_| NetworkError::Lost)?,
+                    id: slime_rt::timer_arm(remaining).map_err(|_| NetworkError::Lost)?,
                     deadline,
                     active: true,
                 });
@@ -571,6 +666,11 @@ impl<'a> NetworkIo<'a> {
             };
             let mut body = [0u8; io_queue::COMPLETION_PAYLOAD_BYTES];
             for _ in 0..ANSWER_YIELDS {
+                if let Some(deadline) = self.deadline
+                    && slime_rt::monotonic_read().map_err(|_| NetworkError::Lost)? >= deadline
+                {
+                    return Err(NetworkError::Lost);
+                }
                 match queue.take_completion(&self.outstanding, &mut body) {
                     Ok(completion) => {
                         if completion.request_id != id
@@ -636,25 +736,49 @@ impl<'a> NetworkIo<'a> {
 
     /// Return both loans before asking the service to release its buffers.
     /// Consuming self prevents requests racing with teardown.
-    pub fn finish(mut self) -> Result<(), NetworkError> {
-        if self.queue.is_none() {
-            return Err(NetworkError::Lost);
-        }
+    pub fn finish(self) -> Result<(), NetworkError> {
+        self.finish_configured(None, false)
+    }
+
+    /// Return loans and detach with a separate bounded cleanup grace. This never
+    /// extends the response deadline or permits additional ring transactions.
+    pub fn finish_with_deadline(self, deadline: u64) -> Result<(), NetworkError> {
+        self.finish_configured(Some(deadline), false)
+    }
+
+    /// Discard this session, including a poisoned in-flight transaction. The
+    /// acknowledgement attests service-owned reclamation, not HTTP completion.
+    pub fn abort_with_deadline(self, deadline: u64) -> Result<(), NetworkError> {
+        self.finish_configured(Some(deadline), true)
+    }
+
+    /// Abort failed setup after local provisioning owners have returned their
+    /// loans. `peer` must be this caller's nontransferable service control endpoint.
+    pub fn abort_session(peer: u32, deadline: u64) -> Result<(), NetworkError> {
+        send_teardown(peer, net::OP_ABORT, Some(deadline))
+    }
+
+    fn finish_configured(mut self, deadline: Option<u64>, abort: bool) -> Result<(), NetworkError> {
+        let usable = self.queue.is_some();
         self.queue.take();
         self.data.take();
         let payload_ok = self.payload.release();
         let ring_ok = self.ring.release();
-        if !ring_ok || !payload_ok {
+        if !abort && !usable {
+            return Err(NetworkError::Lost);
+        }
+        if !abort && (!ring_ok || !payload_ok) {
             return Err(NetworkError::Setup);
         }
+        check_deadline(deadline)?;
         if let Some(wake) = &self.notifications {
             wake.signal()?;
         }
-        if slime_rt::send(self.peer, &request(net::OP_CLOSE, u64::MAX).encode(), &[]) != ERR_SUCCESS
-        {
-            return Err(NetworkError::Lost);
-        }
-        await_control(self.peer, net::OP_CLOSE)
+        send_teardown(
+            self.peer,
+            if abort { net::OP_ABORT } else { net::OP_CLOSE },
+            deadline,
+        )
     }
 
     fn poison(&mut self) {
@@ -689,11 +813,31 @@ fn request(op: u8, capability: u64) -> WireNetworkRequest {
     }
 }
 
-fn await_control(peer: u32, op: u8) -> Result<(), NetworkError> {
+fn check_deadline(deadline: Option<u64>) -> Result<(), NetworkError> {
+    if let Some(deadline) = deadline
+        && slime_rt::monotonic_read().map_err(|_| NetworkError::Lost)? >= deadline
+    {
+        return Err(NetworkError::Lost);
+    }
+    Ok(())
+}
+
+fn send_teardown(peer: u32, op: u8, deadline: Option<u64>) -> Result<(), NetworkError> {
+    check_deadline(deadline)?;
+    if slime_rt::send(peer, &request(op, u64::MAX).encode(), &[]) != ERR_SUCCESS {
+        return Err(NetworkError::Lost);
+    }
+    await_control(peer, op, deadline)
+}
+
+fn await_control(peer: u32, op: u8, deadline: Option<u64>) -> Result<(), NetworkError> {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     for _ in 0..ANSWER_YIELDS {
-        match slime_rt::recv(peer, &mut bytes, &mut caps) {
+        check_deadline(deadline)?;
+        let count = slime_rt::recv(peer, &mut bytes, &mut caps);
+        check_deadline(deadline)?;
+        match count {
             slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
             count if count == net::COMPLETION_BYTES as i64 => {
                 let reply = WireNetworkCompletion::decode(&bytes).ok_or(NetworkError::Malformed)?;
@@ -747,6 +891,7 @@ mod tests {
             peer: 5,
             next_id: 1,
             notifications: None,
+            deadline: None,
         }
     }
 
@@ -771,6 +916,247 @@ mod tests {
                 false,
             )
             .unwrap();
+    }
+
+    fn scripted_completion(io: &mut NetworkIo<'_>, op: u8, capability: u64, transferred: u64) {
+        let completion = WireNetworkCompletion {
+            magic: net::NETWORK_MAGIC,
+            version: net::FORMAT_VERSION,
+            op,
+            capability_kind: if op == net::OP_CONNECT {
+                net::CAPABILITY_TCP_CONNECTION
+            } else {
+                net::CAPABILITY_NONE
+            },
+            status_detail: net::STATUS_SUCCESS,
+            flags: 0,
+            capability,
+        };
+        io.queue
+            .as_mut()
+            .unwrap()
+            .complete(
+                io.next_id,
+                io_queue::STATUS_OK,
+                transferred,
+                &completion.encode(),
+                false,
+            )
+            .unwrap();
+    }
+
+    fn consume_scripted_request(io: &mut NetworkIo<'_>, op: u8) {
+        let mut bytes = [0; io_queue::REQUEST_PAYLOAD_BYTES];
+        io.queue
+            .as_mut()
+            .unwrap()
+            .take_request(&mut bytes, net::DATA_BYTES as u64)
+            .unwrap();
+        assert_eq!(WireNetworkRequest::decode(&bytes).unwrap().op, op);
+    }
+
+    #[test]
+    fn six_adapter_rounds_return_each_loan_once_after_success_and_poison() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut returns = 0;
+        let mut teardowns = 0;
+        for round in 0..6 {
+            for poisoned in [false, true] {
+                let mut io = session(&mut ring, &mut data);
+                slime_rt::test_ipc(
+                    if poisoned {
+                        net::OP_ABORT
+                    } else {
+                        net::OP_CLOSE
+                    },
+                    0,
+                );
+                slime_rt::test_clock(Some((10, 0)));
+                scripted_completion(&mut io, net::OP_CONNECT, 100 + round, 0);
+                let connection = io
+                    .connect_ipv4([10, 0, 2, 2], 80)
+                    .unwrap()
+                    .take_connection()
+                    .unwrap();
+                consume_scripted_request(&mut io, net::OP_CONNECT);
+                scripted_completion(&mut io, net::OP_SEND, 0, 4);
+                assert_eq!(io.send(&connection, b"GET ").unwrap().transferred, 4);
+                consume_scripted_request(&mut io, net::OP_SEND);
+                let mut received = [0; 4];
+                if poisoned {
+                    assert_eq!(io.recv(&connection, &mut received), Err(NetworkError::Lost));
+                    assert!(io.queue.is_none());
+                    assert_eq!(io.abort_with_deadline(20), Ok(()));
+                } else {
+                    io.data.as_mut().unwrap()[..4].copy_from_slice(b"body");
+                    scripted_completion(&mut io, net::OP_RECV, 0, 4);
+                    assert_eq!(io.recv(&connection, &mut received).unwrap().transferred, 4);
+                    assert_eq!(&received, b"body");
+                    consume_scripted_request(&mut io, net::OP_RECV);
+                    scripted_completion(&mut io, net::OP_CLOSE, 0, 0);
+                    assert!(io.close(connection).unwrap().is_success());
+                    consume_scripted_request(&mut io, net::OP_CLOSE);
+                    assert_eq!(io.finish_with_deadline(20), Ok(()));
+                }
+                let (sent, returned) = slime_rt::test_ipc_counts();
+                assert_eq!((sent, returned), (1, 2));
+                teardowns += sent;
+                returns += returned;
+                slime_rt::test_clock(None);
+            }
+        }
+        assert_eq!((teardowns, returns), (12, 24));
+    }
+
+    #[test]
+    fn cleanup_deadline_releases_loans_without_sending() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let io = session(&mut ring, &mut data);
+        slime_rt::test_ipc(net::OP_CLOSE, 0);
+        slime_rt::test_clock(Some((10, 0)));
+        assert_eq!(io.finish_with_deadline(10), Err(NetworkError::Lost));
+        assert_eq!(slime_rt::test_ipc_counts(), (0, 2));
+        slime_rt::test_clock(None);
+    }
+
+    #[test]
+    fn cleanup_grace_is_independent_and_abort_handles_poison() {
+        for abort in [false, true] {
+            let mut ring = [0; net::RING_BYTES];
+            let mut data = [0; net::DATA_BYTES];
+            let mut io = session(&mut ring, &mut data);
+            io.deadline = Some(1);
+            slime_rt::test_ipc(if abort { net::OP_ABORT } else { net::OP_CLOSE }, 0);
+            slime_rt::test_clock(Some((10, 0)));
+            let result = if abort {
+                io.poison();
+                io.abort_with_deadline(20)
+            } else {
+                io.finish_with_deadline(20)
+            };
+            assert_eq!(result, Ok(()));
+            assert_eq!(slime_rt::test_ipc_counts(), (1, 2));
+            slime_rt::test_clock(None);
+        }
+    }
+
+    #[test]
+    fn control_ack_at_deadline_is_failure_without_replay() {
+        slime_rt::test_ipc(net::OP_ABORT, 0);
+        slime_rt::test_clock(Some((10, 1)));
+        assert_eq!(NetworkIo::abort_session(5, 12), Err(NetworkError::Lost));
+        assert_eq!(slime_rt::test_ipc_counts(), (1, 0));
+        slime_rt::test_clock(None);
+    }
+
+    #[test]
+    fn expired_setup_does_not_publish_or_import() {
+        slime_rt::test_ipc(net::OP_ATTACH, 0);
+        slime_rt::test_clock(Some((10, 0)));
+        // SAFETY: expiry is checked before these never-accessed mappings.
+        let result = unsafe { NetworkIo::attach_with_deadline(5, 6, 4096, 8192, None, 10) };
+        assert!(matches!(result, Err(NetworkError::Lost)));
+        assert_eq!(slime_rt::test_ipc_counts(), (0, 0));
+        assert!(matches!(
+            Region::receive(5, 6, net::LOAN_ROLE_RING, 4096, net::RING_BYTES, Some(10)),
+            Err(NetworkError::Lost)
+        ));
+        slime_rt::test_clock(None);
+    }
+
+    #[test]
+    fn hostname_connect_validates_before_publishing_and_preserves_exact_name() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        for (name, port) in [
+            (b"".as_slice(), 80),
+            (b"example.com".as_slice(), 0),
+            (b"bad\r\nHost: x".as_slice(), 80),
+            (b"*.example.com".as_slice(), 80),
+            (b"abcdefghijklmnopqrstuvwxyz".as_slice(), 80),
+        ] {
+            assert_eq!(
+                io.connect_hostname(name, port),
+                Err(NetworkError::BadRequest)
+            );
+            assert_eq!(io.next_id, 1);
+            assert_eq!(io.queue.as_ref().unwrap().submitted(), 0);
+        }
+        let completion = WireNetworkCompletion {
+            magic: net::NETWORK_MAGIC,
+            version: net::FORMAT_VERSION,
+            op: net::OP_CONNECT,
+            capability_kind: net::CAPABILITY_TCP_CONNECTION,
+            status_detail: net::STATUS_SUCCESS,
+            flags: 0,
+            capability: 123,
+        };
+        io.queue
+            .as_mut()
+            .unwrap()
+            .complete(1, io_queue::STATUS_OK, 0, &completion.encode(), false)
+            .unwrap();
+        assert_eq!(
+            io.connect_hostname(b"example.com", 80)
+                .unwrap()
+                .take_connection()
+                .unwrap()
+                .id(),
+            123
+        );
+        let mut bytes = [0; io_queue::REQUEST_PAYLOAD_BYTES];
+        let submitted = io
+            .queue
+            .as_mut()
+            .unwrap()
+            .take_request(&mut bytes, net::DATA_BYTES as u64)
+            .unwrap();
+        let sent = WireNetworkRequest::decode(&bytes).unwrap();
+        assert_eq!(sent.address_kind, net::ADDRESS_DNS);
+        assert_eq!(sent.port, 80);
+        assert_eq!(&sent.endpoint[..sent.name_len as usize], b"example.com");
+        assert_eq!(submitted.slice.length, 0);
+    }
+
+    #[test]
+    fn absolute_deadline_refuses_extension_and_expires_without_publication() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        slime_rt::test_clock(Some((10, 0)));
+        assert_eq!(io.set_deadline(10), Err(NetworkError::BadRequest));
+        assert_eq!(io.set_deadline(20), Ok(()));
+        assert_eq!(io.set_deadline(21), Err(NetworkError::BadRequest));
+        assert_eq!(io.set_deadline(19), Ok(()));
+        slime_rt::test_clock(Some((19, 0)));
+        assert_eq!(
+            io.connect_hostname(b"example.com", 80),
+            Err(NetworkError::Lost)
+        );
+        assert_eq!(io.next_id, 1);
+        assert_eq!(io.queue.as_ref().unwrap().submitted(), 0);
+        assert!(io.ring.live && io.payload.live);
+        slime_rt::test_clock(None);
+    }
+
+    #[test]
+    fn deadline_during_published_request_settles_and_poisons() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        slime_rt::test_clock(Some((10, 1)));
+        io.set_deadline(13).unwrap();
+        assert_eq!(
+            io.connect_hostname(b"example.com", 80),
+            Err(NetworkError::Lost)
+        );
+        assert!(io.outstanding.is_empty());
+        assert!(io.queue.is_none() && io.data.is_none());
+        assert!(!io.ring.live && !io.payload.live);
+        slime_rt::test_clock(None);
     }
 
     #[test]

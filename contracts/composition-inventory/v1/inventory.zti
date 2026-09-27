@@ -89,6 +89,22 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-generation.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-http";
+      deferralReason = "";
+      owningGate = "io_http_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-http.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-http-public";
+      deferralReason = "";
+      owningGate = "io_http_public_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-http-public.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-input.zti";
       composition = "sel4-input";
       deferralReason = "";

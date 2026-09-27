@@ -40,6 +40,21 @@ io_network_qualification_check: contracts_check system_spec_check system_image_b
     just ruff
     just typos
 
+# Reproducible host-stack HTTP/DNS cases; no Internet access is needed.
+[group('planes / mechanism')]
+io_http_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm http
+
+# Explicit opt-in: DNS and HTTP are performed by the guest, not a host proxy.
+[group('planes / mechanism')]
+io_http_public_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm http-public --allow-public
+
+# Completion gate includes a fresh live observation rather than cached evidence.
+[group('planes / mechanism')]
+io_http_qualification_check: io_network_qualification_check io_http_check
+    just io_http_public_check
+
 [group('planes / mechanism')]
 io_queue_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-queue-plane.py

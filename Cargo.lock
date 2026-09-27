@@ -1020,6 +1020,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-http-get"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-http-launcher"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-init"
 version = "0.1.0"
 dependencies = [

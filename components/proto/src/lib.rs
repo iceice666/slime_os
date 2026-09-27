@@ -1338,6 +1338,28 @@ pub fn valid_link_reply(reply: &link_device::WireLinkReply) -> bool {
     }
 }
 
+/// Validate one launch chunk; the receiver additionally enforces endpoint role
+/// and contiguous, single-message assembly before using the supplied bytes.
+pub fn valid_network_launch(frame: &network_service::WireNetworkLaunch) -> bool {
+    use network_service as net;
+    let length = usize::from(frame.length);
+    let total = usize::from(frame.total_len);
+    let offset = usize::from(frame.offset);
+    frame.magic == net::NETWORK_MAGIC
+        && frame.version == net::FORMAT_VERSION
+        && frame.reserved == 0
+        && frame.reserved2 == [0; 2]
+        && length > 0
+        && length <= net::LAUNCH_PAYLOAD_BYTES
+        && offset.checked_add(length).is_some_and(|end| end <= total)
+        && frame.payload[length..].iter().all(|byte| *byte == 0)
+        && match frame.kind {
+            net::LAUNCH_SEED => total == 32 && offset == 0 && length == 32,
+            net::LAUNCH_URL => total > 0 && total <= net::LAUNCH_URL_BYTES,
+            _ => false,
+        }
+}
+
 /// Validate a NetworkService provisioning loan before importing or mapping it.
 /// The expected role comes from the receiver; each role has one contract-defined size.
 pub fn valid_network_loan(
@@ -1357,6 +1379,23 @@ pub fn valid_network_loan(
         && descriptor.length == length as u64
         && descriptor.buffer != 0
         && descriptor.lease != 0
+}
+
+/// Control-only abort never goes through an application ring or names a peer.
+/// The nontransferable control endpoint identifies the session to discard.
+pub fn valid_network_abort(request: &network_service::WireNetworkRequest) -> bool {
+    use network_service as net;
+    request.magic == net::NETWORK_MAGIC
+        && request.version == net::FORMAT_VERSION
+        && request.op == net::OP_ABORT
+        && request.transport == net::TRANSPORT_NONE
+        && request.flags == 0
+        && request.port == 0
+        && request.name_len == 0
+        && request.capability == u64::MAX
+        && request.address_kind == net::ADDRESS_NONE
+        && request.reserved == [0; 7]
+        && request.endpoint == [0; 24]
 }
 
 /// Structural and operation-specific validity of a NetworkService IO0 request payload.
@@ -1509,7 +1548,8 @@ pub fn valid_network_completion(completion: &network_service::WireNetworkComplet
         network_service::OP_SEND
         | network_service::OP_RECV
         | network_service::OP_CLOSE
-        | network_service::OP_ATTACH => {
+        | network_service::OP_ATTACH
+        | network_service::OP_ABORT => {
             completion.capability == 0
                 && completion.capability_kind == network_service::CAPABILITY_NONE
         }

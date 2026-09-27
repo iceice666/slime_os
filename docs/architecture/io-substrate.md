@@ -175,8 +175,15 @@ reset and reclamation independently of the peer's fresh-session byte comparison.
 Neither this reset path nor the local failure paths qualify physical-device
 recovery or ordinary-server interoperability across reset.
 
-UDP payloads, DNS, arbitrary external listeners, IPv6 and broader backend support
-remain unfinished. Neither the local path nor QEMU qualifies a physical device.
+The bounded HTTP client uses the same application queues, a launch-supplied URL,
+and incremental HTTP/1.x framing. Its exact-name connect path resolves A records
+inside the service under separate resolver authority, without turning answers
+into numeric client grants. Fresh host-launch entropy is required for DNS query
+IDs/source ports. Controlled QEMU networking uses ordinary host TCP/UDP sockets,
+not the TCP echo frame peer; public retrieval remains a separate opt-in check.
+The network contract owns the precise DNS subset, bounds and authority policy.
+General application UDP, arbitrary external listeners, IPv6 and broader backend
+support remain unfinished. Neither the local path nor QEMU qualifies a physical device.
 The [network contract](../../contracts/network-service/README.md) owns detailed
 accounting, waiting, retry, timeout and cleanup boundaries.
 
@@ -200,6 +207,12 @@ The implementation and qualification plan is
   work, root-device epoch advance and controlled-peer fresh-session recovery;
 - `just io_network_qualification_check` — aggregate network, link, host, contract,
   image-closure and repository quality gates;
+- `just io_http_check` — controlled ordinary host-stack HTTP/DNS, independent body
+  and packet comparisons, framing/authority refusals and explicit cleanup;
+- `just io_http_public_check` — opt-in native public DNS and `example.com` HTTP,
+  with no fixed-address substitution or host HTTP client;
+- `just io_http_qualification_check` — network regression plus controlled HTTP
+  and a fresh public observation; public unavailability is a failure, not a pass;
 - `just io_tcp_host_check` — production TCP engine against real host smoltcp peers,
   independent authority/resource limits, partial I/O, retries and close quarantine;
 - model and Kani targets below — bounded interleavings and selected wire/device
