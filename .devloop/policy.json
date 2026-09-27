@@ -355,6 +355,26 @@
           "kind": "bool"
         }
       ]
+    },
+    {
+      "id": "ci-wall-time",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [
+        {
+          "id": "criticalPathSeconds",
+          "kind": "int"
+        },
+        {
+          "id": "evaluationStoreRestored",
+          "kind": "bool"
+        },
+        {
+          "id": "recipeSetPreserved",
+          "kind": "bool"
+        }
+      ]
     }
   ]
 }
