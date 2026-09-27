@@ -38,6 +38,13 @@ private_memory_phase4_check: private_memory_adaptive_check private_memory_adapti
 [group('quality')]
 private_memory_phase5_check: private_memory_matrix_check private_memory_phase4_check
 
+# Every recipe the CI contract-source, Miri and host-test jobs run, with
+# closure freshness asserted here directly: restructuring those jobs or
+# removing a duplicated check must not drop an assertion unnoticed.
+[group('quality')]
+ci_critical_path_check: contracts_source_check component_spec_validation_check system_image_builder_check test_host miri_boot_contracts ruff
+    python3 scripts/generate/generate-system-image-closures.py --check
+
 [group('quality')]
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py
