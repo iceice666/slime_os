@@ -516,6 +516,27 @@ def code_paths_coverage(
     return findings
 
 
+def missing_code_paths(
+    code_paths: list[str], tracked: list[tuple[str, str, str]], root: _Path
+) -> list[str]:
+    """`codePaths` entries that name nothing.
+
+    An entry inside a submodule that is not checked out is not judged: the
+    work-item job clones without submodules, so absence there says nothing
+    about the entry. A checked-out submodule is judged like any other tree.
+    """
+    submodules = [path for mode, _, path in tracked if mode == "160000"]
+    findings = []
+    for entry in code_paths:
+        if (root / entry).exists():
+            continue
+        owner = next((s for s in submodules if entry.startswith(s + "/")), None)
+        if owner is not None and not (root / owner / ".git").exists():
+            continue
+        findings.append(f"codePaths names {entry}, which does not exist")
+    return findings
+
+
 def check_code_paths_coverage() -> list[str]:
     """Every tracked input a gate can read is inside devloop's code identity."""
     try:
@@ -525,9 +546,7 @@ def check_code_paths_coverage() -> list[str]:
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         return [f"cannot read codePaths coverage inputs: {error}"]
     findings = code_paths_coverage(code_paths, tracked, pinned_commits=pinned_commits)
-    for entry in code_paths:
-        if not (ROOT / entry).exists():
-            findings.append(f"codePaths names {entry}, which does not exist")
+    findings.extend(missing_code_paths(code_paths, tracked, ROOT))
     # devloop walks the filesystem, so an ignored file under a covered
     # directory would enter the identity and no other checkout could
     # reproduce it.
@@ -580,6 +599,22 @@ def check_code_paths_controls() -> None:
             fail(f"control: {covered} was reported although covered, pinned, or exempt")
     if len(findings) != 3:
         fail(f"control: coverage reported {len(findings)} findings, expected 3")
+
+    # Existence: an entry in an absent submodule is not judged; one in a
+    # checked-out submodule, or outside any submodule, is.
+    with tempfile.TemporaryDirectory(prefix="code-paths-controls-") as temporary:
+        root = _Path(temporary)
+        (root / "slime-root").mkdir()
+        (root / "deps" / "zutai").mkdir(parents=True)
+        (root / "deps" / "sel4").mkdir(parents=True)
+        (root / "deps" / "sel4" / ".git").write_text("gitdir: elsewhere\n")
+        entries = ["slime-root", "gone", "deps/zutai/crates", "deps/sel4/src"]
+        missing = missing_code_paths(entries, tracked, root)
+        if missing != [
+            "codePaths names gone, which does not exist",
+            "codePaths names deps/sel4/src, which does not exist",
+        ]:
+            fail(f"control: codePaths existence reported {missing}")
 
 
 def _script_module(filename: str):
