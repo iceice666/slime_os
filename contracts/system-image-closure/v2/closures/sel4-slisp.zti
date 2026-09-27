@@ -55,7 +55,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "3d9dedf6160958f0ac4ee63f4666233d39904c5266db1353179e0c52a71998e6";
+        identity = "9a4cb5cb5351b914c3834749163b1ce4ddd7df35350218a180c1b79f712244dc";
       };
     };
     {
@@ -151,7 +151,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "f1014a4fbe61083d9d84197db0dc9e2e96a6cf9e7ab90815fec8b033bb56cefd";
+        identity = "1e5e9295005a29deaa1df565c2e52df8629cb6404b2992e05c930d56600cf2e7";
       };
     };
     {

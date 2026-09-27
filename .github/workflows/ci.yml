@@ -339,6 +339,8 @@ jobs:
       - run: nix develop --command just sel4_qemu_image_check
       - run: nix develop --command just lint_sel4_root
       - run: nix develop --command just test_sel4_root
+      - uses: ./.github/actions/slime-zutai-store-save
+        if: ${{ !cancelled() }}
 
   sel4_rollback_runtime:
     name: Rollback runtime, release trust, and BootState trace
@@ -353,6 +355,8 @@ jobs:
       - uses: ./.github/actions/slime-env
       - run: nix develop --command just sel4_qemu_image_check
       - run: nix develop --command just bootstate_trace_check release_trust_runtime_check
+      - uses: ./.github/actions/slime-zutai-store-save
+        if: ${{ !cancelled() }}
 
   sel4_contract_sources:
     name: Contract sources and component specs
@@ -366,15 +370,34 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/slime-env
       - run: nix develop --command just sel4_qemu_image_check
-      # One `just` invocation: prerequisites are deduplicated per process, so a
-      # second one re-runs the four zutai model checks this job already paid for.
-      # Closures are digests of source trees; a merge that touches one without
-      # regenerating them makes every plane gate refuse to resolve. Fail here,
-      # on the clean checkout, rather than in whichever QEMU job runs first.
+      # Split from `sel4_system_image_builder` so the two chains run
+      # concurrently. Together the two jobs run exactly the recipes the single
+      # job ran; `component_spec_validation_check` (seconds) runs in both
+      # because `system_image_builder_check` depends on it.
       - run: >-
           nix develop --command just
           contracts_source_check component_spec_validation_check
-          system_image_builder_check
+      - uses: ./.github/actions/slime-zutai-store-save
+        if: ${{ !cancelled() }}
+
+  sel4_system_image_builder:
+    name: System specs and system-image closures
+    runs-on: ubuntu-24.04-arm
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/slime-env
+      - run: nix develop --command just sel4_qemu_image_check
+      # Closures are digests of source trees; a merge that touches one without
+      # regenerating them makes every plane gate refuse to resolve. Fail here,
+      # on the clean checkout, rather than in whichever QEMU job runs first.
+      - run: nix develop --command just system_image_builder_check
+      - uses: ./.github/actions/slime-zutai-store-save
+        if: ${{ !cancelled() }}
 
   sel4_generations:
     name: Generation v5 (shard ${{ matrix.shard }})
@@ -395,31 +418,35 @@ jobs:
           build-cache-key: generation-${{ matrix.shard }}
       - run: nix develop --command just sel4_qemu_image_check
       - run: nix develop --command just generation_v5_check ${{ matrix.shard }} 4
+      - uses: ./.github/actions/slime-zutai-store-save
+        if: ${{ !cancelled() }}
 
   sel4_contracts:
     name: Contracts and component specs
     runs-on: ubuntu-latest
-    needs: [sel4_contract_sources, sel4_generations]
+    needs: [sel4_contract_sources, sel4_system_image_builder, sel4_generations]
     if: always()
     steps:
-      # `sel4_contract_sources` and `sel4_generations` report `skipped` rather
-      # than `success` for a `.tasks/`-only change (see `changes` above); that
-      # is this aggregate's success too, not a failure to paper over.
+      # The seL4 jobs report `skipped` rather than `success` for a
+      # `.tasks/`-only change (see `changes` above); that is this aggregate's
+      # success too, not a failure to paper over.
       - run: |
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
           ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_system_image_builder.result }}"
           ok "${{ needs.sel4_generations.result }}"
 
   sel4_rollback:
     name: Rollback, release trust, and BootState trace
     runs-on: ubuntu-latest
-    needs: [sel4_rollback_runtime, sel4_contract_sources, sel4_generations]
+    needs: [sel4_rollback_runtime, sel4_contract_sources, sel4_system_image_builder, sel4_generations]
     if: always()
     steps:
       - run: |
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
           ok "${{ needs.sel4_rollback_runtime.result }}"
           ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_system_image_builder.result }}"
           ok "${{ needs.sel4_generations.result }}"
 
   CI:
@@ -440,6 +467,7 @@ jobs:
       - sel4_product
       - sel4_rollback_runtime
       - sel4_contract_sources
+      - sel4_system_image_builder
       - sel4_generations
       - sel4_contracts
       - sel4_rollback
@@ -464,6 +492,7 @@ jobs:
           ok "${{ needs.sel4_product.result }}"
           ok "${{ needs.sel4_rollback_runtime.result }}"
           ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_system_image_builder.result }}"
           ok "${{ needs.sel4_generations.result }}"
           ok "${{ needs.sel4_contracts.result }}"
           ok "${{ needs.sel4_rollback.result }}"

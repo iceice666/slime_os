@@ -89,6 +89,54 @@ runs:
                       'components/**/*.ld', '**/Cargo.lock')
           }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-
 
+    # The Zutai evaluation store is content-addressed (`scripts/lib/zutai_cli.py`):
+    # an entry whose inputs changed is never looked up, so a stale restore costs
+    # misses, not results. GitHub scopes caches saved on a pull-request ref to
+    # that pull request, so `main` never restores one. Saved by
+    # `.github/actions/slime-zutai-store-save` once the job's checks finish.
+    - name: Restore Zutai evaluation store
+      id: zutai-store
+      uses: actions/cache/restore@v4
+      with:
+        path: build/zutai-cache
+        key: >-
+          slime-zutai-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-${{ github.sha }}
+        restore-keys: >-
+          slime-zutai-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-
+
+    # Every restored entry gets atime 0. Under `relatime` the first read moves
+    # it past its mtime, so the save step keeps exactly the entries this run
+    # read or wrote. Where reads do not update atime, pruning is disabled
+    # rather than discarding entries that were in fact used.
+    - name: Mark restored evaluations unread
+      shell: bash
+      env:
+        ZUTAI_STORE_KEY: >-
+          slime-zutai-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-cache-key || github.job
+          }}-${{ github.sha }}
+      run: |
+        set -euo pipefail
+        echo "SLIME_ZUTAI_STORE_KEY=$ZUTAI_STORE_KEY" >> "$GITHUB_ENV"
+        store=build/zutai-cache
+        mkdir -p "$store"
+        probe="$(mktemp -p build)"
+        echo probe > "$probe"
+        touch -a -d @0 "$probe"
+        cat "$probe" > /dev/null
+        if [ "$(stat -c %X "$probe")" -gt 0 ]; then
+          find "$store" -type f -exec touch -a -d @0 {} +
+          echo "SLIME_ZUTAI_STORE_PRUNE=1" >> "$GITHUB_ENV"
+        else
+          echo "::warning::reads do not update atime here; the Zutai store is saved unpruned"
+        fi
+        rm -f "$probe"
+        echo "restored $(find "$store" -type f | wc -l) evaluations (matched: ${{ steps.zutai-store.outputs.cache-matched-key || 'none' }})"
+
     # Realize the shell and run its toolchain hook once, so a later step's
     # failure is the gate's failure rather than an environment download.
     - name: Enter the dev shell
