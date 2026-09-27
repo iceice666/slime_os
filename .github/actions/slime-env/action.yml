@@ -76,7 +76,7 @@ runs:
           }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-
       run: |
         echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
-        echo "key=$PREFIX${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        echo "key=${PREFIX}${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
     # Each save is about 1.1 GB per job, past the repository's 10 GB cache
     # budget in one run, so least-recently-used eviction removes other caches,
