@@ -105,90 +105,12 @@ or another board.
 
 ## Network boundary
 
-The current network service enforces exact per-holder destination authority and
-bounded socket/listener/DNS-record accounting. Its application-facing contract
-names TCP/UDP operations and typed capability results without NIC identity or raw
-packet authority.
-
-When generation data declares a network interface, the service attaches a
-`LinkDevice`, replenishes receive buffers, and polls a smoltcp interface.
-The `sel4-io-tcp` composition connects it to `virtio-net-driver` and supplies a
-real bounded TCP client stream through application IO0 payload slices. Its gate
-compares 4096 echoed bytes independently at the application and external frame
-peer, verifies handshake and FIN closure, refuses an undeclared address/port,
-observes a reset from a second declared port, and retains ARP/ICMP and link
-reset/release checks.
-
-`network-application/v1` declares each application's control/provisioning
-bindings, backend, optional readiness/supervision bindings, and separate exact
-local-listener authority. Listener rows permit only `127.0.0.1`, a nonzero port,
-and one declared local client. Local-peer admission precedes SYN publication;
-localhost alone grants no authority. An authority-only composition may still
-omit the interface; its legacy endpoint results are bookkeeping, not transport.
-
-The service owns distinct application ring and payload buffers. A nontransferable
-control endpoint authorizes provisioning and teardown; a separate transferable
-endpoint carries receiver-bound loans, not application commands. The typed
-`network_io.rs` adapter preserves partial counts, would-block, EOF and explicit
-teardown. External and local backends have separate fixed four-socket pools and
-static service-owned RX/TX storage. Limits are authority ceilings, not guarantees
-that every declared maximum can be allocated simultaneously; TIME-WAIT retains
-pool capacity after handle disposal.
-
-Local TCP uses smoltcp loopback without a NIC. The local QEMU path has observed
-connect/listen/accept, 4096/2048-byte bidirectional delivery, EOF, teardown and
-coalesced readiness draining. Declared notification profiles use wait sets and
-stack deadlines, with a maximum 10 ms idle control deadline for native endpoint
-rendezvous. The external polling profile remains supported without readiness
-bindings. Blocking send/receive/accept retain validated request descriptors,
-not borrowed Rust payload references, for at most four seconds; the readiness
-client's five-second bound limits waiting for an absent completion. The local gate has
-observed seven authority refusals and a typed four-second receive timeout followed
-by successful traffic on the same connection; timeout need not poison a session.
-
-The supervised lifetime path has observed a client VM fault after payload
-exchange, reclamation of its socket and two session buffers, an actual loopback
-RST/reset at the surviving client, and same-boot supervised restart followed by
-a fresh exchange and EOF. Handle identity packs a checked service incarnation,
-backend and serial; incarnation comes from an explicitly authorized, single-writer
-root lifecycle parameter, not a timestamp. It persists across service restarts
-within one boot, not across boots. The AArch64 QEMU service-fault profile has also
-observed an actual service VM fault with payload work pending, root reclamation,
-client faults on revoked mappings, and supervised restart at incarnation 2 with
-fresh traffic and EOF. Both restart paths reject raw sends using predecessor
-handles and admit fresh identities.
-
-The external driver-reset QEMU profile has observed reset with application receive
-work pending, typed `RESET`, socket/session reclamation, and supervised driver,
-service and client restart followed by a fresh 4096-byte exchange. Link epochs
-come from the root device incarnation: the observed device epochs advanced 1 to 2,
-then 2 to 3 on subsequent reset. Reset must consume and settle valid queued IO0
-submissions as well as already-admitted requests; leaving a published RX request
-outside the admitted table cannot make it disappear. The gate exercises that
-queued-RX path, while host tests cover the production settlement helper.
-
-Its controlled external peer acknowledges and withholds echo for the first
-1024 bytes, then discards that server session when the restarted client sends a
-new SYN with a new initial sequence number. That abandonment is not FIN/RST
-closure or transparent TCP continuation. Driver/root markers establish actual
-reset and reclamation independently of the peer's fresh-session byte comparison.
-Neither this reset path nor the local failure paths qualify physical-device
-recovery or ordinary-server interoperability across reset.
-
-The bounded HTTP client uses the same application queues, a launch-supplied URL,
-and incremental HTTP/1.x framing. Its exact-name connect path resolves A records
-inside the service under separate resolver authority, without turning answers
-into numeric client grants. Fresh host-launch entropy is required for DNS query
-IDs/source ports. Controlled QEMU networking uses ordinary host TCP/UDP sockets,
-not the TCP echo frame peer; public retrieval remains a separate opt-in check.
-The network contract owns the precise DNS subset, bounds and authority policy.
-General application UDP, arbitrary external listeners, IPv6 and broader backend
-support remain unfinished. Neither the local path nor QEMU qualifies a physical device.
-The [network contract](../../contracts/network-service/README.md) owns detailed
-accounting, waiting, retry, timeout and cleanup boundaries.
-
-The implementation and qualification plan is
-[`../plans/network-data-plane.md`](../plans/network-data-plane.md).
+The network service (exact per-holder destination authority, `LinkDevice`
+attachment, smoltcp external and loopback backends, bounded TCP streams, and
+the bounded HTTP/DNS client) has its own page:
+[network service](network-service.md). It shares this substrate's queue,
+epoch, lease, and reset semantics and adds nothing to the hardware authority
+model above.
 
 ## Verification
 
@@ -196,25 +118,6 @@ The implementation and qualification plan is
 - `just io_driver_authority_check` — exact hardware authority and reclamation;
 - `just io_block_check` — userspace block driver behavior;
 - `just io_link_check` — userspace virtio-net/LinkDevice behavior;
-- `just io_network_check` — all six arms: authority, external TCP, local TCP,
-  client lifetime, service fault and driver reset; `just io_tcp_check` selects
-  the external stream and its host engine tests;
-- `just io_local_check` — declared local listen/accept, duplex bytes and readiness;
-- `just io_network_lifetime_check` — client death, reclamation and supervised restart;
-- `just io_network_service_fault_check` — service VM fault with in-flight local
-  application work, mapping revocation and fresh-incarnation recovery;
-- `just io_network_driver_reset_check` — external-link reset with pending payload
-  work, root-device epoch advance and controlled-peer fresh-session recovery;
-- `just io_network_qualification_check` — aggregate network, link, host, contract,
-  image-closure and repository quality gates;
-- `just io_http_check` — controlled ordinary host-stack HTTP/DNS, independent body
-  and packet comparisons, framing/authority refusals and explicit cleanup;
-- `just io_http_public_check` — opt-in native public DNS and `example.com` HTTP,
-  with no fixed-address substitution or host HTTP client;
-- `just io_http_qualification_check` — network regression plus controlled HTTP
-  and a fresh public observation; public unavailability is a failure, not a pass;
-- `just io_tcp_host_check` — production TCP engine against real host smoltcp peers,
-  independent authority/resource limits, partial I/O, retries and close quarantine;
 - model and Kani targets below — bounded interleavings and selected wire/device
   arithmetic, not whole-substrate correctness.
 

@@ -22,6 +22,22 @@ first-class concepts, current status, and non-goals. Then:
 6. [Carrying a work item](getting-started/06-work-item-lifecycle.md) — both
    lifecycles command by command: an ordinary item closed on a recorded
    observation, and a spec-driven item closed against bound evidence.
+7. [Add a gate](getting-started/07-add-a-gate.md) — how a QEMU plane gate is
+   built from closure, image, run, and marker contract, when to extend versus
+   add one, and every file a new plane touches.
+8. [Debugging](getting-started/08-debugging.md) — reading a failed gate: which
+   layer refused, the root's marker vocabulary, faults and silent panics,
+   reproducing outside the checker.
+9. [Write a contract](getting-started/09-write-a-contract.md) — `schema.zt` to
+   generated bindings to validator to test to drift check.
+10. [Component runtime tour](getting-started/10-component-runtime.md) — the
+    `slime-rt` API by intent: lifecycle, output, finding capabilities, IPC,
+    waiting, time, spawn and supervision, transfer, shared memory, heap.
+11. [Recipes](getting-started/11-recipes.md) — "I want to change X": the
+    files, the order, and the gate, for the common change kinds.
+
+If you only read one page before editing, read the recipes; if a term stops
+you, the [glossary](glossary.md) routes it to its owner.
 
 ## Concepts
 
@@ -44,7 +60,14 @@ below, which have update discipline these pages do not.
 
 - [Subsystem architecture](architecture/README.md) — current IPC, fabric,
   time/waiting/lifecycle, private memory, component/image boundaries, target
-  profiles, and userspace I/O, with owning source and qualification limits.
+  profiles, userspace I/O, the network service, generation management, and
+  the trust model, with owning source and qualification limits.
+
+## Operations
+
+- [`operations/`](operations/README.md) — operator runbooks for evidence that
+  automated gates can judge but not produce, starting with the Framework 13
+  CPU boot.
 
 ## Reference
 
@@ -56,6 +79,12 @@ in the same commit as the surface it describes.
 - [`syscall-abi.md`](syscall-abi.md) — the component ABI: operation labels,
   operand packing, reply convention, error model, CSpace layout.
   Label coverage is machine-checked by `just contracts_check`.
+
+Two lookup pages without update discipline of their own:
+
+- [`glossary.md`](glossary.md) — terms, each routed to its owner.
+- [`reference/just-targets.md`](reference/just-targets.md) — every public
+  `just` recipe by group, one line each.
 
 ## Decisions
 
@@ -84,6 +113,8 @@ in the same commit as the surface it describes.
 | Known defects and regressions (open ones precede milestone work) | The `backlog`-tagged canonical work items; the old frozen index is historical only |
 | How userspace drivers receive device/MMIO/IRQ/DMA authority, and what IO gates prove | [Userspace I/O substrate](architecture/io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and operations in [`syscall-abi.md`](syscall-abi.md) |
 | How a historical conclusion was reached | [Private history archive](history.md), pinned by full commit and original path; ordinary changes need no investigation |
-| Code map and task-to-file index | [`AGENTS.md`](../AGENTS.md) |
-| The schemas every persisted or cross-process format is generated from | `contracts/` |
-| Build, test, and gate commands | `Justfile` (`just --list`) |
+| Code map | [`AGENTS.md`](../AGENTS.md); the routing table itself is [`task-to-file.md`](task-to-file.md) |
+| The schemas every persisted or cross-process format is generated from | `contracts/`; a few carry their own `README.md` (`network-service`, `network-application`, `network-destination`, `system-spec`) when authority semantics need prose |
+| Build, test, and gate commands | `Justfile` (`just --list`); one line per recipe in [`reference/just-targets.md`](reference/just-targets.md) |
+| Retained physical evidence (Duo, Framework CPU boot) | `evidence/`, each record bound to an exact image identity and judged by its gate; the [runbooks](operations/README.md) say how a record is produced |
+| What is trusted and what is not enforced | [Trust model](architecture/trust-model.md) |

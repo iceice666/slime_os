@@ -204,7 +204,7 @@ These guides own the tutorials; this document owns the contribution workflow.
 ## Making a change
 
 - Read [AGENTS.md](AGENTS.md), the detailed repository engineering rules.
-- Route through its task-to-file index before searching. Change the owning
+- Route through the [task-to-file index](docs/task-to-file.md) before searching. Change the owning
   implementation, not a checker that merely observes it.
 - Identify the narrowest owning gate before editing; preserve capability,
   component, generation, and hardware-safety invariants.

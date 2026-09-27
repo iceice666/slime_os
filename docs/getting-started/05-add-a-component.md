@@ -371,3 +371,9 @@ crate-only edit.
 
 The finished path is always the same: **crate → component spec → composition →
 authority and launch policy → observed QEMU evidence**.
+
+## Next
+
+The component's code is written against the runtime in the
+[component runtime tour](10-component-runtime.md); the gate that observes it is
+built as in [Add a gate](07-add-a-gate.md).

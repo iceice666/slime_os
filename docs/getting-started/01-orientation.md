@@ -31,9 +31,9 @@ with all bindings generated from it — see
 
 Three files answer most "where is..." questions:
 
-- [`AGENTS.md`](../../AGENTS.md) — the code map: execution path, a
-  task-to-file index routing every kind of change to its owning module, and
-  the navigation traps.
+- [`AGENTS.md`](../../AGENTS.md) — the code map: execution path, generated-code
+  rule, and navigation traps — and [`docs/task-to-file.md`](../task-to-file.md),
+  the index routing every kind of change to its owning module.
 - `Justfile` — every build, run, check, and regeneration command
   (`just --list`).
 - `just tasks_list` / `just tasks_next` — what is done, open, blocked, or
@@ -66,3 +66,9 @@ Two habits distinguish this repository; adopting them early saves friction:
 4. [Your first change](04-first-change.md) — the workflow, end to end.
 5. [Add a component](05-add-a-component.md) — take new code through
    declaration, composition, authority, and QEMU evidence.
+6. [Carrying a work item](06-work-item-lifecycle.md), then the proving half:
+   [add a gate](07-add-a-gate.md) and [debugging](08-debugging.md).
+7. When you know what you want to change, go straight to
+   [recipes](11-recipes.md); the [component runtime tour](10-component-runtime.md)
+   and [write a contract](09-write-a-contract.md) are the two reference walks
+   most changes need.

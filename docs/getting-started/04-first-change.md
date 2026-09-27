@@ -12,8 +12,8 @@ change belongs.
    Open items are resolved (or explicitly deferred, with the reason
    recorded) before new milestone work starts, which `just tasks_check`
    enforces. `just tasks_next` lists what is actionable.
-2. **Route, don't search.** Find your change's row in `AGENTS.md`'s
-   task-to-file index and read the named module root first. Broad
+2. **Route, don't search.** Find your change's row in the
+   [task-to-file index](../task-to-file.md) and read the named module root first. Broad
    symbol-grepping across the tree is how you end up editing a generated
    file or a check script instead of the source.
 3. **Know your gate.** Every change area has a narrowest QEMU or host gate;

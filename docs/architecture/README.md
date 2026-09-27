@@ -28,7 +28,15 @@ store for scope, state, relationships, and observed exit conditions.
   semantics versus platform mechanism, admitted targets, evidence scope, and
   target-specific limitations.
 - [Userspace I/O substrate](io-substrate.md) — queue/epoch/lease semantics,
-  hardware authority, userspace drivers, and the incomplete network data plane.
+  hardware authority, and userspace drivers.
+- [Network service](network-service.md) — destination authority, external and
+  loopback smoltcp backends, bounded TCP streams, lifetime and reset behavior,
+  and the bounded HTTP/DNS client.
+- [Generation management](generation-management.md) — BootState, the
+  pre-admission boot selector, the userspace manager protocol, rollback,
+  recovery, and transfer planes, and what is not yet rollbackable.
+- [Trust model](trust-model.md) — the trusted computing base, what each
+  boundary enforces, and the explicit list of what is not enforced today.
 
 ## Load-bearing references
 
