@@ -22,6 +22,9 @@ Work-item identity, dependencies, state, and per-slice exit conditions remain in
    service under deterministic checks before physical DMA promotion.
 4. **DMA containment:** establish one AMD-IOMMU domain per driver, map only live
    IO0 leases, report faults, and enable bus mastering only after containment.
+   seL4 supports only Intel VT-d, so this is new Slime mechanism rather than
+   kernel configuration; the [AMD IOMMU ownership](../decisions/amd-iommu-ownership.md)
+   decision (proposed) places it in `slime-root`.
 5. **Device services:** qualify disposable USB storage and Ethernet before
    internal NVMe, then display/compositor, platform power, suspend/resume,
    touchpad, audio, Wi-Fi, Bluetooth, and Radeon paths through typed services.
