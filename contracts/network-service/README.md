@@ -132,8 +132,10 @@ against `timer_budget`. These are conservative per-connection reservations, not
 per-packet allocations. Send and receive independently require their declared
 rights. Loopback listeners use separate application-authority rows, require the
 exact local endpoint and admitted peer, and return typed listener/accepted
-connection handles. Listener backlog, accepted children, bytes, timers and queue
-work are checked before socket admission. DNS, UDP, IPv6 and arbitrary external
+connection handles. Only backlog one is supported and admitted: one pending
+handshake/accept slot, separate from already accepted children. A successful
+accept rearms that slot when the accepted-child, byte, timer, queue and fixed-pool
+limits permit; multiple live children of one listener are allowed. DNS, UDP, IPv6 and arbitrary external
 listener transport behavior remain unsupported.
 
 The destination byte reservation covers the socket buffers only. The separate
@@ -143,9 +145,12 @@ service resources. A destination byte limit is therefore not an aggregate
 network-memory accounting claim. Closing or failing a connect releases its
 live-handle reservations, but a socket in TCP TIME-WAIT remains quarantined in
 the fixed pool until smoltcp closes it. Such sockets can temporarily exhaust the
-pool even when the live-handle count is zero. Source ports are never reused
-within an engine incarnation; exhausting the bounded ephemeral range refuses
-further connects rather than wrapping.
+pool even when the live-handle count is zero. Source-port selection wraps within
+49152–65535 and skips every port retained at either end of a socket tuple, in a
+pending reset, or by a listener. This includes TIME-WAIT and a loopback peer that
+outlives its client. Reuse is allowed only after those references disappear; a
+failed connect does not advance the cursor. One holder cannot permanently consume
+the ephemeral range by repeated failed requests. Fixed-pool limits still apply.
 
 Connect and close retain pending operation state while the service continues
 polling the interface. The engine itself transfers an available prefix or returns
@@ -171,8 +176,18 @@ retry. The destination's `retry_limit` bounds these repeated segments over the
 whole connection lifetime, including SYN, payload, and FIN retransmissions.
 This is more conservative than a per-segment retry limit: legitimate overlap
 can consume the budget. Pure acknowledgments do not consume retries. The engine
-performs no automatic reconnects. Unknown-tuple TCP resets are not published;
+performs no automatic reconnects. The destination and application
+`reconnect_limit` fields bound automatic recovery attempts, not explicit
+application `OP_CONNECT` requests or listener rearming after accept; this engine
+uses zero such attempts even when a nonzero limit is declared. Unknown-tuple TCP resets are not published;
 TIME-WAIT sockets may still acknowledge duplicate FINs for their retained tuple.
+
+This holder-bound egress policy covers TCP only. ARP neighbor traffic and smoltcp
+IPv4 ICMP responses (including automatic echo replies) are interface-owned
+control traffic, admitted without a holder tuple or destination byte/retry/timer
+charge. An ICMP reply can therefore be emitted with no application connection.
+The fixed link buffers bound storage, not a per-holder control-traffic rate; no
+claim of all-frame holder authorization or ICMP/ARP rate limiting is made.
 
 Close success means local handle disposal, not a certificate of graceful remote
 delivery. An active close normally reaches TIME-WAIT; unexpected closure before

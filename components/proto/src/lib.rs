@@ -1338,6 +1338,27 @@ pub fn valid_link_reply(reply: &link_device::WireLinkReply) -> bool {
     }
 }
 
+/// Validate a NetworkService provisioning loan before importing or mapping it.
+/// The expected role comes from the receiver; each role has one contract-defined size.
+pub fn valid_network_loan(
+    descriptor: &network_service::WireNetworkLoan,
+    expected_role: u8,
+) -> bool {
+    let length = match expected_role {
+        network_service::LOAN_ROLE_RING => network_service::RING_BYTES,
+        network_service::LOAN_ROLE_DATA => network_service::DATA_BYTES,
+        _ => return false,
+    };
+    descriptor.magic == network_service::NETWORK_MAGIC
+        && descriptor.version == network_service::FORMAT_VERSION
+        && descriptor.role == expected_role
+        && descriptor.reserved0 == [0; 1]
+        && descriptor.reserved == [0; 32]
+        && descriptor.length == length as u64
+        && descriptor.buffer != 0
+        && descriptor.lease != 0
+}
+
 /// Structural and operation-specific validity of a NetworkService IO0 request payload.
 pub fn valid_network_request(request: &network_service::WireNetworkRequest) -> bool {
     if request.magic != network_service::NETWORK_MAGIC

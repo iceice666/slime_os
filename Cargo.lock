@@ -1678,6 +1678,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-network-tcp-tests"
+version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+ "slime-proto",
+ "smoltcp",
+]
+
+[[package]]
 name = "slime-proto"
 version = "0.1.0"
 dependencies = [

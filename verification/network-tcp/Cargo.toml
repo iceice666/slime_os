@@ -6,7 +6,9 @@ edition = "2024"
 publish = false
 rust-version = "1.96"
 
-[workspace]
+# Dependencies are used by the production modules included through #[path].
+[package.metadata.cargo-machete]
+ignored = ["boot-contracts", "slime-proto", "smoltcp"]
 
 [lib]
 path = "src/lib.rs"
@@ -25,8 +27,5 @@ smoltcp = { version = "=0.13.0", default-features = false, features = [
     "iface-neighbor-cache-count-4",
 ] }
 
-[lints.clippy]
-mem_forget = "deny"
-todo = "deny"
-dbg_macro = "deny"
-disallowed_methods = "deny"
+[lints]
+workspace = true

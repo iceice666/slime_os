@@ -16,7 +16,7 @@ io_tcp_check: sel4_pin_check io_tcp_host_check
 
 [group('planes / mechanism')]
 io_tcp_host_check:
-    cargo test --manifest-path verification/network-tcp/Cargo.toml --target-dir build/network-tcp-tests --locked
+    cargo test -p slime-network-tcp-tests --locked
 
 [group('planes / mechanism')]
 io_local_check: sel4_pin_check io_tcp_host_check

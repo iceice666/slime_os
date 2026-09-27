@@ -43,10 +43,10 @@
       monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
-      timerBadgeBit = 3;
-      timerNotification = "lifetime-supervisor-wake";
-      timerQuota = 1;
       timerUse = true;
+      timerQuota = 1;
+      timerNotification = "lifetime-supervisor-wake";
+      timerBadgeBit = 3;
     };
   ];
   clockAuthorityObject = true;
@@ -118,36 +118,36 @@
       transferable = false;
     };
     {
-      capabilityKind = "executable";
       name = "lifetime-victim-executable";
-      rights = [
-        "exec";
-        "spawn";
-      ];
+      capabilityKind = "executable";
       source = "network-supervisor";
       target = "io-network-lifetime-probe";
-      transferable = false;
-    };
-    {
-      capabilityKind = "executable";
-      name = "lifetime-survivor-executable";
       rights = [
         "exec";
         "spawn";
       ];
+      transferable = false;
+    };
+    {
+      name = "lifetime-survivor-executable";
+      capabilityKind = "executable";
       source = "network-supervisor";
       target = "io-local-network-probe";
-      transferable = false;
-    };
-    {
-      capabilityKind = "executable";
-      name = "lifetime-service-executable";
       rights = [
         "exec";
         "spawn";
       ];
+      transferable = false;
+    };
+    {
+      name = "lifetime-service-executable";
+      capabilityKind = "executable";
       source = "network-supervisor";
       target = "network-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       transferable = false;
     };
     {
@@ -185,41 +185,41 @@
       name = "init";
     };
     {
-      dependencies = [];
-      executable = "io-network-lifetime-probe";
       name = "network-supervisor";
+      executable = "io-network-lifetime-probe";
+      dependencies = [];
     };
     {
-      autostart = false;
       bufferBytePages = 4;
       bufferCount = 4;
       dependencies = [];
       executable = "network-service";
-      health = "optional";
       loanCount = 4;
       mappingCount = 4;
       name = "network-service";
       owner = "network-supervisor";
+      autostart = false;
+      health = "optional";
     };
     {
-      autostart = false;
       dependencies = [];
       executable = "io-network-lifetime-probe";
-      health = "optional";
       loanCount = 2;
       mappingCount = 2;
       name = "publisher-session";
       owner = "network-supervisor";
+      autostart = false;
+      health = "optional";
     };
     {
-      autostart = false;
       dependencies = [];
       executable = "io-local-network-probe";
-      health = "optional";
       loanCount = 2;
       mappingCount = 2;
       name = "subscriber-session";
       owner = "network-supervisor";
+      autostart = false;
+      health = "optional";
     };
   ];
   interfaceSchemas = [];
@@ -237,43 +237,43 @@
       };
       {
         holder = "publisher-session";
-        read = true;
         subject = "publisher-session";
+        read = true;
         write = true;
       };
       {
         holder = "subscriber-session";
-        read = true;
         subject = "subscriber-session";
+        read = true;
         write = true;
       };
     ];
     restarts = [
       {
-        attempts = 1;
-        backoffNs = 0;
-        causes = [
-          "fault";
-          "exit";
-        ];
         instance = "publisher-session";
-      };
-      {
         attempts = 1;
         backoffNs = 0;
         causes = [
           "fault";
           "exit";
         ];
-        instance = "subscriber-session";
       };
       {
+        instance = "subscriber-session";
+        attempts = 1;
+        backoffNs = 0;
+        causes = [
+          "fault";
+          "exit";
+        ];
+      };
+      {
+        instance = "network-service";
         attempts = 1;
         backoffNs = 0;
         causes = [
           "fault";
         ];
-        instance = "network-service";
       };
     ];
     terminalState = "Error";
@@ -290,25 +290,25 @@
   };
   mintedBindings = [
     {
-      capabilityKind = "supervision";
-      holder = "network-service";
       name = "publisher-session-supervision";
       owner = "network-supervisor";
+      holder = "network-service";
+      capabilityKind = "supervision";
+      slot = 10;
       rights = [
         "supervise";
       ];
-      slot = 10;
       transferable = false;
     };
     {
-      capabilityKind = "supervision";
-      holder = "network-service";
       name = "subscriber-session-supervision";
       owner = "network-supervisor";
+      holder = "network-service";
+      capabilityKind = "supervision";
+      slot = 11;
       rights = [
         "supervise";
       ];
-      slot = 11;
       transferable = false;
     };
   ];

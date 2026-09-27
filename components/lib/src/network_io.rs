@@ -208,14 +208,8 @@ impl Region {
                 count if count == net::LOAN_BYTES as i64 => {
                     let descriptor =
                         WireNetworkLoan::decode(&bytes).ok_or(NetworkError::Malformed)?;
-                    if descriptor.magic != net::NETWORK_MAGIC
-                        || descriptor.version != net::FORMAT_VERSION
-                        || descriptor.role != role
-                        || descriptor.reserved0 != [0; 1]
-                        || descriptor.reserved != [0; 32]
+                    if !slime_proto::valid_network_loan(&descriptor, role)
                         || descriptor.length != length as u64
-                        || descriptor.buffer == 0
-                        || descriptor.lease == 0
                     {
                         return Err(NetworkError::Malformed);
                     }
@@ -510,7 +504,7 @@ impl<'a> NetworkIo<'a> {
         length: u64,
     ) -> Result<NetworkReply, NetworkError> {
         if length > net::DATA_BYTES as u64
-            || (direction == io_queue::DIRECTION_NONE && length != 0)
+            || (direction == io_queue::DIRECTION_NONE) != (length == 0)
             || !matches!(
                 direction,
                 io_queue::DIRECTION_NONE
@@ -546,10 +540,16 @@ impl<'a> NetworkIo<'a> {
             .admit(id, slice.lease, slice.length)
             .map_err(|_| NetworkError::Malformed)?;
         let mut timer = None;
+        let mut published = false;
         let mut result = (|| {
             queue
                 .submit(id, &slice, &request.encode(), false, net::DATA_BYTES as u64)
-                .map_err(|_| NetworkError::Malformed)?;
+                .map_err(|error| match error {
+                    QueueError::Closed | QueueError::StaleEpoch => NetworkError::Lost,
+                    QueueError::Malformed | QueueError::TooLarge => NetworkError::BadRequest,
+                    _ => NetworkError::Malformed,
+                })?;
+            published = true;
             let deadline = if let Some(wake) = &self.notifications {
                 let deadline = slime_rt::monotonic_read()
                     .map_err(|_| NetworkError::Lost)?
@@ -618,10 +618,13 @@ impl<'a> NetworkIo<'a> {
         };
         let settled = self.outstanding.settle(id, status);
         if !matches!(settled, Ok(entry) if entry.lease == slice.lease) {
-            self.poison();
+            if published {
+                self.poison();
+            }
             return Err(NetworkError::Malformed);
         }
-        if result.is_err() {
+        // Only a published request can leave the peer using this payload.
+        if published && result.is_err() {
             self.poison();
         }
         result
@@ -707,4 +710,196 @@ fn await_control(peer: u32, op: u8) -> Result<(), NetworkError> {
         }
     }
     Err(NetworkError::Lost)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slime_proto::io_queue_ring::format;
+
+    fn session<'a>(ring: &'a mut [u8], data: &'a mut [u8]) -> NetworkIo<'a> {
+        format(ring, net::QUEUE_SLOTS, 7).unwrap();
+        let queue = Queue::attach(ring, net::QUEUE_SLOTS).unwrap();
+        let region = |role, buffer, lease| Region {
+            slot: buffer as u32,
+            descriptor: WireNetworkLoan {
+                magic: net::NETWORK_MAGIC,
+                version: net::FORMAT_VERSION,
+                role,
+                reserved0: [0],
+                buffer,
+                lease,
+                length: net::DATA_BYTES as u64,
+                reserved: [0; 32],
+            },
+            live: true,
+        };
+        NetworkIo {
+            queue: Some(queue),
+            data: Some(data),
+            outstanding: Outstanding::new(7),
+            ring: region(net::LOAN_ROLE_RING, 1, 2),
+            payload: region(net::LOAN_ROLE_DATA, 3, 4),
+            peer: 5,
+            next_id: 1,
+            notifications: None,
+        }
+    }
+
+    fn complete_close(io: &mut NetworkIo<'_>) {
+        let completion = WireNetworkCompletion {
+            magic: net::NETWORK_MAGIC,
+            version: net::FORMAT_VERSION,
+            op: net::OP_CLOSE,
+            capability_kind: net::CAPABILITY_NONE,
+            status_detail: net::STATUS_SUCCESS,
+            flags: 0,
+            capability: 0,
+        };
+        io.queue
+            .as_mut()
+            .unwrap()
+            .complete(
+                io.next_id,
+                io_queue::STATUS_OK,
+                0,
+                &completion.encode(),
+                false,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn invalid_slices_do_not_admit_publish_or_poison() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        for (direction, length) in [
+            (io_queue::DIRECTION_DEVICE_READ, 0),
+            (io_queue::DIRECTION_DEVICE_WRITE, 0),
+            (io_queue::DIRECTION_NONE, 1),
+            (io_queue::DIRECTION_DEVICE_READ, net::DATA_BYTES as u64 + 1),
+            (u32::MAX, 1),
+        ] {
+            assert_eq!(
+                io.transact_raw(request(net::OP_CLOSE, 1), direction, length),
+                Err(NetworkError::BadRequest)
+            );
+            assert_eq!(io.next_id, 1);
+            assert!(io.outstanding.is_empty());
+            assert_eq!(io.queue.as_ref().unwrap().submitted(), 0);
+            assert!(io.data.is_some() && io.ring.live && io.payload.live);
+        }
+        complete_close(&mut io);
+        assert!(
+            io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0)
+                .unwrap()
+                .is_success()
+        );
+    }
+
+    #[test]
+    fn full_submission_settles_without_poisoning_and_can_retry() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        let empty = WireBufferSlice {
+            buffer: 0,
+            lease: 0,
+            offset: 0,
+            length: 0,
+            direction: io_queue::DIRECTION_NONE,
+            reserved: [0; 4],
+        };
+        for id in 10..10 + net::QUEUE_SLOTS as u64 {
+            io.queue
+                .as_mut()
+                .unwrap()
+                .submit(id, &empty, &[], false, 0)
+                .unwrap();
+        }
+        assert_eq!(
+            io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0),
+            Err(NetworkError::Malformed)
+        );
+        assert!(io.outstanding.is_empty());
+        assert_eq!(
+            io.queue.as_ref().unwrap().submitted(),
+            net::QUEUE_SLOTS as u64
+        );
+        assert!(io.data.is_some() && io.ring.live && io.payload.live);
+        let mut body = [0; io_queue::REQUEST_PAYLOAD_BYTES];
+        for _ in 0..net::QUEUE_SLOTS {
+            io.queue
+                .as_mut()
+                .unwrap()
+                .take_request(&mut body, 0)
+                .unwrap();
+        }
+        complete_close(&mut io);
+        assert!(
+            io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0)
+                .unwrap()
+                .is_success()
+        );
+        assert!(io.outstanding.is_empty());
+    }
+
+    #[test]
+    fn closed_submission_is_lost_without_publication_or_poisoning() {
+        for dead in [false, true] {
+            let mut ring = [0; net::RING_BYTES];
+            let mut data = [0; net::DATA_BYTES];
+            let mut io = session(&mut ring, &mut data);
+            if dead {
+                io.queue.as_mut().unwrap().mark_driver_dead();
+            } else {
+                io.queue.as_mut().unwrap().begin_reset();
+            }
+            assert_eq!(
+                io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0),
+                Err(NetworkError::Lost)
+            );
+            assert!(io.outstanding.is_empty());
+            assert_eq!(io.queue.as_ref().unwrap().submitted(), 0);
+            assert!(io.data.is_some() && io.ring.live && io.payload.live);
+        }
+    }
+
+    #[test]
+    fn lost_completion_after_publication_settles_and_poisons() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        assert_eq!(
+            io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0),
+            Err(NetworkError::Lost)
+        );
+        assert!(io.outstanding.is_empty());
+        assert!(io.queue.is_none() && io.data.is_none());
+        assert!(!io.ring.live && !io.payload.live);
+    }
+
+    #[test]
+    fn malformed_completion_after_publication_settles_and_poisons() {
+        let mut ring = [0; net::RING_BYTES];
+        let mut data = [0; net::DATA_BYTES];
+        let mut io = session(&mut ring, &mut data);
+        io.queue
+            .as_mut()
+            .unwrap()
+            .complete(1, io_queue::STATUS_OK, 0, &[], false)
+            .unwrap();
+        assert_eq!(
+            io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0),
+            Err(NetworkError::Malformed)
+        );
+        assert!(io.outstanding.is_empty());
+        assert!(io.queue.is_none() && io.data.is_none());
+        assert!(!io.ring.live && !io.payload.live);
+        assert_eq!(
+            io.transact_raw(request(net::OP_CLOSE, 1), io_queue::DIRECTION_NONE, 0),
+            Err(NetworkError::Lost)
+        );
+    }
 }

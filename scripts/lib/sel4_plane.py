@@ -125,6 +125,6 @@ def run_plane(
     transcript = "\n".join(lines)
     if timed_out.is_set():
         fail(f"QEMU timed out after {timeout}s before terminal condition")
-    if not terminal_reached and process.returncode not in (0, None):
+    if not terminal_reached:
         fail(f"QEMU exited with status {process.returncode} before terminal condition")
     return transcript

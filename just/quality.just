@@ -145,6 +145,7 @@ lint_components_host:
     set -euo pipefail
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cargo clippy -p slime-proto --target "$host" -- -D warnings
+    cargo clippy -p slime-network-tcp-tests --all-targets --target "$host" -- -D warnings
 
 # Product-target lint requires the installed seL4 prefix, pinned toolchain,
 # custom targets, and embedded child ELF; missing prerequisites fail closed.
@@ -260,7 +261,7 @@ deny:
 
 [group('quality')]
 machete:
-    cargo-machete boot-contracts components slime-root
+    cargo-machete boot-contracts components slime-root verification/network-tcp
 
 # Override the components bare-metal default with the actual host target.
 [group('quality')]
@@ -348,6 +349,7 @@ test_host:
     # Disable the seL4-only runtime while testing host-safe device arithmetic.
     (cd components && cargo test --target "$host" -p slime-components --no-default-features)
     cargo test -p slime-build-support
+    just io_tcp_host_check
 
 # Run shipped root mechanism modules on the host. The generated seL4 config is
 # still required at build time, so a missing installed prefix fails closed.

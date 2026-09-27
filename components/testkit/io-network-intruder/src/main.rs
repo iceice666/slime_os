@@ -54,17 +54,19 @@ fn main(_: u32) {
     );
     debug_write(b"\n");
 
-    let mut cross_holder = 0u64;
+    // Guessed IDs can name either another holder's legacy handle or no live
+    // handle at all; this probe does not establish which denial branch ran.
+    let mut guessed = 0u64;
     for id in 1..=4 {
         let reply = call(capability(network_service::OP_SEND, id));
         if reply.status_detail >= 0 {
-            fail(b"cross-holder accepted");
+            fail(b"guessed accepted");
         }
-        cross_holder += u64::from(reply.status_detail < 0);
+        guessed += u64::from(reply.status_detail < 0);
     }
     write_number(
-        b"[io-network-intruder] cross-holder capability refusals=",
-        cross_holder,
+        b"[io-network-intruder] guessed capability refusals=",
+        guessed,
     );
     debug_write(b"\n");
 
@@ -115,7 +117,7 @@ fn main(_: u32) {
     let shutdown_observed = u64::from(shutdown.status_detail == 0);
     write_number(
         b"[io-network-intruder] structured denials=",
-        exact_refusals + cross_holder + rights_mask_refusals,
+        exact_refusals + guessed + rights_mask_refusals,
     );
     write_number(b" shutdown=", shutdown_observed);
     debug_write(b"\n");

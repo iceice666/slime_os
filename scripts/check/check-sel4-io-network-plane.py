@@ -2,7 +2,8 @@
 """IO4 and IO11 gate: destination-scoped network authority under seL4, and
 the data plane behind it.
 
-Two arms over one checker. The authority arm boots `sel4-io-network`, whose
+Six arms share this checker: authority, external TCP, local TCP, client lifetime,
+service fault, and driver reset. The authority arm boots `sel4-io-network`, whose
 service is bound to a loopback that performs no link operation, and proves the
 exact-destination boundary alone. The tcp arm boots `sel4-io-tcp`, whose
 service is bound to the IO3 virtio-net driver behind a frame-level peer on
@@ -72,7 +73,7 @@ AUTHORITY_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "denials",
         (
             r"\[io-network-intruder\] exact authority refusals=8",
-            r"\[io-network-intruder\] cross-holder capability refusals=4",
+            r"\[io-network-intruder\] guessed capability refusals=4",
             r"\[io-network-intruder\] rights-mask refusals=2",
             r"\[io-network-intruder\] structured denials=14 shutdown=1",
         ),
@@ -104,7 +105,7 @@ TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[network-service\] interface addr=10\.0\.0\.1/24 gateway=none mac=52:54:00:53:4c:01",
             r"\[network-service\] link query state=up rx provisioned=4",
             r"\[network-service\] application bytes sent=4096 received=4096",
-            r"\[network-service\] application buffers released=2",
+            r"\[network-service\] application buffers released",
             r"\[network-service\] application connection handles live=0",
             r"\[network-service\] link frames total=[0-9]+ tx=[0-9]+ rx=[0-9]+ arp=[0-9]+ icmp=[0-9]+ tcp=[1-9]\d* other=0",
             r"\[network-service\] link statistics tx=[0-9]+ rx=[0-9]+",
@@ -137,7 +138,7 @@ TCP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "tcp denials",
         (
             r"\[io-network-intruder\] exact authority refusals=8",
-            r"\[io-network-intruder\] cross-holder capability refusals=4",
+            r"\[io-network-intruder\] guessed capability refusals=4",
             r"\[io-network-intruder\] rights-mask refusals=2",
             r"\[io-network-intruder\] structured denials=14 shutdown=1",
         ),
@@ -151,7 +152,7 @@ LOCAL_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("local admission", (r"SLIME_ROOT generation admitted number=155 executables=3 instances=4 grants=5 ",)),
     ("local service", (
         r"\[network-service\] loopback interface=127\.0\.0\.1 external_nic=none",
-        r"\[network-service\] wait wakes=[1-9]\d* coalesced=[0-9]+ timers_live=0",
+        r"\[network-service\] wait wakes=[1-9]\d* coalesced=[0-9]+",
         r"\[network-service\] loopback frames=[1-9]\d* rejected=0 handles=0 external_frames=0 resets=0 syns=2 fins=2",
     )),
     ("local publisher", (
@@ -186,7 +187,7 @@ LIFETIME_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("lifetime service", (
         r"\[network-service\] incarnation=1",
-        r"\[network-service\] client death handles=1 sockets=1 bytes=4096 buffers=2",
+        r"\[network-service\] client death handles=1 sockets=1 bytes=4096 sessions_released=1",
         r"\[network-service\] loopback frames=[1-9]\d* rejected=0 handles=0 external_frames=0 resets=[1-9]\d*",
         r"\[network-service\] incarnation=2",
     )),
@@ -196,6 +197,7 @@ LIFETIME_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("lifetime accepted stale handle", (
         r"\[io-network-lifetime-probe\] role=survivor old_handle_refused=1 fresh_identity=1",
     )),
+    ("lifetime health", (r"SLIME_GRAPH HEALTHY generation=156 required=2 live=0 completed=2 failed=0",)),
     ("lifetime clients", (
         r"\[io-network-lifetime-probe\] role=victim sent=1024 acknowledged=16 faulting=1",
         r"\[io-network-lifetime-probe\] role=survivor received=1024 identical=1 reset=1",

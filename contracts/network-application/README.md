@@ -57,10 +57,18 @@ listener endpoint. `LISTEN = 8` is mandatory; independent
 `SEND = 2` and `RECV = 4` may additionally be granted. No wildcard address, arbitrary
 external listener, unknown right, or implicit peer is admitted.
 
-Listener backlog and accepted-socket limit are each 1–4, with backlog no greater
-than the accepted limit. Byte budget is at most 16384 and at least 4096 times the
-accepted limit. Timer budget is 1–4; queue depth is a power of two from 2 through
-4. Retry and reconnect limits are independently 0–16. These are admission
+The v1 contract, encoder, decoder and service admit **only backlog one**; all
+other values fail closed. That slot
+includes a handshake or a connected socket awaiting accept. Accepted-socket
+limit is independently 1–4, and a successful accept may rearm the pending slot
+while earlier accepted children remain live. Byte budget is at most 16384 and
+at least 4096 times the accepted limit. Timer budget is 1–4; queue depth is a
+power of two from 2 through 4. The pending slot and accepted children share
+these byte, timer and queue ceilings and the backend's four-socket pool.
+
+Retry and reconnect limits are independently 0–16. Reconnect limit bounds only
+automatic recovery attempts, not explicit client connects or listener rearming;
+the current engine performs no automatic reconnects. These are admission
 ceilings, not a promise that runtime resources are currently available.
 
 The format is an authority declaration, not evidence of a running listener,

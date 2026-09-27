@@ -11,6 +11,7 @@ not change that record shape or any boot format.
 committed outputs under `v1/systems/` to `.zt` sources under `v1/sources/`:
 
 - `sel4-call`
+- `sel4-io-service-fault` (the lifetime graph with service-fault grants and restart causes)
 - `sel4-private-memory-adaptive-rv64`
 - `sel4-private-memory-matrix-rv64`
 - `sel4-private-memory-stress-rv64`
@@ -26,6 +27,14 @@ The map is host orchestration, not an additional serialized contract.
 endpoint grants with their two slot pins, and minted supervision bindings.
 Sources retain explicit authority choices and list ordering; helpers do not
 infer extra grants or ambient permissions.
+
+Factory sources encode authority provenance, not just the eventual holder.
+The lifetime, service-fault, and driver-reset graphs declare the network
+service's factory as a self-grant: root installs it without a capability from
+the spawning supervisor. An `init`-sourced factory, as in the boot-launched TCP
+and local graphs, instead counts as parent-supplied authority if dynamically
+spawned. Preserve this distinction when deriving variants; the owning rule is
+`grant_crosses_spawn` in `slime-root/src/generation.rs`.
 
 ## Generation and admission
 
@@ -55,10 +64,10 @@ integers and booleans, and must satisfy `SystemSpec` plus host semantic checks.
 Evaluation is bounded by a host timeout.
 
 Rendering preserves record-field and list order, with the existing two-space
-`.zti` layout. The migration must preserve committed output bytes, not just
-normalized JSON equality. A source change that does change output bytes is a
-composition change and must also regenerate its downstream manifests and image
-closures under their ordinary validation rules.
+`.zti` layout. A semantics-preserving variant must preserve field values and
+list order; inheriting a base record can also inherit its field order. Any
+change to committed output bytes, including field order, must regenerate its
+downstream manifests and image closures under their ordinary validation rules.
 
 ## Verification boundaries
 

@@ -189,8 +189,9 @@ The implementation and qualification plan is
 - `just io_driver_authority_check` — exact hardware authority and reclamation;
 - `just io_block_check` — userspace block driver behavior;
 - `just io_link_check` — userspace virtio-net/LinkDevice behavior;
-- `just io_network_check` — exact-destination authority plus the external TCP
-  stream arm; `just io_tcp_check` selects that stream and its host engine tests;
+- `just io_network_check` — all six arms: authority, external TCP, local TCP,
+  client lifetime, service fault and driver reset; `just io_tcp_check` selects
+  the external stream and its host engine tests;
 - `just io_local_check` — declared local listen/accept, duplex bytes and readiness;
 - `just io_network_lifetime_check` — client death, reclamation and supervised restart;
 - `just io_network_service_fault_check` — service VM fault with in-flight local

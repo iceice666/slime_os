@@ -63,6 +63,7 @@ COMPUTED_SYSTEM_SOURCES = {
     name: f"sources/{name}.zt"
     for name in (
         "sel4-call",
+        "sel4-io-service-fault",
         "sel4-private-memory-adaptive-rv64",
         "sel4-private-memory-matrix-rv64",
         "sel4-private-memory-stress-rv64",

@@ -29,7 +29,7 @@ from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 # silently weaken a gate. Boot-layout fixture equality is controlled separately.
 GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
-    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 104),
+    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 105),
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 109),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
@@ -680,6 +680,9 @@ if mode == "terminal":
 elif mode == "failure":
     print("SLIME CONTROL EARLY FAILURE", flush=True)
     raise SystemExit(7)
+elif mode == "early-success":
+    print("SLIME CONTROL EARLY EXIT", flush=True)
+    raise SystemExit(0)
 while True:
     time.sleep(1)
 """,
@@ -770,6 +773,11 @@ memory_mib = 64
         "exited with status 7",
         lambda: run("failure", 2),
     )
+    require_rejection(
+        "early successful process exit runtime control",
+        "exited with status 0",
+        lambda: run("early-success", 2),
+    )
     empty_path = root / "empty-path"
     empty_path.mkdir()
     require_rejection(
@@ -790,9 +798,9 @@ memory_mib = 64
 
     print(
         "seL4 gate control check: runtime returned terminal evidence and rejected "
-        "timeout, early process failure, and missing QEMU"
+        "timeout, early process failure/success, and missing QEMU"
     )
-    return 4
+    return 5
 
 
 def capacity_workload_transcript() -> str:

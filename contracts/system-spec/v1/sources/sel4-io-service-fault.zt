@@ -1,0 +1,33 @@
+base ::= import "../systems/sel4-io-lifetime.zti";
+
+base with {
+  name = "sel4-io-service-fault";
+  generation = 157;
+  acceptanceCriteria = "Service fault invalidates in-flight client mappings and requests; fresh incarnations refuse old handles and exchange bytes.";
+  deploymentConstraint = "AArch64 seL4 QEMU; closure-selected in-flight network-service fault and same-boot restart, no NIC.";
+  grants = append base.grants {
+    {
+      name = "service-fault-victim";
+      capabilityKind = "endpoint";
+      source = "network-supervisor";
+      target = "publisher-session";
+      rights = { "send"; "recv"; };
+      transferable = false;
+    };
+    {
+      name = "service-fault-survivor";
+      capabilityKind = "endpoint";
+      source = "network-supervisor";
+      target = "subscriber-session";
+      rights = { "send"; "recv"; };
+      transferable = false;
+    };
+  };
+  lifecyclePolicy = base.lifecyclePolicy with {
+    restarts = {
+      { instance = "publisher-session"; attempts = 1; backoffNs = 0; causes = { "fault"; "exit"; }; };
+      { instance = "subscriber-session"; attempts = 1; backoffNs = 0; causes = { "fault"; "exit"; }; };
+      { instance = "network-service"; attempts = 1; backoffNs = 0; causes = { "fault"; }; };
+    };
+  };
+}

@@ -49,9 +49,6 @@ const INTERFACE_PAGE_ROWS: usize = 4;
 /// occupies it, so both must sit below the first buffer this service creates.
 const LINK_PEER_SLOT: u32 = 0;
 const FACTORY_SLOT: u32 = 1;
-// The declared application provisioning endpoint is pinned to 30: above the
-// factory, twelve retained buffer handles, and one transient moved loan. Native
-// endpoint receiver lookup must not be shadowed by a logical buffer slot.
 const MAX_CAPABILITIES: usize = 8;
 /// The clients a generation may bind to this service, by the grant name each
 /// resolves and the instance name its holder identity derives from. A grant
@@ -293,20 +290,22 @@ fn main(_: u32) {
                             Backend::External => engine.release_holder(client.holder),
                             Backend::Loopback => local_engine.release_holder(client.holder),
                         };
-                        let mut buffers = 0;
-                        if let Some(application) = applications[index].take() {
+                        let session_released = if let Some(application) = applications[index].take()
+                        {
                             if !application.release() {
                                 fail(b"dead client buffers");
                             }
-                            buffers = 2;
-                        }
+                            true
+                        } else {
+                            false
+                        };
                         write_number(
                             b"[network-service] client death handles=",
                             reclaimed.handles as u64,
                         );
                         write_number(b" sockets=", reclaimed.sockets as u64);
                         write_number(b" bytes=", reclaimed.bytes as u64);
-                        write_number(b" buffers=", buffers);
+                        write_number(b" sessions_released=", u64::from(session_released));
                         debug_write(b"\n");
                         client.closed = true;
                         progress = true;
@@ -454,7 +453,7 @@ fn main(_: u32) {
                                 if !application.release() {
                                     fail(b"application buffer release");
                                 }
-                                debug_write(b"[network-service] application buffers released=2\n");
+                                debug_write(b"[network-service] application buffers released\n");
                             }
                             client.closed = true;
                             (0, network_service::CAPABILITY_NONE, 0)
@@ -605,7 +604,7 @@ fn main(_: u32) {
     if let Some(wait) = waiting {
         write_number(b"[network-service] wait wakes=", wait.wakes() as u64);
         write_number(b" coalesced=", coalesced);
-        debug_write(b" timers_live=0\n");
+        debug_write(b"\n");
     }
     let external_frames = stack
         .as_ref()

@@ -11,6 +11,7 @@ members = [
     "components/proto",
     "components/runtime",
     "slime-root",
+    "verification/network-tcp",
 ]
 
 # Inherited by every member via `[lints] workspace = true`. Only lints the

@@ -17,6 +17,7 @@ pub const SOCKETS: usize = 4;
 pub const BUFFER_BYTES: usize = 2048;
 pub const MAX_INCARNATION: u64 = (1 << 30) - 1;
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
+const FIRST_EPHEMERAL_PORT: u16 = 49152;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -121,7 +122,7 @@ pub struct Engine<'a> {
     listeners: [Option<Listener>; SOCKETS],
     namespace: u64,
     serial: u32,
-    next_port: Option<u16>,
+    next_port: u16,
     resets: [Option<Reset>; SOCKETS],
     last_now: Instant,
 }
@@ -155,7 +156,7 @@ impl<'a> Engine<'a> {
             // Checked disjoint fields prevent aliasing across incarnations/backends.
             namespace: (1 << 63) | (epoch << 33) | (u64::from(backend) << 32),
             serial: 0,
-            next_port: Some(49152),
+            next_port: FIRST_EPHEMERAL_PORT,
             resets: [None; SOCKETS],
             last_now: Instant::ZERO,
         })
@@ -168,6 +169,7 @@ impl<'a> Engine<'a> {
     }
 
     /// Call after interface polling and before publishing each queued frame.
+    /// Only TCP has holder accounting; interface ARP and ICMP bypass this guard.
     /// A segment overlapping an already-transmitted sequence consumes one retry;
     /// the budget is conservative and applies over the whole connection lifetime.
     pub fn permit_egress(&mut self, frame: &[u8]) -> bool {
@@ -342,6 +344,39 @@ impl<'a> Engine<'a> {
         })
     }
 
+    fn ephemeral_port(&self) -> Option<u16> {
+        let mut port = self.next_port;
+        loop {
+            // Retain both ends: a loopback peer can outlive its released client.
+            // Closed sockets may still hold a tuple for a queued reset.
+            let occupied = self.handles.iter().any(|handle| {
+                let socket = self.sockets.get::<Socket>(*handle);
+                socket
+                    .local_endpoint()
+                    .is_some_and(|endpoint| endpoint.port == port)
+                    || socket
+                        .remote_endpoint()
+                        .is_some_and(|endpoint| endpoint.port == port)
+            }) || self
+                .resets
+                .iter()
+                .flatten()
+                .any(|reset| reset.local.port == port || reset.remote.port == port)
+                || self
+                    .listeners
+                    .iter()
+                    .flatten()
+                    .any(|listener| listener.port == port);
+            if !occupied {
+                return Some(port);
+            }
+            port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
+            if port == self.next_port {
+                return None;
+            }
+        }
+    }
+
     fn next_id(&mut self) -> Option<u64> {
         self.serial = self.serial.checked_add(1)?;
         Some(self.namespace | u64::from(self.serial))
@@ -427,6 +462,7 @@ impl<'a> Engine<'a> {
         if policy.holder_identity != holder
             || policy.role != Role::Listener
             || policy.backend != Backend::Loopback
+            || policy.backlog != 1
             || policy.rights & boot_contracts::network_application::RIGHT_LISTEN == 0
             || request.transport != wire::TRANSPORT_TCP
             || request.address_kind != wire::ADDRESS_IPV4
@@ -610,7 +646,7 @@ impl<'a> Engine<'a> {
             if !listener.socket.is_some_and(|slot| {
                 self.sockets.get::<Socket>(self.handles[slot]).state() == State::Listen
             }) || self.connections.iter().enumerate().any(|(slot, entry)| {
-                entry.is_some()
+                entry.is_some_and(|connection| connection.phase == Phase::Connecting)
                     && self
                         .sockets
                         .get::<Socket>(self.handles[slot])
@@ -821,6 +857,8 @@ impl<'a> Engine<'a> {
         Outcome::Complete(completion)
     }
 
+    // reconnect_limit bounds automatic recovery only; each call is an explicit
+    // holder request and this engine never schedules an automatic reconnect.
     fn connect(
         &mut self,
         destinations: &NetworkDestinations<'_>,
@@ -868,12 +906,9 @@ impl<'a> Engine<'a> {
         let Some(serial) = self.serial.checked_add(1) else {
             return fail(Status::Exhausted);
         };
-        // No source port is reused within one engine lifetime, including after
-        // capability release while an old socket remains in TIME-WAIT.
-        let Some(port) = self.next_port else {
+        let Some(port) = self.ephemeral_port() else {
             return fail(Status::Exhausted);
         };
-        self.next_port = port.checked_add(1);
         let socket = self.sockets.get_mut::<Socket>(self.handles[index]);
         if socket
             .connect(
@@ -887,6 +922,7 @@ impl<'a> Engine<'a> {
         }
         socket.set_timeout(Some(OPERATION_TIMEOUT));
         socket.set_ack_delay(None);
+        self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
         self.serial = serial;
         let id = self.namespace | u64::from(serial);
         self.connections[index] = Some(Connection {
@@ -1180,14 +1216,16 @@ mod tests {
         let bytes = local_applications(RIGHT_LISTEN | RIGHT_RECV);
         let applications = NetworkApplications::decode(&bytes).unwrap();
         let policy = applications.by_holder(&[2; 32]).unwrap();
-        for mutation in 0..5 {
+        for mutation in 0..7 {
             let mut denied = policy;
             match mutation {
                 0 => denied.byte_budget = 4095,
                 1 => denied.timer_budget = 0,
                 2 => denied.queue_depth = 0,
                 3 => denied.accepted_socket_limit = 0,
-                _ => denied.rights = RIGHT_RECV,
+                4 => denied.rights = RIGHT_RECV,
+                5 => denied.backlog = 0,
+                _ => denied.backlog = 2,
             }
             let status = complete(engine.listen(
                 [2; 32],
@@ -1198,7 +1236,7 @@ mod tests {
             .status;
             assert_eq!(
                 status,
-                if mutation == 4 {
+                if mutation >= 4 {
                     Status::Denied
                 } else {
                     Status::Exhausted
@@ -1224,6 +1262,9 @@ mod tests {
             Instant::ZERO,
         ))
         .capability;
+        let listener = engine.listeners.iter_mut().flatten().next().unwrap();
+        listener.port = FIRST_EPHEMERAL_PORT;
+        assert_eq!(engine.ephemeral_port(), Some(FIRST_EPHEMERAL_PORT + 1));
         assert_eq!(engine.release_holder([2; 32]).handles, 1);
         assert_eq!(
             complete(engine.accept([2; 32], id, Instant::ZERO)).status,
@@ -1712,6 +1753,235 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_ports_wrap_skip_live_and_reset_tuples_and_preserve_failed_cursor() {
+        let mut storage = [SocketStorage::EMPTY; SOCKETS];
+        let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+        let mut link = Link::default();
+        let mut iface = interface(&mut link, 1);
+        let mut bytes = declarations(RIGHT_CONNECT, 16384, 4, 4);
+        let mut other = bytes[contract::HEADER_BYTES..].to_vec();
+        other[contract::OFF_ENTRY_HOLDER_IDENTITY..contract::OFF_ENTRY_HOLDER_IDENTITY_END].fill(2);
+        bytes.extend_from_slice(&other);
+        let length = bytes.len() as u32;
+        for (offset, value) in [
+            (contract::OFF_HEADER_DESTINATION_COUNT, 2u32),
+            (contract::OFF_HEADER_TOTAL_LEN, length),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let destinations = NetworkDestinations::decode(&bytes).unwrap();
+        engine.next_port = u16::MAX;
+        let first = pending(engine.handle(
+            &destinations,
+            HOLDER,
+            request(wire::OP_CONNECT, 0),
+            &mut [],
+            Instant::ZERO,
+            &mut iface,
+        ));
+        assert_eq!(engine.next_port, FIRST_EPHEMERAL_PORT);
+        engine.next_port = u16::MAX;
+        let second = pending(engine.handle(
+            &destinations,
+            [2; 32],
+            request(wire::OP_CONNECT, 0),
+            &mut [],
+            Instant::ZERO,
+            &mut iface,
+        ));
+        let second_slot = engine.find([2; 32], second).unwrap();
+        assert_eq!(
+            engine
+                .sockets
+                .get::<Socket>(engine.handles[second_slot])
+                .local_endpoint()
+                .unwrap()
+                .port,
+            FIRST_EPHEMERAL_PORT
+        );
+        assert_ne!(first, second);
+        engine.release_holder(HOLDER);
+        engine.release_holder([2; 32]);
+        engine.next_port = u16::MAX;
+        assert_eq!(engine.ephemeral_port(), Some(FIRST_EPHEMERAL_PORT + 1));
+        // A retained reset alone quarantines either end even without a socket tuple.
+        let mut storage = [SocketStorage::EMPTY; SOCKETS];
+        let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 2, 0).unwrap();
+        engine.resets[0] = Some(Reset {
+            local: IpEndpoint::new(IpAddress::v4(10, 0, 0, 1), FIRST_EPHEMERAL_PORT),
+            remote: IpEndpoint::new(IpAddress::v4(10, 0, 0, 2), FIRST_EPHEMERAL_PORT + 1),
+            deadline: Instant::ZERO + OPERATION_TIMEOUT,
+        });
+        assert_eq!(engine.ephemeral_port(), Some(FIRST_EPHEMERAL_PORT + 2));
+        engine.tick(Instant::ZERO + OPERATION_TIMEOUT);
+        assert_eq!(engine.ephemeral_port(), Some(FIRST_EPHEMERAL_PORT));
+        iface.update_ip_addrs(|addresses| addresses.clear());
+        for _ in 0..=u16::MAX - FIRST_EPHEMERAL_PORT {
+            assert_eq!(
+                complete(engine.handle(
+                    &destinations,
+                    HOLDER,
+                    request(wire::OP_CONNECT, 0),
+                    &mut [],
+                    Instant::ZERO,
+                    &mut iface
+                ))
+                .status,
+                Status::Refused
+            );
+        }
+        assert_eq!(engine.next_port, FIRST_EPHEMERAL_PORT);
+        assert_eq!(engine.serial, 0);
+        assert_eq!(engine.allocated(), 0);
+        iface.update_ip_addrs(|addresses| {
+            addresses
+                .push(IpCidr::new(IpAddress::v4(10, 0, 0, 1), 24))
+                .unwrap()
+        });
+        pending(engine.handle(
+            &destinations,
+            [2; 32],
+            request(wire::OP_CONNECT, 0),
+            &mut [],
+            Instant::ZERO,
+            &mut iface,
+        ));
+    }
+
+    #[test]
+    fn local_listener_accepts_two_live_connections_with_independent_payloads() {
+        use crate::loopback::Loopback;
+        use boot_contracts::network_application as app;
+        let mut storage = [SocketStorage::EMPTY; SOCKETS];
+        let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 1).unwrap();
+        let mut device = Loopback::new();
+        let mut iface = Interface::new(
+            Config::new(HardwareAddress::Ethernet(EthernetAddress([
+                2, 0, 0, 0, 0, 1,
+            ]))),
+            &mut device,
+            Instant::ZERO,
+        );
+        iface.update_ip_addrs(|addresses| {
+            addresses
+                .push(IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8))
+                .unwrap()
+        });
+        let mut bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, 8192, 2, 2);
+        let offset = contract::HEADER_BYTES + contract::OFF_ENTRY_ADDRESS;
+        bytes[offset..offset + 4].copy_from_slice(&[127, 0, 0, 1]);
+        let destinations = NetworkDestinations::decode(&bytes).unwrap();
+        let mut bytes = local_applications(app::RIGHT_LISTEN | app::RIGHT_SEND | app::RIGHT_RECV);
+        let offset = app::HEADER_BYTES + app::ENTRY_BYTES + app::OFF_ENTRY_ACCEPTED_SOCKET_LIMIT;
+        bytes[offset..offset + 4].copy_from_slice(&2u32.to_le_bytes());
+        let applications = NetworkApplications::decode(&bytes).unwrap();
+        let listener = complete(engine.handle_local(
+            &destinations,
+            &applications,
+            [2; 32],
+            local_request(wire::OP_LISTEN, 0),
+            &mut [],
+            Instant::ZERO,
+            &mut iface,
+        ))
+        .capability;
+        let mut pairs = [(0, 0); 2];
+        for (ordinal, pair) in pairs.iter_mut().enumerate() {
+            let now = Instant::from_millis(ordinal as i64 * 20);
+            pair.0 = pending(engine.handle_local(
+                &destinations,
+                &applications,
+                HOLDER,
+                local_request(wire::OP_CONNECT, 0),
+                &mut [],
+                now,
+                &mut iface,
+            ));
+            assert_eq!(
+                complete(engine.handle_local(
+                    &destinations,
+                    &applications,
+                    HOLDER,
+                    local_request(wire::OP_CONNECT, 0),
+                    &mut [],
+                    now,
+                    &mut iface
+                ))
+                .status,
+                Status::Exhausted
+            );
+            for _ in 0..20 {
+                iface.poll(now, &mut device, engine.sockets());
+                device.flush(|frame| engine.permit_egress(frame));
+            }
+            assert_eq!(
+                engine.poll_pending(HOLDER, pair.0, now).unwrap().status,
+                Status::Success
+            );
+            let accepted = complete(engine.accept([2; 32], listener, now));
+            assert_eq!(accepted.status, Status::Success);
+            pair.1 = accepted.capability;
+        }
+        assert_eq!(engine.children(listener), 2);
+        assert_eq!(engine.allocated(), 5);
+        assert_eq!(
+            complete(engine.handle_local(
+                &destinations,
+                &applications,
+                HOLDER,
+                local_request(wire::OP_CONNECT, 0),
+                &mut [],
+                Instant::from_millis(40),
+                &mut iface
+            ))
+            .status,
+            Status::Exhausted
+        );
+        for (ordinal, (client, _)) in pairs.iter().enumerate() {
+            assert_eq!(
+                complete(engine.handle_local(
+                    &destinations,
+                    &applications,
+                    HOLDER,
+                    local_request(wire::OP_SEND, *client),
+                    &mut [ordinal as u8 + 1],
+                    Instant::from_millis(40),
+                    &mut iface
+                ))
+                .transferred,
+                1
+            );
+        }
+        for _ in 0..20 {
+            iface.poll(Instant::from_millis(40), &mut device, engine.sockets());
+            device.flush(|frame| engine.permit_egress(frame));
+        }
+        for (ordinal, (_, accepted)) in pairs.iter().enumerate() {
+            let mut received = [0];
+            assert_eq!(
+                complete(engine.handle_local(
+                    &destinations,
+                    &applications,
+                    [2; 32],
+                    local_request(wire::OP_RECV, *accepted),
+                    &mut received,
+                    Instant::from_millis(40),
+                    &mut iface
+                ))
+                .transferred,
+                1
+            );
+            assert_eq!(received, [ordinal as u8 + 1]);
+        }
+    }
+
+    #[test]
     fn incarnation_backend_and_serial_fields_are_checked_and_disjoint() {
         let mut identities = Vec::new();
         for epoch in [1, 2, MAX_INCARNATION] {
@@ -2014,6 +2284,81 @@ mod tests {
     }
 
     #[test]
+    fn interface_icmp_echo_is_not_charged_to_a_holder() {
+        use smoltcp::phy::ChecksumCapabilities;
+        use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, Ipv4Repr};
+        let mut storage = [SocketStorage::EMPTY; SOCKETS];
+        let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
+        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+        let mut link = Link::default();
+        let mut iface = interface(&mut link, 1);
+        let icmp = Icmpv4Repr::EchoRequest {
+            ident: 7,
+            seq_no: 1,
+            data: b"interface traffic",
+        };
+        let ip = Ipv4Repr {
+            src_addr: Ipv4Address::from(PEER),
+            dst_addr: Ipv4Address::new(10, 0, 0, 1),
+            next_header: IpProtocol::Icmp,
+            payload_len: icmp.buffer_len(),
+            hop_limit: 64,
+        };
+        let mut frame =
+            vec![0; EthernetFrame::<&[u8]>::buffer_len(ip.buffer_len() + icmp.buffer_len())];
+        let mut ethernet = EthernetFrame::new_unchecked(&mut frame[..]);
+        ethernet.set_ethertype(EthernetProtocol::Ipv4);
+        ethernet.set_src_addr(EthernetAddress([2, 0, 0, 0, 0, 2]));
+        ethernet.set_dst_addr(EthernetAddress([2, 0, 0, 0, 0, 1]));
+        let mut packet = Ipv4Packet::new_unchecked(ethernet.payload_mut());
+        ip.emit(&mut packet, &ChecksumCapabilities::default());
+        icmp.emit(
+            &mut Icmpv4Packet::new_unchecked(packet.payload_mut()),
+            &ChecksumCapabilities::default(),
+        );
+        let mut peer_link = Link::default();
+        let mut peer_iface = interface(&mut peer_link, 2);
+        let mut peer_storage = [];
+        let mut peer_sockets = SocketSet::new(&mut peer_storage[..]);
+        let mut reply = None;
+        for _ in 0..4 {
+            link.rx.push_back(frame.clone());
+            iface.poll(Instant::ZERO, &mut link, engine.sockets());
+            while let Some(outgoing) = link.tx.pop_front() {
+                assert!(engine.permit_egress(&outgoing));
+                let ethernet = EthernetFrame::new_checked(&outgoing[..]).unwrap();
+                if ethernet.ethertype() == EthernetProtocol::Ipv4 {
+                    reply = Some(outgoing);
+                } else {
+                    assert_eq!(ethernet.ethertype(), EthernetProtocol::Arp);
+                    peer_link.rx.push_back(outgoing);
+                }
+            }
+            peer_iface.poll(Instant::ZERO, &mut peer_link, &mut peer_sockets);
+            link.rx.extend(peer_link.tx.drain(..));
+        }
+        let reply = reply.expect("automatic ICMP echo reply after ARP resolution");
+        let ethernet = EthernetFrame::new_checked(&reply[..]).unwrap();
+        let packet = Ipv4Packet::new_checked(ethernet.payload()).unwrap();
+        assert_eq!(packet.next_header(), IpProtocol::Icmp);
+        assert_eq!(
+            Icmpv4Repr::parse(
+                &Icmpv4Packet::new_checked(packet.payload()).unwrap(),
+                &ChecksumCapabilities::default()
+            )
+            .unwrap(),
+            Icmpv4Repr::EchoReply {
+                ident: 7,
+                seq_no: 1,
+                data: b"interface traffic"
+            }
+        );
+        assert_eq!(engine.allocated(), 0);
+        assert_eq!(engine.serial, 0);
+    }
+
+    #[test]
     fn retry_budget_covers_syn_data_fin_and_sequence_wrap() {
         use smoltcp::phy::ChecksumCapabilities;
         use smoltcp::wire::{Ipv4Repr, TcpControl, TcpRepr};
@@ -2091,7 +2436,7 @@ mod tests {
     }
 
     #[test]
-    fn active_close_preserves_time_wait_and_never_reuses_ports() {
+    fn active_close_quarantines_time_wait_ports_until_tuple_reclamation() {
         real_peer(true);
     }
 
@@ -2223,6 +2568,7 @@ mod tests {
                 State::TimeWait
             );
             pump(&mut engine, &mut peer_sockets, 40);
+            engine.next_port = local_port;
             let next = pending(engine.handle(
                 &destinations,
                 HOLDER,
@@ -2253,20 +2599,28 @@ mod tests {
                 }
             );
             assert!(engine.sockets.iter().all(|(_,socket)| matches!(socket, smoltcp::socket::Socket::Tcp(socket) if socket.state()==State::Closed)));
+            // Drain the aborts so no socket retains an old reset tuple.
+            pump(&mut engine, &mut peer_sockets, 41);
             engine.tick(Instant::from_millis(40) + OPERATION_TIMEOUT);
             assert!(engine.resets.iter().all(Option::is_none));
-            engine.next_port = None;
+            engine.next_port = local_port;
+            let fresh = pending(engine.handle(
+                &destinations,
+                HOLDER,
+                request(wire::OP_CONNECT, 0),
+                &mut [],
+                Instant::from_millis(10041),
+                &mut context,
+            ));
+            let slot = engine.find(HOLDER, fresh).unwrap();
             assert_eq!(
-                complete(engine.handle(
-                    &destinations,
-                    HOLDER,
-                    request(wire::OP_CONNECT, 0),
-                    &mut [],
-                    Instant::from_millis(40),
-                    &mut context
-                ))
-                .status,
-                Status::Exhausted
+                engine
+                    .sockets
+                    .get::<Socket>(engine.handles[slot])
+                    .local_endpoint()
+                    .unwrap()
+                    .port,
+                local_port
             );
             return;
         }

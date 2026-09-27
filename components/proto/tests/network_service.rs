@@ -1,6 +1,6 @@
 use slime_proto::{
     network_service::{self, WireNetworkCompletion, WireNetworkRequest},
-    valid_network_completion, valid_network_request,
+    valid_network_completion, valid_network_loan, valid_network_request,
 };
 
 fn dns_request(op: u8, transport: u8, name: &[u8], port: u16) -> WireNetworkRequest {
@@ -63,6 +63,10 @@ fn payload_loan_descriptor_and_endpoint_readiness_are_typed() {
         length: network_service::DATA_BYTES as u64,
         reserved: [0; 32],
     };
+    assert!(valid_network_loan(
+        &descriptor,
+        network_service::LOAN_ROLE_DATA
+    ));
     let bytes = descriptor.encode();
     assert_eq!(bytes.len(), 64);
     assert_eq!(
@@ -101,6 +105,98 @@ fn payload_loan_descriptor_and_endpoint_readiness_are_typed() {
         443,
     );
     assert!(!valid_network_request(&request));
+}
+
+#[test]
+fn provisioning_loans_require_exact_role_size_identity_and_reserved_bytes() {
+    use network_service::{LOAN_ROLE_DATA, LOAN_ROLE_RING, WireNetworkLoan};
+    for (role, length) in [
+        (LOAN_ROLE_RING, network_service::RING_BYTES as u64),
+        (LOAN_ROLE_DATA, network_service::DATA_BYTES as u64),
+    ] {
+        let descriptor = WireNetworkLoan {
+            magic: network_service::NETWORK_MAGIC,
+            version: network_service::FORMAT_VERSION,
+            role,
+            reserved0: [0; 1],
+            buffer: 17,
+            lease: 23,
+            length,
+            reserved: [0; 32],
+        };
+        assert!(valid_network_loan(&descriptor, role));
+        for malformed in [
+            WireNetworkLoan {
+                magic: 0,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                version: 0,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                role: 0,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                role: u8::MAX,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                role: if role == LOAN_ROLE_RING {
+                    LOAN_ROLE_DATA
+                } else {
+                    LOAN_ROLE_RING
+                },
+                ..descriptor
+            },
+            WireNetworkLoan {
+                buffer: 0,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                lease: 0,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                length: 0,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                length: length - 1,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                length: length + 1,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                length: u64::MAX,
+                ..descriptor
+            },
+            WireNetworkLoan {
+                reserved0: [1],
+                ..descriptor
+            },
+        ] {
+            assert!(!valid_network_loan(&malformed, role), "{malformed:?}");
+        }
+        for index in 0..descriptor.reserved.len() {
+            let mut malformed = descriptor;
+            malformed.reserved[index] = 1;
+            assert!(!valid_network_loan(&malformed, role));
+        }
+        for unknown_role in [0, 3, u8::MAX] {
+            assert!(!valid_network_loan(&descriptor, unknown_role));
+            assert!(!valid_network_loan(
+                &WireNetworkLoan {
+                    role: unknown_role,
+                    ..descriptor
+                },
+                unknown_role
+            ));
+        }
+    }
 }
 
 #[test]

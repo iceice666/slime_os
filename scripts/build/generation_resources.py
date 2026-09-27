@@ -474,7 +474,7 @@ def build_network_applications(manifest: dict) -> bytes:
             backlog, sockets, byte_budget, timers, queue, retries, reconnects = limits
             if backend != c.NETWORK_APPLICATION_BACKEND_LOOPBACK or address != ipaddress.IPv4Address("127.0.0.1").packed or not 1 <= port <= 65535 or not rights & c.NETWORK_APPLICATION_RIGHT_LISTEN:
                 fail("network application: listener is not an exact authorized loopback endpoint")
-            if not (1 <= backlog <= min(sockets, c.NETWORK_APPLICATION_MAX_BACKLOG) and 1 <= sockets <= c.NETWORK_APPLICATION_MAX_ACCEPTED_SOCKETS and sockets * c.NETWORK_APPLICATION_BYTES_PER_ACCEPTED_SOCKET <= byte_budget <= c.NETWORK_APPLICATION_MAX_BYTE_BUDGET and 1 <= timers <= c.NETWORK_APPLICATION_MAX_TIMER_BUDGET and c.NETWORK_APPLICATION_MIN_QUEUE_DEPTH <= queue <= c.NETWORK_APPLICATION_MAX_QUEUE_DEPTH and queue & (queue - 1) == 0 and retries <= c.NETWORK_APPLICATION_MAX_RETRY_LIMIT and reconnects <= c.NETWORK_APPLICATION_MAX_RECONNECT_LIMIT):
+            if not (backlog == 1 and 1 <= sockets <= c.NETWORK_APPLICATION_MAX_ACCEPTED_SOCKETS and sockets * c.NETWORK_APPLICATION_BYTES_PER_ACCEPTED_SOCKET <= byte_budget <= c.NETWORK_APPLICATION_MAX_BYTE_BUDGET and 1 <= timers <= c.NETWORK_APPLICATION_MAX_TIMER_BUDGET and c.NETWORK_APPLICATION_MIN_QUEUE_DEPTH <= queue <= c.NETWORK_APPLICATION_MAX_QUEUE_DEPTH and queue & (queue - 1) == 0 and retries <= c.NETWORK_APPLICATION_MAX_RETRY_LIMIT and reconnects <= c.NETWORK_APPLICATION_MAX_RECONNECT_LIMIT):
                 fail("network application: listener bounds exceed contract")
             endpoint = (address, port)
             if endpoint in listener_endpoints:

@@ -4,7 +4,7 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-io-service-fault.zti";
     kind = "file";
-    identity = "023a6f63f7e74ca5f9a9f552f6530e7a6c0c32c50c84c90c397f12f4c04dd61a";
+    identity = "483e9688ba3c66cc2aa7bba74e238d9d32f990cb8323f9bac73b382ca122fde4";
   };
   systemIdentity = "a7ed9ba1f67397203c6b8f6dc7af9f3122a4b76d74b8cccc4edb26c1f4006bc6";
   implementations = [
@@ -47,7 +47,7 @@
       artifact = {
         path = "components/services/network-service";
         kind = "tree";
-        identity = "c9ef1819a3b8c271c04456095208b0e451934b3cbc6461c711c468870b25974d";
+        identity = "2097a71db2ae0c08fc29a6398e79767a3f5ef8bd4799d604e7249acc59dab137";
       };
       identity = "54811b4f246af2e7bfad5ae9a9eb1902749775cc0c2eec9668a1ef665ca9ed34";
       buildProfile = "default";
@@ -88,7 +88,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "d4e8218a502b31782cd989ac6748ce5d10db5b88e68ca5911a802170dae90b02";
+        identity = "3d9dedf6160958f0ac4ee63f4666233d39904c5266db1353179e0c52a71998e6";
       };
     };
     {
@@ -96,7 +96,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "293ef878aea5222f59efd8df669b378dcb8403183ec8eb180bba6cc60d0a2b71";
+        identity = "bc03da895e5e7fba87f7b9117bc37c9a58ff1fb2a63c1759c90d65eea360abea";
       };
     };
     {
@@ -120,7 +120,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "154fb900aabe4396703257907531db831fa280c7c0c9c71f2edbb6a774af21aa";
+        identity = "26070a9e2f45fec9da3fbc407c5b7135fbf2adc491f1de4750a8774719921479";
       };
     };
     {
@@ -128,7 +128,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "ba4a3f7d190e14c4708fb1c749b48ba4f12416a3e6d8077220caab43a85184f4";
+        identity = "a297d30127d5ecd08c821e258063e9b07d4738276a645dfb97e750f602253ba0";
       };
     };
     {
@@ -184,7 +184,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "0c0734877a58c08f0569b56f54106582319945a29eb3f4bd4c25319246091a23";
+        identity = "d0aa06e999427789901055136bc8f8ac8df3500c8e29b12bfac8416c6ee77fb2";
       };
     };
     {
@@ -224,7 +224,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "28c949c8d81eb044ae6306f7b7bf5aee49b5b589605f54528c3411abcc1802ec";
+        identity = "c46b703fcd0fdd1158e36832b58dbb0e448524712b3009c2cbb3c4caf930bccf";
       };
     };
   ];

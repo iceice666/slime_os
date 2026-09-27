@@ -240,8 +240,7 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
             {
                 return Err(DecodeError::InvalidEntry);
             }
-            if entry.backlog == 0
-                || entry.backlog > MAX_BACKLOG
+            if entry.backlog != 1
                 || entry.accepted_socket_limit == 0
                 || entry.accepted_socket_limit > MAX_ACCEPTED_SOCKETS
                 || entry.backlog > entry.accepted_socket_limit
@@ -576,7 +575,7 @@ mod tests {
         }
         let mut maximum = valid;
         for (offset, value) in [
-            (OFF_ENTRY_BACKLOG, MAX_BACKLOG),
+            (OFF_ENTRY_BACKLOG, 1),
             (OFF_ENTRY_ACCEPTED_SOCKET_LIMIT, MAX_ACCEPTED_SOCKETS),
             (OFF_ENTRY_BYTE_BUDGET, MAX_BYTE_BUDGET),
             (OFF_ENTRY_TIMER_BUDGET, MAX_TIMER_BUDGET),
@@ -586,6 +585,14 @@ mod tests {
             put32(&mut maximum, offset, value);
         }
         assert!(NetworkApplications::decode(&object(&[peer, maximum])).is_ok());
+        for backlog in 2..=MAX_ACCEPTED_SOCKETS {
+            let mut unsupported = maximum;
+            put32(&mut unsupported, OFF_ENTRY_BACKLOG, backlog);
+            assert_eq!(
+                NetworkApplications::decode(&object(&[peer, unsupported])).err(),
+                Some(DecodeError::Impossible)
+            );
+        }
         assert_eq!(
             NetworkApplications::decode(&object(&[valid])).err(),
             Some(DecodeError::InvalidPeer)

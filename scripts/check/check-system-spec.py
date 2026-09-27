@@ -591,75 +591,67 @@ def check_network_post_baseline(name: str, derived: dict, system) -> None:
     exact("network-service placement count", len(placements), 1)
     resource = COMPONENTS["network-service"]["runtime"]["resource"]
     stack = placements[0].get("stackBytes", resource["stackBytes"])
-    exact("declared stackBytes", stack, 131072)
-    exact("derived stackBytes", [entry.get("stackBytes") for entry in derived["executables"]
+    exact("derived stackBytes", [entry.get("stackBytes", BUILDER.COMPONENT_DEFAULT_STACK_BYTES)
+                                for entry in derived["executables"]
                                 if entry["name"] == "network-service"], [stack])
     if name != "sel4-io-tcp":
         return
-    lifecycle_policy = {
-        "initialState": "Initialize", "terminalState": "Error",
-        "transitions": [{"from": "Initialize", "to": "Running"}, {"from": "Running", "to": "Error"}],
-        "restarts": [], "dependencies": [],
-        "parameters": [{"holder": "network-service", "subject": "network-service", "read": True, "write": True}],
-    }
-    exact("declared lifecycle policy", system.spec.get("lifecyclePolicy"), lifecycle_policy)
-    exact("derived lifecycle policy", derived.get("lifecyclePolicy"), lifecycle_policy)
+    exact("derived lifecycle policy", derived.get("lifecyclePolicy"), system.spec.get("lifecyclePolicy"))
     exact("derived lifecycle resource", [entry for entry in derived["objects"]
           if entry["id"] == "lifecycle-policy"],
-          [{"id": "lifecycle-policy", "kind": "resource", "size": 4096}])
-    application_rows = [{
-        "holder": "io-tcp-probe", "controlBinding": "network-tcp-probe-service",
-        "provisionBinding": "network-tcp-probe-provision", "supervisionBinding": "",
-        "requestNotification": "", "completionNotification": "", "role": "client",
-        "backend": "external", "localAddress": "0.0.0.0", "localPort": 0,
-        "admittedPeer": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
-        "byteBudget": 0, "timerBudget": 0, "queueDepth": 0, "retryLimit": 0,
-        "reconnectLimit": 0,
-    }]
-    exact("declared applications", system.spec.get("networkApplications"), application_rows)
-    exact("declared application resource", system.spec.get("networkApplicationsObject"), True)
-    exact("derived applications", derived.get("networkApplications"), application_rows)
+          [{"id": "lifecycle-policy", "kind": "resource", "size": 4096}]
+          if system.spec.get("lifecyclePolicy") is not None else [])
+    applications = system.spec.get("networkApplications", [])
+    exact("derived applications", derived.get("networkApplications", []), applications)
     exact("derived application resource", [entry for entry in derived["objects"]
           if entry["id"] == "network-application"],
-          [{"id": "network-application", "kind": "resource", "size": 4096}])
-    expected_grant = {
-        "name": "network-tcp-probe-provision", "capabilityKind": "endpoint",
-        "source": "network-service", "target": "io-tcp-probe",
-        "rights": ["send", "recv"], "transferable": True,
-    }
-    for label, grants in (("declared", system.spec["grants"]), ("derived", derived["grants"])):
-        exact(f"{label} provisioning grant",
-              [entry for entry in grants if entry["name"] == expected_grant["name"]],
-              [expected_grant])
-        exact(f"{label} nontransferable control",
-              [entry["transferable"] for entry in grants
-               if entry["name"] == "network-tcp-probe-service"], [False])
-    pins = [("io-tcp-probe", 1, "componentAbi"), ("network-service", 30, "allocatorOrder")]
-    for holder, slot, reason in pins:
-        exact(f"declared provisioning pin {holder}",
-              [entry for entry in system.spec["slotPins"]
-               if entry["holder"] == holder and entry["grant"] == expected_grant["name"]],
-              [{"holder": holder, "grant": expected_grant["name"], "slot": slot, "reason": reason}])
-    exact("derived provisioning bindings", sorted(
-        (instance["name"], binding["slot"], binding.get("slotReason"))
-        for instance in derived["instances"] for binding in instance["bindings"]
-        if binding["grant"] == expected_grant["name"]), pins)
+          [{"id": "network-application", "kind": "resource", "size": 4096}]
+          if system.spec.get("networkApplicationsObject") else [])
+    for application in applications:
+        for field, transferable in (("controlBinding", False), ("provisionBinding", True)):
+            grant_name = application[field]
+            declared = [entry for entry in system.spec["grants"] if entry["name"] == grant_name]
+            exact(f"declared {field} grant count", len(declared), 1)
+            grant = declared[0]
+            exact(f"declared {field} kind", grant["capabilityKind"], "endpoint")
+            exact(f"declared {field} rights", sorted(grant["rights"]), ["recv", "send"])
+            exact(f"declared {field} transfer", grant["transferable"], transferable)
+            exact(f"declared {field} peers", {grant["source"], grant["target"]},
+                  {application["holder"], "network-service"})
+            exact(f"derived {field} grant",
+                  [entry for entry in derived["grants"] if entry["name"] == grant_name], declared)
+    for grant_name in POST_BASELINE_GRANTS.get(name, frozenset()):
+        pins = sorted((entry["holder"], entry["slot"], entry["reason"])
+                      for entry in system.spec["slotPins"] if entry["grant"] == grant_name)
+        exact("derived provisioning bindings", sorted(
+            (instance["name"], binding["slot"], binding.get("slotReason"))
+            for instance in derived["instances"] for binding in instance["bindings"]
+            if binding["grant"] == grant_name), pins)
     budget_fields = {"bytePages": "bufferBytePages", "bufferCount": "bufferCount",
                      "mappingCount": "mappingCount", "loanCount": "loanCount"}
     instances = resolved_instances(system.spec)
-    for holder, amounts in (("network-service", (12, 12, 12, 12)),
-                            ("io-tcp-probe", (0, 0, 2, 2))):
-        expected = {"holder": holder, **dict(zip(budget_fields, amounts, strict=True))}
+    component_by_executable = {
+        entry.get("executableName", entry["component"]): entry["component"]
+        for entry in system.spec["placements"]
+    }
+    holders = (POST_BASELINE_SHARED_BUFFER_HOLDERS.get(name, frozenset())
+               | POST_BASELINE_SHARED_BUFFER_FIELDS.get(name, {}).keys())
+    for holder in sorted(holders):
         declarations = [entry for entry in instances if entry["name"] == holder]
         exact(f"declared budget holder {holder}", len(declarations), 1)
-        defaults = COMPONENTS[holder]["runtime"]["resource"]
-        declared = {"holder": holder, **{field: declarations[0].get(key, defaults[key])
+        instance = declarations[0]
+        component = component_by_executable.get(instance["executable"], instance["executable"])
+        defaults = COMPONENTS[component]["runtime"]["resource"]
+        declared = {"holder": holder, **{field: instance.get(key, defaults[key])
                                         for field, key in budget_fields.items()}}
-        exact(f"declared buffer budget {holder}", declared, expected)
         exact(f"derived buffer budget {holder}",
               [entry for entry in derived["sharedBufferBudget"] if entry["holder"] == holder],
-              [expected])
-    BUILDER.build_network_applications(derived)
+              [declared] if any(declared[field] for field in budget_fields) else [])
+    # The production encoder owns endpoint exclusivity and listener bounds.
+    try:
+        BUILDER.build_network_applications(derived)
+    except SystemExit as error:
+        fail(f"{name}: network post-baseline authority: {error}")
 
 
 def first_difference(left: object, right: object, label: str) -> str:
@@ -788,6 +780,11 @@ def network_application_controls(source: dict) -> int:
     ):
         reject(f"listener {field}={value!r}",
                lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][1].update({field: value}), reason)
+    reject("unsupported pending backlog", lambda value: value["networkApplications"][1].update(
+        backlog=2, acceptedSocketLimit=2, byteBudget=8192), "listener bounds exceed contract")
+    retained_sockets = copy.deepcopy(manifest)
+    retained_sockets["networkApplications"][1].update(acceptedSocketLimit=2, byteBudget=8192)
+    BUILDER.build_network_applications(retained_sockets)
     fan_in = copy.deepcopy(manifest)
     fan_in["networkApplications"][0].update(requestNotification="app-requests", completionNotification="client-complete")
     fan_in["notificationGrants"] = [
@@ -941,6 +938,13 @@ def computed_source_controls(components: dict[str, dict]) -> int:
         after = computed_system_outputs(root)
         if before != after:
             fail("computed system output is not deterministic")
+        lifetime = root / "systems" / "sel4-io-lifetime.zti"
+        fault = root / "systems" / "sel4-io-service-fault.zti"
+        lifetime.write_text(lifetime.read_text().replace(
+            "defaultImageBytes = 65536;", "defaultImageBytes = 131072;"))
+        inherited = render_computed_system("sel4-io-service-fault", root)
+        if inherited != before[fault].replace("defaultImageBytes = 65536;", "defaultImageBytes = 131072;"):
+            fail("service-fault variant did not inherit the lifetime declaration exactly")
     return refused
 
 
@@ -1518,11 +1522,47 @@ for name, holder, field in (
         fail(f"post-baseline exception concealed unrelated {name}/{holder}.{field} drift")
     refusals += 1
 
-# Network exceptions must reject both derivation drift and changes to their
-# independently pinned live declarations, while retaining all unrelated facts.
+# Network exceptions reject derivation drift and invalid authority, while
+# allowing the owning declarations to evolve without a second policy copy.
 network_name = "sel4-io-tcp"
 network_system = systems[network_name]
 network_manifest = normalized(derive_manifest(network_system))
+# Coherent changes to live policy are not frozen-baseline drift.
+for mutation in ("stack", "budget", "lifecycle", "application", "pin"):
+    changed = copy.deepcopy(network_system)
+    if mutation == "stack":
+        next(entry for entry in changed.spec["placements"]
+             if entry["component"] == "network-service")["stackBytes"] = 262144
+    elif mutation == "budget":
+        next(entry for entry in changed.spec["placements"]
+             if entry["component"] == "io-tcp-probe")["loanCount"] += 1
+    elif mutation == "lifecycle":
+        changed.spec["lifecyclePolicy"]["parameters"][0]["write"] = False
+    elif mutation == "application":
+        changed.spec["networkApplications"][0]["backend"] = "loopback"
+    else:
+        next(entry for entry in changed.spec["slotPins"]
+             if entry["holder"] == "network-service"
+             and entry["grant"] == "network-tcp-probe-provision")["slot"] = 29
+    check_network_post_baseline(network_name, normalized(derive_manifest(changed)), changed)
+
+# Coherent derivation cannot legitimize invalid authority in a live spec.
+for grant_name, field, value in (
+    ("network-tcp-probe-service", "transferable", True),
+    ("network-tcp-probe-provision", "transferable", False),
+    ("network-tcp-probe-provision", "rights", ["send"]),
+):
+    changed = copy.deepcopy(network_system)
+    next(entry for entry in changed.spec["grants"] if entry["name"] == grant_name)[field] = value
+    try:
+        check_network_post_baseline(network_name, normalized(derive_manifest(changed)), changed)
+    except SystemExit as error:
+        if "network post-baseline" not in str(error):
+            raise
+    else:
+        fail(f"network post-baseline accepted invalid live {grant_name}.{field}")
+    refusals += 1
+
 network_cases = (
     ("stack", "executables", "name", "network-service", "stackBytes", 262144),
     ("provision rights", "grants", "name", "network-tcp-probe-provision", "rights", ["send"]),
