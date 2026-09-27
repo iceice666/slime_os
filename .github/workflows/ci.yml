@@ -15,6 +15,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Cheap, always-run scope detection. A change confined to `.tasks/` (the
+  # canonical work-item store, e.g. an automated retirement batch) touches no
+  # code, contract, or generation surface, so every job below that builds or
+  # boots something is skipped for it. Anything else — including a mix of
+  # `.tasks/` and code — runs the full suite; uncertainty defaults to `true`.
+  changes:
+    name: Detect change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          if [[ -z "$base" ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$base" "$head")"
+          echo "Changed files:"
+          echo "$changed"
+          if [[ -n "$changed" ]] && ! echo "$changed" | grep -qvE '^\.tasks/'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # === Jobs that need neither the seL4 prefix nor Nix ===
   #
   # These run on the ordinary x64 runner with a plain toolchain, because
@@ -23,6 +60,8 @@ jobs:
   lint:
     name: Format and host clippy
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -42,6 +81,8 @@ jobs:
   sel4_pins:
     name: seL4 pins
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -57,6 +98,8 @@ jobs:
   test_host:
     name: Host tests
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -73,6 +116,8 @@ jobs:
   miri_packages:
     name: Miri (${{ matrix.package }})
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -104,11 +149,15 @@ jobs:
     needs: [miri_packages]
     if: always()
     steps:
-      - run: test "${{ needs.miri_packages.result }}" = success
+      - run: |
+          result="${{ needs.miri_packages.result }}"
+          test "$result" = success || test "$result" = skipped
 
   deps:
     name: cargo-deny and machete
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -214,6 +263,8 @@ jobs:
     # derivation was developed and observed on `aarch64-darwin`, so this is the
     # first run of the Linux bundle and its `autoPatchelfHook` path.
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     # Observed warm on aarch64-darwin: 17 seconds. Cold here additionally
     # fetches a ~143 MB release bundle and the pinned nightly, so the bound
     # covers a cold cache and catches a wedged solver rather than a slow run.
@@ -270,6 +321,8 @@ jobs:
   sel4_product:
     name: Pinned seL4 image, lint, and root tests
     runs-on: ubuntu-24.04-arm
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     # Observed cold: 8 minutes. The bound catches a wedged QEMU or a stalled
     # build, so it is roughly triple the observation rather than a guess.
     timeout-minutes: 30
@@ -290,6 +343,8 @@ jobs:
   sel4_rollback_runtime:
     name: Rollback runtime, release trust, and BootState trace
     runs-on: ubuntu-24.04-arm
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -302,6 +357,8 @@ jobs:
   sel4_contract_sources:
     name: Contract sources and component specs
     runs-on: ubuntu-24.04-arm
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -322,6 +379,8 @@ jobs:
   sel4_generations:
     name: Generation v5 (shard ${{ matrix.shard }})
     runs-on: ubuntu-24.04-arm
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -343,9 +402,13 @@ jobs:
     needs: [sel4_contract_sources, sel4_generations]
     if: always()
     steps:
+      # `sel4_contract_sources` and `sel4_generations` report `skipped` rather
+      # than `success` for a `.tasks/`-only change (see `changes` above); that
+      # is this aggregate's success too, not a failure to paper over.
       - run: |
-          test "${{ needs.sel4_contract_sources.result }}" = success
-          test "${{ needs.sel4_generations.result }}" = success
+          ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
+          ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_generations.result }}"
 
   sel4_rollback:
     name: Rollback, release trust, and BootState trace
@@ -354,14 +417,16 @@ jobs:
     if: always()
     steps:
       - run: |
-          test "${{ needs.sel4_rollback_runtime.result }}" = success
-          test "${{ needs.sel4_contract_sources.result }}" = success
-          test "${{ needs.sel4_generations.result }}" = success
+          ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
+          ok "${{ needs.sel4_rollback_runtime.result }}"
+          ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_generations.result }}"
 
   CI:
     name: CI
     runs-on: ubuntu-latest
     needs:
+      - changes
       - lint
       - sel4_pins
       - test_host
@@ -380,20 +445,25 @@ jobs:
       - sel4_rollback
     if: always()
     steps:
+      # `scripts`, `docs_gates`, and `work_items` are cheap and always run, so
+      # they must actually succeed. Every other job is skipped on purpose for
+      # a `.tasks/`-only change (`needs.changes.outputs.code == 'false'`);
+      # `skipped` is as good as `success` for those.
       - run: |
-          test "${{ needs.lint.result }}" = success
-          test "${{ needs.sel4_pins.result }}" = success
-          test "${{ needs.test_host.result }}" = success
-          test "${{ needs.miri_packages.result }}" = success
-          test "${{ needs.miri.result }}" = success
-          test "${{ needs.deps.result }}" = success
           test "${{ needs.scripts.result }}" = success
           test "${{ needs.docs_gates.result }}" = success
           test "${{ needs.work_items.result }}" = success
-          test "${{ needs.kani_proofs.result }}" = success
-          test "${{ needs.sel4_product.result }}" = success
-          test "${{ needs.sel4_rollback_runtime.result }}" = success
-          test "${{ needs.sel4_contract_sources.result }}" = success
-          test "${{ needs.sel4_generations.result }}" = success
-          test "${{ needs.sel4_contracts.result }}" = success
-          test "${{ needs.sel4_rollback.result }}" = success
+          ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
+          ok "${{ needs.lint.result }}"
+          ok "${{ needs.sel4_pins.result }}"
+          ok "${{ needs.test_host.result }}"
+          ok "${{ needs.miri_packages.result }}"
+          ok "${{ needs.miri.result }}"
+          ok "${{ needs.deps.result }}"
+          ok "${{ needs.kani_proofs.result }}"
+          ok "${{ needs.sel4_product.result }}"
+          ok "${{ needs.sel4_rollback_runtime.result }}"
+          ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_generations.result }}"
+          ok "${{ needs.sel4_contracts.result }}"
+          ok "${{ needs.sel4_rollback.result }}"
