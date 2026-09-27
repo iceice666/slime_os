@@ -75,20 +75,32 @@ mod tests {
     /// vector and it exercises the 64-bit length counter as well as thousands of
     /// block boundaries; the odd chunk size keeps `update`'s buffered path live
     /// throughout rather than hitting only aligned blocks.
+    ///
+    /// Under Miri the input is 10,000 bytes (156 blocks), still fed in 7-byte
+    /// pieces: Miri checks memory behavior, which does not change with input
+    /// length, and the full vector costs over ten minutes there. The native
+    /// run keeps the published million-byte vector.
     #[test]
     fn the_long_nist_vector_matches_when_fed_unaligned() {
+        #[cfg(not(miri))]
+        const VECTOR: (usize, &str) = (
+            1_000_000,
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+        );
+        #[cfg(miri)]
+        const VECTOR: (usize, &str) = (
+            10_000,
+            "27dd1f61b867b6a0f6e9d8a41c43231de52107e53ae424de8f847b821db4b711",
+        );
         let mut hasher = Sha256::new();
         let block = [b'a'; 7];
-        let mut remaining = 1_000_000usize;
+        let mut remaining = VECTOR.0;
         while remaining > 0 {
             let take = block.len().min(remaining);
             hasher.update(&block[..take]);
             remaining -= take;
         }
-        assert_eq!(
-            hex(hasher.finalize()),
-            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
-        );
+        assert_eq!(hex(hasher.finalize()), VECTOR.1);
     }
 
     /// Streaming must equal one-shot for every split point across a

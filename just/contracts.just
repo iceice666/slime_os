@@ -83,9 +83,9 @@ system_composition_closure_check: system_spec_check
 
 # Resolution checks each closure's committed prefix against `sel4/pins.toml`;
 # no installed platform build or published SDK record is needed for that check.
+# The checker runs the closure freshness check itself, before anything else.
 [group('contracts')]
 system_image_builder_check: system_composition_closure_check
-    python3 scripts/generate/generate-system-image-closures.py --check
     python3 scripts/check/check-system-image-builder.py
 
 # Execution-only inputs — disks, devices, injected faults, timeouts, marker
