@@ -6,3 +6,8 @@ pub mod link_reset;
 pub mod loopback;
 #[path = "../../../components/services/network-service/src/tcp.rs"]
 pub mod tcp;
+
+#[path = "../../../components/services/network-service/src/dns.rs"]
+pub mod dns;
+#[path = "../../../components/services/network-service/src/resolver.rs"]
+pub mod resolver;

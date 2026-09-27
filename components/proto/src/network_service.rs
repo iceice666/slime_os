@@ -39,6 +39,7 @@ pub const DATA_PAGES: usize = 1;
 pub const RING_BYTES: usize = 4096;
 pub const DATA_BYTES: usize = 4096;
 pub const OP_ATTACH: u8 = 8;
+pub const OP_ABORT: u8 = 9;
 pub const STATUS_SUCCESS: i32 = 0;
 pub const STATUS_DENIED: i32 = -1;
 pub const STATUS_MALFORMED: i32 = -2;
@@ -48,6 +49,93 @@ pub const STATUS_EXHAUSTED: i32 = -5;
 pub const STATUS_REFUSED: i32 = -6;
 pub const STATUS_TIMEOUT: i32 = -7;
 pub const STATUS_RESET: i32 = -8;
+pub const LAUNCH_BYTES: usize = 64;
+pub const LAUNCH_PAYLOAD_BYTES: usize = 48;
+pub const LAUNCH_URL_BYTES: usize = 2048;
+pub const LAUNCH_SEED: u8 = 1;
+pub const LAUNCH_URL: u8 = 2;
+pub const OFF_LAUNCH_MAGIC: usize = 0;
+pub const OFF_LAUNCH_VERSION: usize = 4;
+pub const OFF_LAUNCH_KIND: usize = 6;
+pub const OFF_LAUNCH_RESERVED: usize = 7;
+pub const OFF_LAUNCH_TOTAL_LEN: usize = 8;
+pub const OFF_LAUNCH_OFFSET: usize = 10;
+pub const OFF_LAUNCH_LENGTH: usize = 12;
+pub const OFF_LAUNCH_RESERVED2: usize = 14;
+pub const OFF_LAUNCH_PAYLOAD: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireNetworkLaunch {
+    pub magic: u32,
+    pub version: u16,
+    pub kind: u8,
+    pub reserved: u8,
+    pub total_len: u16,
+    pub offset: u16,
+    pub length: u16,
+    pub reserved2: [u8; 2],
+    pub payload: [u8; 48],
+}
+
+impl WireNetworkLaunch {
+    pub fn decode(buf: &[u8]) -> Option<Self> {
+        if buf.len() < LAUNCH_BYTES {
+            return None;
+        }
+        Some(Self {
+            magic: u32::from_le_bytes(
+                buf[OFF_LAUNCH_MAGIC..OFF_LAUNCH_MAGIC + 4]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            version: u16::from_le_bytes(
+                buf[OFF_LAUNCH_VERSION..OFF_LAUNCH_VERSION + 2]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            kind: buf[OFF_LAUNCH_KIND],
+            reserved: buf[OFF_LAUNCH_RESERVED],
+            total_len: u16::from_le_bytes(
+                buf[OFF_LAUNCH_TOTAL_LEN..OFF_LAUNCH_TOTAL_LEN + 2]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            offset: u16::from_le_bytes(
+                buf[OFF_LAUNCH_OFFSET..OFF_LAUNCH_OFFSET + 2]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            length: u16::from_le_bytes(
+                buf[OFF_LAUNCH_LENGTH..OFF_LAUNCH_LENGTH + 2]
+                    .try_into()
+                    .expect("generated network-service layout"),
+            ),
+            reserved2: buf[OFF_LAUNCH_RESERVED2..OFF_LAUNCH_RESERVED2 + 2]
+                .try_into()
+                .expect("generated network-service layout"),
+            payload: buf[OFF_LAUNCH_PAYLOAD..OFF_LAUNCH_PAYLOAD + 48]
+                .try_into()
+                .expect("generated network-service layout"),
+        })
+    }
+
+    pub fn encode(self) -> [u8; LAUNCH_BYTES] {
+        let mut buf = [0u8; LAUNCH_BYTES];
+        buf[OFF_LAUNCH_MAGIC..OFF_LAUNCH_MAGIC + 4].copy_from_slice(&self.magic.to_le_bytes());
+        buf[OFF_LAUNCH_VERSION..OFF_LAUNCH_VERSION + 2]
+            .copy_from_slice(&self.version.to_le_bytes());
+        buf[OFF_LAUNCH_KIND] = self.kind;
+        buf[OFF_LAUNCH_RESERVED] = self.reserved;
+        buf[OFF_LAUNCH_TOTAL_LEN..OFF_LAUNCH_TOTAL_LEN + 2]
+            .copy_from_slice(&self.total_len.to_le_bytes());
+        buf[OFF_LAUNCH_OFFSET..OFF_LAUNCH_OFFSET + 2].copy_from_slice(&self.offset.to_le_bytes());
+        buf[OFF_LAUNCH_LENGTH..OFF_LAUNCH_LENGTH + 2].copy_from_slice(&self.length.to_le_bytes());
+        buf[OFF_LAUNCH_RESERVED2..OFF_LAUNCH_RESERVED2 + 2].copy_from_slice(&self.reserved2);
+        buf[OFF_LAUNCH_PAYLOAD..OFF_LAUNCH_PAYLOAD + 48].copy_from_slice(&self.payload);
+        buf
+    }
+}
+
 pub const OFF_LOAN_MAGIC: usize = 0;
 pub const OFF_LOAN_VERSION: usize = 4;
 pub const OFF_LOAN_ROLE: usize = 6;

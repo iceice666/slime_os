@@ -1,5 +1,6 @@
 //! Bounded, holder-bound TCP connections over the service's smoltcp interface.
 
+use crate::{dns, resolver};
 use boot_contracts::network_application::{Application, Backend, NetworkApplications, Role};
 use boot_contracts::network_destination::{
     Address, NetworkDestinations, RIGHT_CONNECT, RIGHT_RECV, RIGHT_SEND, Transport,
@@ -7,6 +8,7 @@ use boot_contracts::network_destination::{
 use slime_proto::network_service::{self as wire, WireNetworkRequest};
 use smoltcp::iface::{Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::socket::tcp::{Socket, SocketBuffer, State};
+use smoltcp::socket::udp;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
     EthernetFrame, EthernetProtocol, IpAddress, IpEndpoint, IpProtocol, Ipv4Address, Ipv4Packet,
@@ -61,6 +63,7 @@ pub enum Outcome {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
+    Resolving,
     Connecting,
     Connected,
     Closing,
@@ -115,6 +118,29 @@ struct Reset {
     deadline: Instant,
 }
 
+#[derive(Clone, Copy)]
+pub struct DnsObservation {
+    pub name: [u8; 24],
+    pub name_len: usize,
+    pub addresses: [[u8; 4]; dns::MAX_ADDRESSES],
+    pub count: usize,
+    pub ttl_seconds: u32,
+    pub selected: [u8; 4],
+    pub attempt: usize,
+    pub port: u16,
+}
+
+#[derive(Clone, Copy)]
+struct NameConnect {
+    index: usize,
+    port: u16,
+    addresses: [[u8; 4]; dns::MAX_ADDRESSES],
+    count: usize,
+    next: usize,
+    deadline: Instant,
+    expiry: Instant,
+}
+
 pub struct Engine<'a> {
     sockets: SocketSet<'a>,
     handles: [SocketHandle; SOCKETS],
@@ -125,19 +151,24 @@ pub struct Engine<'a> {
     next_port: u16,
     resets: [Option<Reset>; SOCKETS],
     last_now: Instant,
+    resolver: Option<resolver::Resolver>,
+    dns_capacity: bool,
+    name_connect: Option<NameConnect>,
+    dns_observation: Option<DnsObservation>,
 }
 
 impl<'a> Engine<'a> {
     pub fn new(
-        storage: &'a mut [SocketStorage<'a>; SOCKETS],
+        storage: &'a mut [SocketStorage<'a>],
         rx: &'a mut [[u8; BUFFER_BYTES]; SOCKETS],
         tx: &'a mut [[u8; BUFFER_BYTES]; SOCKETS],
         epoch: u64,
         backend: u8,
     ) -> Result<Self, Status> {
-        if epoch == 0 || epoch > MAX_INCARNATION || backend > 1 {
+        if epoch == 0 || epoch > MAX_INCARNATION || backend > 1 || storage.len() < SOCKETS {
             return Err(Status::Exhausted);
         }
+        let dns_capacity = storage.len() > SOCKETS && backend == 0;
         let mut sockets = SocketSet::new(&mut storage[..]);
         let mut buffers = rx.iter_mut().zip(tx.iter_mut());
         let handles = core::array::from_fn(|_| {
@@ -159,7 +190,224 @@ impl<'a> Engine<'a> {
             next_port: FIRST_EPHEMERAL_PORT,
             resets: [None; SOCKETS],
             last_now: Instant::ZERO,
+            resolver: None,
+            dns_capacity,
+            name_connect: None,
+            dns_observation: None,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn enable_dns(
+        &mut self,
+        destinations: &NetworkDestinations<'_>,
+        seed: [u8; 32],
+        rx_meta: &'a mut [udp::PacketMetadata; 1],
+        rx: &'a mut [u8; resolver::BUFFER_BYTES],
+        tx_meta: &'a mut [udp::PacketMetadata; 1],
+        tx: &'a mut [u8; resolver::BUFFER_BYTES],
+    ) -> Result<(), Status> {
+        if self.resolver.is_some() || !self.dns_capacity {
+            return Err(Status::Denied);
+        }
+        let socket = udp::Socket::new(
+            udp::PacketBuffer::new(&mut rx_meta[..], &mut rx[..]),
+            udp::PacketBuffer::new(&mut tx_meta[..], &mut tx[..]),
+        );
+        let handle = self.sockets.add(socket);
+        match resolver::Resolver::new(handle, destinations, seed) {
+            Ok(resolver) => {
+                self.resolver = Some(resolver);
+                Ok(())
+            }
+            Err(error) => {
+                self.sockets.remove(handle);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn take_dns_observation(&mut self) -> Option<DnsObservation> {
+        self.dns_observation.take()
+    }
+
+    fn cancel_dns(&mut self) {
+        self.name_connect = None;
+        if let Some(resolver) = self.resolver.as_mut() {
+            resolver.cancel(&mut self.sockets);
+        }
+    }
+
+    /// Advance only the pending service-owned name-to-connect transaction.
+    /// The original destination row remains attached to the connection; answers
+    /// never mint numeric authority or authorize any other holder/name/port.
+    pub fn advance_dns(
+        &mut self,
+        destinations: &NetworkDestinations<'_>,
+        iface: &mut Interface,
+        now: Instant,
+    ) {
+        self.last_now = now;
+        let Some(mut pending) = self.name_connect else {
+            return;
+        };
+        let mut observed_answer = None;
+        let Some(connection) = self.connections[pending.index] else {
+            self.cancel_dns();
+            return;
+        };
+        if now >= pending.deadline || (pending.count != 0 && now >= pending.expiry) {
+            self.fail_dns(pending.index, Status::Timeout);
+            return;
+        }
+        if connection.phase == Phase::Resolving {
+            let Some(result) = self
+                .resolver
+                .as_mut()
+                .expect("pending resolver")
+                .poll(&mut self.sockets, now)
+            else {
+                return;
+            };
+            self.resolver
+                .as_mut()
+                .expect("pending resolver")
+                .cancel(&mut self.sockets);
+            let answer = match result {
+                Ok(answer) => answer,
+                Err(status) => {
+                    self.fail_dns(pending.index, status);
+                    return;
+                }
+            };
+            let Some(destination) = destinations.destination(connection.destination) else {
+                self.fail_dns(pending.index, Status::Denied);
+                return;
+            };
+            if answer.ttl_seconds == 0 || answer.count > destination.dns_record_limit as usize {
+                self.fail_dns(pending.index, Status::Denied);
+                return;
+            }
+            // A controlled fixture is an exact additional numeric grant, not a
+            // private-range escape hatch. Reject a mixed allowed/forbidden set.
+            if answer.addresses[..answer.count].iter().any(|address| {
+                !(dns::is_public_address(*address)
+                    || (self
+                        .resolver
+                        .as_ref()
+                        .is_some_and(resolver::Resolver::controlled)
+                        && destinations.authorizes(
+                            &connection.holder,
+                            Transport::Tcp,
+                            Address::Ipv4(*address),
+                            pending.port,
+                            boot_contracts::network_destination::Right::Connect,
+                        )))
+            }) {
+                self.fail_dns(pending.index, Status::Denied);
+                return;
+            }
+            observed_answer = Some(answer);
+            pending.addresses = answer.addresses;
+            pending.count = answer.count;
+            pending.expiry = match answer
+                .expires_at_millis(now.total_millis() as u64)
+                .and_then(|value| i64::try_from(value).ok())
+            {
+                Some(expiry) => Instant::from_millis(expiry).min(now + Duration::from_secs(60)),
+                None => {
+                    self.fail_dns(pending.index, Status::Timeout);
+                    return;
+                }
+            };
+        } else {
+            let state = self
+                .sockets
+                .get::<Socket>(self.handles[pending.index])
+                .state();
+            if matches!(state, State::Established | State::CloseWait)
+                && connection.terminal.is_none()
+            {
+                self.sockets
+                    .get_mut::<Socket>(self.handles[pending.index])
+                    .set_timeout(Some(OPERATION_TIMEOUT));
+                self.name_connect = None;
+                return;
+            }
+            if connection.terminal.is_none() && state != State::Closed && now < connection.deadline
+            {
+                return;
+            }
+        }
+        if pending.next == pending.count {
+            self.fail_dns(pending.index, Status::Refused);
+            return;
+        }
+        // No application data has been sent: address fallback occurs only while
+        // connecting, never as transparent replay of a partially sent request.
+        self.sockets
+            .get_mut::<Socket>(self.handles[pending.index])
+            .abort();
+        self.resets[pending.index] = None;
+        let Some(port) = self.ephemeral_port() else {
+            self.fail_dns(pending.index, Status::Exhausted);
+            return;
+        };
+        let socket = self.sockets.get_mut::<Socket>(self.handles[pending.index]);
+        if socket
+            .connect(
+                iface.context(),
+                (
+                    IpAddress::Ipv4(Ipv4Address::from(pending.addresses[pending.next])),
+                    pending.port,
+                ),
+                port,
+            )
+            .is_err()
+        {
+            self.fail_dns(pending.index, Status::Refused);
+            return;
+        }
+        socket.set_timeout(Some(Duration::from_secs(2)));
+        socket.set_ack_delay(None);
+        self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
+        if let Some(destination) = destinations.destination(connection.destination)
+            && let Address::Dns(name) = destination.address
+        {
+            let mut query_name = [0; 24];
+            let Some(target) = query_name.get_mut(..name.len()) else {
+                self.fail_dns(pending.index, Status::Denied);
+                return;
+            };
+            target.copy_from_slice(name);
+            self.dns_observation = Some(DnsObservation {
+                name: query_name,
+                name_len: name.len(),
+                addresses: pending.addresses,
+                count: observed_answer.map_or(0, |answer| answer.count),
+                ttl_seconds: observed_answer.map_or(0, |answer| answer.ttl_seconds),
+                selected: pending.addresses[pending.next],
+                attempt: pending.next + 1,
+                port: pending.port,
+            });
+        }
+        pending.next += 1;
+        self.connections[pending.index] = Some(Connection {
+            phase: Phase::Connecting,
+            deadline: now + Duration::from_secs(2),
+            terminal: None,
+            sent_end: None,
+            ..connection
+        });
+        self.name_connect = Some(pending);
+    }
+
+    fn fail_dns(&mut self, index: usize, status: Status) {
+        self.cancel_dns();
+        self.abort_socket(index);
+        if let Some(connection) = self.connections[index].as_mut() {
+            connection.terminal = Some(status);
+        }
     }
 
     /// Poll this set before draining every produced frame through `permit_egress`.
@@ -182,6 +430,12 @@ impl<'a> Engine<'a> {
         let Ok(ip) = Ipv4Packet::new_checked(ethernet.payload()) else {
             return false;
         };
+        if ip.next_header() == IpProtocol::Udp {
+            return self
+                .resolver
+                .as_mut()
+                .is_some_and(|resolver| resolver.permit_egress(&ip));
+        }
         if ip.next_header() != IpProtocol::Tcp {
             return true;
         }
@@ -322,6 +576,7 @@ impl<'a> Engine<'a> {
                 sockets += 1;
             }
         }
+        self.cancel_dns();
         self.connections.fill(None);
         self.listeners.fill(None);
         Reclaimed {
@@ -711,6 +966,11 @@ impl<'a> Engine<'a> {
     }
 
     pub fn release_holder(&mut self, holder: [u8; 32]) -> Reclaimed {
+        if self.name_connect.is_some_and(|pending| {
+            self.connections[pending.index].is_some_and(|connection| connection.holder == holder)
+        }) {
+            self.cancel_dns();
+        }
         let mut reclaimed = Reclaimed::default();
         let mut slots = [false; SOCKETS];
         for (index, entry) in self.connections.iter().enumerate() {
@@ -868,16 +1128,24 @@ impl<'a> Engine<'a> {
         iface: &mut Interface,
     ) -> Outcome {
         let fail = |status| Outcome::Complete(Completion::status(status));
-        if request.transport != wire::TRANSPORT_TCP || request.address_kind != wire::ADDRESS_IPV4 {
+        if request.transport != wire::TRANSPORT_TCP
+            || !matches!(request.address_kind, wire::ADDRESS_IPV4 | wire::ADDRESS_DNS)
+        {
             return fail(Status::Unsupported);
         }
+        let named = request.address_kind == wire::ADDRESS_DNS;
         let address: [u8; 4] = request.endpoint[..4].try_into().expect("IPv4 prefix");
+        let requested = if named {
+            Address::Dns(&request.endpoint[..request.name_len as usize])
+        } else {
+            Address::Ipv4(address)
+        };
         let Some((destination_index, destination)) = (0..destinations.destination_count())
             .find_map(|index| {
                 let destination = destinations.destination(index)?;
                 (destination.holder_identity == holder
                     && destination.transport == Transport::Tcp
-                    && destination.address == Address::Ipv4(address)
+                    && destination.address == requested
                     && destination.port == request.port
                     && destination.rights & RIGHT_CONNECT != 0)
                     .then_some((index, destination))
@@ -885,6 +1153,12 @@ impl<'a> Engine<'a> {
         else {
             return fail(Status::Denied);
         };
+        if named && (destination.dns_record_limit == 0 || self.resolver.is_none()) {
+            return fail(Status::Unsupported);
+        }
+        if named && self.name_connect.is_some() {
+            return fail(Status::Exhausted);
+        }
         let charged = self
             .connections
             .iter()
@@ -906,23 +1180,30 @@ impl<'a> Engine<'a> {
         let Some(serial) = self.serial.checked_add(1) else {
             return fail(Status::Exhausted);
         };
-        let Some(port) = self.ephemeral_port() else {
+        let Some(port) = (if named {
+            Some(0)
+        } else {
+            self.ephemeral_port()
+        }) else {
             return fail(Status::Exhausted);
         };
         let socket = self.sockets.get_mut::<Socket>(self.handles[index]);
-        if socket
-            .connect(
-                iface.context(),
-                (IpAddress::Ipv4(Ipv4Address::from(address)), request.port),
-                port,
-            )
-            .is_err()
+        if !named
+            && socket
+                .connect(
+                    iface.context(),
+                    (IpAddress::Ipv4(Ipv4Address::from(address)), request.port),
+                    port,
+                )
+                .is_err()
         {
             return fail(Status::Refused);
         }
         socket.set_timeout(Some(OPERATION_TIMEOUT));
         socket.set_ack_delay(None);
-        self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
+        if !named {
+            self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
+        }
         self.serial = serial;
         let id = self.namespace | u64::from(serial);
         self.connections[index] = Some(Connection {
@@ -930,7 +1211,11 @@ impl<'a> Engine<'a> {
             holder,
             destination: destination_index,
             rights: destination.rights,
-            phase: Phase::Connecting,
+            phase: if named {
+                Phase::Resolving
+            } else {
+                Phase::Connecting
+            },
             deadline: now + OPERATION_TIMEOUT,
             retry_limit: destination.retry_limit,
             retries: 0,
@@ -939,6 +1224,25 @@ impl<'a> Engine<'a> {
             peer_fin_seen: false,
             listener: None,
         });
+        if named {
+            if let Err(status) = self.resolver.as_mut().expect("enabled resolver").start(
+                &mut self.sockets,
+                &request.endpoint[..request.name_len as usize],
+                now,
+            ) {
+                self.connections[index] = None;
+                return fail(status);
+            }
+            self.name_connect = Some(NameConnect {
+                index,
+                port: request.port,
+                addresses: [[0; 4]; dns::MAX_ADDRESSES],
+                count: 0,
+                next: 0,
+                deadline: now + Duration::from_secs(15),
+                expiry: now,
+            });
+        }
         Outcome::Pending { capability: id }
     }
 
@@ -953,9 +1257,17 @@ impl<'a> Engine<'a> {
             return Some(Completion::status(Status::Denied));
         };
         let connection = self.connections[index].expect("located connection");
+        if self
+            .name_connect
+            .is_some_and(|pending| pending.index == index)
+        {
+            return None;
+        }
         let socket = self.sockets.get_mut::<Socket>(self.handles[index]);
         let status = match connection.phase {
-            Phase::Connecting | Phase::Closing if connection.terminal.is_some() => {
+            Phase::Resolving | Phase::Connecting | Phase::Closing
+                if connection.terminal.is_some() =>
+            {
                 connection.terminal.expect("terminal status")
             }
             Phase::Connecting
@@ -1012,16 +1324,16 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    const HOLDER: [u8; 32] = [1; 32];
-    const PEER: [u8; 4] = [10, 0, 0, 2];
+    pub(super) const HOLDER: [u8; 32] = [1; 32];
+    pub(super) const PEER: [u8; 4] = [10, 0, 0, 2];
 
     #[derive(Default)]
-    struct Link {
-        rx: VecDeque<Vec<u8>>,
-        tx: VecDeque<Vec<u8>>,
+    pub(super) struct Link {
+        pub(super) rx: VecDeque<Vec<u8>>,
+        pub(super) tx: VecDeque<Vec<u8>>,
     }
-    struct Rx(Vec<u8>);
-    struct Tx<'a>(&'a mut VecDeque<Vec<u8>>);
+    pub(super) struct Rx(Vec<u8>);
+    pub(super) struct Tx<'a>(&'a mut VecDeque<Vec<u8>>);
     impl RxToken for Rx {
         fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R {
             f(&self.0)
@@ -1053,7 +1365,7 @@ mod tests {
             caps
         }
     }
-    fn interface(link: &mut Link, host: u8) -> Interface {
+    pub(super) fn interface(link: &mut Link, host: u8) -> Interface {
         let mut iface = Interface::new(
             Config::new(HardwareAddress::Ethernet(EthernetAddress([
                 2, 0, 0, 0, 0, host,
@@ -1071,7 +1383,7 @@ mod tests {
         });
         iface
     }
-    fn declarations(rights: u16, bytes: u32, timers: u32, sockets: u32) -> Vec<u8> {
+    pub(super) fn declarations(rights: u16, bytes: u32, timers: u32, sockets: u32) -> Vec<u8> {
         use contract::*;
         let mut object = vec![0; HEADER_BYTES + ENTRY_BYTES];
         object[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC + MAGIC.len()].copy_from_slice(&MAGIC);
@@ -1101,7 +1413,7 @@ mod tests {
         }
         object
     }
-    fn request(op: u8, capability: u64) -> WireNetworkRequest {
+    pub(super) fn request(op: u8, capability: u64) -> WireNetworkRequest {
         let mut request = WireNetworkRequest {
             magic: wire::NETWORK_MAGIC,
             version: wire::FORMAT_VERSION,
@@ -1123,7 +1435,7 @@ mod tests {
         }
         request
     }
-    fn pending(outcome: Outcome) -> u64 {
+    pub(super) fn pending(outcome: Outcome) -> u64 {
         match outcome {
             Outcome::Pending { capability } => capability,
             other => panic!("{other:?}"),
@@ -2689,3 +3001,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "dns_tests.rs"]
+mod dns_integration_tests;

@@ -1,0 +1,60 @@
+{
+  communication = {
+    qos = [];
+    semantic = "none";
+  };
+  compatibility = {
+    dependency = "none";
+    interface = "contracts/interface-schema/v1";
+    platform = "aarch64-sel4-qemu-virt";
+    qos = "none";
+    resource = "atMost";
+    runtime = "exact";
+  };
+  componentType = "application";
+  configuration = [];
+  dependencies = [];
+  formatVersion = 1;
+  health = "required";
+  implementation = {
+    binary = "http-launcher";
+    contentHash = "";
+    provider = "workspace";
+  };
+  interfaces = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  name = "http-launcher";
+  owner = "root";
+  provides = [];
+  purpose = "Accepts versioned launch records through an explicit input capability and forwards entropy only to network-service and the URL only to http-get.";
+  requires = [
+    "endpoint";
+    "input";
+  ];
+  runtime = {
+    devices = [];
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      bufferBytePages = 0;
+      bufferCount = 0;
+      extraThreads = 0;
+      loanCount = 0;
+      mappingCount = 0;
+      privatePageQuota = 0;
+      spawnBudget = 0;
+      stackBytes = 16384;
+    };
+  };
+  test = {
+    testCondition = "io_http_check boots sel4-http";
+    expectedResult = "bounded native HTTP completion and explicit cleanup with independently observed host-server traffic";
+    passFailCriteria = "[http-launcher] ready";
+    requiredTestEnvironment = "io_http_check";
+  };
+  version = "1.0.0";
+}

@@ -76,6 +76,103 @@ success completion with no capability or flags. Individual TCP closes remain IO0
 requests. A failed session marks its ring dead and settles its live work; teardown
 releases service-owned buffers without taking down other sessions.
 
+The additive control-only `OP_ABORT` uses the same sentinel and otherwise empty
+request fields. The authenticated nontransferable control endpoint selects the
+holder; no request field can name another session. It is refused as an IO0
+operation. Unlike normal close, abort does not require ring quiescence: after the
+client drops its views and returns loans, the service releases that holder's
+transport state, marks the ring dead, invalidates admitted and queued work,
+revokes any remaining loans and releases both backing buffers before acknowledging.
+Invalidation does not promise a separate completion for each abandoned request. It may
+also close an admitted client that never attached. A successful abort is explicit
+failure-path reclamation, not successful HTTP delivery or graceful TCP close.
+
+## Bounded HTTP launch input
+
+The additive `WireNetworkLaunch` record in `v1/schema.zt` is exactly 64 bytes.
+Its generated Rust and Python bindings share one layout: magic/version, role,
+reserved zero bytes, total length, offset, chunk length, and a 48-byte zero-padded
+payload. The `LAUNCH_SEED` role is exactly one 32-byte seed at offset zero;
+`LAUNCH_URL` carries contiguous nonempty chunks of one URL of at most 2048 bytes.
+Receivers reject role confusion, inconsistent totals, gaps, overlaps, nonzero
+padding and excess bytes before using the payload. The role alone authorizes
+nothing: separate nontransferable launch endpoints select service and client.
+
+The QEMU `http-launcher` testkit component has explicit input and clock authority.
+It reads lowercase hexadecimal encodings of those records, one per input line,
+without echoing them; the host supplies fresh operating-system entropy, never an
+image-embedded or fixed test seed. Only the service receives the seed; only the
+HTTP client receives URL chunks. Missing input, malformed input, an all-zero
+seed, or an input deadline failure refuses startup. This trusted host-launch
+source is a QEMU qualification boundary, not a hardware entropy-source claim.
+The seed must not appear in transcripts, command arguments, or persisted images.
+
+Launch delivery, like existing loan provisioning, uses native blocking endpoint
+rendezvous. Its declared receivers must remain alive during startup; the host
+watchdog bounds failed qualification. Input polling has a 30-second deadline,
+but that is not a dead-peer-safe rendezvous guarantee.
+
+`NetworkIo::set_deadline` optionally binds subsequent transactions to one
+absolute monotonic deadline, which can be shortened but not extended. Polling
+and notification paths check it; notification timers use the earlier of the
+request timeout and that deadline. Expiry before publication preserves the
+session. Expiry after publication settles the local request and poisons the
+session, returning loans without reusing the payload. Explicit control abort can
+reclaim a poisoned session without reusing those mappings; profiles with declared
+client supervision separately reclaim after observed death. A poisoned adapter
+does not claim successful normal `finish` or replay the interrupted operation.
+The deadline-aware attach API carries the same deadline through loan and control
+polling; the HTTP client gives detach/abort a separate five-second cleanup grace.
+HTTP compositions declare request/completion notifications and timer authority,
+so an idle socket waits rather than spending the root dispatcher iteration budget
+on repeated polling before a monotonic deadline can expire.
+Native endpoint sends remain rendezvous operations, so these polling deadlines
+are not a claim that a dead peer can never block a startup or teardown send.
+
+## Exact-name DNS/connect
+
+`NetworkIo::connect_hostname` submits the existing TCP `OP_CONNECT` with
+`ADDRESS_DNS`; its original name is bounded to the wire contract's 24 bytes.
+The service authorizes holder, exact name, TCP, port and CONNECT before sending
+DNS. It reserves the connection against that original destination row, retaining
+its independent SEND/RECV rights and budgets. Numeric `connect_ipv4` still needs
+its own exact numeric grant. There is no application resolver socket, transferable
+answer handle, DNS cache, or DNS-to-numeric grant conversion.
+
+One extra fixed UDP socket serves one pending resolution/connect transaction.
+The generation must declare exactly one service-held IPv4 UDP resolver destination
+on port 53 or 1053, SEND/RECV rights, a socket, queue and timer, at least 1024
+buffer bytes and a nonzero record bound. Queries use fresh launch seed material
+and a checked SHA-256 counter construction to select a 16-bit ID and a source
+port in 49152–65535. No seed, invalid seed or exhausted counter fails closed.
+The egress guard permits only the pending encoded question to that exact resolver
+and source port, once per attempt; ordinary clients gain no UDP authority.
+
+Responses must match resolver address/port, transaction ID and complete A/IN
+question. Parsing is capped at 512 bytes, 32 records, four CNAME hops, 64-byte
+internal names, 16 compression-pointer hops and four distinct IPv4 answers.
+Only answer-section records on the original name's alias chain contribute.
+Truncated replies fail explicitly; TCP fallback and alias-only follow-up queries
+are unsupported. CNAME traversal requires the terminal A RRset in the same
+recursive response. NXDOMAIN, malformed replies and exhausted bounded retries
+are terminal failures, never a compiled-in-address fallback.
+
+Resolution lifetime is the minimum chain/RRset TTL, capped at 60 seconds; zero
+TTL is refused. Every pre-establishment attempt checks expiry and the 15-second
+total DNS/connect deadline. Up to two DNS retries use two-second timers; each
+of at most four address attempts has a two-second handshake bound. An established
+connection keeps its selected tuple and returns to the ordinary TCP timeout; it
+is not silently re-resolved or reconnected after application bytes are sent.
+
+Every returned address must be public unicast under the conservative implementation
+filter, which refuses private, loopback, link-local, shared-address, documentation,
+benchmarking, multicast and reserved ranges. A controlled resolver on port 1053
+may return a non-public address only when the **same client** also has an exact
+numeric CONNECT grant for that address and port. A mixed forbidden answer set is
+refused rather than partially trusted. The public composition has no numeric
+exception. DNS offers no cryptographic server authentication; neither this policy
+nor QEMU NAT qualifies physical networking or TLS.
+
 ## Results
 
 The IO0 queue status describes admission and settlement. The network completion's
@@ -135,8 +232,9 @@ exact local endpoint and admitted peer, and return typed listener/accepted
 connection handles. Only backlog one is supported and admitted: one pending
 handshake/accept slot, separate from already accepted children. A successful
 accept rearms that slot when the accepted-child, byte, timer, queue and fixed-pool
-limits permit; multiple live children of one listener are allowed. DNS, UDP, IPv6 and arbitrary external
-listener transport behavior remain unsupported.
+limits permit; multiple live children of one listener are allowed. The bounded
+service-owned DNS path above is separate from the TCP pools; general application
+UDP, IPv6 and arbitrary external listener transport remain unsupported.
 
 The destination byte reservation covers the socket buffers only. The separate
 application ring and payload page, link frame pages, and fixed engine metadata
@@ -182,7 +280,8 @@ application `OP_CONNECT` requests or listener rearming after accept; this engine
 uses zero such attempts even when a nonzero limit is declared. Unknown-tuple TCP resets are not published;
 TIME-WAIT sockets may still acknowledge duplicate FINs for their retained tuple.
 
-This holder-bound egress policy covers TCP only. ARP neighbor traffic and smoltcp
+TCP egress has holder-bound connection accounting; DNS UDP egress has the
+separate exact pending-query guard described above. ARP neighbor traffic and smoltcp
 IPv4 ICMP responses (including automatic echo replies) are interface-owned
 control traffic, admitted without a holder tuple or destination byte/retry/timer
 charge. An ICMP reply can therefore be emitted with no application connection.

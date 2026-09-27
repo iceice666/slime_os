@@ -18,10 +18,11 @@ from harness import ROOT
 
 GENERATOR = ROOT / "contracts" / "network-service" / "v1" / "schema.zt"
 OUTPUT = ROOT / "components" / "proto" / "src" / "network_service.rs"
+PYTHON_OUTPUT = ROOT / "scripts" / "lib" / "network_launch.py"
 INVALID_SCHEMA = "INVALID_NETWORK_SERVICE_SCHEMA"
 
 
-def render() -> str:
+def render() -> tuple[str, str]:
     with tempfile.TemporaryDirectory(prefix="slime-network-service-bindings-") as temporary:
         staging = Path(temporary)
         staged = staging / "components" / "proto" / "src" / "network_service.rs"
@@ -42,7 +43,10 @@ def render() -> str:
         generated = staged.read_text(encoding="utf-8")
         if INVALID_SCHEMA in generated:
             raise SystemExit("network-service schema reflection/layout validation failed")
-        return generated
+        python = (staging / "network_launch.py").read_text(encoding="utf-8")
+        if INVALID_SCHEMA in python:
+            raise SystemExit("network launch schema validation failed")
+        return generated, python
 
 
 def format_rust(source: str) -> str:
@@ -67,13 +71,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
-    generated = format_rust(render())
+    rust, python = render()
+    generated = format_rust(rust)
     if arguments.check:
         if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != generated:
             raise SystemExit("generated network-service bindings are stale")
+        if not PYTHON_OUTPUT.exists() or PYTHON_OUTPUT.read_text(encoding="utf-8") != python:
+            raise SystemExit("generated network launch bindings are stale")
         print("Network service protocol bindings are current")
         return
     write_atomic(OUTPUT, generated)
+    write_atomic(PYTHON_OUTPUT, python)
     print(f"Generated {OUTPUT.relative_to(ROOT)}")
 
 

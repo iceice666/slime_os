@@ -3,6 +3,146 @@ use slime_proto::{
     valid_network_completion, valid_network_loan, valid_network_request,
 };
 
+#[test]
+fn launch_chunks_have_bounded_roles_lengths_and_canonical_padding() {
+    use network_service::{LAUNCH_SEED, LAUNCH_URL, WireNetworkLaunch};
+    use slime_proto::valid_network_launch;
+    let seed = WireNetworkLaunch {
+        magic: network_service::NETWORK_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        kind: LAUNCH_SEED,
+        reserved: 0,
+        total_len: 32,
+        offset: 0,
+        length: 32,
+        reserved2: [0; 2],
+        payload: [0; 48],
+    };
+    assert!(valid_network_launch(&seed));
+    assert_eq!(WireNetworkLaunch::decode(&seed.encode()), Some(seed));
+    assert_eq!(seed.encode().len(), 64);
+    assert!(WireNetworkLaunch::decode(&seed.encode()[..63]).is_none());
+    for frame in [
+        WireNetworkLaunch { magic: 0, ..seed },
+        WireNetworkLaunch { version: 2, ..seed },
+        WireNetworkLaunch { kind: 3, ..seed },
+        WireNetworkLaunch {
+            reserved: 1,
+            ..seed
+        },
+        WireNetworkLaunch {
+            reserved2: [1, 0],
+            ..seed
+        },
+        WireNetworkLaunch { length: 0, ..seed },
+        WireNetworkLaunch { length: 49, ..seed },
+        WireNetworkLaunch { offset: 1, ..seed },
+        WireNetworkLaunch {
+            total_len: 33,
+            ..seed
+        },
+        WireNetworkLaunch {
+            payload: [1; 48],
+            ..seed
+        },
+    ] {
+        assert!(!valid_network_launch(&frame), "{frame:?}");
+    }
+    let url = WireNetworkLaunch {
+        kind: LAUNCH_URL,
+        total_len: 2048,
+        offset: 2016,
+        ..seed
+    };
+    assert!(valid_network_launch(&url));
+    assert!(!valid_network_launch(&WireNetworkLaunch {
+        offset: 2017,
+        ..url
+    }));
+    assert!(!valid_network_launch(&WireNetworkLaunch {
+        total_len: 2049,
+        ..url
+    }));
+    assert!(!valid_network_launch(&WireNetworkLaunch {
+        total_len: 0,
+        offset: 0,
+        ..url
+    }));
+}
+
+#[test]
+fn session_abort_is_control_only_and_cannot_select_another_holder() {
+    let request = WireNetworkRequest {
+        magic: network_service::NETWORK_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        op: network_service::OP_ABORT,
+        transport: network_service::TRANSPORT_NONE,
+        flags: 0,
+        port: 0,
+        name_len: 0,
+        capability: u64::MAX,
+        address_kind: network_service::ADDRESS_NONE,
+        reserved: [0; 7],
+        endpoint: [0; 24],
+    };
+    assert!(slime_proto::valid_network_abort(&request));
+    assert!(!valid_network_request(&request));
+    for malformed in [
+        WireNetworkRequest {
+            capability: 1,
+            ..request
+        },
+        WireNetworkRequest {
+            flags: 1,
+            ..request
+        },
+        WireNetworkRequest {
+            endpoint: [1; 24],
+            ..request
+        },
+        WireNetworkRequest {
+            port: 80,
+            ..request
+        },
+        WireNetworkRequest {
+            transport: network_service::TRANSPORT_TCP,
+            ..request
+        },
+        WireNetworkRequest {
+            name_len: 1,
+            ..request
+        },
+        WireNetworkRequest {
+            address_kind: network_service::ADDRESS_DNS,
+            ..request
+        },
+        WireNetworkRequest {
+            reserved: [1; 7],
+            ..request
+        },
+        WireNetworkRequest {
+            op: network_service::OP_CLOSE,
+            ..request
+        },
+    ] {
+        assert!(!slime_proto::valid_network_abort(&malformed));
+    }
+    let completion = WireNetworkCompletion {
+        magic: network_service::NETWORK_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        op: network_service::OP_ABORT,
+        capability_kind: network_service::CAPABILITY_NONE,
+        status_detail: network_service::STATUS_SUCCESS,
+        flags: 0,
+        capability: 0,
+    };
+    assert!(valid_network_completion(&completion));
+    assert!(!valid_network_completion(&WireNetworkCompletion {
+        capability: 1,
+        ..completion
+    }));
+}
+
 fn dns_request(op: u8, transport: u8, name: &[u8], port: u16) -> WireNetworkRequest {
     let mut endpoint = [0u8; 24];
     endpoint[..name.len()].copy_from_slice(name);

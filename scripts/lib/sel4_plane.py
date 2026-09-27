@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from re import Pattern
@@ -70,15 +71,27 @@ def run_plane(
     additional_arguments: Sequence[str] = (),
     pins_path: Path | None = None,
     cwd: Path = ROOT,
+    input_trigger: Pattern[str] | None = None,
+    input_text: str | None = None,
+    input_character_delay: float = 0.001,
 ) -> str:
-    """Run QEMU until terminal evidence, exit, or the bounded timeout."""
+    """Run QEMU until terminal evidence, exit, or the bounded timeout.
+
+    Optional launch input is sent once after the declared readiness marker.
+    The harness does not log input; callers supplying secrets must use a guest
+    input path that does not echo them to the serial output.
+    """
+    if (input_trigger is None) != (input_text is None):
+        fail("QEMU launch input requires both a readiness trigger and input text")
+    if input_character_delay < 0:
+        fail("QEMU input pacing delay must be nonnegative")
     command = qemu_base_command(image=image, fail=fail, pins_path=pins_path)
     command.extend(additional_arguments)
     try:
         process = subprocess.Popen(
             command,
             cwd=cwd,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -104,10 +117,22 @@ def run_plane(
     watchdog.start()
     lines: list[str] = []
     terminal_reached = False
+    input_sent = False
     try:
         assert process.stdout is not None
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
+            if input_trigger is not None and not input_sent and input_trigger.search(line):
+                assert process.stdin is not None and input_text is not None
+                try:
+                    for character in input_text:
+                        process.stdin.write(character)
+                        process.stdin.flush()
+                        if input_character_delay:
+                            time.sleep(input_character_delay)
+                except (BrokenPipeError, OSError):
+                    fail("QEMU closed the launch-input stream")
+                input_sent = True
             if terminal_condition.search(line):
                 terminal_reached = True
                 break
@@ -123,8 +148,11 @@ def run_plane(
             process.wait()
 
     transcript = "\n".join(lines)
+    diagnostic_tail = "\n".join(lines[-80:])
     if timed_out.is_set():
-        fail(f"QEMU timed out after {timeout}s before terminal condition")
+        fail(f"QEMU timed out after {timeout}s before terminal condition\nLast serial output:\n{diagnostic_tail}")
     if not terminal_reached:
-        fail(f"QEMU exited with status {process.returncode} before terminal condition")
+        fail(f"QEMU exited with status {process.returncode} before terminal condition\nLast serial output:\n{diagnostic_tail}")
+    if input_text is not None and not input_sent:
+        fail("QEMU reached terminal evidence without accepting launch input")
     return transcript

@@ -3,7 +3,8 @@
 **Canonical work items:** short-term TCP epic
 `01a08ff0-0b99-7315-99b0-7e7f340fa6f9`; demo listener/loopback facilities
 `01a0ddaa-825f-7309-8508-ed49ffe33a8d`; long-term smoltcp coverage
-`01a0ddaa-8676-7d7e-8faf-47285166731f`.
+`01a0ddaa-8676-7d7e-8faf-47285166731f`; native HTTP/DNS
+`01a0e12e-32fe-71e6-bea4-48c1c007f04c`.
 
 ## Current gap
 
@@ -35,8 +36,9 @@ advance and supervised recovery with a fresh 4096-byte stream. Its controlled pe
 abandons the first acknowledged, unechoed 1024-byte session on a new SYN; this is
 not transparent continuation or ordinary-server interoperability across reset.
 Local qualification also observes authority refusals and a typed receive timeout
-followed by resumed traffic. Physical-device recovery, UDP payloads, DNS,
-arbitrary external listeners and broader backends remain separate work.
+followed by resumed traffic. Physical-device recovery, general application UDP,
+arbitrary external listeners and broader backends remain separate work. The
+bounded HTTP/DNS slice below extends this transport without broad DNS coverage.
 
 ## Planned scope
 
@@ -95,6 +97,68 @@ facilities. Zenoh session/framing, declarations, CDR and ROS semantics remain in
 routers and broad smoltcp coverage are not short-term demo prerequisites. Local
 TCP proves no physical NIC; actual board and external-peer evidence remain
 separate obligations.
+
+## Native HTTP and bounded DNS
+
+Work item `01a0e12e-32fe-71e6-bea4-48c1c007f04c` carries the native HTTP GET
+requirements. Delivery proceeds through ordinary-server fixed-address HTTP,
+exact-name service-owned DNS/connect, then an explicitly requested public
+`http://example.com/` observation. A parser test or controlled echo does not
+satisfy either ordinary-server interoperability or the final public observation.
+
+The HTTP parser lives in `components/lib/src/http.rs`, separate from network
+policy. It uses fixed storage, incremental partial input, bounded headers,
+trailers, informational responses, chunk metadata and streamed body bytes.
+Content-Length, chunked and orderly-close-delimited responses are distinct;
+reset/timeout never substitutes for EOF. Conflicting lengths, transfer/content
+codings outside the supported profile, upgrades and URL/header injection are
+refused. Completed non-2xx responses remain HTTP responses, not transport errors.
+
+A launch-supplied URL reaches the native client over its explicit endpoint using
+the [network launch contract](../../contracts/network-service/README.md#bounded-http-launch-input),
+not a compiled URL or ambient environment. Console body chunks are hex-encoded
+separately from diagnostics so an untrusted response cannot impersonate service
+or qualification markers. This is bounded body streaming, not terminal rendering
+of arbitrary control bytes.
+
+DNS is scoped to the original holder/name/TCP/port grant. The service retains
+resolution results and returns only a connection; answers and CNAME targets
+never mint numeric-address permissions. Resolver traffic requires its own exact
+service destination authority. Controlled host-address answers require a separate
+exact numeric destination grant; public profiles must not inherit that exception.
+Fresh launch entropy is mandatory for query-ID/source-port unpredictability;
+this mitigates guessing, not cryptographic DNS authentication.
+
+Qualification must compare actual guest body bytes with ordinary host TCP/UDP
+server observations over QEMU user networking, retain current network regression,
+and cover negative framing, DNS, authority and cleanup cases. Public retrieval
+is opt-in and separate from the offline controlled suite. Completion still
+requires a genuine observation tied to target, full revision, image identity,
+queried name, returned/selected address, status, byte count and cleanup. Missing
+or unreachable public DNS/HTTP is unavailable/failure, never a local substitution.
+These obligations do not qualify TLS, physical NICs or IOMMU containment.
+
+Run controlled cases with `just io_http_check`; select one case or retain serial
+and packet evidence through the owning checker:
+
+```sh
+python3 scripts/check/check-sel4-io-network-plane.py --arm http --http-case dns-content-length --transcript build/http-controlled.log
+```
+
+`just io_http_public_check` explicitly opts into live traffic. The equivalent
+checker invocation below keeps the transcript and packet capture; it must report
+failure if public DNS/HTTP cannot be reached. It uses the public composition's
+exact resolver and hostname authority, not the controlled server.
+
+```sh
+python3 scripts/check/check-sel4-io-network-plane.py --arm http-public --allow-public --transcript build/http-public.log
+```
+
+`just io_http_qualification_check` combines current network regression, controlled
+HTTP and a fresh public smoke for one devloop execution identity. No recorded
+body string or fixed status is required for the public response. The maintained
+work item must remain active until every required observation is qualified;
+adding these entry points is not completion evidence.
 
 ## Long-term authority-compatible smoltcp coverage
 

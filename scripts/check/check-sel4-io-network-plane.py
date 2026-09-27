@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IO4 and IO11 gate: destination-scoped network authority under seL4, and
+"""Destination-scoped network authority, native TCP, and bounded HTTP under seL4:
 the data plane behind it.
 
 Six arms share this checker: authority, external TCP, local TCP, client lifetime,
@@ -10,12 +10,18 @@ service is bound to the IO3 virtio-net driver behind a frame-level peer on
 QEMU's UDP socket backend (`scripts/lib/link_peer.py`). Its packet ledger
 independently proves the exact 4096-byte TCP echo, handshake and graceful
 close, refused-port reset, absence of forbidden egress, and ARP/ICMP traffic.
+The HTTP arms instead use QEMU user networking and ordinary host TCP/UDP sockets;
+public DNS/HTTP remains an explicitly requested smoke, never part of ``all``.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shlex
+import subprocess
+import tempfile
 import socket
 import sys
 import threading
@@ -27,6 +33,9 @@ from closure_image import ClosureImageError, build as build_closure_image  # noq
 from harness import sha256_file  # noqa: E402
 
 import link_peer  # noqa: E402
+import http_peer  # noqa: E402
+import http_capture  # noqa: E402
+import network_launch as launch  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from sel4_plane import run_plane  # noqa: E402
 
@@ -246,8 +255,26 @@ DRIVER_RESET_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
 )
 
+HTTP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("http launch", (r"\[http-launcher\] ready",)),
+    ("http client", (
+        r"\[http-get\] cleanup close=1 detach=1",
+        r"\[http-get\] complete success=1 status=[0-9]+ bytes=[0-9]+ error=none",
+    )),
+    ("http service cleanup", (
+        r"\[network-service\] application buffers released",
+        r"\[network-service\] application connection handles live=0",
+        r"\[network-service\] link released",
+    )),
+    ("http graph cleanup", (
+        r"SLIME_GRAPH tasks reclaimed live=0 slots=[1-9]\d*",
+        r"SLIME_GRAPH loans served=[0-9]+ loans=0 mappings=0 regions=0 orphans=0 quota=0",
+        r"SLIME_GRAPH HEALTHY generation=(?:159|160) required=4 live=0 completed=4 failed=0",
+    )),
+)
+
 # Every arm participates in the shared missing/reordered/failure controls.
-CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS
+CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -259,6 +286,9 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[io-local-network-probe\] fail: ",
     r"\[io-network-lifetime-probe\] fail: ",
     r"\[virtio-net-driver\] fail: ",
+    r"\[http-get\] fail: ",
+    r"\[http-launcher\] fail: ",
+    r"\[http-get\] complete success=0 ",
     r"Caught cap fault",
     r"Caught vm fault",
     r"panicked at ",
@@ -407,10 +437,197 @@ def check_tcp_ledger(ledger: link_peer.Ledger, guest_mac: bytes) -> None:
         fail(f"peer wire evidence: {error}")
 
 
+def http_launch_text(url: str) -> str:
+    """Serialize only through the schema-generated launch binding."""
+    encoded = url.encode("ascii")
+    if not 0 < len(encoded) <= launch.LAUNCH_URL_BYTES:
+        fail("HTTP launch URL exceeds its contract bound")
+    records: list[str] = []
+    for kind, value in ((launch.LAUNCH_SEED, os.urandom(32)), (launch.LAUNCH_URL, encoded)):
+        for offset in range(0, len(value), launch.LAUNCH_PAYLOAD_BYTES):
+            chunk = value[offset:offset + launch.LAUNCH_PAYLOAD_BYTES]
+            frame = launch.NETWORK_LAUNCH.pack(
+                launch.NETWORK_MAGIC, launch.FORMAT_VERSION, kind, 0,
+                len(value), offset, len(chunk), b"\0" * 2,
+                chunk.ljust(launch.LAUNCH_PAYLOAD_BYTES, b"\0"),
+            )
+            records.append(frame.hex() + "\n")
+    return "".join(records)
+
+
+def check_http_body(transcript: str, case: http_peer.Case | None) -> tuple[int, int]:
+    body = bytearray()
+    complete = []
+    cleanup = []
+    cleanup_record = (
+        "[http-get] cleanup close=0 detach=1 abort=1"
+        if case is not None and case.error != "none" else "[http-get] cleanup close=1 detach=1"
+    )
+    for number, line in enumerate(transcript.splitlines()):
+        if line.startswith("[http-get] body "):
+            match = re.fullmatch(r"\[http-get\] body hex=([0-9a-f]{2,128})", line)
+            if match is None or len(match[1]) % 2 or cleanup or complete:
+                fail("malformed, oversized, or reordered HTTP body record")
+            body.extend(bytes.fromhex(match[1]))
+            if len(body) > 1024 * 1024:
+                fail("HTTP console body exceeds the client body bound")
+        if line.startswith("[http-get] cleanup "):
+            if line != cleanup_record or cleanup or complete:
+                fail("HTTP cleanup failed, was duplicated, or was reordered")
+            cleanup.append(number)
+        if line.startswith("[http-get] complete "):
+            match = re.fullmatch(r"\[http-get\] complete success=([01]) status=([0-9]+) bytes=([0-9]+) error=([a-z-]+)", line)
+            if match is None or complete or not cleanup:
+                fail("malformed, duplicate, or premature HTTP completion")
+            complete.append(match)
+    if len(complete) != 1 or len(cleanup) != 1:
+        fail("HTTP completion or cleanup evidence is absent")
+    result = complete[0]
+    status, count = int(result[2]), int(result[3])
+    if count != len(body):
+        fail("HTTP byte count disagrees with independently decoded console body")
+    expected_error = case.error if case is not None else "none"
+    if result[1] != str(int(expected_error == "none")) or result[4] != expected_error:
+        fail(f"unexpected HTTP completion: {result[0]}")
+    if case is not None and (status != case.status or bytes(body) != case.body):
+        fail(f"{case.name}: HTTP status/body differs from the independent server fixture")
+    if case is None and not 200 <= status <= 599:
+        fail("public HTTP completion has no final response status")
+    return status, count
+
+
+def http_identity(image: Path, case: str) -> str:
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True))
+    return (f"[http-observation] target=aarch64-sel4-qemu-virt revision={revision} "
+            f"dirty={int(dirty)} image-sha256={sha256_file(image, fail)} case={case}")
+
+
+def run_http_request(image: Path, url: str, *, expected_failure: bool = False, default_port_forward: bool = False) -> tuple[str, bytes]:
+    failures = tuple(marker for marker in FAILURE_MARKERS if marker not in (
+        r"\[http-get\] complete success=0 ",
+    )) if expected_failure else FAILURE_MARKERS
+    terminal = re.compile(r"SLIME_GRAPH HEALTHY generation=(?:159|160) required=4 live=0 completed=4 failed=0|" + "|".join(failures))
+    netdev = "user,id=slimehttp,net=10.0.2.0/24,host=10.0.2.2,dhcpstart=10.0.2.15,ipv6=off"
+    if default_port_forward:
+        # QEMU forwards the byte stream; the guest still performs DNS and HTTP.
+        # This controlled-only endpoint avoids privileged host port 80 listeners.
+        relay = shlex.join((sys.executable, str(ROOT / "scripts/lib/http_peer.py"), "--relay"))
+        netdev += f",guestfwd=tcp:10.0.2.100:80-cmd:{relay}"
+    with tempfile.TemporaryDirectory(prefix="slime-http-capture-") as directory:
+        capture = Path(directory) / "network.pcap"
+        transcript = run_plane(
+            image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS,
+            additional_arguments=(
+                "-netdev", netdev,
+                "-device", "virtio-net-device,netdev=slimehttp,mac=52:54:00:53:4c:01",
+                "-object", f"filter-dump,id=httpcapture,netdev=slimehttp,file={capture}",
+            ),
+            input_trigger=re.compile(r"\[http-launcher\] ready"), input_text=http_launch_text(url),
+        )
+        if not capture.is_file():
+            fail("QEMU did not produce the HTTP/DNS packet observation")
+        packets = capture.read_bytes()
+    for pattern in failures:
+        if re.search(pattern, transcript):
+            print(transcript)
+            fail(f"HTTP run contains failure evidence {pattern!r}")
+    return transcript, packets
+
+
+def run_http_arm(image: Path, transcript_path: Path | None, selected_case: str | None) -> None:
+    selected = [case for case in http_peer.cases() if selected_case is None or case.name == selected_case]
+    if not selected:
+        fail(f"unknown HTTP case {selected_case!r}")
+    observations: list[str] = []
+    for case in selected:
+        print(f"[http-check] starting {case.name}", flush=True)
+        try:
+            with http_peer.Peer(case) as peer:
+                transcript, packets = run_http_request(image, case.url, expected_failure=case.error != "none", default_port_forward=case.port == 80)
+            identity = http_identity(image, case.name)
+            if transcript_path is not None:
+                transcript_path.write_text("\n".join(observations + [identity + "\n" + transcript]) + "\n", encoding="utf-8")
+                transcript_path.with_suffix(f".{case.name}.pcap").write_bytes(packets)
+            peer.qualify()
+            wire = http_capture.verify_capture(
+                packets, hostname=None if case.host == "10.0.2.2" or not case.attached else case.host,
+                resolver=("10.0.2.2", http_peer.DNS_PORT), port=case.port,
+                expected_destination=case.destination, expect_connect=case.expect_request,
+                expect_no_application_traffic=not case.attached,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            fail(f"{case.name}: controlled HTTP/DNS peer unavailable or invalid: {error}")
+        status, count = check_http_body(transcript, case)
+        if case.error == "none":
+            match_marker_contract(transcript, HTTP_CHAINS, FAILURE_MARKERS, fail)
+        else:
+            failure_chains = tuple(
+                (name, tuple(
+                    marker.replace("success=1", "success=0")
+                    .replace("error=none", f"error={case.error}")
+                    .replace("cleanup close=1 detach=1", "cleanup close=0 detach=1 abort=1")
+                    .replace("application buffers released", f"application aborted sessions_released={int(case.attached)}")
+                    for marker in markers
+                )) for name, markers in HTTP_CHAINS
+            )
+            expected_failures = tuple(marker for marker in FAILURE_MARKERS if marker != r"\[http-get\] complete success=0 ")
+            match_marker_contract(transcript, failure_chains, expected_failures, fail)
+        identity = http_identity(image, case.name)
+        summary = (f"[http-peer] case={case.name} dns-queries={len(peer.queries)} "
+                   f"http-requests={len(peer.requests)} status={status} bytes={count} "
+                   f"expected-error={case.error} body-identical=1")
+        peer_records = "\n".join(
+            [f"[http-peer] DNS name={name} id={query_id} source-port={source_port}" for name, query_id, source_port in peer.queries]
+            + [f"[http-peer] request={request!r}" for request in peer.requests]
+        )
+        wire_record = f"[http-wire] frames={wire['frames']} dns-queries={wire['dns_queries']} selected={wire['selected']} tcp-connections={wire['tcp_connections']} tcp-payload-bytes={wire['tcp_payload_bytes']}"
+        observations.append(identity + "\n" + transcript + "\n" + peer_records + "\n" + wire_record + "\n" + summary)
+        if transcript_path is not None:
+            transcript_path.write_text("\n".join(observations) + "\n", encoding="utf-8")
+        print(identity)
+        print(peer_records)
+        print(wire_record)
+        print(summary)
+    print(f"seL4 HTTP check: {len(selected)} controlled ordinary host-stack cases passed")
+
+
+def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
+    identity = http_identity(image, "public-example.com")
+    print(identity, flush=True)
+    transcript, packets = run_http_request(image, "http://example.com/")
+    if transcript_path is not None:
+        transcript_path.write_text(identity + "\n" + transcript + "\n", encoding="utf-8")
+        transcript_path.with_suffix(".pcap").write_bytes(packets)
+    match_marker_contract(transcript, HTTP_CHAINS, FAILURE_MARKERS, fail)
+    status, count = check_http_body(transcript, None)
+    # DNS is performed inside network-service. Public results cannot be supplied
+    # by the controlled peer or the host resolver.
+    answers = re.findall(r"\[network-service\] DNS name=example\.com answer=([0-9.]+) ttl=[1-9][0-9]*", transcript)
+    selected = re.findall(r"\[network-service\] DNS name=example\.com selected=([0-9.]+) port=80 attempt=[1-4]", transcript)
+    if not answers or not selected or any(address not in answers for address in selected):
+        fail("public HTTP observation lacks validated guest DNS answers and selected-address evidence")
+    try:
+        wire = http_capture.verify_capture(packets, hostname="example.com", resolver=("1.1.1.1", 53), port=80)
+    except ValueError as error:
+        fail(str(error))
+    if set(selected) != set(wire["selected"]):
+        fail("guest-selected DNS addresses differ from independently observed TCP SYN destinations")
+    summary = (f"[http-public] name=example.com answers={wire['answers']} selected={wire['selected']} "
+               f"dns-queries={wire['dns_queries']} dns-responses={wire['dns_responses']} "
+               f"status={status} bytes={count} completion=1 cleanup=1")
+    if transcript_path is not None:
+        transcript_path.write_text(identity + "\n" + transcript + "\n" + summary + "\n", encoding="utf-8")
+    print(transcript)
+    print(summary)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "http", "http-public", "all"), default="all")
+    parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
+    parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
         "--transcript",
         type=Path,
@@ -419,6 +636,14 @@ def main() -> None:
     arguments = parser.parse_args()
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
+    if arguments.arm == "http-public" and not arguments.allow_public:
+        fail("public HTTP requires explicit --allow-public; unavailable public access is not a pass")
+    if arguments.http_case is not None and arguments.arm != "http":
+        fail("--http-case requires --arm http")
+    if arguments.arm == "http":
+        run_http_arm(build_image("sel4-http"), arguments.transcript, arguments.http_case)
+    if arguments.arm == "http-public":
+        run_http_public_arm(build_image("sel4-http-public"), arguments.transcript)
     if arguments.arm in ("authority", "all"):
         check_fixture()
         image = build_image(CLOSURE) if not arguments.no_build else IMAGE
