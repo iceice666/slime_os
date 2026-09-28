@@ -293,6 +293,7 @@
     {
       acceptedSocketLimit = 0;
       admittedPeer = "";
+      admittedPeerAddress = "";
       backend = "loopback";
       backlog = 0;
       byteBudget = 0;
@@ -314,6 +315,7 @@
     {
       acceptedSocketLimit = 1;
       admittedPeer = "publisher-session";
+      admittedPeerAddress = "";
       backend = "loopback";
       backlog = 1;
       byteBudget = 8192;

@@ -224,6 +224,7 @@
     {
       acceptedSocketLimit = 0;
       admittedPeer = "";
+      admittedPeerAddress = "";
       backend = "external";
       backlog = 0;
       byteBudget = 0;

@@ -17,9 +17,10 @@ Owners:
   transport-independent), `components/lib/src/link_frames.rs`;
 - contracts: `contracts/network-service/v1/` (operations, bounds, waiting,
   retry, timeout, cleanup — see its [README](../../contracts/network-service/README.md)),
-  `contracts/network-application/v1/`, `contracts/network-destination/v1/`,
+  `contracts/network-application/v2/`, `contracts/network-destination/v1/`,
   `contracts/network-interface/v1/`, `contracts/link-device/v1/`;
 - compositions: `sel4-io-network`, `sel4-io-tcp`, `sel4-io-tcp-impairment`,
+  `sel4-io-tcp-listener`,
   `sel4-io-local`, `sel4-io-lifetime`, `sel4-io-service-fault`,
   `sel4-io-driver-reset`, `sel4-http`, `sel4-http-public` under
   `contracts/system-spec/v1/`;
@@ -78,12 +79,50 @@ connect refused as `exhausted`. The declared values are in the
 
 ## Application authority and listeners
 
-`network-application/v1` declares each application's control/provisioning
+`network-application/v2` declares each application's control/provisioning
 bindings, backend, optional readiness/supervision bindings, and separate exact
-local-listener authority. Listener rows permit only `127.0.0.1`, a nonzero port,
-and one declared local client. Local-peer admission precedes SYN publication;
-localhost alone grants no authority. An authority-only composition may still
-omit the interface; its legacy endpoint results are bookkeeping, not transport.
+listener authority. A loopback listener row permits only `127.0.0.1`, a nonzero
+port and one declared local client holder; local-peer admission precedes SYN
+publication, and localhost alone grants no authority. An authority-only
+composition may still omit the interface; its legacy endpoint results are
+bookkeeping, not transport.
+
+## External listener
+
+An external listener row names an address the service's declared interface
+owns, a nonzero port and one exact remote IPv4 address; the builder, the
+decoder and the service each refuse anything else. At attach the service
+states the declaration (`tcp listener backend=external …`) and installs an
+ingress rule on its `LinkDevice`: TCP to that endpoint from any other source
+is dropped before smoltcp sees it, so it is never answered and never takes
+the backlog slot, and bare SYNs so dropped are counted. A SYN to an undeclared
+port draws smoltcp's reset, which the egress guard withholds. The listener has
+one backlog slot; accepted connections, up to the declared limit, use the same
+typed handles, readiness and lifetime as loopback ones. An admitted peer's SYN
+that finds no armed socket, because the slot is held or the accepted limit is
+reached, gets smoltcp's reset; the egress guard publishes that single
+`RST|ACK` only for the admitted address at the declared endpoint and counts it.
+At shutdown the service reports both counts (`tcp listener refusals
+unadmitted=… excess=…`).
+
+Every TCP connection, external or loopback, closes the same way. `OP_SHUTDOWN`
+queues a FIN after the bytes already queued and refuses later sends, while
+receive continues to EOF. A close with unread receive bytes aborts with one
+reset and reports success, meaning local disposal; any other close queues a FIN
+after the unsent bytes and completes in TIME-WAIT, or closed once a peer that
+closed first acknowledges ours. For each accepted connection the service
+reports the unread and unsent bytes at the close request, the terminal state
+and the returned reservation (`tcp accepted close …`), and a listener close
+reports its live children.
+
+The `sel4-io-tcp-listener` composition qualifies this behind a scripted frame
+peer (`scripts/lib/tcp_listener_peer.py`) that opens every listener connection
+itself and reads the probe's progress from a control connection; the declared
+values are in the
+[plan](../plans/network-data-plane.md#external-tcp-listener-and-close-semantics).
+The TIME-WAIT quarantine applies here too: the four-socket pool holds the
+control connection, closed connections in TIME-WAIT, live children and the
+armed listener socket.
 
 The service owns distinct application ring and payload buffers. A nontransferable
 control endpoint authorizes provisioning and teardown; a separate transferable
@@ -150,7 +189,7 @@ The network contract owns the precise DNS subset, bounds and authority policy.
 
 ## Limits
 
-General application UDP, arbitrary external listeners, IPv6, DHCP, multicast,
+General application UDP, wildcard or multi-peer external listeners, IPv6, DHCP, multicast,
 routers, and broad smoltcp coverage remain unfinished. Neither the loopback
 path nor any QEMU profile qualifies a physical NIC; the controlled external
 peer's reset behavior is not ordinary-server interoperability across reset.
@@ -179,3 +218,6 @@ peer's reset behavior is not ordinary-server interoperability across reset.
 - `just io_tcp_impairment_check` — scripted reordering, loss, a silent peer and
   zero windows in both directions against the declared bounds, judged from the
   wire, after the peer's own host controls;
+- `just io_tcp_listener_check` — one exact external listener: silent and reset
+  refusals, half-close both ways, simultaneous close and close with unread or
+  unsent bytes, judged from the wire, after the peer's own host controls;

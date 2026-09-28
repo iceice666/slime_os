@@ -231,6 +231,7 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-io-service-fault",
     "sel4-io-driver-reset",
     "sel4-io-tcp-impairment",
+    "sel4-io-tcp-listener",
     "sel4-private-memory-stress",
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",
@@ -681,7 +682,7 @@ def network_application_controls(source: dict) -> int:
         "provisionBinding": "network-tcp-probe-provision", "supervisionBinding": "",
         "requestNotification": "", "completionNotification": "", "role": "client",
         "backend": "loopback", "localAddress": "0.0.0.0", "localPort": 0,
-        "admittedPeer": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
+        "admittedPeer": "", "admittedPeerAddress": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
         "byteBudget": 0, "timerBudget": 0, "queueDepth": 0, "retryLimit": 0,
         "reconnectLimit": 0,
     }
@@ -739,6 +740,7 @@ def network_application_controls(source: dict) -> int:
         ("rights", ["listen"], "client row carries listener authority"),
         ("localPort", True, "invalid numeric bound"),
         ("byteBudget", 1, "client row carries listener authority"),
+        ("admittedPeerAddress", "10.0.0.2", "client row carries listener authority"),
     ):
         reject(f"client {field}={value!r}",
                lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][0].update({field: value}), reason)
@@ -763,10 +765,11 @@ def network_application_controls(source: dict) -> int:
         ("localAddress", "0.0.0.0", "not an exact authorized loopback endpoint"),
         ("localAddress", "127.0.0.2", "not an exact authorized loopback endpoint"),
         ("localAddress", "127.*", "invalid local IPv4 address"),
-        ("localPort", 0, "not an exact authorized loopback endpoint"),
-        ("localPort", 65536, "not an exact authorized loopback endpoint"),
-        ("backend", "external", "not an exact authorized loopback endpoint"),
-        ("rights", ["send"], "not an exact authorized loopback endpoint"),
+        ("localPort", 0, "not an exact authorized endpoint"),
+        ("localPort", 65536, "not an exact authorized endpoint"),
+        ("backend", "external", "not on a declared service interface address"),
+        ("admittedPeerAddress", "10.0.0.2", "not an exact authorized loopback endpoint"),
+        ("rights", ["send"], "not an exact authorized endpoint"),
         ("rights", ["listen", "listen"], "unknown or duplicate right"),
         ("rights", ["connect"], "unknown or duplicate right"),
         ("backlog", 2, "listener bounds exceed contract"),
@@ -831,6 +834,42 @@ def network_application_controls(source: dict) -> int:
     refused += 1
     duplicate_listener["networkApplications"][-1]["localPort"] += 1
     BUILDER.build_network_applications(duplicate_listener)
+
+    # An external listener listens on the service's declared interface address
+    # and admits one exact remote unicast address, never a holder.
+    interface = next(entry["address"] for entry in manifest["networkInterfaces"] if entry["holder"] == "network-service")
+    external = copy.deepcopy(manifest)
+    external["networkApplications"][1].update(backend="external", localAddress=interface, admittedPeer="",
+                                               admittedPeerAddress="10.0.0.2")
+    encoded = BUILDER.build_network_applications(external)
+    row = next(wire.NETWORK_APPLICATION_ENTRY.unpack_from(encoded, wire.NETWORK_APPLICATION_HEADER_BYTES + index * wire.NETWORK_APPLICATION_ENTRY_BYTES)
+               for index in range(2)
+               if wire.NETWORK_APPLICATION_ENTRY.unpack_from(encoded, wire.NETWORK_APPLICATION_HEADER_BYTES + index * wire.NETWORK_APPLICATION_ENTRY_BYTES)[10] == wire.NETWORK_APPLICATION_ROLE_LISTENER)
+    if (row[12], row[21], row[6]) != (wire.NETWORK_APPLICATION_PEER_IPV4, bytes([10, 0, 0, 2]), bytes(32)):
+        fail("external listener encoding lost its peer kind, admitted address or empty holder")
+    for field, value, reason in (
+        ("admittedPeerAddress", "", "admits no exact remote IPv4 address"),
+        ("admittedPeerAddress", "10.0.0.0/24", "admits no exact remote IPv4 address"),
+        ("admittedPeerAddress", "0.0.0.0", "admits no exact remote IPv4 address"),
+        ("admittedPeerAddress", "127.0.0.1", "admits no exact remote IPv4 address"),
+        ("admittedPeerAddress", "224.0.0.1", "admits no exact remote IPv4 address"),
+        ("admittedPeerAddress", "255.255.255.255", "admits no exact remote IPv4 address"),
+        ("admittedPeerAddress", interface, "admits no exact remote IPv4 address"),
+        ("admittedPeer", "io-tcp-probe", "not on a declared service interface address"),
+        ("localAddress", "10.0.0.9", "not on a declared service interface address"),
+        ("localAddress", "0.0.0.0", "not on a declared service interface address"),
+        ("backlog", 2, "listener bounds exceed contract"),
+    ):
+        altered = copy.deepcopy(external)
+        altered["networkApplications"][1].update({field: value})
+        try:
+            BUILDER.build_network_applications(altered)
+        except SystemExit as error:
+            if reason not in str(error):
+                fail(f"external listener {field}={value!r} refused at wrong boundary: {error}")
+        else:
+            fail(f"network application accepted external listener {field}={value!r}")
+        refused += 1
     return refused
 
 

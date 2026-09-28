@@ -197,7 +197,7 @@ For how the planes work and how to add one, read
 | `just io_queue_check` | IO0 gate: two supervised components exchange work through the shared queue. |
 | `just io_tcp_check` | The external TCP stream arm plus the host TCP engine tests. |
 | `just io_tcp_impairment_check` | Scripted reordering, loss, a silent peer and zero windows held to the declared TCP bounds, judged from the wire. |
-| `just io_tcp_listener_check` | One exact external listener: admitted accept, silent and reset refusals, half-close, simultaneous close and unread/unsent close judged from the wire; fails until the `sel4-io-tcp-listener` composition lands. |
+| `just io_tcp_listener_check` | One exact external listener: admitted accept, silent and reset refusals, half-close, simultaneous close and unread/unsent close judged from the wire. |
 | `just io_tcp_host_check` | Host tests of the production TCP engine against real host smoltcp peers. |
 | `just sel4_channel_check` | P5.3.1 gate: two components rendezvous over a generation-declared native seL4 Endpoint. |
 | `just sel4_crossing_check` | B22 gate: a graph outlives `MAX_CHANNELS` and still sends on every live one. |

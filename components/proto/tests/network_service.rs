@@ -591,6 +591,7 @@ fn control_requests_require_completely_empty_payload_slices() {
     use slime_proto::io_queue::{self, WireBufferSlice};
     use slime_proto::valid_network_payload_slice;
     let close = payload_request(network_service::OP_CLOSE);
+    let shutdown = payload_request(network_service::OP_SHUTDOWN);
     let connect = dns_request(
         network_service::OP_CONNECT,
         network_service::TRANSPORT_TCP,
@@ -608,7 +609,7 @@ fn control_requests_require_completely_empty_payload_slices() {
     let valid = |request: &WireNetworkRequest, slice: &WireBufferSlice| {
         valid_network_payload_slice(request, slice, 17, 23, 4096)
     };
-    for request in [close, connect] {
+    for request in [close, shutdown, connect] {
         assert!(valid(&request, &empty));
         for malformed in [
             WireBufferSlice {
@@ -640,4 +641,49 @@ fn control_requests_require_completely_empty_payload_slices() {
     assert!(!valid(&payload_request(network_service::OP_SEND), &empty));
     assert!(!valid(&payload_request(network_service::OP_RECV), &empty));
     assert!(!valid(&payload_request(network_service::OP_ATTACH), &empty));
+}
+
+#[test]
+fn shutdown_names_only_a_connection_and_completes_without_capability() {
+    let shutdown = payload_request(network_service::OP_SHUTDOWN);
+    assert!(valid_network_request(&shutdown));
+    for malformed in [
+        WireNetworkRequest {
+            capability: 0,
+            ..shutdown
+        },
+        WireNetworkRequest {
+            transport: network_service::TRANSPORT_TCP,
+            ..shutdown
+        },
+        WireNetworkRequest {
+            port: 1,
+            ..shutdown
+        },
+        WireNetworkRequest {
+            address_kind: network_service::ADDRESS_IPV4,
+            ..shutdown
+        },
+    ] {
+        assert!(!valid_network_request(&malformed), "{malformed:?}");
+    }
+    let completion = WireNetworkCompletion {
+        magic: network_service::NETWORK_MAGIC,
+        version: network_service::FORMAT_VERSION,
+        op: network_service::OP_SHUTDOWN,
+        capability_kind: network_service::CAPABILITY_NONE,
+        status_detail: 0,
+        flags: 0,
+        capability: 0,
+    };
+    assert!(valid_network_completion(&completion));
+    assert!(!valid_network_completion(&WireNetworkCompletion {
+        capability_kind: network_service::CAPABILITY_TCP_CONNECTION,
+        capability: 7,
+        ..completion
+    }));
+    assert!(!valid_network_completion(&WireNetworkCompletion {
+        flags: network_service::FLAG_END_OF_STREAM,
+        ..completion
+    }));
 }

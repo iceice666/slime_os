@@ -17,4 +17,4 @@ and IPv4 ICMP responses, including automatic echo replies, do not require an
 application connection or consume these destination budgets. Fixed link-buffer
 storage does not imply per-holder ARP/ICMP rate limiting. Local listener
 authority is separately declared by
-[network-application/v1](../network-application/README.md).
+[network-application/v2](../network-application/README.md).

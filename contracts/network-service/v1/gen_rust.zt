@@ -17,7 +17,7 @@ Protocol :: type {
   queueSlots : Int; ringPages : Int; dataPages : Int; ringBytes : Int; dataBytes : Int;
   statusSuccess : Int; statusDenied : Int; statusMalformed : Int; statusUnsupported : Int;
   statusWouldBlock : Int; statusExhausted : Int; statusRefused : Int; statusTimeout : Int; statusReset : Int;
-  opAttach : Int; opAbort : Int;
+  opAttach : Int; opAbort : Int; opShutdown : Int;
   loanFields : List refl.SchemaField; loanLayout : List WireField;
   opConnect : Int; opSend : Int; opRecv : Int; opClose : Int; opListen : Int; opAccept : Int; opResolve : Int;
   transportNone : Int; transportTcp : Int; transportUdp : Int;
@@ -76,6 +76,7 @@ rustBindings :: Protocol -> Text = p => w.join {
   "pub const DATA_BYTES: usize = "; n.toText p.dataBytes; ";\n";
   "pub const OP_ATTACH: u8 = "; n.toText p.opAttach; ";\n";
   "pub const OP_ABORT: u8 = "; n.toText p.opAbort; ";\n";
+  "pub const OP_SHUTDOWN: u8 = "; n.toText p.opShutdown; ";\n";
   "pub const STATUS_SUCCESS: i32 = "; n.toText p.statusSuccess; ";\n";
   "pub const STATUS_DENIED: i32 = "; n.toText p.statusDenied; ";\n";
   "pub const STATUS_MALFORMED: i32 = "; n.toText p.statusMalformed; ";\n";

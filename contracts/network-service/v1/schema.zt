@@ -47,6 +47,8 @@ opAccept :: Int = 6;
 opResolve :: Int = 7;
 opAttach :: Int = 8;
 opAbort :: Int = 9;
+-- Half-close: queue a FIN after bytes already sent; receive continues to EOF.
+opShutdown :: Int = 10;
 
 transportNone :: Int = 0;
 transportTcp :: Int = 1;
@@ -175,7 +177,7 @@ protocol ::= {
   queueSlots =; ringPages =; dataPages =; ringBytes =; dataBytes =;
   statusSuccess =; statusDenied =; statusMalformed =; statusUnsupported =;
   statusWouldBlock =; statusExhausted =; statusRefused =; statusTimeout =; statusReset =;
-  opAttach =; opAbort =;
+  opAttach =; opAbort =; opShutdown =;
   loanFields = loanSchema.fields ?? {;};
   loanLayout =;
   opConnect =; opSend =; opRecv =; opClose =; opListen =; opAccept =; opResolve =;

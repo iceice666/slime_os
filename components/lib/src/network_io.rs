@@ -572,6 +572,17 @@ impl<'a> NetworkIo<'a> {
         Ok(reply)
     }
 
+    /// Half-close: the service queues a FIN after the bytes already sent and
+    /// refuses later sends; receive continues until the peer's FIN.
+    pub fn shutdown(&mut self, connection: &Connection) -> Result<NetworkReply, NetworkError> {
+        self.check_connection(connection)?;
+        self.transact_raw(
+            request(net::OP_SHUTDOWN, connection.id),
+            io_queue::DIRECTION_NONE,
+            0,
+        )
+    }
+
     pub fn close(&mut self, connection: Connection) -> Result<NetworkReply, NetworkError> {
         self.check_connection(&connection)?;
         self.transact_raw(

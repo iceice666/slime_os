@@ -291,6 +291,7 @@ NetworkApplicationEntry :: type {
   localAddress : Text;
   localPort : Int;
   admittedPeer : Text;
+  admittedPeerAddress : Text;
   rights : List Text;
   backlog : Int;
   acceptedSocketLimit : Int;

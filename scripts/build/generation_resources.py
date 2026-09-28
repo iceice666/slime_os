@@ -397,7 +397,12 @@ def build_network_interfaces(declarations: list[dict]) -> bytes:
 
 
 def build_network_applications(manifest: dict) -> bytes:
-    """Encode exact application bindings and local listener policy."""
+    """Encode exact application bindings and listener policy (network-application/v2).
+
+    A loopback listener admits one declared local client holder; an external
+    listener listens on an address the service's declared interface owns and
+    admits one exact remote unicast IPv4 address, any source port.
+    """
     c = wire_contracts
     declarations = manifest.get("networkApplications") or []
     if len(declarations) > c.NETWORK_APPLICATION_MAX_APPLICATIONS:
@@ -411,6 +416,11 @@ def build_network_applications(manifest: dict) -> bytes:
         fail("network application: missing service instance")
     bindings_used: set[str] = set()
     listener_endpoints: set[tuple[bytes, int]] = set()
+    interface_addresses = {
+        ipaddress.IPv4Address(entry["address"]).packed
+        for entry in manifest.get("networkInterfaces") or []
+        if entry.get("holder") == "network-service"
+    }
     entries = []
     name_fields = ("controlBinding", "provisionBinding", "supervisionBinding", "requestNotification", "completionNotification")
     limit_fields = ("backlog", "acceptedSocketLimit", "byteBudget", "timerBudget", "queueDepth", "retryLimit", "reconnectLimit")
@@ -467,25 +477,44 @@ def build_network_applications(manifest: dict) -> bytes:
         if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in (port, *limits)):
             fail("network application: invalid numeric bound")
         peer = declaration["admittedPeer"]
+        peer_address_text = declaration["admittedPeerAddress"]
+        peer_kind = c.NETWORK_APPLICATION_PEER_NONE
+        peer_address = bytes(4)
         if role == c.NETWORK_APPLICATION_ROLE_CLIENT:
-            if address != bytes(4) or port or peer or rights or any(limits):
+            if address != bytes(4) or port or peer or peer_address_text or rights or any(limits):
                 fail("network application: client row carries listener authority")
         else:
             backlog, sockets, byte_budget, timers, queue, retries, reconnects = limits
-            if backend != c.NETWORK_APPLICATION_BACKEND_LOOPBACK or address != ipaddress.IPv4Address("127.0.0.1").packed or not 1 <= port <= 65535 or not rights & c.NETWORK_APPLICATION_RIGHT_LISTEN:
-                fail("network application: listener is not an exact authorized loopback endpoint")
+            if not 1 <= port <= 65535 or not rights & c.NETWORK_APPLICATION_RIGHT_LISTEN:
+                fail("network application: listener is not an exact authorized endpoint")
+            if backend == c.NETWORK_APPLICATION_BACKEND_LOOPBACK:
+                if address != ipaddress.IPv4Address("127.0.0.1").packed or peer_address_text:
+                    fail("network application: listener is not an exact authorized loopback endpoint")
+                peer_kind = c.NETWORK_APPLICATION_PEER_HOLDER
+            else:
+                if peer or address not in interface_addresses:
+                    fail("network application: external listener is not on a declared service interface address")
+                try:
+                    remote = ipaddress.IPv4Address(peer_address_text)
+                except ipaddress.AddressValueError:
+                    fail("network application: external listener admits no exact remote IPv4 address")
+                if remote.packed == address or remote.packed[0] in (0, 127) or remote.packed[0] >= 224:
+                    fail("network application: external listener admits no exact remote IPv4 address")
+                peer_kind = c.NETWORK_APPLICATION_PEER_IPV4
+                peer_address = remote.packed
             if not (backlog == 1 and 1 <= sockets <= c.NETWORK_APPLICATION_MAX_ACCEPTED_SOCKETS and sockets * c.NETWORK_APPLICATION_BYTES_PER_ACCEPTED_SOCKET <= byte_budget <= c.NETWORK_APPLICATION_MAX_BYTE_BUDGET and 1 <= timers <= c.NETWORK_APPLICATION_MAX_TIMER_BUDGET and c.NETWORK_APPLICATION_MIN_QUEUE_DEPTH <= queue <= c.NETWORK_APPLICATION_MAX_QUEUE_DEPTH and queue & (queue - 1) == 0 and retries <= c.NETWORK_APPLICATION_MAX_RETRY_LIMIT and reconnects <= c.NETWORK_APPLICATION_MAX_RECONNECT_LIMIT):
                 fail("network application: listener bounds exceed contract")
             endpoint = (address, port)
             if endpoint in listener_endpoints:
                 fail("network application: duplicate listener endpoint")
             listener_endpoints.add(endpoint)
-            admitted = rows.get(peer)
-            if peer == holder or admitted is None or admitted["role"] != "client" or admitted["backend"] != "loopback":
-                fail("network application: admitted peer is not a distinct declared local client")
+            if backend == c.NETWORK_APPLICATION_BACKEND_LOOPBACK:
+                admitted = rows.get(peer)
+                if peer == holder or admitted is None or admitted["role"] != "client" or admitted["backend"] != "loopback":
+                    fail("network application: admitted peer is not a distinct declared local client")
         identity = network_destination_holder_identity(holder)
         peer_identity = network_destination_holder_identity(peer) if peer else bytes(32)
-        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, bytes(2), *limits, bytes(56))
+        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, peer_kind, bytes(1), *limits, peer_address, bytes(52))
         entries.append((identity, packed))
     entries.sort(key=lambda entry: entry[0])
     total = c.NETWORK_APPLICATION_HEADER_BYTES + len(entries) * c.NETWORK_APPLICATION_ENTRY_BYTES

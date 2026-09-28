@@ -66,7 +66,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "9a4cb5cb5351b914c3834749163b1ce4ddd7df35350218a180c1b79f712244dc";
+        identity = "38e04697994eeeb3e582a5a00ed74284a86a68674f47861cf908424d6481c37a";
       };
     };
     {
@@ -74,7 +74,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "643149a96fe7c972badabfb1612af9086eccad1fd43c3242e6b591ade7ce1452";
+        identity = "f54bdc41334fb13f4fe100e96a01f0f72004f562e6154475ebd1826b2bd28a21";
       };
     };
     {
@@ -98,7 +98,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "419c23593d4424029ba65991ff718d1cae217a2ad63a617d2a0ae586e4ab6142";
+        identity = "7fe57af8ab58d32bfcc831a51748f0dad97d183b92c2df35a9a85f064e9b6523";
       };
     };
     {
@@ -106,7 +106,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "90781e4d8f81483521735a66d32291f46ec933f19f41ba8cfbda4ca531275b66";
+        identity = "d1cd4dfa09636a483f745ed8078cbd607ac5e1261a589e342538d8584165a173";
       };
     };
     {
@@ -122,7 +122,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "5f935328a2e079229116e6b25ca350ba3dbc2971229d1a871f0af11c71807a78";
+        identity = "e123dd66c275631685f3f7a8c0b391012213f94247da24ba4225be8192fc569a";
       };
     };
     {
@@ -202,7 +202,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "7f0b6efe40cc2ef087dc4508145d44bac4f2d7801e0a72e0f51c8782ccd92c9d";
+        identity = "aeb8d4352bd1cbd39611eacdb419827a71b33be8e7ce11d57145b074a858a351";
       };
     };
   ];

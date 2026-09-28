@@ -245,6 +245,7 @@ fn main(_: u32) {
     let mut observed = Observed::default();
 
     let mut stack = attach_stack();
+    let external_listeners = admit_external_listeners(application_table.as_ref(), stack.as_mut());
     let mut socket_storage: [SocketStorage; tcp::SOCKETS + 1] =
         [SocketStorage::EMPTY; tcp::SOCKETS + 1];
     // SAFETY: each engine exclusively borrows its own arena for this service lifetime.
@@ -342,28 +343,32 @@ fn main(_: u32) {
                             .as_mut()
                             .unwrap_or_else(|| fail(b"application without stack"));
                         let now = stack.now();
-                        application.drive(
+                        let progress = application.drive(
                             client.holder,
                             &destinations,
-                            None,
+                            application_table.as_ref(),
                             &mut engine,
                             &mut stack.iface,
                             now,
-                        )
+                        );
+                        report_events(&mut engine);
+                        progress
                     }
                     Backend::Loopback => {
                         let stack = local
                             .as_mut()
                             .unwrap_or_else(|| fail(b"application without loopback"));
                         let now = stack.now();
-                        application.drive(
+                        let progress = application.drive(
                             client.holder,
                             &destinations,
                             application_table.as_ref(),
                             &mut local_engine,
                             &mut stack.iface,
                             now,
-                        )
+                        );
+                        report_events(&mut local_engine);
+                        progress
                     }
                 };
             }
@@ -542,6 +547,7 @@ fn main(_: u32) {
             progress |= stack.link.flush(&mut engine);
             progress |= stack.link.replenish();
             engine.observe_peaks();
+            report_events(&mut engine);
             if let Some(reclaimed) = engine.take_timeout_reclamation() {
                 write_number(
                     b"[network-service] tcp timeout handles=",
@@ -681,6 +687,14 @@ fn main(_: u32) {
         debug_write(b"\n");
     }
     if let Some(mut stack) = stack {
+        if external_listeners != 0 {
+            write_number(
+                b"[network-service] tcp listener refusals unadmitted=",
+                u64::from(stack.link.unadmitted),
+            );
+            write_number(b" excess=", u64::from(engine.excess_refusals()));
+            debug_write(b"\n");
+        }
         let peaks = engine.peaks();
         write_number(b"[network-service] tcp peaks rx_bytes=", peaks.rx as u64);
         write_number(b" tx_bytes=", peaks.tx as u64);
@@ -696,6 +710,85 @@ fn main(_: u32) {
     }
     report_observed(&observed);
     exit(0)
+}
+
+/// Install each external listener's ingress rule and state its declaration.
+/// Its local address must be the address this service's interface declares.
+fn admit_external_listeners(
+    table: Option<&NetworkApplications<'_>>,
+    stack: Option<&mut Stack>,
+) -> usize {
+    let Some(table) = table else { return 0 };
+    let mut stack = stack;
+    let mut count = 0;
+    for index in 0..table.application_count() {
+        let entry = table.application(index).unwrap();
+        if entry.role != network_application::Role::Listener || entry.backend != Backend::External {
+            continue;
+        }
+        let stack = stack
+            .as_deref_mut()
+            .unwrap_or_else(|| fail(b"external listener without interface"));
+        if !stack
+            .iface
+            .has_ip_addr(IpAddress::Ipv4(Ipv4Address::from(entry.local_ipv4)))
+        {
+            fail(b"external listener address");
+        }
+        if !stack.link.admit_listener(tcp::ListenerRule {
+            local: entry.local_ipv4,
+            port: entry.local_port,
+            admitted: entry.admitted_peer_ipv4,
+        }) {
+            fail(b"external listener rules");
+        }
+        debug_write(b"[network-service] tcp listener backend=external address=");
+        write_ipv4(entry.local_ipv4);
+        write_number(b" port=", u64::from(entry.local_port));
+        debug_write(b" peer=");
+        write_ipv4(entry.admitted_peer_ipv4);
+        write_number(b" backlog=", u64::from(entry.backlog));
+        write_number(b" accepted_limit=", u64::from(entry.accepted_socket_limit));
+        write_number(b" bytes=", u64::from(entry.byte_budget));
+        debug_write(b"\n");
+        count += 1;
+    }
+    count
+}
+
+fn report_events(engine: &mut tcp::Engine<'_>) {
+    while let Some(event) = engine.take_event() {
+        match event {
+            tcp::Event::AcceptedClose {
+                unread,
+                unsent,
+                terminal,
+                bytes,
+            } => {
+                write_number(
+                    b"[network-service] tcp accepted close unread=",
+                    unread as u64,
+                );
+                write_number(b" unsent=", unsent as u64);
+                debug_write(match terminal {
+                    tcp::Terminal::TimeWait => b" terminal=time-wait".as_slice(),
+                    tcp::Terminal::Closed => b" terminal=closed",
+                    tcp::Terminal::Reset => b" terminal=reset",
+                    tcp::Terminal::Timeout => b" terminal=timeout",
+                });
+                write_number(b" handles=", 1);
+                write_number(b" bytes=", bytes as u64);
+                debug_write(b"\n");
+            }
+            tcp::Event::ListenerClosed { children } => {
+                write_number(
+                    b"[network-service] tcp listener closed children=",
+                    children as u64,
+                );
+                debug_write(b"\n");
+            }
+        }
+    }
 }
 
 /// Bind to the link and configure the stack when the generation declares an
