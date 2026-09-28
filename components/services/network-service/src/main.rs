@@ -541,6 +541,16 @@ fn main(_: u32) {
                 == PollResult::SocketStateChanged;
             progress |= stack.link.flush(&mut engine);
             progress |= stack.link.replenish();
+            engine.observe_peaks();
+            if let Some(reclaimed) = engine.take_timeout_reclamation() {
+                write_number(
+                    b"[network-service] tcp timeout handles=",
+                    reclaimed.handles as u64,
+                );
+                write_number(b" sockets=", reclaimed.sockets as u64);
+                write_number(b" bytes=", reclaimed.bytes as u64);
+                debug_write(b"\n");
+            }
         }
         if let Some(stack) = local.as_mut() {
             let now = stack.now();
@@ -671,6 +681,10 @@ fn main(_: u32) {
         debug_write(b"\n");
     }
     if let Some(mut stack) = stack {
+        let peaks = engine.peaks();
+        write_number(b"[network-service] tcp peaks rx_bytes=", peaks.rx as u64);
+        write_number(b" tx_bytes=", peaks.tx as u64);
+        debug_write(b"\n");
         write_number(
             b"[network-service] application connection handles live=",
             engine.allocated() as u64,
@@ -695,6 +709,7 @@ fn attach_stack() -> Option<Stack> {
     write_number(b"[network-service] clock rate=", rate);
     debug_write(b"\n");
     report_interface(&declared);
+    report_tcp_bounds();
 
     let mut link = Link::attach(FACTORY_SLOT, LINK_PEER_SLOT);
     if !link.link_up() {
@@ -968,6 +983,22 @@ fn read_interface() -> Option<DeclaredInterface> {
     let interfaces = NetworkInterfaces::decode(&object[..total])
         .unwrap_or_else(|_| fail(b"interface resource decode"));
     interfaces.for_holder(&network_interface::holder_identity("network-service"))
+}
+
+/// The per-socket bounds this build enforces, read from the constants and
+/// the smoltcp configuration that actually size them.
+fn report_tcp_bounds() {
+    write_number(
+        b"[network-service] tcp bounds rx_bytes=",
+        tcp::BUFFER_BYTES as u64,
+    );
+    write_number(b" tx_bytes=", tcp::BUFFER_BYTES as u64);
+    write_number(
+        b" assembler_segments=",
+        smoltcp::config::ASSEMBLER_MAX_SEGMENT_COUNT as u64,
+    );
+    write_number(b" timeout_ms=", tcp::OPERATION_TIMEOUT.total_millis());
+    debug_write(b"\n");
 }
 
 fn report_interface(declared: &DeclaredInterface) {

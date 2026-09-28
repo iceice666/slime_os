@@ -99,6 +99,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-io-link": "sel4-io-link.zti",
     "sel4-io-network": "sel4-io-network.zti",
     "sel4-io-tcp": "sel4-io-tcp.zti",
+    "sel4-io-tcp-impairment": "sel4-io-tcp-impairment.zti",
     "sel4-io-local": "sel4-io-local.zti",
     "sel4-io-lifetime": "sel4-io-lifetime.zti",
     "sel4-io-service-fault": "sel4-io-service-fault.zti",

@@ -155,6 +155,15 @@ pub struct Engine<'a> {
     dns_capacity: bool,
     name_connect: Option<NameConnect>,
     dns_observation: Option<DnsObservation>,
+    peaks: Peaks,
+    timeout_reclaimed: Option<Reclaimed>,
+}
+
+/// The most bytes any socket held queued at once in each direction.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Peaks {
+    pub rx: usize,
+    pub tx: usize,
 }
 
 impl<'a> Engine<'a> {
@@ -194,6 +203,8 @@ impl<'a> Engine<'a> {
             dns_capacity,
             name_connect: None,
             dns_observation: None,
+            peaks: Peaks::default(),
+            timeout_reclaimed: None,
         })
     }
 
@@ -229,6 +240,26 @@ impl<'a> Engine<'a> {
 
     pub fn take_dns_observation(&mut self) -> Option<DnsObservation> {
         self.dns_observation.take()
+    }
+
+    /// Resources released with connections that ended in a typed timeout since
+    /// the last call, counted once each when the holder disposes of the handle.
+    pub fn take_timeout_reclamation(&mut self) -> Option<Reclaimed> {
+        self.timeout_reclaimed.take()
+    }
+
+    /// Fold the current receive and transmit queue depths into the peaks.
+    /// Every socket owns fixed buffers, so a peak can never exceed them.
+    pub fn observe_peaks(&mut self) {
+        for handle in self.handles {
+            let socket = self.sockets.get::<Socket>(handle);
+            self.peaks.rx = self.peaks.rx.max(socket.recv_queue());
+            self.peaks.tx = self.peaks.tx.max(socket.send_queue());
+        }
+    }
+
+    pub const fn peaks(&self) -> Peaks {
+        self.peaks
     }
 
     fn cancel_dns(&mut self) {
@@ -1298,6 +1329,14 @@ impl<'a> Engine<'a> {
         };
         if status != Status::Success {
             self.abort_socket(index);
+        }
+        if status == Status::Timeout {
+            let reclaimed = self
+                .timeout_reclaimed
+                .get_or_insert_with(Reclaimed::default);
+            reclaimed.handles += 1;
+            reclaimed.sockets += 1;
+            reclaimed.bytes += 2 * BUFFER_BYTES;
         }
         self.connections[index] = None;
         Some(Completion::status(status))
@@ -2731,6 +2770,7 @@ mod tests {
             assert!(engine.permit_egress(&frame));
             assert!(engine.permit_egress(&frame));
             assert!(!engine.permit_egress(&frame));
+            assert_eq!(engine.take_timeout_reclamation(), None);
             assert_eq!(
                 engine
                     .poll_pending(HOLDER, id, Instant::ZERO)
@@ -2739,6 +2779,15 @@ mod tests {
                 Status::Timeout
             );
             assert_eq!(engine.allocated(), 0);
+            assert_eq!(
+                engine.take_timeout_reclamation(),
+                Some(Reclaimed {
+                    handles: 1,
+                    sockets: 1,
+                    bytes: 2 * BUFFER_BYTES,
+                })
+            );
+            assert_eq!(engine.take_timeout_reclamation(), None);
         }
     }
 
@@ -2819,6 +2868,8 @@ mod tests {
         ));
         assert_eq!(sent.transferred, BUFFER_BYTES);
         assert!(!engine.transmit_drained());
+        engine.observe_peaks();
+        assert_eq!(engine.peaks().tx, BUFFER_BYTES);
         assert_eq!(
             complete(engine.handle(
                 &destinations,

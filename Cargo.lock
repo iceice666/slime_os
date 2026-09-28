@@ -1158,6 +1158,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-io-tcp-impairment-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-io-tcp-probe"
 version = "0.1.0"
 dependencies = [

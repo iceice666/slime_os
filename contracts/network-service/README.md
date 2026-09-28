@@ -294,7 +294,9 @@ that state reports `reset`. For a peer-first FIN, smoltcp's public state cannot
 distinguish a later reset from the final acknowledgment, so passive-close success
 still means local disposal only. Successful close preserves TIME-WAIT rather
 than aborting the socket. A gate claiming a graceful exchange must independently
-observe both FINs and the final acknowledgment.
+observe both FINs and the final acknowledgment. Closing a connection that
+already ended in `timeout` reports `timeout` again and still disposes of the
+handle, returning its socket, buffer, work-slot and timer reservations.
 
 Connection capabilities are checked against their exact holder and live engine
 metadata. Checked packing combines service incarnation, backend and monotonically
