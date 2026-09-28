@@ -71,7 +71,7 @@ Use the Justfile targets from the repository root:
 - `just x86_64_sel4_root_boot_check` — P6.3's root, component runtime, child loader, fault, thread-context, and timer markers on pc99.
 - `just x86_64_qemu_check` — P6.4's corpus on pc99: root boot, wait-set, sample, product graph, boot layouts, and portability.
 - `just framework_media_check` — P6.5's deterministic raw GPT/FAT32 image: byte-identical rebuild, malformed/drifted/unsafe-target refusals, and a boot of the exact raw bytes under pinned q35/OVMF.
-- `just framework_cpu_boot_check` — P6.6's physical claim. Proves the observation validator refuses forged evidence, then reports the recorded boot from `evidence/framework-cpu-boot/`. It cannot manufacture an observation: `framework_cpu_boot_prepare` writes the image and hashes the protected internal region, the cold boots are an operator's power cycle, and `check-framework-cpu-boot.py verify` re-hashes and judges. QEMU cannot close it.
+- `just framework_cpu_boot_check` — P6.6's physical claim. Proves the observation validator refuses forged evidence, then reports the recorded boot from `evidence/framework-cpu-boot/`. It cannot manufacture an observation: `framework_cpu_boot_prepare` writes the image and hashes the protected internal region, the cold boots are an operator's power cycle, and `framework_cpu_boot_verify` re-hashes and judges the operator's record. QEMU cannot close it.
 - `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
 - `just lint_all` — run clippy with warnings denied for components, boot-contracts, and seL4 product crates.
 - `just deny` — dependency advisories, bans, licenses, and source pinning.

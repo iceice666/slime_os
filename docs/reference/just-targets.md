@@ -31,6 +31,7 @@ For how the planes work and how to add one, read
 | --- | --- |
 | `just framework_cpu_boot_check` | P6.6 judges a physical Framework CPU boot. |
 | `just framework_cpu_boot_prepare device protect` | P6.6: the Framework's removable-media CPU boot, and its evidence. |
+| `just framework_cpu_boot_verify *ARGS` | P6.6: re-hash the protected internal region and judge the operator's record; arguments pass through to `check-framework-cpu-boot.py verify`. |
 | `just framework_media_check` | P6.5 builds one Framework-target-qualified raw GPT/FAT32 image, validates the identity and removable-writer safety boundary, then boots those exact bytes under the pinned q35/OVMF reference to the resident product graph. |
 | `just framework_media_image` | Build P6.5's Framework-qualified deterministic GPT/FAT32 image. |
 | `just generation_check` | Build the product seL4 generation twice and verify identical admitted bytes. |

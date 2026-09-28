@@ -72,6 +72,17 @@ framework_cpu_boot_check: framework_media_check
 framework_cpu_boot_prepare device protect: framework_media_check
     python3 scripts/check/check-framework-cpu-boot.py prepare --device {{device}} --protect {{protect}}
 
+# Arguments pass through unchanged, as positional arguments so a quoted product
+# or CPU string stays intact, to `check-framework-cpu-boot.py verify`:
+# `--boots <file> --operator <name> --observed-on <date> --machine-vendor ...
+# --machine-product ... --machine-cpu ... --firmware-vendor ...
+# --firmware-version ... [--secure-boot] [--state <file>] [--output <file>]`.
+# P6.6: re-hash the protected internal region and judge the operator's record.
+[group('product')]
+[positional-arguments]
+framework_cpu_boot_verify *ARGS: framework_media_check
+    python3 scripts/check/check-framework-cpu-boot.py verify "$@"
+
 
 [group('product')]
 riscv64_qemu_check: sel4_pin_check
