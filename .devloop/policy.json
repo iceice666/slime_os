@@ -205,6 +205,7 @@
     "scripts/lib/sel4_boot.py",
     "scripts/lib/sel4_gate_markers.py",
     "scripts/lib/sel4_plane.py",
+    "scripts/lib/smoltcp_matrix.py",
     "scripts/lib/system_image_closure.py",
     "scripts/lib/system_image_closure_contract.py",
     "scripts/lib/system_spec.py",
