@@ -14,6 +14,10 @@ The tcp-impairment arm boots `sel4-io-tcp-impairment` behind a scripted peer
 (`scripts/lib/tcp_impairment_peer.py`) that reorders, drops, falls silent and
 closes windows, and holds the wire to the declared loss, reordering,
 retransmission and window bounds; it is selected explicitly, never by ``all``.
+The tcp-listener arm boots `sel4-io-tcp-listener` behind a peer
+(`scripts/lib/tcp_listener_peer.py`) that connects to one exact external
+listener, sends SYNs it must ignore or refuse, and drives half-close,
+simultaneous close and close with unread or unsent data; it is also explicit.
 The HTTP arms instead use QEMU user networking and ordinary host TCP/UDP sockets;
 public DNS/HTTP remains an explicitly requested smoke, never part of ``all``.
 """
@@ -39,6 +43,7 @@ from harness import sha256_file  # noqa: E402
 
 import link_peer  # noqa: E402
 import tcp_impairment_peer  # noqa: E402
+import tcp_listener_peer  # noqa: E402
 import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
@@ -59,6 +64,12 @@ IMPAIRMENT_CLOSURE = "sel4-io-tcp-impairment"
 IMPAIRMENT_FIXTURE = COMPOSITIONS / "sel4-io-tcp-impairment.zti"
 IMPAIRMENT_PROBE = "io-tcp-impairment-probe"
 IMPAIRMENT_GENERATION = 161
+LISTENER_CLOSURE = "sel4-io-tcp-listener"
+LISTENER_FIXTURE = COMPOSITIONS / "sel4-io-tcp-listener.zti"
+LISTENER_PROBE = "io-tcp-listener-probe"
+LISTENER_HOLDER = "listener-session"
+INTRUDER_HOLDER = "intruder-session"
+LISTENER_GENERATION = 162
 NETWORK_SERVICE_MANIFEST = ROOT / "components" / "services" / "network-service" / "Cargo.toml"
 TIMEOUT = 240
 # The MAC the composition declares for the service, which is also the one the
@@ -317,8 +328,55 @@ IMPAIRMENT_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("impairment health", (rf"SLIME_GRAPH HEALTHY generation={IMPAIRMENT_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
 )
 
+# The external-listener arm. The service states the declared listener, settles
+# each accepted connection's close with the bytes still unread or unsent when
+# the close was requested and the reservation it returned, and counts the SYNs
+# it dropped from unadmitted sources and the excess ones it refused; the probe
+# reports each scenario in program order.
+_LP = tcp_listener_peer
+_ACCEPTED_CLOSE = r"\[network-service\] tcp accepted close unread={unread} unsent={unsent} terminal={terminal} handles=1 bytes=" + str(2 * _LP.SOCKET_BUFFER_BYTES)
+LISTENER_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("listener admission", (rf"SLIME_ROOT generation admitted number={LISTENER_GENERATION} executables=[0-9]+ instances=[0-9]+ grants=[0-9]+ ",)),
+    ("listener declaration", (
+        rf"\[network-service\] tcp listener backend=external address=10\.0\.0\.1 port={_LP.LISTEN_PORT} peer=10\.0\.0\.2 backlog={_LP.BACKLOG} accepted_limit={_LP.ACCEPTED_LIMIT} bytes={_LP.LISTENER_BYTE_BUDGET}",
+    )),
+    ("listener service", (
+        _ACCEPTED_CLOSE.format(unread=0, unsent=0, terminal="time-wait"),
+        _ACCEPTED_CLOSE.format(unread=0, unsent="[0-9]+", terminal="closed"),
+        _ACCEPTED_CLOSE.format(unread=0, unsent=0, terminal="time-wait"),
+        _ACCEPTED_CLOSE.format(unread=len(_LP.UNREAD), unsent=0, terminal="reset"),
+        _ACCEPTED_CLOSE.format(unread=0, unsent=len(_LP.UNSENT), terminal="time-wait"),
+        r"\[network-service\] tcp listener closed children=0",
+        r"\[network-service\] tcp listener refusals unadmitted=1 excess=2",
+        r"\[network-service\] application connection handles live=0",
+        r"\[network-service\] link released",
+    )),
+    ("listener driver", (
+        r"\[virtio-net-driver\] negotiated legacy features=0 queues rx=16 tx=16 epoch=1",
+        r"\[virtio-net-driver\] rx drained=[0-9]+ replenished=[0-9]+ stalled=0 tx-stalled=0 device-refused=0",
+    )),
+    ("listener intruder", (
+        r"\[io-tcp-listener-probe\] role=intruder attached=1",
+        r"\[io-tcp-listener-probe\] role=intruder listen_refused=1 shutdown=1",
+    )),
+    ("listener probe", (
+        r"\[io-tcp-listener-probe\] role=listener attached=1",
+        r"\[io-tcp-listener-probe\] role=listener listen_refusals=2",
+        rf"\[io-tcp-listener-probe\] role=listener listening=1 address=10\.0\.0\.1 port={_LP.LISTEN_PORT}",
+        rf"\[io-tcp-listener-probe\] role=listener accepted=1 sent={len(_LP.EXCHANGE)} received={len(_LP.EXCHANGE)} identical=1",
+        r"\[io-tcp-listener-probe\] role=listener accepted=2 held=1",
+        rf"\[io-tcp-listener-probe\] role=listener scenario=local-half-close sent={len(_LP.LOCAL_HALF_GUEST)} received={len(_LP.LOCAL_HALF_PEER)} eof=1 close=success stale_refused=1",
+        rf"\[io-tcp-listener-probe\] role=listener scenario=peer-half-close received={len(_LP.PEER_HALF_PEER)} eof=1 sent={len(_LP.PEER_HALF_GUEST)} close=success stale_refused=1",
+        r"\[io-tcp-listener-probe\] role=listener scenario=simultaneous-close close=success stale_refused=1",
+        rf"\[io-tcp-listener-probe\] role=listener scenario=unread-close unread={len(_LP.UNREAD)} close=success stale_refused=1",
+        rf"\[io-tcp-listener-probe\] role=listener scenario=unsent-close queued={len(_LP.UNSENT)} close=success stale_refused=1",
+        r"\[io-tcp-listener-probe\] role=listener listener_closed=1 scenarios=5 shutdown=1",
+    )),
+    ("listener health", (rf"SLIME_GRAPH HEALTHY generation={LISTENER_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
+)
+
 # Every arm participates in the shared missing/reordered/failure controls.
-CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS
+CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -328,6 +386,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[io-network-intruder\] fail: ",
     r"\[io-tcp-probe\] fail: ",
     r"\[io-tcp-impairment-probe\] fail: ",
+    r"\[io-tcp-listener-probe\] fail: ",
     r"\[io-local-network-probe\] fail: ",
     r"\[io-network-lifetime-probe\] fail: ",
     r"\[virtio-net-driver\] fail: ",
@@ -490,11 +549,11 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None, *, driver_r
         check_tcp_ledger(ledger, bytes.fromhex(mac.replace(":", "")))
 
 
-def fixture_destinations(text: str) -> list[dict[str, str]]:
-    """The derived manifest's network destinations as flat field maps; rights are comma-joined."""
-    section = re.search(r"networkDestinations\s*=\s*\[(.*?)\n  \];", text, re.S)
+def fixture_destinations(text: str, section_name: str = "networkDestinations") -> list[dict[str, str]]:
+    """The derived manifest's rows of one network section as flat field maps; rights are comma-joined."""
+    section = re.search(rf"{section_name}\s*=\s*\[(.*?)\n  \];", text, re.S)
     if section is None:
-        fail("impairment fixture declares no network destinations")
+        fail(f"fixture declares no {section_name}")
     assert section is not None
     rows = []
     for block in re.findall(r"\{(.*?)\n    \};", section.group(1), re.S):
@@ -552,6 +611,64 @@ def run_impairment_arm(image: Path, mac: str, retry_limits: dict[int, int], tran
         fail(f"impairment wire evidence: {error}")
     for summary in summaries:
         print(f"[impairment] {summary}")
+
+
+def check_listener_fixture() -> str:
+    """Return the interface MAC once the composition declares exactly the listener the peer scripts."""
+    if not LISTENER_FIXTURE.is_file():
+        fail(f"{LISTENER_FIXTURE.relative_to(ROOT)} does not exist; the external listener composition has not landed")
+    text = LISTENER_FIXTURE.read_text(encoding="utf-8")
+    macs = MAC_DECLARATION.findall(text)
+    if len(macs) != 1:
+        fail(f"listener fixture declares {len(macs)} interface MACs, expected exactly one")
+    for pattern in (rf"generation\s*=\s*{LISTENER_GENERATION};", r"networkInterfaces\s*=\s*\[", r'address\s*=\s*"10\.0\.0\.1"', r'name\s*=\s*"network-service"', r'name\s*=\s*"virtio-net-driver"', rf'executable\s*=\s*"{LISTENER_PROBE}"', rf'name\s*=\s*"{LISTENER_HOLDER}"', rf'name\s*=\s*"{INTRUDER_HOLDER}"'):
+        if re.search(pattern, text) is None:
+            fail(f"listener fixture is missing {pattern!r}")
+    applications = {row.get("holder"): row for row in fixture_destinations(text, "networkApplications")}
+    listeners = [row for row in applications.values() if row.get("role") == "listener"]
+    expected = {
+        "holder": LISTENER_HOLDER,
+        "backend": "external",
+        "localAddress": "10.0.0.1",
+        "localPort": str(tcp_listener_peer.LISTEN_PORT),
+        "admittedPeer": "",
+        "admittedPeerAddress": "10.0.0.2",
+        "backlog": str(tcp_listener_peer.BACKLOG),
+        "acceptedSocketLimit": str(tcp_listener_peer.ACCEPTED_LIMIT),
+        "byteBudget": str(tcp_listener_peer.LISTENER_BYTE_BUDGET),
+    }
+    if len(listeners) != 1 or any(listeners[0].get(key) != value for key, value in expected.items()):
+        fail(f"the composition must declare exactly one external listener {expected}, found {listeners}")
+    if set(listeners[0]["rights"].split(",")) != {"listen", "send", "recv"}:
+        fail("the external listener must hold exactly listen, send and recv")
+    intruder = applications.get(INTRUDER_HOLDER)
+    if intruder is None or (intruder.get("role"), intruder.get("backend"), intruder.get("localPort")) != ("client", "external", "0"):
+        fail("the intruder must be an external client holding no listener authority")
+    destinations = fixture_destinations(text)
+    control = [row for row in destinations if row.get("holder") == LISTENER_HOLDER]
+    if [(row.get("address"), row.get("port"), row.get("transport")) for row in control] != [("10.0.0.2", str(tcp_listener_peer.CONTROL_PORT), "tcp")] or not {"connect", "send", "recv"} <= set(control[0]["rights"].split(",")):
+        fail("the listener holder must hold exactly one 10.0.0.2 control destination with connect, send and recv")
+    if any("listen" in row["rights"].split(",") for row in destinations):
+        fail("listener authority must come from the application declaration, never a destination row")
+    return macs[0]
+
+
+def run_listener_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
+    peer = tcp_listener_peer.ListenerPeer()
+    transcript = run_with_peer(image, mac, tcp_listener_peer.serve, peer, LISTENER_CHAINS)
+    write_wire_transcript(transcript_path, transcript, peer.ledger.summary(), (("received", peer.ledger.received), ("sent", peer.ledger.sent)))
+    try:
+        match_marker_contract(transcript, LISTENER_CHAINS, FAILURE_MARKERS, fail)
+    except SystemExit:
+        print(transcript)
+        raise
+    print(f"[listener-peer] {peer.ledger.summary()}")
+    try:
+        summaries = tcp_listener_peer.qualify_listener_ledger(peer.ledger, bytes.fromhex(mac.replace(":", "")))
+    except ValueError as error:
+        fail(f"listener wire evidence: {error}")
+    for summary in summaries:
+        print(f"[listener] {summary}")
 
 
 def check_tcp_ledger(ledger: link_peer.Ledger, guest_mac: bytes) -> None:
@@ -749,7 +866,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "http", "http-public", "all"), default="all")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -775,6 +892,15 @@ def main() -> None:
             "seL4 I/O tcp impairment check: reassembly within and refusal beyond the declared out-of-order capacity, "
             "loss and duplicate-ACK recovery within the declared retry limit and time, typed silent-peer timeout "
             "with reclamation and a fresh exchange, and bounded zero-window behavior in both directions proved"
+        )
+    if arguments.arm == "tcp-listener":
+        mac = check_listener_fixture()
+        run_listener_arm(build_image(LISTENER_CLOSURE), mac, arguments.transcript)
+        print(
+            "seL4 I/O tcp listener check: an exact external listener accepting only its admitted peer, "
+            "silent unadmitted SYNs, single-reset backlog and accepted-limit refusals, half-close in both "
+            "directions, simultaneous close, reset on unread close, FIN after unsent data, and numeric "
+            "reclamation proved"
         )
     if arguments.arm in ("authority", "all"):
         check_fixture()

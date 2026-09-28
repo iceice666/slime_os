@@ -244,6 +244,84 @@ These bounds cover the QEMU `LinkDevice` backend only. Congestion-control
 selection, listener semantics and performance targets remain with their own
 slices, and no physical NIC is qualified.
 
+### External TCP listener and close semantics
+
+Work item `01a0e239-ad77-7754-874f-b8703be81c04` admits one exact external
+listener and fixes close semantics for every TCP connection. Its declarations
+and wire policy are stated here before the implementation;
+`just io_tcp_listener_check` holds the wire to them.
+
+**Declaration.** `network-application/v1` names a listener's admitted peer only
+as a holder in the same table, which cannot express a remote host. The slice
+introduces `network-application/v2`, keeping v1's bindings, budgets and
+loopback rules, and separating local and remote identity: a listener row
+carries its exact local IPv4 address and port, and an admitted-peer kind that
+is either a holder (loopback only, as in v1) or one exact remote IPv4 address
+(external only). A client row carries neither. An external listener's local
+address must equal an address the admitted generation declares for the
+service's interface; its admitted address must be a unicast host other than
+that address, with no prefix, range or wildcard, and any source port. Backlog
+stays exactly one; the accepted-socket limit stays 1–4, and the byte budget at
+least 4096 bytes per accepted connection and at most 16384. Two listeners
+cannot share a local endpoint. Listen authority comes only from this row, never
+from a destination's `listen` right. In derived manifests the admitted address
+is `admittedPeerAddress`, beside the existing holder-valued `admittedPeer`;
+exactly one is nonempty for a listener.
+
+| Declared value | Qualified composition |
+| --- | --- |
+| Local endpoint | `10.0.0.1:4270`, the interface address |
+| Admitted peer | `10.0.0.2`, any source port |
+| Backlog, accepted connections | 1, 2 |
+| Byte budget | 8192: both 2048-byte buffers of each accepted connection |
+
+**Wire policy.** A SYN to the listener's endpoint from any other source is
+dropped before smoltcp sees it, so it neither answers nor occupies the backlog
+slot; the service counts these. A SYN to an undeclared port or to an address the
+interface does not own draws no frame. An admitted peer's SYN that finds the
+backlog slot occupied, or the accepted-connection limit reached, is refused
+with exactly one reset acknowledging that SYN, and counted. The egress guard
+publishes such a reset only for the admitted peer at the declared endpoint.
+
+**Close semantics.** These apply to every connection, accepted, connected or
+loopback.
+
+| Operation | Result |
+| --- | --- |
+| `opShutdown = 10` (new in `network-service/v1`) | Queues a FIN after bytes already sent; the handle keeps receiving until the peer's FIN; later sends fail |
+| Peer FIN first | Receive reports EOF after queued bytes; the handle may still send; close completes when the peer acknowledges the FIN |
+| Simultaneous close | Both FINs cross; close completes in TIME-WAIT |
+| Close with unread bytes | Aborts with one reset; close reports success, meaning local disposal |
+| Close with unsent bytes | The FIN follows the last queued byte; close completes in TIME-WAIT |
+
+Every close returns the handle's socket, buffer, work-slot and timer
+reservations, and the service states for each accepted connection the unread
+and unsent bytes at the close request and its terminal state. A disposed handle
+is refused afterwards.
+
+**Qualification.** Composition `sel4-io-tcp-listener` (generation 162) runs
+`io-tcp-listener-probe` twice: `listener-session` holds the listener and one
+control destination `10.0.0.2:4280`, and `intruder-session` is an external
+client with no listener authority. The frame peer
+(`scripts/lib/tcp_listener_peer.py`) opens every listener connection itself.
+The probe reports progress as lines on its control connection, and the peer
+answers with one-byte cues where the probe must wait for wire evidence. The
+script sends three SYNs that must stay unanswered: from the unadmitted
+`10.0.0.3`, to undeclared port 4271, and to `10.0.0.9`. It then exchanges 2048
+echoed bytes and holds a second connection unaccepted while a third is reset.
+After the second is accepted, a fourth is reset. It then drives a local
+half-close, a peer half-close, a simultaneous close, a close with 512 unread
+bytes and a close with 2048 bytes queued behind a zero window. Every scripted
+stream is byte `i = (31·i + seed) mod 256` with the seeds in the peer module.
+The qualifier checks each case from the wire alone; the arm also requires the
+service's declaration, refusal counts and per-close reclamation markers.
+`check-link-peer.py` runs the script against a model listener and refuses
+corrupted evidence first.
+
+The gate observes accepted external connections. The loopback backend shares
+the engine's close path; its host tests are implementation evidence, not this
+gate. No physical NIC is qualified.
+
 ## smoltcp support matrix
 
 Pinned release: smoltcp `0.13.0`, crate checksum `ac729b0a77bd092a3f06ddaddc59fe0d67f48ba0de45a9abe707c2842c7f8767`.
