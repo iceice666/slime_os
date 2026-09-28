@@ -376,6 +376,26 @@
           "kind": "bool"
         }
       ]
+    },
+    {
+      "id": "ci-cache-retention",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [
+        {
+          "id": "consecutiveWarmRuns",
+          "kind": "int"
+        },
+        {
+          "id": "slowestCriticalPathSeconds",
+          "kind": "int"
+        },
+        {
+          "id": "cacheUsageMegabytes",
+          "kind": "int"
+        }
+      ]
     }
   ]
 }
