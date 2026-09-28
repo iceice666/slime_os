@@ -150,7 +150,10 @@ that trust-root rotation records are honored.
   partition-relative LBA 0–1 beneath a boot-store directory; the manager and
   the rollback/recovery/transfer probes use LBA 1024–1025 within the store
   partition `gpt::validate_store_partition` admits. No plane boots the selector
-  against a disk the manager wrote; unifying them is unfinished work.
+  against a disk the manager wrote. Boot-store v1 is the only product layout
+  and the userspace one is test scaffolding
+  ([decision](../decisions/bootstate-partition-layouts.md)); unifying them is
+  deferred to `01a0e54d-8a04-767d-95c5-0ded2ddc9a2d`.
 - **Disk-only rollback protection can itself be rolled back.** TPM-bound
   attempt counters and attestation are planned, not built
   ([authority and trust plan](../plans/authority-and-trust.md)).

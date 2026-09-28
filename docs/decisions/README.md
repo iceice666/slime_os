@@ -34,6 +34,10 @@ readable and link to the decision that replaced them.
 - [MCS and conserved CPU budgets](mcs-cpu-budgets.md) — proposed; keep
   `KernelIsMCS OFF` (as every pinned profile is today) until one
   target-specific cutover covers API, resources, admission, and assurance.
+- [BootState partition layouts](bootstate-partition-layouts.md) — accepted;
+  boot-store v1 is the only product BootState layout, and the userspace
+  planes' LBA 1024/1025 object-store layout is test scaffolding until the
+  manager stages into a boot store.
 - [AMD IOMMU ownership on x86-64](amd-iommu-ownership.md) — proposed; seL4
   supports only Intel VT-d, so `slime-root` programs the AMD IOMMU behind IO1's
   existing DMA mediation instead of extending the kernel.
