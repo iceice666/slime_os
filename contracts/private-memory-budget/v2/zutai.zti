@@ -1,7 +1,0 @@
-{
-  formatVersion = 1;
-  name = "slime_private_memory_policy";
-  compilerCompatibility = "0.1.0";
-  modules = [{ name = "declarations"; path = "declarations.zt"; };];
-  dependencies = [{ alias = "wire"; path = "../../_shared"; };];
-}
