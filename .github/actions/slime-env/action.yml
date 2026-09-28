@@ -7,9 +7,23 @@ description: >
   the checked-out tree, so this action cannot check out the tree it lives in.
 inputs:
   build-cache-key:
-    description: Partition for persistent Cargo build outputs; empty uses the caller job.
+    description: >-
+      Partition for the Zutai evaluation store, and for build outputs unless
+      build-partition is set; empty uses the caller job.
     required: false
     default: ''
+  build-partition:
+    description: >-
+      Build-output partition shared with other jobs that run the same build;
+      empty uses build-cache-key.
+    required: false
+    default: ''
+  build-save:
+    description: >-
+      Whether this job saves its build-output partition. Exactly one job per
+      shared partition saves it, so jobs never race to save one key.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -42,9 +56,11 @@ runs:
     # Cargo owns invalidation for Rust sources and declared build-script inputs.
     # Keep the restore boundary stricter for inputs outside Cargo's fingerprints:
     # the exact submodule gitlinks, seL4 configuration/pins, target definitions,
-    # linker scripts, lockfiles, and both pinned Rust toolchains. The final SHA
-    # makes saves immutable; the matching prefix lets a later source revision
-    # restore compatible intermediates and lets Cargo rebuild what changed.
+    # linker scripts, lockfiles, and both pinned Rust toolchains. The final
+    # component is the UTC date, not the commit: a partition is written at most
+    # once a day, which keeps the saved set inside the repository's cache
+    # budget, and restored outputs are at most a day behind. The matching
+    # prefix restores the newest earlier entry, and Cargo rebuilds what changed.
     - name: Identify build-cache submodules
       id: build-cache-submodules
       shell: bash
@@ -64,8 +80,8 @@ runs:
       shell: bash
       env:
         PREFIX: >-
-          slime-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
-            inputs.build-cache-key || github.job
+          slime-build-v2-${{ runner.os }}-${{ runner.arch }}-${{
+            inputs.build-partition || inputs.build-cache-key || github.job
           }}-${{
             hashFiles('flake.lock', 'flake.nix', 'rust-toolchain.toml',
                       'deps/zutai/.cargo/config.toml',
@@ -76,14 +92,16 @@ runs:
           }}-${{ steps.build-cache-submodules.outputs.gitlinks }}-
       run: |
         echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
-        echo "key=${PREFIX}${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        echo "key=${PREFIX}$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-    # Each save is about 1.1 GB per job, past the repository's 10 GB cache
-    # budget in one run, so least-recently-used eviction removes other caches,
-    # the Zutai evaluation store among them. Only the base branch saves; a pull
-    # request restores the base branch's outputs and lets Cargo rebuild the rest.
+    # A partition is 0.5 to 1.5 GB against a 10 GB repository budget, and
+    # least-recently-used eviction removes whatever the budget cannot hold, the
+    # Zutai evaluation store among them. Only the base branch saves, and only
+    # the partition's designated job; a pull request or a sharing job restores
+    # the saved outputs and lets Cargo rebuild the rest. An exact key hit saves
+    # nothing.
     - name: Restore and save persistent Cargo build outputs
-      if: github.event_name != 'pull_request'
+      if: github.event_name != 'pull_request' && inputs.build-save == 'true'
       uses: actions/cache@v4
       with:
         path: |
@@ -94,7 +112,7 @@ runs:
         restore-keys: ${{ steps.build-cache-key.outputs.prefix }}
 
     - name: Restore persistent Cargo build outputs
-      if: github.event_name == 'pull_request'
+      if: github.event_name == 'pull_request' || inputs.build-save != 'true'
       uses: actions/cache/restore@v4
       with:
         path: |

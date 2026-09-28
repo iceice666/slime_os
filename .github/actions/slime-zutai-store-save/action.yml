@@ -1,15 +1,26 @@
 name: Save the Zutai evaluation store
 description: >
-  Prune the Zutai evaluation store to the entries this job read or wrote, then
-  save it under the key `slime-env` exported. Run after the job's checks with
-  `if: always()`: only zero-exit evaluations are ever stored, so a store from a
-  failed or cancelled job is as sound as one from a passing job.
+  Save the Zutai evaluation store under the key `slime-env` exported, pruned to
+  the entries this job read or wrote when every check ran to completion. Run
+  after the job's checks with `if: always()`: only zero-exit evaluations are
+  ever stored, so a store from a failed or cancelled job is as sound as one
+  from a passing job.
+
+inputs:
+  checks-completed:
+    description: >-
+      'true' only when every check in the job succeeded. A failed or cancelled
+      job never read the entries its unrun checks need, so its store is saved
+      unpruned rather than shrunk to what it reached.
+    required: true
 
 runs:
   using: composite
   steps:
     - name: Prune unread evaluations
       shell: bash
+      env:
+        CHECKS_COMPLETED: ${{ inputs.checks-completed }}
       run: |
         set -euo pipefail
         store=build/zutai-cache
@@ -19,9 +30,11 @@ runs:
         fi
         [ -d "$store" ] || exit 0
         before="$(find "$store" -type f | wc -l)"
-        if [ "${SLIME_ZUTAI_STORE_PRUNE:-}" = 1 ]; then
+        if [ "${SLIME_ZUTAI_STORE_PRUNE:-}" = 1 ] && [ "$CHECKS_COMPLETED" = true ]; then
           # Still at atime 0: restored, never read.
           find "$store" -type f ! -newerat @1 -delete
+        else
+          echo "saving unpruned (prune=${SLIME_ZUTAI_STORE_PRUNE:-0}, checks completed=$CHECKS_COMPLETED)"
         fi
         echo "Zutai store: $before entries, $(find "$store" -type f | wc -l) kept, $(du -sh "$store" | cut -f1)"
 

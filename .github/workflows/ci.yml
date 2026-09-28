@@ -354,6 +354,8 @@ jobs:
       - run: nix develop --command just test_sel4_root
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()
+        with:
+          checks-completed: ${{ job.status == 'success' }}
 
   sel4_rollback_runtime:
     name: Rollback runtime, release trust, and BootState trace
@@ -366,10 +368,15 @@ jobs:
         with:
           submodules: recursive
       - uses: ./.github/actions/slime-env
+        with:
+          build-partition: image
+          build-save: 'false'
       - run: nix develop --command just sel4_qemu_image_check
       - run: nix develop --command just bootstate_trace_check release_trust_runtime_check
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()
+        with:
+          checks-completed: ${{ job.status == 'success' }}
 
   sel4_contract_sources:
     name: Contract sources and component specs
@@ -382,6 +389,9 @@ jobs:
         with:
           submodules: recursive
       - uses: ./.github/actions/slime-env
+        with:
+          build-partition: image
+          build-save: 'false'
       - run: nix develop --command just sel4_qemu_image_check
       # Split from `sel4_system_image_builder` so the two chains run
       # concurrently. Together the two jobs run exactly the recipes the single
@@ -392,6 +402,8 @@ jobs:
           contracts_source_check component_spec_validation_check
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()
+        with:
+          checks-completed: ${{ job.status == 'success' }}
 
   sel4_system_image_builder:
     name: System specs and system-image closures
@@ -404,6 +416,10 @@ jobs:
         with:
           submodules: recursive
       - uses: ./.github/actions/slime-env
+        # Saves the build-output partition the image-only jobs share: its
+        # outputs are the builder check's plus the image every job builds.
+        with:
+          build-partition: image
       - run: nix develop --command just sel4_qemu_image_check
       # Closures are digests of source trees; a merge that touches one without
       # regenerating them makes every plane gate refuse to resolve. Fail here,
@@ -411,6 +427,8 @@ jobs:
       - run: nix develop --command just system_image_builder_check
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()
+        with:
+          checks-completed: ${{ job.status == 'success' }}
 
   sel4_generations:
     name: Generation v5 (shard ${{ matrix.shard }})
@@ -426,13 +444,19 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      # The four shards build the same image and share one build-output
+      # partition that shard 0 saves; each keeps its own evaluation store.
       - uses: ./.github/actions/slime-env
         with:
           build-cache-key: generation-${{ matrix.shard }}
+          build-partition: generation
+          build-save: ${{ matrix.shard == 0 }}
       - run: nix develop --command just sel4_qemu_image_check
       - run: nix develop --command just generation_v5_check ${{ matrix.shard }} 4
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()
+        with:
+          checks-completed: ${{ job.status == 'success' }}
 
   sel4_contracts:
     name: Contracts and component specs
