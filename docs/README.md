@@ -8,6 +8,10 @@ narrates or points at a source that is.
 Read the root [`README.md`](../README.md) first — what Slime OS is, the five
 first-class concepts, current status, and non-goals. Then:
 
+0. [How work flows](getting-started/00-how-work-flows.md) — the whole
+   process on one page: why each convention exists, which program enforces
+   it, which path a typo, a bug, or a feature takes, and what an agent is
+   doing when you hand it a task.
 1. [Orientation](getting-started/01-orientation.md) — how to hold the project
    in your head, and where everything lives.
 2. [Build and run](getting-started/02-build-and-run.md) — prerequisites,

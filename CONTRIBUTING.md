@@ -15,6 +15,11 @@ A work-item proposal PR is the bootstrap exception: it needs no existing item.
 **PR merged != work item done.** Completion requires the item's exit conditions
 to be observed and recorded, not just an implementation to land.
 
+If those two rules read as ceremony, start with
+[How work flows](docs/getting-started/00-how-work-flows.md): the same process
+as a timeline, with the reason and the enforcing check beside each step. This
+file owns the exact rules; that page explains them.
+
 ## Where work lives
 
 ### Human Issues are intake
