@@ -8,12 +8,13 @@
 //! drive every transition.
 
 /// One receive slot: its page is either lent to the device, holding a frame
-/// the device delivered, or free to be lent again.
+/// the device delivered, or free to be lent again. `delivery` numbers ready
+/// frames in the order the device completed them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RxSlot {
     Free,
     Provisioned { request_id: u64 },
-    Ready { len: usize },
+    Ready { len: usize, delivery: u64 },
 }
 
 /// One transmit slot: its page is either free or retained by the device until
@@ -35,6 +36,7 @@ pub enum SlotError {
 #[derive(Clone, Copy, Debug)]
 pub struct RxSlots<const N: usize> {
     slots: [RxSlot; N],
+    deliveries: u64,
 }
 
 impl<const N: usize> Default for RxSlots<N> {
@@ -47,6 +49,7 @@ impl<const N: usize> RxSlots<N> {
     pub const fn new() -> Self {
         Self {
             slots: [RxSlot::Free; N],
+            deliveries: 0,
         }
     }
     /// Lend the first free slot to the device under `request_id`.
@@ -58,7 +61,11 @@ impl<const N: usize> RxSlots<N> {
     /// The device delivered `len` bytes into the slot lent under `request_id`.
     pub fn delivered(&mut self, request_id: u64, len: usize) -> Result<usize, SlotError> {
         let slot = self.provisioned(request_id)?;
-        self.slots[slot] = RxSlot::Ready { len };
+        self.slots[slot] = RxSlot::Ready {
+            len,
+            delivery: self.deliveries,
+        };
+        self.deliveries = self.deliveries.wrapping_add(1);
         Ok(slot)
     }
     /// The device gave the slot back without a frame (reset, error).
@@ -67,16 +74,20 @@ impl<const N: usize> RxSlots<N> {
         self.slots[slot] = RxSlot::Free;
         Ok(slot)
     }
-    /// The first delivered frame, in delivery order of the slots, and the
-    /// slot goes back to free: the caller reads the page and lends it again.
+    /// The oldest delivered frame, and the slot goes back to free: the caller
+    /// reads the page and lends it again. Frames leave in the order the device
+    /// completed them, whichever slots recycling placed them in; TCP discards a
+    /// segment whose acknowledgment another frame has already overtaken.
     pub fn take_ready(&mut self) -> Option<(usize, usize)> {
-        let slot = self
+        let (slot, len, _) = self
             .slots
             .iter()
-            .position(|slot| matches!(slot, RxSlot::Ready { .. }))?;
-        let RxSlot::Ready { len } = self.slots[slot] else {
-            unreachable!()
-        };
+            .enumerate()
+            .filter_map(|(slot, state)| match *state {
+                RxSlot::Ready { len, delivery } => Some((slot, len, delivery)),
+                _ => None,
+            })
+            .min_by_key(|&(_, _, delivery)| delivery.wrapping_sub(self.deliveries))?;
         self.slots[slot] = RxSlot::Free;
         Some((slot, len))
     }
@@ -179,6 +190,25 @@ mod tests {
         assert_eq!(rx.returned(10), Ok(0));
         assert_eq!(rx.returned(99), Err(SlotError::Unknown));
         assert_eq!(rx.free_count(), 1);
+    }
+
+    #[test]
+    fn ready_frames_leave_in_delivery_order_across_recycled_slots() {
+        let mut rx = RxSlots::<3>::new();
+        for request in 1..=3 {
+            assert!(rx.provide(request).is_some());
+        }
+        assert_eq!(rx.delivered(1, 61), Ok(0));
+        assert_eq!(rx.delivered(2, 62), Ok(1));
+        assert_eq!(rx.take_ready(), Some((0, 61)));
+        // Slot 0 is lent again and fills after slot 2 and before slot 1 is read.
+        assert_eq!(rx.provide(4), Some(0));
+        assert_eq!(rx.delivered(3, 63), Ok(2));
+        assert_eq!(rx.delivered(4, 64), Ok(0));
+        assert_eq!(rx.take_ready(), Some((1, 62)));
+        assert_eq!(rx.take_ready(), Some((2, 63)));
+        assert_eq!(rx.take_ready(), Some((0, 64)));
+        assert_eq!(rx.take_ready(), None);
     }
 
     #[test]

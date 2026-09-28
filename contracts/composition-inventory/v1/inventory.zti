@@ -193,6 +193,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-io-tcp.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-io-tcp-impairment";
+      deferralReason = "";
+      owningGate = "io_tcp_impairment_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-io-tcp-impairment.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-lifecycle-restart.zti";
       composition = "sel4-lifecycle-restart";
       deferralReason = "";

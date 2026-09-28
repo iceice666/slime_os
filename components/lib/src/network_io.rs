@@ -525,14 +525,32 @@ impl<'a> NetworkIo<'a> {
         connection: &Connection,
         bytes: &[u8],
     ) -> Result<NetworkReply, NetworkError> {
+        self.send_flagged(connection, bytes, 0)
+    }
+
+    /// Like [`Self::send`], but a full transmit buffer answers `would-block`
+    /// at once rather than being retained by a notification-enabled service,
+    /// so the caller observes backpressure instead of waiting through it.
+    pub fn send_nonblocking(
+        &mut self,
+        connection: &Connection,
+        bytes: &[u8],
+    ) -> Result<NetworkReply, NetworkError> {
+        self.send_flagged(connection, bytes, net::FLAG_NONBLOCKING)
+    }
+
+    fn send_flagged(
+        &mut self,
+        connection: &Connection,
+        bytes: &[u8],
+        flags: u32,
+    ) -> Result<NetworkReply, NetworkError> {
         self.check_connection(connection)?;
         self.check_length(bytes.len())?;
         self.data.as_mut().ok_or(NetworkError::Lost)?[..bytes.len()].copy_from_slice(bytes);
-        self.transact_raw(
-            request(net::OP_SEND, connection.id),
-            io_queue::DIRECTION_DEVICE_READ,
-            bytes.len() as u64,
-        )
+        let mut request = request(net::OP_SEND, connection.id);
+        request.flags = flags;
+        self.transact_raw(request, io_queue::DIRECTION_DEVICE_READ, bytes.len() as u64)
     }
 
     pub fn recv(

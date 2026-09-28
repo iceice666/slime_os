@@ -230,6 +230,7 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-io-lifetime",
     "sel4-io-service-fault",
     "sel4-io-driver-reset",
+    "sel4-io-tcp-impairment",
     "sel4-private-memory-stress",
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",

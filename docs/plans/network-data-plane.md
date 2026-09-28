@@ -224,10 +224,11 @@ the support claim.
 
 ### TCP loss, reordering, retransmission and window bounds
 
-Work item `01a0e239-b16f-735e-9d04-417a547a42e3` declares these bounds before
-its implementation; `just io_tcp_impairment_check` holds the wire to them. The
-recipe fails until the `sel4-io-tcp-impairment` composition (generation 161)
-and its `io-tcp-impairment-probe` land, so it is not wired into CI.
+Work item `01a0e239-b16f-735e-9d04-417a547a42e3` declared these bounds before
+its implementation, and `just io_tcp_impairment_check` holds the wire to them.
+The [network service page](../architecture/network-service.md#loss-reordering-retransmission-and-window-bounds)
+owns the implemented behavior and the qualification; the matrix below records
+the selected assembler capacity.
 
 | Bound | Declared value |
 | --- | --- |
@@ -239,29 +240,9 @@ and its `io-tcp-impairment-probe` land, so it is not wired into CI.
 | Guest persist probes | 1 to 3 during a 3 s peer zero window, at least 0.9 s apart |
 | Peer persist probes | 1 to 3 across the application's 2000 ms stall, each unaccepted while the window is zero |
 
-One boot runs five scenarios, each on its own destination port of the scripted
-frame peer in `scripts/lib/tcp_impairment_peer.py`: reordering within and one
-range beyond the assembler capacity (4260), guest and peer loss with injected
-duplicate acknowledgments (4261), a peer that falls silent after 1024 bytes and
-then serves a fresh exchange (4262), an application stall that closes the
-guest's receive window (4263), and a peer that opens with a zero window (4264).
-The composition grants the probe one exact destination per scenario port, each
-with a retry limit of 1 to 16; the silent port admits only one connection's
-reservation, so its fresh exchange also proves reclamation. The qualifier
-judges each scenario from the wire alone; the probe and service markers must
-additionally report typed results, the silent connection's numeric
-reclamation, and receive and transmit high-water marks equal to the declared
-buffers. `just link_peer_check` drives the scripts against a reduced model
-stack and refuses corrupted evidence.
-
-Scripted reordering and loss are meaningful only if smoltcp sees frames in wire
-order. The service currently takes ready receive slots lowest-index first, which
-does not preserve arrival order once slots are recycled mid-drain, and smoltcp
-discards a data segment whose acknowledgment falls below its
-send-unacknowledged point. The implementation must deliver received frames in
-arrival order. The scenarios run for roughly 20 s, while the polling profile's
-clock reads alone exhaust a finite plane's 32768-request root watchdog within
-seconds, so the composition needs the notification-backed waiting profile.
+These bounds cover the QEMU `LinkDevice` backend only. Congestion-control
+selection, listener semantics and performance targets remain with their own
+slices, and no physical NIC is qualified.
 
 ## smoltcp support matrix
 
@@ -291,7 +272,7 @@ owning slices, chiefly the media and backend classification.
 | TCP external connect | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service-held; clients reach it only through exact destination grants | 4 sockets, 2048-byte buffers, 10 s timeout | `just io_network_qualification_check` |
 | TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, 2048-byte buffers | `just io_tcp_check` |
 | TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | Exact external listener grants with admitted peer policy | Declared by the owning slice | Owning slice's recipe |
-| TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | Declared by the owning slice | Owning slice's recipe |
+| TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | supported | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | 4 out-of-order ranges, 2048-byte RX and TX per socket, retransmissions within the destination `retryLimit`, 10 s socket timeout | `just io_tcp_impairment_check` |
 | TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per application binding, never client-chosen | Declared by the owning slice | Owning slice's recipe |
 | TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Fixed service policy | 10 s operation timeout, no ack delay | `just io_network_qualification_check` |
 | UDP resolver socket | socket | `src/socket/udp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service resolver only; answers never authorize destinations | 1 socket, 512-byte packets | `just io_network_qualification_check` |
@@ -320,13 +301,13 @@ of its optional dependencies, has exactly one row.
 | `_netsim` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Crate-private network simulator used by upstream tests; not a public facility | — | — |
 | `_proto-fragmentation` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-c630-71d3-8c0c-85ab4d366bd4 | Private fragmentation core implied by every fragmentation feature | Declared by the owning slice | Owning slice's recipe |
 | `alloc` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Heap-growable storage; follows the `std` classification | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-1` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-2` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-3` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-4` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-8` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-16` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
-| `assembler-max-segment-count-32` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | TCP out-of-order assembler capacity, selected with the loss and reorder bounds | Declared by the owning slice | Owning slice's recipe |
+| `assembler-max-segment-count-1` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Alternative value; `assembler-max-segment-count-4` is selected and changing it is a matrix change | — | — |
+| `assembler-max-segment-count-2` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Alternative value; `assembler-max-segment-count-4` is selected and changing it is a matrix change | — | — |
+| `assembler-max-segment-count-3` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Alternative value; `assembler-max-segment-count-4` is selected and changing it is a matrix change | — | — |
+| `assembler-max-segment-count-4` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a0e239-b16f-735e-9d04-417a547a42e3 | Selected resource value; out-of-order ranges are service state, never client-visible | 4 disjoint out-of-order ranges per socket; a fifth is dropped and recovered by retransmission | `just io_tcp_impairment_check` |
+| `assembler-max-segment-count-8` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Alternative value; `assembler-max-segment-count-4` is selected and changing it is a matrix change | — | — |
+| `assembler-max-segment-count-16` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Alternative value; `assembler-max-segment-count-4` is selected and changing it is a matrix change | — | — |
+| `assembler-max-segment-count-32` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Alternative value; `assembler-max-segment-count-4` is selected and changing it is a matrix change | — | — |
 | `async` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Waker registration for async executors | Declared by the owning slice | Owning slice's recipe |
 | `auto-icmp-echo-reply` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Replies only to echo requests addressed to the service's own address; no client ICMP authority | One reply per request, same frame budget | `just io_network_qualification_check` |
 | `default` | feature | `Cargo.toml` `[features]` | not-applicable | — | — | Upstream default set; the service sets `default-features = false` and names every feature, and each member has its own row | — | — |

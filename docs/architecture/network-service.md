@@ -19,9 +19,10 @@ Owners:
   retry, timeout, cleanup — see its [README](../../contracts/network-service/README.md)),
   `contracts/network-application/v1/`, `contracts/network-destination/v1/`,
   `contracts/network-interface/v1/`, `contracts/link-device/v1/`;
-- compositions: `sel4-io-network`, `sel4-io-tcp`, `sel4-io-local`,
-  `sel4-io-lifetime`, `sel4-io-service-fault`, `sel4-io-driver-reset`,
-  `sel4-http`, `sel4-http-public` under `contracts/system-spec/v1/`;
+- compositions: `sel4-io-network`, `sel4-io-tcp`, `sel4-io-tcp-impairment`,
+  `sel4-io-local`, `sel4-io-lifetime`, `sel4-io-service-fault`,
+  `sel4-io-driver-reset`, `sel4-http`, `sel4-http-public` under
+  `contracts/system-spec/v1/`;
 - plan: [`../plans/network-data-plane.md`](../plans/network-data-plane.md).
 
 ## Boundary
@@ -41,6 +42,39 @@ compares 4096 echoed bytes independently at the application and external frame
 peer, verifies handshake and FIN closure, refuses an undeclared address/port,
 observes a reset from a second declared port, and retains ARP/ICMP and link
 reset/release checks.
+
+## Loss, reordering, retransmission and window bounds
+
+Each external socket owns fixed 2048-byte receive and transmit buffers, and
+smoltcp's out-of-order assembler holds four disjoint ranges
+(`assembler-max-segment-count-4`); a fifth range is dropped and recovered only
+by the peer's retransmission. The service states these bounds and its 10 s
+socket timeout at attach (`tcp bounds …`) and, at shutdown, the deepest
+receive and transmit queues any socket reached (`tcp peaks …`). A peer that
+stops acknowledging exhausts the destination's `retryLimit` or that timeout:
+the socket is aborted with one reset, the holder's operations and its close
+report `timeout`, and the close releases the connection's reservation
+(`tcp timeout handles=1 sockets=1 bytes=4096`).
+
+Received frames reach smoltcp in the order the device completed them, however
+recycling placed them in receive slots. smoltcp discards a segment whose
+acknowledgment another frame has already overtaken, so reordering inside the
+service would turn into loss. A notification-enabled client may send with
+`FLAG_NONBLOCKING` to observe a full transmit buffer as `would-block` instead
+of waiting through it.
+
+The `sel4-io-tcp-impairment` composition qualifies these bounds behind a
+scripted frame peer (`scripts/lib/tcp_impairment_peer.py`) that judges each
+scenario from the wire: reordering within and one range beyond the assembler
+capacity, guest and peer loss with injected duplicate acknowledgments, a
+silent peer followed by a fresh exchange on a single-connection destination,
+an application stall that closes the receive window, and a peer that opens
+with a zero window. Its probe and service use the notification-backed waiting
+profile; the polling profile's clock reads would exhaust a finite plane's
+root-request watchdog long before the scenarios finish. TIME-WAIT keeps closed
+sockets in the fixed four-socket pool for ten seconds, so the probe retries a
+connect refused as `exhausted`. The declared values are in the
+[plan](../plans/network-data-plane.md#tcp-loss-reordering-retransmission-and-window-bounds).
 
 ## Application authority and listeners
 
@@ -142,3 +176,6 @@ peer's reset behavior is not ordinary-server interoperability across reset.
   and a fresh public observation; public unavailability is a failure, not a pass;
 - `just io_tcp_host_check` — production TCP engine against real host smoltcp peers,
   independent authority/resource limits, partial I/O, retries and close quarantine;
+- `just io_tcp_impairment_check` — scripted reordering, loss, a silent peer and
+  zero windows in both directions against the declared bounds, judged from the
+  wire, after the peer's own host controls;
