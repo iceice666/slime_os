@@ -138,7 +138,7 @@ repository. The field set is the `BootObservation` record in
 Back on the host, with the USB and the same internal disk present:
 
 ```sh
-sudo -E python3 scripts/check/check-framework-cpu-boot.py verify \
+sudo -E just framework_cpu_boot_verify \
     --boots boots.json \
     --operator "<your name>" --observed-on YYYY-MM-DD \
     --machine-vendor Framework --machine-product "Laptop 13 (AMD Ryzen AI 300 Series)" \
@@ -147,9 +147,11 @@ sudo -E python3 scripts/check/check-framework-cpu-boot.py verify \
     [--secure-boot]
 ```
 
-(There is no `just` alias for `verify`; the recipe comment mentions one, but
-call the script directly.) It re-hashes the protected region, refuses if it
-differs from `sha256Before`, assembles the observation, writes it to
+The recipe passes its arguments unchanged to
+`scripts/check/check-framework-cpu-boot.py verify`, after rebuilding and
+validating the medium through `framework_media_check` as `prepare` does;
+`--state` and `--output` keep their defaults unless given. It re-hashes the
+protected region, refuses if it differs from `sha256Before`, assembles the observation, writes it to
 `evidence/framework-cpu-boot/slime-cpu-boot.observation.json`, and validates
 it. Then:
 
