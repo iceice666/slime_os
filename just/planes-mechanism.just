@@ -20,6 +20,13 @@ io_tcp_check: sel4_pin_check io_tcp_host_check
 io_tcp_impairment_check: sel4_pin_check link_peer_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-impairment
 
+# One exact external listener, its refusals, half-close, simultaneous close and
+# close with unread or unsent data, judged from the wire after the peer's host
+# controls. Explicit, never part of `all`.
+[group('planes / mechanism')]
+io_tcp_listener_check: sel4_pin_check link_peer_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-listener
+
 [group('planes / mechanism')]
 io_tcp_host_check:
     cargo test -p slime-network-tcp-tests --locked

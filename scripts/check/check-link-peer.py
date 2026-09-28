@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 import link_peer as lp  # noqa: E402
 import tcp_impairment_peer as tip  # noqa: E402
+import tcp_listener_peer as tlp  # noqa: E402
 from harness import load_script  # noqa: E402
 
 GUEST_MAC = bytes.fromhex("5254005" "34c01")
@@ -1046,6 +1047,610 @@ def check_impairment_controls(ledger: tip.Ledger) -> None:
     refused("unclassifiable", malformed)
 
 
+# The external-listener script against a model guest: a listening smoltcp stack
+# behind the service's ingress and egress policy, and the listener probe's
+# program. Like the impairment model above, it exists so the script and the
+# qualifier agree on what a conforming guest does before the controls corrupt it.
+
+LISTENER_MSS = 536
+TIME_WAIT_SECONDS = 10.0
+LISTENER_POOL = 4
+
+
+@dataclasses.dataclass
+class ListenerModelSocket:
+    """smoltcp's socket, reduced to the in-order exchanges and closes the listener script drives."""
+
+    local_port: int
+    remote_port: int = 0
+    isn: int = 0
+    state: str = "closed"
+    peer_isn: int = 0
+    tx: bytearray = dataclasses.field(default_factory=bytearray)
+    snd_una: int = 0
+    snd_nxt: int = 0
+    fin_queued: bool = False
+    fin_sent: bool = False
+    fin_acked: bool = False
+    rx: bytearray = dataclasses.field(default_factory=bytearray)
+    rcv_nxt: int = 0
+    peer_fin: bool = False
+    peer_fin_first: bool = False
+    remote_window: int = 0
+    ack_due: bool = False
+    syn_due: float | None = None
+    retransmit_due: float | None = None
+    probe_due: float | None = None
+    probe_delay: float = 1.0
+    time_wait_until: float | None = None
+    reset: bool = False
+
+    def frame(self, flags: int, offset: int = 0, payload: bytes = b"") -> bytes:
+        syn = bool(flags & lp.TCP_SYN)
+        acknowledgment = (self.peer_isn + 1 + self.rcv_nxt + int(self.peer_fin)) & lp.TCP_SEQUENCE_MASK if flags & lp.TCP_ACK else 0
+        sequence = self.isn if syn else self.isn + 1 + offset
+        options = b"\x02\x04\x02\x18" if syn else b""
+        window = tlp.SOCKET_BUFFER_BYTES - len(self.rx)
+        segment = lp.tcp(lp.GUEST_IP, lp.PEER_IP, self.local_port, self.remote_port, sequence, acknowledgment, flags, payload, window, options)
+        return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment))
+
+    @property
+    def end(self) -> int:
+        return self.snd_una + len(self.tx)
+
+    def write(self, data: bytes) -> int:
+        count = min(len(data), tlp.SOCKET_BUFFER_BYTES - len(self.tx))
+        self.tx.extend(data[:count])
+        return count
+
+    def read(self) -> bytes:
+        data = bytes(self.rx)
+        self.rx.clear()
+        if data:
+            self.ack_due = True
+        return data
+
+    def abort(self) -> bytes:
+        self.state = "closed"
+        self.reset = True
+        return self.frame(lp.TCP_RST | lp.TCP_ACK, self.snd_nxt + int(self.fin_sent))
+
+    def tick(self, now: float) -> list[bytes]:
+        if self.state in ("syn-sent", "syn-received"):
+            if self.syn_due is None or now < self.syn_due:
+                return []
+            self.syn_due = now + 1.0
+            return [self.frame(lp.TCP_SYN if self.state == "syn-sent" else lp.TCP_SYN | lp.TCP_ACK)]
+        if self.state != "open":
+            return []
+        if self.time_wait_until is not None:
+            if now >= self.time_wait_until:
+                self.state = "closed"
+                return []
+            if not self.ack_due:
+                return []
+            self.ack_due = False
+            return [self.frame(lp.TCP_ACK, self.end + 1)]
+        out: list[bytes] = []
+        if self.retransmit_due is not None and now >= self.retransmit_due:
+            self.snd_nxt = self.snd_una
+            self.fin_sent = self.fin_acked
+            self.retransmit_due = None
+        while self.snd_nxt < self.end:
+            size = min(LISTENER_MSS, self.end - self.snd_nxt, self.snd_una + self.remote_window - self.snd_nxt)
+            if size <= 0:
+                break
+            start = self.snd_nxt - self.snd_una
+            out.append(self.frame(lp.TCP_ACK | lp.TCP_PSH, self.snd_nxt, bytes(self.tx[start : start + size])))
+            self.snd_nxt += size
+            self.ack_due = False
+            self.retransmit_due = self.retransmit_due or now + 1.0
+        if self.remote_window == 0 and self.snd_nxt == self.snd_una < self.end:
+            self.probe_due = self.probe_due or now + self.probe_delay
+            if now >= self.probe_due:
+                out.append(self.frame(lp.TCP_ACK | lp.TCP_PSH, self.snd_nxt, bytes(self.tx[:1])))
+                self.probe_delay *= 2
+                self.probe_due = now + self.probe_delay
+                self.ack_due = False
+        else:
+            self.probe_due = None
+            self.probe_delay = 1.0
+        if self.fin_queued and not self.fin_sent and self.snd_nxt == self.end:
+            out.append(self.frame(lp.TCP_ACK | lp.TCP_FIN, self.end))
+            self.fin_sent = True
+            self.ack_due = False
+            self.retransmit_due = self.retransmit_due or now + 1.0
+        if self.ack_due:
+            out.append(self.frame(lp.TCP_ACK, self.snd_nxt + int(self.fin_sent)))
+            self.ack_due = False
+        self.settle(now)
+        return out
+
+    def settle(self, now: float) -> None:
+        if self.fin_sent and self.fin_acked and self.peer_fin:
+            if self.peer_fin_first:
+                self.state = "closed"
+            elif self.time_wait_until is None:
+                self.time_wait_until = now + TIME_WAIT_SECONDS
+
+    def receive(self, frame: lp.Frame, now: float) -> None:
+        if frame.tcp_flags & lp.TCP_RST:
+            self.state = "closed"
+            self.reset = True
+            return
+        if self.state == "listen":
+            if frame.tcp_flags == lp.TCP_SYN:
+                self.remote_port = frame.tcp_source_port or 0
+                self.peer_isn = frame.tcp_sequence
+                self.remote_window = frame.tcp_window
+                self.state = "syn-received"
+                self.syn_due = now
+            return
+        if self.state == "syn-sent":
+            if frame.tcp_flags == lp.TCP_SYN | lp.TCP_ACK and frame.tcp_acknowledgment == (self.isn + 1) & lp.TCP_SEQUENCE_MASK:
+                self.peer_isn = frame.tcp_sequence
+                self.remote_window = frame.tcp_window
+                self.state = "open"
+                self.ack_due = True
+            return
+        if self.state == "syn-received":
+            if frame.tcp_flags == lp.TCP_SYN:
+                self.syn_due = now
+                return
+            if not frame.tcp_flags & lp.TCP_ACK or frame.tcp_acknowledgment != (self.isn + 1) & lp.TCP_SEQUENCE_MASK:
+                return
+            self.state = "open"
+        if self.state != "open" or not frame.tcp_flags & lp.TCP_ACK:
+            return
+        acked = (frame.tcp_acknowledgment - self.isn - 1) & lp.TCP_SEQUENCE_MASK
+        if self.snd_una <= acked <= self.end + int(self.fin_sent):
+            end = self.end
+            data_acked = min(acked, end)
+            if data_acked > self.snd_una:
+                del self.tx[: data_acked - self.snd_una]
+                self.snd_una = data_acked
+            self.fin_acked = self.fin_acked or self.fin_sent and acked == end + 1
+            self.snd_nxt = max(self.snd_nxt, self.snd_una)
+            self.remote_window = frame.tcp_window
+            in_flight = self.snd_nxt > self.snd_una or self.fin_sent and not self.fin_acked
+            self.retransmit_due = now + 1.0 if in_flight else None
+        offset = (frame.tcp_sequence - self.peer_isn - 1) & lp.TCP_SEQUENCE_MASK
+        payload = frame.tcp_payload
+        if payload:
+            if offset == self.rcv_nxt and not self.peer_fin:
+                accepted = payload[: tlp.SOCKET_BUFFER_BYTES - len(self.rx)]
+                self.rx.extend(accepted)
+                self.rcv_nxt += len(accepted)
+            self.ack_due = True
+        if frame.tcp_flags & lp.TCP_FIN:
+            if offset + len(payload) == self.rcv_nxt and not self.peer_fin:
+                self.peer_fin = True
+                self.peer_fin_first = not self.fin_sent
+            self.ack_due = True
+        self.settle(now)
+
+
+class ListenerModelGuest:
+    """The service's listener policy over a four-socket pool, and the probe's program."""
+
+    def __init__(self) -> None:
+        self.sockets: list[ListenerModelSocket] = []
+        self.armed: ListenerModelSocket | None = None
+        self.children: list[ListenerModelSocket] = []
+        self.listening = False
+        self.resolved = False
+        self.unadmitted = 0
+        self.excess = 0
+        self.closes: list[tuple[str, int, int]] = []
+        self.out: list[bytes] = [lp.ethernet(lp.BROADCAST, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), lp.PEER_IP))]
+        self.now = 0.0
+        self.isn = 0x47100000
+        self.done = False
+        self.program = self.run()
+
+    def allocate(self, local_port: int) -> ListenerModelSocket | None:
+        if len(self.sockets) >= LISTENER_POOL:
+            return None
+        self.isn += 0x100000
+        socket_ = ListenerModelSocket(local_port, isn=self.isn)
+        self.sockets.append(socket_)
+        return socket_
+
+    def arm(self) -> None:
+        if self.listening and self.armed is None and len(self.children) < tlp.ACCEPTED_LIMIT:
+            self.armed = self.allocate(tlp.LISTEN_PORT)
+            if self.armed is not None:
+                self.armed.state = "listen"
+
+    def receive(self, raw: bytes, now: float) -> None:
+        frame = lp.decode(raw)
+        if frame is None or frame.destination not in (GUEST_MAC, lp.BROADCAST):
+            return
+        if frame.kind == "arp-reply" and frame.arp_sender_ip == lp.PEER_IP:
+            self.resolved = True
+            return
+        if frame.kind != "tcp" or frame.ip_destination != lp.GUEST_IP:
+            return
+        admitted = frame.ip_source == lp.PEER_IP
+        if frame.tcp_destination_port == tlp.LISTEN_PORT and not admitted:
+            self.unadmitted += int(frame.tcp_flags == lp.TCP_SYN)
+            return
+        if not admitted:
+            return
+        match = next((entry for entry in self.sockets if entry.state not in ("listen", "closed") and entry.local_port == frame.tcp_destination_port and entry.remote_port == frame.tcp_source_port), None)
+        if match is not None:
+            match.receive(frame, now)
+            return
+        if frame.tcp_flags != lp.TCP_SYN or frame.tcp_destination_port != tlp.LISTEN_PORT:
+            return
+        if self.armed is not None and self.armed.state == "listen":
+            self.armed.receive(frame, now)
+            return
+        # No listening socket: smoltcp answers with a reset, and the egress guard
+        # publishes it only for the admitted peer at the declared endpoint.
+        self.excess += 1
+        segment = lp.tcp(lp.GUEST_IP, lp.PEER_IP, tlp.LISTEN_PORT, frame.tcp_source_port or 0, 0, frame.tcp_sequence + 1, lp.TCP_RST | lp.TCP_ACK, b"", 0)
+        self.out.append(lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment)))
+
+    def tick(self, now: float) -> list[bytes]:
+        self.now = now
+        if not self.done:
+            try:
+                next(self.program)
+            except StopIteration:
+                self.done = True
+        for entry in list(self.sockets):
+            self.out.extend(entry.tick(now))
+        self.sockets = [entry for entry in self.sockets if entry.state != "closed" or entry in self.children]
+        self.arm()
+        out, self.out = self.out, []
+        return out
+
+    # The probe's program: every `yield` waits one tick.
+
+    def send(self, connection: ListenerModelSocket, data: bytes):
+        offset = 0
+        while offset < len(data):
+            offset += connection.write(data[offset:])
+            if offset < len(data):
+                yield
+
+    def cue(self, control: ListenerModelSocket, cue: bytes):
+        while not control.rx:
+            yield
+        expect(bytes(control.rx[:1]) == cue, f"the model probe expected cue {cue!r}, got {bytes(control.rx[:1])!r}")
+        del control.rx[:1]
+        control.ack_due = True
+
+    def accept(self):
+        while self.armed is None or self.armed.state != "open":
+            yield
+        child = self.armed
+        self.children.append(child)
+        self.armed = None
+        self.arm()
+        return child
+
+    def read_to_eof(self, connection: ListenerModelSocket):
+        data = bytearray()
+        while not (connection.peer_fin and not connection.rx):
+            data.extend(connection.read())
+            yield
+        return bytes(data)
+
+    def close(self, connection: ListenerModelSocket):
+        unread, unsent = len(connection.rx), len(connection.tx)
+        if unread:
+            self.out.append(connection.abort())
+            terminal = "reset"
+        else:
+            connection.fin_queued = True
+            while connection.time_wait_until is None and connection.state != "closed":
+                yield
+            terminal = "time-wait" if connection.time_wait_until is not None else "closed"
+        if connection in self.children:
+            self.children.remove(connection)
+            self.closes.append((terminal, unread, unsent))
+
+    def run(self):
+        while not self.resolved:
+            yield
+        self.listening = True
+        self.arm()
+        control = self.allocate(49152)
+        assert control is not None
+        control.remote_port, control.state, control.syn_due = tlp.CONTROL_PORT, "syn-sent", self.now
+        while control.state != "open":
+            yield
+        lines = iter(tlp.CONTROL_LINES)
+        yield from self.send(control, next(lines))
+        exchange = yield from self.accept()
+        yield from self.send(control, next(lines))
+        echoed = bytearray()
+        while len(echoed) < len(tlp.EXCHANGE):
+            echoed.extend(exchange.read())
+            yield
+        yield from self.send(exchange, bytes(echoed))
+        yield from self.cue(control, tlp.CUE_ACCEPT_HELD)
+        held = yield from self.accept()
+        yield from self.send(control, next(lines))
+        yield from self.cue(control, tlp.CUE_HALF_CLOSE)
+        yield from self.send(exchange, tlp.LOCAL_HALF_GUEST)
+        exchange.fin_queued = True
+        received = yield from self.read_to_eof(exchange)
+        expect(received == tlp.LOCAL_HALF_PEER, "the model probe did not receive the peer's bytes after its half-close")
+        yield from self.close(exchange)
+        yield from self.send(control, next(lines))
+        received = yield from self.read_to_eof(held)
+        expect(received == tlp.PEER_HALF_PEER, "the model probe did not receive the peer's bytes before its FIN")
+        yield from self.send(held, tlp.PEER_HALF_GUEST)
+        yield from self.close(held)
+        yield from self.send(control, next(lines))
+        crossing = yield from self.accept()
+        yield from self.send(control, next(lines))
+        yield from self.close(crossing)
+        yield from self.send(control, next(lines))
+        unread = yield from self.accept()
+        yield from self.send(control, next(lines))
+        yield from self.cue(control, tlp.CUE_UNREAD)
+        yield from self.close(unread)
+        yield from self.send(control, next(lines))
+        unsent = yield from self.accept()
+        yield from self.send(control, next(lines))
+        expect(unsent.write(tlp.UNSENT) == len(tlp.UNSENT), "the model probe could not queue its unsent bytes")
+        yield from self.send(control, next(lines))
+        yield from self.close(unsent)
+        yield from self.send(control, next(lines))
+        self.listening = False
+        if self.armed is not None:
+            self.armed.state = "closed"
+            self.armed = None
+        yield from self.send(control, next(lines))
+        control.fin_queued = True
+        while control.time_wait_until is None and control.state != "closed":
+            yield
+
+
+def listener_simulate() -> tuple[tlp.ListenerPeer, ListenerModelGuest]:
+    peer = tlp.ListenerPeer()
+    guest = ListenerModelGuest()
+    to_peer: list[tuple[float, bytes]] = []
+    to_guest: list[tuple[float, bytes]] = []
+    next_poll = 0.0
+    tick = 0
+    drain = 0
+    while drain < 500 and tick < 120_000:
+        tick += 1
+        drain += int(guest.done and peer.complete)
+        now = tick * MODEL_TICK
+        due = [raw for when, raw in to_peer if when <= now]
+        to_peer = [(when, raw) for when, raw in to_peer if when > now]
+        for raw in due:
+            to_guest.extend((now + MODEL_LATENCY, reply) for reply in peer.handle(raw, now))
+        if now >= next_poll:
+            to_guest.extend((now + MODEL_LATENCY, reply) for reply in peer.poll(now))
+            next_poll = now + MODEL_POLL
+        due = [raw for when, raw in to_guest if when <= now]
+        to_guest = [(when, raw) for when, raw in to_guest if when > now]
+        for raw in due:
+            guest.receive(raw, now)
+        to_peer.extend((now + MODEL_LATENCY, raw) for raw in guest.tick(now))
+    expect(guest.done and peer.complete, f"the model listener did not finish the script: {peer.ledger.summary()}")
+    return peer, guest
+
+
+def check_listener_scripts() -> None:
+    expect(tlp.LISTENER_BYTE_BUDGET == tlp.ACCEPTED_LIMIT * 2 * tlp.SOCKET_BUFFER_BYTES == 8192, "the listener byte budget does not reserve both buffers of every accepted connection")
+    expect(len({attempt.source_port for attempt in tlp.ATTEMPTS}) == len(tlp.ATTEMPTS), "two attempts share a source port, so their flows would merge")
+    expect([attempt.outcome for attempt in tlp.ATTEMPTS].count("reset") == 2, "the script must provoke exactly one backlog and one accepted-limit refusal")
+    expect(set(tlp.GUEST_STREAMS) == set(tlp.PEER_STREAMS) == {attempt.name for attempt in tlp.ATTEMPTS if attempt.outcome == "accept"}, "every accepted attempt needs both declared streams")
+    expect(tlp.pattern(3, 4) == bytes([3, 34, 65, 96]), "the declared stream formula changed")
+    peer = tlp.ListenerPeer()
+    expect(peer.poll(5.0) == [], "the peer initiated traffic before it knew the guest")
+    peer.guest_mac = GUEST_MAC
+    expect(peer.poll(6.0) == [], "the peer sent a SYN before the guest reported that it listens")
+    syn = lp.decode(peer.open("unsent-close", 0.0)[0])
+    expect(syn is not None and syn.tcp_window == 0 and syn.tcp_flags == lp.TCP_SYN, "the unsent-close SYN did not open with a zero window")
+    impostor = lp.decode(peer.open("unadmitted-source", 0.0)[0])
+    expect(impostor is not None and impostor.source == tlp.INTRUDER_MAC and impostor.ip_source == tlp.INTRUDER_IP, "the unadmitted SYN did not come from the impostor")
+
+
+def check_listener_simulation() -> tlp.Ledger:
+    peer, guest = listener_simulate()
+    summaries = tlp.qualify_listener_ledger(peer.ledger, GUEST_MAC)
+    expect(len(summaries) == len(tlp.ATTEMPTS) + 2, f"the listener qualifier did not summarize every case: {summaries}")
+    expect((guest.unadmitted, guest.excess) == (1, 2), f"the model refused {guest.unadmitted} unadmitted and {guest.excess} excess SYNs, expected 1 and 2")
+    # The peer half-close reply may still be queued when its close is requested.
+    settled = [(terminal, unread, None if index == 1 else unsent) for index, (terminal, unread, unsent) in enumerate(guest.closes)]
+    expect(settled == [("time-wait", 0, 0), ("closed", 0, None), ("time-wait", 0, 0), ("reset", len(tlp.UNREAD), 0), ("time-wait", 0, len(tlp.UNSENT))], f"the model's closes settled differently: {guest.closes}")
+    return peer.ledger
+
+
+def forge_listener(observation: tlp.Observation, **changes: object) -> tlp.Observation:
+    frame = observation.frame
+    fields: dict[str, object] = {"sequence": frame.tcp_sequence, "acknowledgment": frame.tcp_acknowledgment, "flags": frame.tcp_flags, "payload": frame.tcp_payload, "window": frame.tcp_window}
+    fields.update(changes)
+    assert frame.ip_source is not None and frame.ip_destination is not None and frame.tcp_source_port is not None and frame.tcp_destination_port is not None
+    segment = lp.tcp(frame.ip_source, frame.ip_destination, frame.tcp_source_port, frame.tcp_destination_port, fields["sequence"], fields["acknowledgment"], fields["flags"], fields["payload"], fields["window"], frame.tcp_options)  # type: ignore[arg-type]
+    decoded = lp.decode(lp.ethernet(frame.destination, frame.source, lp.ETHERTYPE_IPV4, lp.ipv4(frame.ip_source, frame.ip_destination, lp.IP_PROTOCOL_TCP, segment)))
+    assert decoded is not None
+    return dataclasses.replace(observation, frame=decoded)
+
+
+def guest_segment(order: float, source_port: int, destination_port: int, sequence: int, acknowledgment: int, flags: int, payload: bytes = b"", window: int = 1024, destination: bytes = lp.PEER_MAC, destination_ip: bytes = lp.PEER_IP) -> tlp.Observation:
+    segment = lp.tcp(lp.GUEST_IP, destination_ip, source_port, destination_port, sequence, acknowledgment, flags, payload, window)
+    frame = lp.decode(lp.ethernet(destination, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, destination_ip, lp.IP_PROTOCOL_TCP, segment)))
+    assert frame is not None
+    return tlp.Observation(order, order, frame)  # type: ignore[arg-type]
+
+
+def check_listener_controls(ledger: tlp.Ledger) -> int:
+    def positions(altered: tlp.Ledger, name: str, *, guest: bool) -> list[int]:
+        attempt = tlp.ATTEMPT[name]
+        entries = altered.received if guest else altered.sent
+        return [index for index, entry in enumerate(entries) if entry.frame.kind == "tcp" and (entry.frame.tcp_destination_port if guest else entry.frame.tcp_source_port) == attempt.source_port]
+
+    def flow(altered: tlp.Ledger, name: str) -> tlp.Flow:
+        attempt = tlp.ATTEMPT[name]
+        found = tlp.split_flows(altered, GUEST_MAC)[(attempt.source_ip, attempt.source_port, attempt.destination_port)]
+        found.peer_isn = found.peer[0].frame.tcp_sequence
+        found.guest_isn = found.guest[0].frame.tcp_sequence if found.guest else 0
+        return found
+
+    def append_guest(altered: tlp.Ledger, observation: tlp.Observation) -> None:
+        altered.received.append(observation)
+        altered.received.sort(key=lambda entry: entry.order)
+
+    count = 0
+
+    def refused(fragment: str, mutate: object) -> None:
+        nonlocal count
+        altered = copy.deepcopy(ledger)
+        mutate(altered)  # type: ignore[operator]
+        try:
+            tlp.qualify_listener_ledger(altered, GUEST_MAC)
+        except ValueError as error:
+            expect(fragment in str(error), f"a listener control was refused for another reason: expected {fragment!r}, got {error}")
+            count += 1
+            return
+        fail(f"listener qualification accepted corrupted evidence: {fragment}")
+
+    def answer_unadmitted(altered: tlp.Ledger) -> None:
+        syn = altered.sent[positions(altered, "unadmitted-source", guest=False)[0]]
+        append_guest(altered, guest_segment(syn.order + 0.5, tlp.LISTEN_PORT, 50100, 7, syn.frame.tcp_sequence + 1, lp.TCP_SYN | lp.TCP_ACK, destination=tlp.INTRUDER_MAC, destination_ip=tlp.INTRUDER_IP))
+
+    def resolve_intruder(altered: tlp.Ledger) -> None:
+        frame = lp.decode(lp.ethernet(lp.BROADCAST, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), tlp.INTRUDER_IP)))
+        assert frame is not None
+        append_guest(altered, tlp.Observation(altered.received[-1].order + 0.5, 0.0, frame))  # type: ignore[arg-type]
+
+    def answer_port(name: str, source_port: int, flags: int):
+        def mutate(altered: tlp.Ledger) -> None:
+            syn = altered.sent[positions(altered, name, guest=False)[0]]
+            append_guest(altered, guest_segment(syn.order + 0.5, source_port, tlp.ATTEMPT[name].source_port, 0, syn.frame.tcp_sequence + 1, flags))
+        return mutate
+
+    def accept_refused(altered: tlp.Ledger) -> None:
+        index = positions(altered, "backlog-full", guest=True)[0]
+        altered.received[index] = forge_listener(altered.received[index], flags=lp.TCP_SYN | lp.TCP_ACK, sequence=5)
+
+    def repeat_refusal(altered: tlp.Ledger) -> None:
+        index = positions(altered, "accepted-limit", guest=True)[0]
+        altered.received.insert(index + 1, dataclasses.replace(altered.received[index], order=altered.received[index].order + 0.5))
+
+    def drop_refusal(altered: tlp.Ledger) -> None:
+        del altered.received[positions(altered, "accepted-limit", guest=True)[0]]
+
+    def corrupt_echo(altered: tlp.Ledger) -> None:
+        index = next(index for index in positions(altered, "exchange", guest=True) if altered.received[index].frame.tcp_payload)
+        payload = altered.received[index].frame.tcp_payload
+        altered.received[index] = forge_listener(altered.received[index], payload=bytes([payload[0] ^ 1]) + payload[1:])
+
+    def drop_fin(name: str):
+        def mutate(altered: tlp.Ledger) -> None:
+            for index in positions(altered, name, guest=True):
+                frame = altered.received[index].frame
+                if frame.tcp_flags & lp.TCP_FIN:
+                    altered.received[index] = forge_listener(altered.received[index], flags=frame.tcp_flags & ~lp.TCP_FIN)
+        return mutate
+
+    def early_half_close_bytes(altered: tlp.Ledger) -> None:
+        found = flow(altered, "exchange")
+        fin = min(entry.order for entry in found.guest if entry.frame.tcp_flags & lp.TCP_FIN)
+        index = next(index for index in positions(altered, "exchange", guest=False) if altered.sent[index].frame.tcp_payload and found.peer_offset(altered.sent[index].frame) >= len(tlp.EXCHANGE))
+        altered.sent[index] = dataclasses.replace(altered.sent[index], order=fin - 0.5)
+
+    def early_reply(altered: tlp.Ledger) -> None:
+        found = flow(altered, "backlog-held")
+        fin = min(entry.order for entry in found.peer if entry.frame.tcp_flags & lp.TCP_FIN)
+        index = next(index for index in positions(altered, "backlog-held", guest=True) if altered.received[index].frame.tcp_payload)
+        moved = forge_listener(altered.received[index], acknowledgment=found.peer_isn + 1 + len(tlp.PEER_HALF_PEER))
+        altered.received[index] = dataclasses.replace(moved, order=fin - 0.25)
+
+    def acknowledge_crossing(altered: tlp.Ledger) -> None:
+        for index in positions(altered, "simultaneous-close", guest=False):
+            frame = altered.sent[index].frame
+            if frame.tcp_flags & lp.TCP_FIN:
+                altered.sent[index] = forge_listener(altered.sent[index], acknowledgment=frame.tcp_acknowledgment + 1)
+
+    def fin_instead_of_reset(altered: tlp.Ledger) -> None:
+        for index in positions(altered, "unread-close", guest=True):
+            frame = altered.received[index].frame
+            if frame.tcp_flags & lp.TCP_RST:
+                altered.received[index] = forge_listener(altered.received[index], flags=lp.TCP_ACK | lp.TCP_FIN)
+
+    def premature_reset(altered: tlp.Ledger) -> None:
+        index = next(index for index in positions(altered, "unread-close", guest=True) if altered.received[index].frame.tcp_flags & lp.TCP_RST)
+        cue = min(entry.order for entry in altered.sent if entry.frame.tcp_payload == tlp.CUE_UNREAD)
+        altered.received[index] = dataclasses.replace(altered.received[index], order=cue - 0.5)
+
+    def widen_probe(altered: tlp.Ledger) -> None:
+        found = flow(altered, "unsent-close")
+        opened = min(entry.order for entry in found.peer if entry.frame.tcp_window > 0)
+        synack = found.guest[0]
+        append_guest(altered, guest_segment(opened - 0.5, tlp.LISTEN_PORT, tlp.ATTEMPT["unsent-close"].source_port, synack.frame.tcp_sequence + 1, found.peer_isn + 1, lp.TCP_ACK | lp.TCP_PSH, tlp.UNSENT[:2]))
+
+    def open_syn(altered: tlp.Ledger) -> None:
+        index = positions(altered, "unsent-close", guest=False)[0]
+        altered.sent[index] = forge_listener(altered.sent[index], window=tlp.PEER_WINDOW)
+
+    def early_window(altered: tlp.Ledger) -> None:
+        index = next(index for index in positions(altered, "unsent-close", guest=False) if altered.sent[index].frame.tcp_flags == lp.TCP_ACK)
+        altered.sent[index] = forge_listener(altered.sent[index], window=1)
+
+    def widen_window(altered: tlp.Ledger) -> None:
+        index = positions(altered, "exchange", guest=True)[-1]
+        altered.received[index] = forge_listener(altered.received[index], window=tlp.SOCKET_BUFFER_BYTES + 1)
+
+    def acknowledge_unsent(altered: tlp.Ledger) -> None:
+        found = flow(altered, "exchange")
+        first = min(entry.order for entry in found.peer if entry.frame.tcp_payload)
+        append_guest(altered, guest_segment(first - 0.5, tlp.LISTEN_PORT, tlp.ATTEMPT["exchange"].source_port, found.guest_isn + 1, found.peer_isn + 101, lp.TCP_ACK))
+
+    def corrupt_line(altered: tlp.Ledger) -> None:
+        index = next(index for index, entry in enumerate(altered.received) if entry.frame.tcp_payload == tlp.CONTROL_LINES[0])
+        altered.received[index] = forge_listener(altered.received[index], payload=b"reddy\n")
+
+    def reorder_backlog(altered: tlp.Ledger) -> None:
+        index = positions(altered, "backlog-full", guest=True)[0]
+        altered.received[index] = dataclasses.replace(altered.received[index], order=10**9)
+
+    def skip_attempt(altered: tlp.Ledger) -> None:
+        del altered.sent[positions(altered, "unadmitted-source", guest=False)[0]]
+
+    def desync(altered: tlp.Ledger) -> None:
+        altered.desync = "forged"
+
+    def unfinished(altered: tlp.Ledger) -> None:
+        altered.stage -= 1
+
+    refused("the guest addressed a host other than the admitted peer", answer_unadmitted)
+    refused("resolved an address other than the admitted peer", resolve_intruder)
+    refused("undeclared-port: the guest answered", answer_port("undeclared-port", tlp.UNDECLARED_PORT, lp.TCP_RST | lp.TCP_ACK))
+    refused("foreign-address: the guest answered", answer_port("foreign-address", tlp.LISTEN_PORT, lp.TCP_SYN | lp.TCP_ACK))
+    refused("backlog-full: the refusal is not a reset", accept_refused)
+    refused("accepted-limit: expected exactly one guest frame", repeat_refusal)
+    refused("accepted-limit: expected exactly one guest frame", drop_refusal)
+    refused("exchange: guest bytes at offset", corrupt_echo)
+    refused("exchange: the guest's FIN", drop_fin("exchange"))
+    refused("local half-close: the peer's half-close bytes preceded the guest's FIN", early_half_close_bytes)
+    refused("peer half-close: the guest's bytes did not follow the peer's FIN", early_reply)
+    refused("simultaneous close: the peer's FIN acknowledged the guest's FIN", acknowledge_crossing)
+    refused("unread-close: the guest's FIN", fin_instead_of_reset)
+    refused("unread close: the reset did not follow", premature_reset)
+    refused("more than a one-byte probe", widen_probe)
+    refused("the peer's window was not zero until it opened", open_syn)
+    refused("the peer's window opened before the guest queued its bytes", early_window)
+    refused("beyond its declared 2048-byte buffer", widen_window)
+    refused("acknowledged bytes the peer had not sent", acknowledge_unsent)
+    refused("control bytes at offset", corrupt_line)
+    refused("the backlog refusal did not happen", reorder_backlog)
+    refused("unadmitted-source: the peer never sent its SYN", skip_attempt)
+    refused("left the script", desync)
+    refused("the script stopped", unfinished)
+    return count
+
+
 def main() -> None:
     check_checksums()
     check_frames_decode_and_pad()
@@ -1062,10 +1667,13 @@ def main() -> None:
     check_driver_reset_qualification_controls()
     check_impairment_scripts()
     check_impairment_controls(check_impairment_simulation())
+    check_listener_scripts()
+    listener_controls = check_listener_controls(check_listener_simulation())
     (kind,) = struct.unpack("!H", struct.pack("!H", lp.ETHERTYPE_ARP))
     expect(kind == lp.ETHERTYPE_ARP, "struct sanity")
     print("link peer check: ARP/ICMP preserved; bounded real TCP echo, checksums, stream delivery, windows, retransmissions, refusal, and close verified")
     print("link peer check: scripted reorder, loss, silence and window impairments qualified against a model stack; 24 corrupted-evidence controls refused")
+    print(f"link peer check: scripted external-listener refusals, half-close, simultaneous close and unread/unsent close qualified against a model stack; {listener_controls} corrupted-evidence controls refused")
 
 
 if __name__ == "__main__":
