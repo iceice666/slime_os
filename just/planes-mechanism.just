@@ -14,6 +14,12 @@ io_network_check: sel4_pin_check
 io_tcp_check: sel4_pin_check io_tcp_host_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp
 
+# Scripted reordering, loss, silence and zero windows held to the declared TCP
+# bounds; the peer's host controls run first. Explicit, never part of `all`.
+[group('planes / mechanism')]
+io_tcp_impairment_check: sel4_pin_check link_peer_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-impairment
+
 [group('planes / mechanism')]
 io_tcp_host_check:
     cargo test -p slime-network-tcp-tests --locked

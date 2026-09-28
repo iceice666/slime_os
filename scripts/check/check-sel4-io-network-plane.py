@@ -10,6 +10,10 @@ service is bound to the IO3 virtio-net driver behind a frame-level peer on
 QEMU's UDP socket backend (`scripts/lib/link_peer.py`). Its packet ledger
 independently proves the exact 4096-byte TCP echo, handshake and graceful
 close, refused-port reset, absence of forbidden egress, and ARP/ICMP traffic.
+The tcp-impairment arm boots `sel4-io-tcp-impairment` behind a scripted peer
+(`scripts/lib/tcp_impairment_peer.py`) that reorders, drops, falls silent and
+closes windows, and holds the wire to the declared loss, reordering,
+retransmission and window bounds; it is selected explicitly, never by ``all``.
 The HTTP arms instead use QEMU user networking and ordinary host TCP/UDP sockets;
 public DNS/HTTP remains an explicitly requested smoke, never part of ``all``.
 """
@@ -25,6 +29,7 @@ import tempfile
 import socket
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
@@ -33,6 +38,7 @@ from closure_image import ClosureImageError, build as build_closure_image  # noq
 from harness import sha256_file  # noqa: E402
 
 import link_peer  # noqa: E402
+import tcp_impairment_peer  # noqa: E402
 import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
@@ -49,6 +55,11 @@ IMAGE: Path | None = None
 COMPOSITIONS = ROOT / "contracts" / "generation-manifest" / "v1" / "compositions"
 FIXTURE = COMPOSITIONS / "sel4-io-network.zti"
 TCP_FIXTURE = COMPOSITIONS / "sel4-io-tcp.zti"
+IMPAIRMENT_CLOSURE = "sel4-io-tcp-impairment"
+IMPAIRMENT_FIXTURE = COMPOSITIONS / "sel4-io-tcp-impairment.zti"
+IMPAIRMENT_PROBE = "io-tcp-impairment-probe"
+IMPAIRMENT_GENERATION = 161
+NETWORK_SERVICE_MANIFEST = ROOT / "components" / "services" / "network-service" / "Cargo.toml"
 TIMEOUT = 240
 # The MAC the composition declares for the service, which is also the one the
 # QEMU device carries: the gate reads it from the fixture so the two cannot drift.
@@ -273,8 +284,41 @@ HTTP_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
 )
 
+# The impairment arm. The service states its declared bounds, the numeric
+# reclamation of the silent connection, and receive/transmit high-water marks
+# that the window scenarios drive to exactly those bounds; the probe reports
+# each scenario in program order.
+_BUFFER = tcp_impairment_peer.SOCKET_BUFFER_BYTES
+_STREAM = tcp_impairment_peer.STREAM_BYTES
+IMPAIRMENT_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("impairment admission", (rf"SLIME_ROOT generation admitted number={IMPAIRMENT_GENERATION} executables=[0-9]+ instances=[0-9]+ grants=[0-9]+ ",)),
+    ("impairment bounds", (
+        rf"\[network-service\] tcp bounds rx_bytes={_BUFFER} tx_bytes={_BUFFER} assembler_segments={tcp_impairment_peer.ASSEMBLER_SEGMENTS} timeout_ms={int(tcp_impairment_peer.SOCKET_TIMEOUT_SECONDS * 1000)}",
+    )),
+    ("impairment reclamation", (rf"\[network-service\] tcp timeout handles=1 sockets=1 bytes={2 * _BUFFER}",)),
+    ("impairment peaks", (rf"\[network-service\] tcp peaks rx_bytes={_BUFFER} tx_bytes={_BUFFER}",)),
+    ("impairment service", (
+        r"\[network-service\] application connection handles live=0",
+        r"\[network-service\] link released",
+    )),
+    ("impairment driver", (
+        r"\[virtio-net-driver\] negotiated legacy features=0 queues rx=16 tx=16 epoch=1",
+        r"\[virtio-net-driver\] rx drained=[0-9]+ replenished=[0-9]+ stalled=0 tx-stalled=0 device-refused=0",
+    )),
+    ("impairment client", (
+        rf"\[io-tcp-impairment-probe\] scenario=reorder sent={_STREAM} received={_STREAM} identical=1",
+        rf"\[io-tcp-impairment-probe\] scenario=loss sent={_STREAM} received={_STREAM} identical=1",
+        r"\[io-tcp-impairment-probe\] scenario=silent terminal=timeout",
+        rf"\[io-tcp-impairment-probe\] scenario=silent fresh sent={_STREAM} received={_STREAM} identical=1",
+        rf"\[io-tcp-impairment-probe\] scenario=receive-window stalled_ms={tcp_impairment_peer.RECEIVE_STALL_MS} sent={_STREAM} received={_STREAM} identical=1",
+        rf"\[io-tcp-impairment-probe\] scenario=send-window queued={_BUFFER} backpressure=1 sent={_STREAM} received={_STREAM} identical=1",
+        r"\[io-tcp-impairment-probe\] scenarios=5 shutdown=1",
+    )),
+    ("impairment health", (rf"SLIME_GRAPH HEALTHY generation={IMPAIRMENT_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
+)
+
 # Every arm participates in the shared missing/reordered/failure controls.
-CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS
+CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -283,6 +327,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[io-network-probe\] fail: ",
     r"\[io-network-intruder\] fail: ",
     r"\[io-tcp-probe\] fail: ",
+    r"\[io-tcp-impairment-probe\] fail: ",
     r"\[io-local-network-probe\] fail: ",
     r"\[io-network-lifetime-probe\] fail: ",
     r"\[virtio-net-driver\] fail: ",
@@ -365,25 +410,28 @@ def run_authority_arm(image: Path) -> None:
     match_marker_contract(transcript, AUTHORITY_CHAINS, FAILURE_MARKERS, fail)
 
 
-def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None, *, driver_reset: bool = False) -> None:
+def run_with_peer(image: Path, mac: str, serve: Callable[..., None], peer: object, chains: tuple[tuple[str, tuple[str, ...]], ...]) -> str:
+    """Boot `image` behind a frame-level peer on QEMU's UDP socket backend.
+
+    The transcript is returned only once the observer has stopped cleanly, so
+    no verdict can rest on wire evidence that is still being collected.
+    """
     receiver, backend_port = reserve_udp_port()
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     probe.bind(("127.0.0.1", 0))
     qemu_port = int(probe.getsockname()[1])
     probe.close()
-    peer = link_peer.Peer(hold_first_tcp=driver_reset)
     stop = threading.Event()
     peer_errors: list[BaseException] = []
 
     def observe() -> None:
         try:
-            link_peer.serve(receiver, qemu_port, stop, peer)
+            serve(receiver, qemu_port, stop, peer)
         except BaseException as error:
             peer_errors.append(error)
 
     thread = threading.Thread(target=observe, daemon=True)
     thread.start()
-    chains = DRIVER_RESET_CHAINS if driver_reset else TCP_CHAINS
     terminal = re.compile(chains[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
     try:
         transcript = run_plane(
@@ -407,13 +455,25 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None, *, driver_r
         fail("peer observer did not stop; wire evidence is incomplete")
     if peer_errors:
         fail(f"peer observer failed; wire evidence is incomplete: {peer_errors[0]!r}")
-    if transcript_path is not None:
-        packets = "".join(
-            f"[peer {direction} {index}] {frame!r}\n"
-            for direction, frames in (("received", peer.ledger.received), ("sent", peer.ledger.sent))
-            for index, frame in enumerate(frames)
-        )
-        transcript_path.write_text(transcript + f"\n[peer] {peer.ledger.summary()}\n" + packets, encoding="utf-8")
+    return transcript
+
+
+def write_wire_transcript(transcript_path: Path | None, transcript: str, summary: str, directions: tuple[tuple[str, list[object]], ...]) -> None:
+    if transcript_path is None:
+        return
+    packets = "".join(
+        f"[peer {direction} {index}] {frame!r}\n"
+        for direction, frames in directions
+        for index, frame in enumerate(frames)
+    )
+    transcript_path.write_text(transcript + f"\n[peer] {summary}\n" + packets, encoding="utf-8")
+
+
+def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None, *, driver_reset: bool = False) -> None:
+    peer = link_peer.Peer(hold_first_tcp=driver_reset)
+    chains = DRIVER_RESET_CHAINS if driver_reset else TCP_CHAINS
+    transcript = run_with_peer(image, mac, link_peer.serve, peer, chains)
+    write_wire_transcript(transcript_path, transcript, peer.ledger.summary(), (("received", peer.ledger.received), ("sent", peer.ledger.sent)))
     try:
         match_marker_contract(transcript, chains, FAILURE_MARKERS, fail)
     except SystemExit:
@@ -428,6 +488,70 @@ def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None, *, driver_r
             fail(f"driver reset peer wire evidence: {error}")
     else:
         check_tcp_ledger(ledger, bytes.fromhex(mac.replace(":", "")))
+
+
+def fixture_destinations(text: str) -> list[dict[str, str]]:
+    """The derived manifest's network destinations as flat field maps; rights are comma-joined."""
+    section = re.search(r"networkDestinations\s*=\s*\[(.*?)\n  \];", text, re.S)
+    if section is None:
+        fail("impairment fixture declares no network destinations")
+    assert section is not None
+    rows = []
+    for block in re.findall(r"\{(.*?)\n    \};", section.group(1), re.S):
+        row = {key: value.strip('"') for key, value in re.findall(r'^\s*(\w+)\s*=\s*("[^"]*"|-?[0-9]+);', block, re.M)}
+        rights = re.search(r"rights\s*=\s*\[(.*?)\];", block, re.S)
+        row["rights"] = ",".join(re.findall(r'"([a-z]+)"', rights.group(1))) if rights else ""
+        rows.append(row)
+    return rows
+
+
+def check_impairment_fixture() -> tuple[str, dict[int, int]]:
+    """Return the interface MAC and the declared per-scenario retry limits."""
+    if not IMPAIRMENT_FIXTURE.is_file():
+        fail(f"{IMPAIRMENT_FIXTURE.relative_to(ROOT)} does not exist; the impairment composition has not landed")
+    text = IMPAIRMENT_FIXTURE.read_text(encoding="utf-8")
+    macs = MAC_DECLARATION.findall(text)
+    if len(macs) != 1:
+        fail(f"impairment fixture declares {len(macs)} interface MACs, expected exactly one")
+    for pattern in (rf"generation\s*=\s*{IMPAIRMENT_GENERATION};", r"networkInterfaces\s*=\s*\[", r'address\s*=\s*"10\.0\.0\.1"', r'name\s*=\s*"network-service"', rf'name\s*=\s*"{IMPAIRMENT_PROBE}"', r'name\s*=\s*"virtio-net-driver"'):
+        if re.search(pattern, text) is None:
+            fail(f"impairment fixture is missing {pattern!r}")
+    rows = [row for row in fixture_destinations(text) if row.get("holder") == IMPAIRMENT_PROBE]
+    if sorted(int(row.get("port", "0")) for row in rows) != sorted(tcp_impairment_peer.SCENARIOS):
+        fail("the impairment probe must hold exactly one destination per scenario port")
+    limits: dict[int, int] = {}
+    for row in rows:
+        port = int(row["port"])
+        if (row.get("address"), row.get("addressKind"), row.get("transport")) != ("10.0.0.2", "ipv4", "tcp") or not {"connect", "send", "recv"} <= set(row["rights"].split(",")):
+            fail(f"scenario destination {port} is not an exact 10.0.0.2 TCP connect/send/recv grant")
+        limits[port] = int(row.get("retryLimit", "-1"))
+        if not 1 <= limits[port] <= 16:
+            fail(f"scenario destination {port} declares retry limit {limits[port]}, outside the contract's 1..16")
+    silent = next(row for row in rows if int(row["port"]) == tcp_impairment_peer.SILENT_PORT)
+    if (silent.get("socketLimit"), silent.get("byteBudget")) != ("1", str(2 * tcp_impairment_peer.SOCKET_BUFFER_BYTES)):
+        fail("the silent destination must admit one connection's reservation, so its fresh exchange proves reclamation")
+    features = re.findall(r"assembler-max-segment-count-([0-9]+)", NETWORK_SERVICE_MANIFEST.read_text(encoding="utf-8"))
+    if features != [str(tcp_impairment_peer.ASSEMBLER_SEGMENTS)]:
+        fail(f"the network service must select exactly assembler-max-segment-count-{tcp_impairment_peer.ASSEMBLER_SEGMENTS}, found {features}")
+    return macs[0], limits
+
+
+def run_impairment_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
+    peer = tcp_impairment_peer.ImpairmentPeer()
+    transcript = run_with_peer(image, mac, tcp_impairment_peer.serve, peer, IMPAIRMENT_CHAINS)
+    write_wire_transcript(transcript_path, transcript, peer.ledger.summary(), (("received", peer.ledger.received), ("sent", peer.ledger.sent)))
+    try:
+        match_marker_contract(transcript, IMPAIRMENT_CHAINS, FAILURE_MARKERS, fail)
+    except SystemExit:
+        print(transcript)
+        raise
+    print(f"[impairment-peer] {peer.ledger.summary()}")
+    try:
+        summaries = tcp_impairment_peer.qualify_impairment_ledger(peer.ledger, bytes.fromhex(mac.replace(":", "")), retry_limits)
+    except ValueError as error:
+        fail(f"impairment wire evidence: {error}")
+    for summary in summaries:
+        print(f"[impairment] {summary}")
 
 
 def check_tcp_ledger(ledger: link_peer.Ledger, guest_mac: bytes) -> None:
@@ -625,7 +749,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "http", "http-public", "all"), default="all")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -644,6 +768,14 @@ def main() -> None:
         run_http_arm(build_image("sel4-http"), arguments.transcript, arguments.http_case)
     if arguments.arm == "http-public":
         run_http_public_arm(build_image("sel4-http-public"), arguments.transcript)
+    if arguments.arm == "tcp-impairment":
+        mac, retry_limits = check_impairment_fixture()
+        run_impairment_arm(build_image(IMPAIRMENT_CLOSURE), mac, retry_limits, arguments.transcript)
+        print(
+            "seL4 I/O tcp impairment check: reassembly within and refusal beyond the declared out-of-order capacity, "
+            "loss and duplicate-ACK recovery within the declared retry limit and time, typed silent-peer timeout "
+            "with reclamation and a fresh exchange, and bounded zero-window behavior in both directions proved"
+        )
     if arguments.arm in ("authority", "all"):
         check_fixture()
         image = build_image(CLOSURE) if not arguments.no_build else IMAGE

@@ -211,6 +211,7 @@
     "scripts/lib/system_spec.py",
     "scripts/lib/system_spec_contract.py",
     "scripts/lib/system_test_run_contract.py",
+    "scripts/lib/tcp_impairment_peer.py",
     "scripts/lib/uboot_console.py",
     "scripts/lib/work_item_retirement.py",
     "scripts/lib/work_item_retirement_controls.py",

@@ -222,6 +222,47 @@ explicitly excluded on authority grounds, with no unresolved planned entries.
 Upgrading smoltcp requires a feature-delta review rather than silently expanding
 the support claim.
 
+### TCP loss, reordering, retransmission and window bounds
+
+Work item `01a0e239-b16f-735e-9d04-417a547a42e3` declares these bounds before
+its implementation; `just io_tcp_impairment_check` holds the wire to them. The
+recipe fails until the `sel4-io-tcp-impairment` composition (generation 161)
+and its `io-tcp-impairment-probe` land, so it is not wired into CI.
+
+| Bound | Declared value |
+| --- | --- |
+| Out-of-order assembler | 4 disjoint ranges; the service selects `assembler-max-segment-count-4` |
+| Socket receive and transmit buffers | 2048 bytes each; the window scenarios fill both exactly |
+| Silent peer | typed timeout and one reset within the 10 s socket timeout plus 2 s slack |
+| Retransmissions | at most each scenario destination's declared `retryLimit` |
+| Lossy exchange | completes within 10 s of its SYN |
+| Guest persist probes | 1 to 3 during a 3 s peer zero window, at least 0.9 s apart |
+| Peer persist probes | 1 to 3 across the application's 2000 ms stall, each unaccepted while the window is zero |
+
+One boot runs five scenarios, each on its own destination port of the scripted
+frame peer in `scripts/lib/tcp_impairment_peer.py`: reordering within and one
+range beyond the assembler capacity (4260), guest and peer loss with injected
+duplicate acknowledgments (4261), a peer that falls silent after 1024 bytes and
+then serves a fresh exchange (4262), an application stall that closes the
+guest's receive window (4263), and a peer that opens with a zero window (4264).
+The composition grants the probe one exact destination per scenario port, each
+with a retry limit of 1 to 16; the silent port admits only one connection's
+reservation, so its fresh exchange also proves reclamation. The qualifier
+judges each scenario from the wire alone; the probe and service markers must
+additionally report typed results, the silent connection's numeric
+reclamation, and receive and transmit high-water marks equal to the declared
+buffers. `just link_peer_check` drives the scripts against a reduced model
+stack and refuses corrupted evidence.
+
+Scripted reordering and loss are meaningful only if smoltcp sees frames in wire
+order. The service currently takes ready receive slots lowest-index first, which
+does not preserve arrival order once slots are recycled mid-drain, and smoltcp
+discards a data segment whose acknowledgment falls below its
+send-unacknowledged point. The implementation must deliver received frames in
+arrival order. The scenarios run for roughly 20 s, while the polling profile's
+clock reads alone exhaust a finite plane's 32768-request root watchdog within
+seconds, so the composition needs the notification-backed waiting profile.
+
 ## smoltcp support matrix
 
 Pinned release: smoltcp `0.13.0`, crate checksum `ac729b0a77bd092a3f06ddaddc59fe0d67f48ba0de45a9abe707c2842c7f8767`.
