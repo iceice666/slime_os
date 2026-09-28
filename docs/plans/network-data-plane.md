@@ -171,7 +171,10 @@ in MyQue. Each matrix row must name its upstream feature/source, applicable
 backend/target, authority mapping, quantitative bounds, implementation slice and
 verification. Distinguish supported, planned, excluded for a concrete authority
 conflict, and not applicable/not provided by the pinned release. Unfinished
-work is not an authority exclusion.
+work is not an authority exclusion. `just smoltcp_matrix_check` enforces the
+matrix's format and its agreement with the lockfile, the checksum-verified
+crate archive and the network service's enabled features; the rules are in
+`scripts/lib/smoltcp_matrix.py`.
 
 The initial areas to assess and deliver are:
 

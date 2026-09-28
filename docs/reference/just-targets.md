@@ -99,6 +99,7 @@ For how the planes work and how to add one, read
 | `just ruff` | `ruff check scripts/` |
 | `just ruff_fix` | `ruff check scripts/ --fix` |
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |
+| `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
 | `just tasks_graph` | `myque graph`. |
 | `just tasks_list` | `myque list` — generated view, never authoritative. |

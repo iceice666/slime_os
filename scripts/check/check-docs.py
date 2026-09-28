@@ -7,6 +7,11 @@ retained roadmap page and PR template. Literal Just invocations are checked in
 current documentation, live task requirements, scripts and CI execution fields;
 historical task outcomes and roadmap chronology do not promise recipe presence.
 History URLs pin a full commit but are never opened. Just metadata is local.
+
+`--smoltcp-matrix` checks the network plan's smoltcp support matrix against the
+lockfile, the network service's enabled features and the pinned crate archive
+(`scripts/lib/smoltcp_matrix.py`). It reads Cargo's registry cache, so it is a
+separate mode; the default run exercises only its offline controls.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import argparse
 import ast
 import re
 import shlex
@@ -27,7 +33,8 @@ import yaml
 from harness import ROOT
 from just_metadata import recipes
 from markdown_anchors import anchors, controls as anchor_controls
-from work_items import FIELD, UUID, identities, retired, without_consumer_records
+from work_items import FIELD, UUID, identities, items, retired, without_consumer_records
+import smoltcp_matrix
 
 REQUIRED_ACTIVE_DOCUMENTS = (
     "README.md",
@@ -584,8 +591,34 @@ def consumer_record_controls() -> list[str]:
     return failures
 
 
+def smoltcp_matrix_main() -> int:
+    failures = smoltcp_matrix.controls()
+    failures += smoltcp_matrix.check(
+        states={str(item["id"]): str(item["state"]) for item in items()},
+        recipes=frozenset(recipes()),
+    )
+    for failure in failures:
+        print(f"smoltcp matrix: {failure}")
+    if failures:
+        print(f"smoltcp matrix check failed with {len(failures)} problem(s)")
+        return 1
+    print(
+        "smoltcp matrix: the pinned release, its advertised features and the network "
+        "service's enabled set agree with docs/plans/network-data-plane.md"
+    )
+    return 0
+
+
 def main() -> int:
-    failures = controls() + consumer_record_controls()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--smoltcp-matrix",
+        action="store_true",
+        help="check the smoltcp support matrix against the pinned release",
+    )
+    if parser.parse_args().smoltcp_matrix:
+        return smoltcp_matrix_main()
+    failures = controls() + consumer_record_controls() + smoltcp_matrix.controls()
     known_recipes = recipes()
     known_items = identities()
     documents = active_documents()

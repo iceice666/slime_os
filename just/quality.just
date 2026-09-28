@@ -101,6 +101,13 @@ fmt_check_all: fmt_check
 docs_check:
     python3 scripts/check/check-docs.py
 
+# The smoltcp support matrix in docs/plans/network-data-plane.md against the
+# locked release, its checksum-verified crate archive (`cargo fetch --locked`)
+# and the network service's enabled features.
+[group('quality')]
+smoltcp_matrix_check:
+    python3 scripts/check/check-docs.py --smoltcp-matrix
+
 # MyQue validates the live store; this target also enforces backlog-first policy.
 # docs_check needs only the checkout, never MyQue or the history repository.
 [group('quality')]
