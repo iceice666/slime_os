@@ -199,6 +199,19 @@ jobs:
       - run: just x86_portability_check
       - run: just framework_safety_check
       - run: just docs_check
+      # The matrix check reads only the locked smoltcp archive, and refuses it
+      # unless its SHA-256 matches Cargo.lock, so one download replaces a
+      # toolchain and a workspace fetch.
+      - name: Fetch the locked smoltcp archive
+        run: |
+          version=$(python3 -c 'import tomllib; print(next(p["version"] for p in tomllib.load(open("Cargo.lock", "rb"))["package"] if p["name"] == "smoltcp"))')
+          mkdir -p "$RUNNER_TEMP/cargo/registry/cache/crates.io"
+          curl --fail --silent --show-error --location --output \
+            "$RUNNER_TEMP/cargo/registry/cache/crates.io/smoltcp-$version.crate" \
+            "https://static.crates.io/crates/smoltcp/smoltcp-$version.crate"
+      - run: just smoltcp_matrix_check
+        env:
+          CARGO_HOME: ${{ runner.temp }}/cargo
       - run: just sel4_gate_control_check
       - run: python3 scripts/check/check-generation-v5.py --check-controls
 
