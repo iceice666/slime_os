@@ -38,6 +38,9 @@ readable and link to the decision that replaced them.
   boot-store v1 is the only product BootState layout, and the userspace
   planes' LBA 1024/1025 object-store layout is test scaffolding until the
   manager stages into a boot store.
+- [Entropy authority](entropy-authority.md) — proposed; a userspace
+  entropy-service over a virtio-rng driver, with generation-declared holders,
+  per-holder HMAC-DRBG output and reproducible seeded fixtures.
 - [AMD IOMMU ownership on x86-64](amd-iommu-ownership.md) — proposed; seL4
   supports only Intel VT-d, so `slime-root` programs the AMD IOMMU behind IO1's
   existing DMA mediation instead of extending the kernel.
