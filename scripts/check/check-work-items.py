@@ -52,6 +52,9 @@ from work_item_retirement_controls import check_retirement_controls
 from work_item_retirement_publish_controls import (
     check_controls as check_retirement_publish_controls,
 )
+from work_item_closeout_publish_controls import (
+    check_controls as check_closeout_publish_controls,
+)
 
 
 # Items whose identity is at or after this instant must carry a devloop record.
@@ -1037,6 +1040,10 @@ def main() -> int:
         check_retirement_publish_controls()
     except RetirementError as error:
         fail(f"retirement publication control: {error}")
+    try:
+        check_closeout_publish_controls()
+    except RetirementError as error:
+        fail(f"closeout publication control: {error}")
     failures.extend(run_myque_check())
     failures.extend(check_backlog_first())
     failures.extend(check_spec_driven_required())

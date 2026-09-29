@@ -1,0 +1,80 @@
+name: Close spec-driven items on recorded evidence
+
+# An implementation branch records gate evidence but cannot complete its item:
+# `just devloop complete` grades only against `origin/main`. Once the branch
+# merges, this workflow asks devloop the same question on main itself and
+# proposes the `.tasks`-only transition as a PR. Evidence lifetimes are one
+# day, so this runs on every push to main rather than on a schedule; a human
+# still merges the result, and main is never written directly.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.tasks/**'
+      - '.devloop/**'
+      - 'scripts/**'
+      - 'just/**'
+      - 'Justfile'
+      - '.github/workflows/myque-closeout.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a closeout PR after verifying repository safeguards
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: myque-closeout-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  closeout:
+    if: >-
+      github.repository == 'iceice666/slime_os' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.MYQUE_CLOSEOUT_ENABLED == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Only trusted canonical code runs with publication credentials.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            projection-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            }}
+          restore-prefixes-first-match: projection-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+
+      - name: Preview or publish closeout
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        shell: bash
+        run: |
+          gh auth setup-git
+          args=()
+          if [[ "$PUBLISH" == "true" ]]; then
+            args+=(--apply)
+          fi
+          nix develop .#projection --command \
+            python3 scripts/lib/work_item_closeout_publish.py "${args[@]}"

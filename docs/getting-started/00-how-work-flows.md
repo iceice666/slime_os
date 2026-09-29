@@ -173,8 +173,12 @@ just devloop complete <UUID> --policy .devloop/policy.json --inputs .devloop/inp
 - **Enforced by:** `just devloop complete` refuses while any mandatory
   obligation is unmet. `myque close` is the pre-cutoff path and bypasses this
   by design; never use it on a spec-driven item.
-- Commit the `.tasks/` transition. Once it reaches `main`, the projector
-  closes the Issue.
+- You record the gate evidence on the branch; `complete` runs on `main`.
+  After the implementation PR merges, `myque-closeout.yml` runs
+  `just devloop complete` there for every item devloop accepts and opens a
+  `.tasks`-only PR with the transition; merge it and the projector closes
+  the Issue. Details in
+  [Carrying a work item](06-work-item-lifecycle.md#closeout-prs).
 
 ### ⑦ Retire (optional, later)
 

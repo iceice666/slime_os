@@ -172,11 +172,36 @@ for this repository's gates.
    just devloop complete <ITEM> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
    ```
 
-   Use `just devloop eligible …` to ask without closing.
+   Use `just devloop eligible …` to ask without closing. You rarely run
+   `complete` yourself: once the implementation PR merges,
+   `myque-closeout.yml` runs it on `main` for every item whose recorded
+   evidence devloop still accepts and proposes the transition as a
+   `.tasks`-only PR (see [Closeout PRs](#closeout-prs)). Evidence expires a
+   day after it is recorded, so merge promptly or re-gate on `main`.
 
 6. **Retire it.** As for any item, plus the identity fields worth keeping
    outside history — the body profile, schemas, helper identity, requirements
    digest and admission identity — supplied as the retained consumer record.
+
+## Closeout PRs
+
+`myque-closeout.yml` runs on every push to `main` that touches `.tasks/`
+or the grader closure. In a fresh clone of canonical `main` it runs
+`just tasks_check`, then for every open or active spec-driven item whose
+`devloop` record carries evidence it reads the inputs digest, target and
+image from that evidence, finds the tracked `.devloop/inputs` file with that
+digest, and asks `just devloop eligible`. Each item devloop accepts is closed
+with `just devloop complete`; the changed `.tasks/items` files — and nothing
+else — are committed by the bot on top of that exact `main`, pushed as
+`automation/myque-closeout/<main>` and opened as one PR. Items devloop
+refuses are listed in the PR body with the reason and stay open: expired
+evidence, a code closure that no longer matches, an acceptance still unmet.
+
+The workflow decides nothing devloop does not; it is the same command you
+would run, executed where approval allows it. It never writes `main` and a
+human merges the PR after normal CI. A dispatch without `publish` previews
+in a throwaway clone; the push trigger publishes only while the
+`MYQUE_CLOSEOUT_ENABLED` repository variable is `true`.
 
 ## Retirement maintenance PRs
 
