@@ -18,6 +18,10 @@ The tcp-listener arm boots `sel4-io-tcp-listener` behind a peer
 (`scripts/lib/tcp_listener_peer.py`) that connects to one exact external
 listener, sends SYNs it must ignore or refuse, and drives half-close,
 simultaneous close and close with unread or unsent data; it is also explicit.
+The tcp-options arm boots `sel4-io-tcp-options` behind a peer
+(`scripts/lib/tcp_options_peer.py`) that holds acknowledgments, drops a
+segment, answers keep-alives and falls mute so each binding's declared Nagle,
+keep-alive, hop limit and idle timeout shows on the wire; it is also explicit.
 The HTTP arms instead use QEMU user networking and ordinary host TCP/UDP sockets;
 public DNS/HTTP remains an explicitly requested smoke, never part of ``all``.
 """
@@ -44,6 +48,7 @@ from harness import sha256_file  # noqa: E402
 import link_peer  # noqa: E402
 import tcp_impairment_peer  # noqa: E402
 import tcp_listener_peer  # noqa: E402
+import tcp_options_peer  # noqa: E402
 import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
@@ -70,6 +75,11 @@ LISTENER_PROBE = "io-tcp-listener-probe"
 LISTENER_HOLDER = "listener-session"
 INTRUDER_HOLDER = "intruder-session"
 LISTENER_GENERATION = 162
+OPTIONS_CLOSURE = "sel4-io-tcp-options"
+OPTIONS_FIXTURE = COMPOSITIONS / "sel4-io-tcp-options.zti"
+OPTIONS_PROBE = "io-tcp-options-probe"
+OPTIONS_HOLDERS = {"baseline": "options-baseline", "tuned": "options-tuned"}
+OPTIONS_GENERATION = 163
 NETWORK_SERVICE_MANIFEST = ROOT / "components" / "services" / "network-service" / "Cargo.toml"
 TIMEOUT = 240
 # The MAC the composition declares for the service, which is also the one the
@@ -375,8 +385,52 @@ LISTENER_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("listener health", (rf"SLIME_GRAPH HEALTHY generation={LISTENER_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
 )
 
+# The socket-options arm. The service states each binding's applied options
+# and its congestion control at activation, reclaims both mute connections by
+# typed timeout, and the two probe holders report each scenario in program
+# order; the wire evidence is judged by the peer's qualifier.
+_OP = tcp_options_peer
+
+
+def _options_marker(holder: str, options: tcp_options_peer.Options) -> str:
+    return rf"\[network-service\] tcp options holder={holder} keepalive_ms={options.keepalive_ms} nagle={int(options.nagle)} hop_limit={options.hop_limit} idle_timeout_ms={options.idle_timeout_ms}"
+
+
+OPTIONS_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("options admission", (rf"SLIME_ROOT generation admitted number={OPTIONS_GENERATION} executables=[0-9]+ instances=[0-9]+ grants=[0-9]+ ",)),
+    ("options declaration", (
+        _options_marker(OPTIONS_HOLDERS["baseline"], _OP.BASELINE),
+        _options_marker(OPTIONS_HOLDERS["tuned"], _OP.TUNED),
+        r"\[network-service\] tcp congestion control=reno",
+    )),
+    ("options reclamation", (rf"\[network-service\] tcp timeout handles=1 sockets=1 bytes={2 * _OP.SOCKET_BUFFER_BYTES}",)),
+    ("options service", (
+        r"\[network-service\] application connection handles live=0",
+        r"\[network-service\] link released",
+    )),
+    ("options driver", (
+        r"\[virtio-net-driver\] negotiated legacy features=0 queues rx=16 tx=16 epoch=1",
+        r"\[virtio-net-driver\] rx drained=[0-9]+ replenished=[0-9]+ stalled=0 tx-stalled=0 device-refused=0",
+    )),
+    ("options baseline", (
+        r"\[io-tcp-options-probe\] role=baseline attached=1 mutation_refused=1",
+        rf"\[io-tcp-options-probe\] role=baseline scenario=nagle-on writes={_OP.BURST_WRITES} sent={len(_OP.BURST)} done=1",
+        rf"\[io-tcp-options-probe\] role=baseline scenario=loss sent={_OP.STREAM_BYTES} done=1",
+        r"\[io-tcp-options-probe\] role=baseline scenario=silent-timeout terminal=timeout",
+        r"\[io-tcp-options-probe\] role=baseline scenarios=3 shutdown=1",
+    )),
+    ("options tuned", (
+        r"\[io-tcp-options-probe\] role=tuned attached=1 mutation_refused=1",
+        rf"\[io-tcp-options-probe\] role=tuned scenario=nagle-off writes={_OP.BURST_WRITES} sent={len(_OP.BURST)} done=1",
+        r"\[io-tcp-options-probe\] role=tuned scenario=keepalive done=1",
+        r"\[io-tcp-options-probe\] role=tuned scenario=dead-peer terminal=timeout",
+        r"\[io-tcp-options-probe\] role=tuned scenarios=3 shutdown=1",
+    )),
+    ("options health", (rf"SLIME_GRAPH HEALTHY generation={OPTIONS_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
+)
+
 # Every arm participates in the shared missing/reordered/failure controls.
-CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS
+CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS + OPTIONS_CHAINS
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -387,6 +441,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[io-tcp-probe\] fail: ",
     r"\[io-tcp-impairment-probe\] fail: ",
     r"\[io-tcp-listener-probe\] fail: ",
+    r"\[io-tcp-options-probe\] fail: ",
     r"\[io-local-network-probe\] fail: ",
     r"\[io-network-lifetime-probe\] fail: ",
     r"\[virtio-net-driver\] fail: ",
@@ -557,7 +612,7 @@ def fixture_destinations(text: str, section_name: str = "networkDestinations") -
     assert section is not None
     rows = []
     for block in re.findall(r"\{(.*?)\n    \};", section.group(1), re.S):
-        row = {key: value.strip('"') for key, value in re.findall(r'^\s*(\w+)\s*=\s*("[^"]*"|-?[0-9]+);', block, re.M)}
+        row = {key: value.strip('"') for key, value in re.findall(r'^\s*(\w+)\s*=\s*("[^"]*"|-?[0-9]+|true|false);', block, re.M)}
         rights = re.search(r"rights\s*=\s*\[(.*?)\];", block, re.S)
         row["rights"] = ",".join(re.findall(r'"([a-z]+)"', rights.group(1))) if rights else ""
         rows.append(row)
@@ -651,6 +706,72 @@ def check_listener_fixture() -> str:
     if any("listen" in row["rights"].split(",") for row in destinations):
         fail("listener authority must come from the application declaration, never a destination row")
     return macs[0]
+
+
+def check_options_fixture() -> tuple[str, dict[int, int]]:
+    """Return the interface MAC and per-port retry limits once the composition declares exactly the options the peer scripts."""
+    if not OPTIONS_FIXTURE.is_file():
+        fail(f"{OPTIONS_FIXTURE.relative_to(ROOT)} does not exist; the socket-options composition has not landed")
+    text = OPTIONS_FIXTURE.read_text(encoding="utf-8")
+    macs = MAC_DECLARATION.findall(text)
+    if len(macs) != 1:
+        fail(f"options fixture declares {len(macs)} interface MACs, expected exactly one")
+    for pattern in (rf"generation\s*=\s*{OPTIONS_GENERATION};", r"networkInterfaces\s*=\s*\[", r'address\s*=\s*"10\.0\.0\.1"', r'name\s*=\s*"network-service"', r'name\s*=\s*"virtio-net-driver"', rf'executable\s*=\s*"{OPTIONS_PROBE}"', *(rf'name\s*=\s*"{holder}"' for holder in OPTIONS_HOLDERS.values())):
+        if re.search(pattern, text) is None:
+            fail(f"options fixture is missing {pattern!r}")
+    applications = {row.get("holder"): row for row in fixture_destinations(text, "networkApplications")}
+    for role, holder in OPTIONS_HOLDERS.items():
+        row = applications.get(holder)
+        declared = tcp_options_peer.HOLDERS[role]
+        expected = {
+            "role": "client",
+            "backend": "external",
+            "keepaliveMs": str(declared.keepalive_ms),
+            "nagle": "true" if declared.nagle else "false",
+            "hopLimit": str(declared.hop_limit),
+            "idleTimeoutMs": str(declared.idle_timeout_ms),
+        }
+        if row is None or any(row.get(key) != value for key, value in expected.items()):
+            fail(f"the composition must declare {holder} as an external client with options {expected}, found {row}")
+    if any(row.get("role") == "listener" for row in applications.values()):
+        fail("the options composition declares no listener")
+    destinations = fixture_destinations(text)
+    limits: dict[int, int] = {}
+    for role, holder in OPTIONS_HOLDERS.items():
+        rows = [row for row in destinations if row.get("holder") == holder]
+        if sorted(int(row.get("port", "0")) for row in rows) != sorted(tcp_options_peer.HOLDER_PORTS[role]):
+            fail(f"{holder} must hold exactly one destination per scenario port {tcp_options_peer.HOLDER_PORTS[role]}")
+        for row in rows:
+            port = int(row["port"])
+            if (row.get("address"), row.get("addressKind"), row.get("transport")) != ("10.0.0.2", "ipv4", "tcp") or not {"connect", "send", "recv"} <= set(row["rights"].split(",")):
+                fail(f"scenario destination {port} is not an exact 10.0.0.2 TCP connect/send/recv grant")
+            limits[port] = int(row.get("retryLimit", "-1"))
+            if not 1 <= limits[port] <= 16:
+                fail(f"scenario destination {port} declares retry limit {limits[port]}, outside the contract's 1..16")
+    if any("listen" in row["rights"].split(",") for row in destinations):
+        fail("no destination in the options composition may carry listen")
+    manifest = NETWORK_SERVICE_MANIFEST.read_text(encoding="utf-8")
+    if "socket-tcp-reno" not in manifest or "socket-tcp-cubic" in manifest:
+        fail("the network service must enable exactly socket-tcp-reno and not socket-tcp-cubic")
+    return macs[0], limits
+
+
+def run_options_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
+    peer = tcp_options_peer.OptionsPeer()
+    transcript = run_with_peer(image, mac, tcp_options_peer.serve, peer, OPTIONS_CHAINS)
+    write_wire_transcript(transcript_path, transcript, peer.ledger.summary(), (("received", peer.ledger.received), ("sent", peer.ledger.sent)))
+    try:
+        match_marker_contract(transcript, OPTIONS_CHAINS, FAILURE_MARKERS, fail)
+    except SystemExit:
+        print(transcript)
+        raise
+    print(f"[options-peer] {peer.ledger.summary()}")
+    try:
+        summaries = tcp_options_peer.qualify_options_ledger(peer.ledger, bytes.fromhex(mac.replace(":", "")), retry_limits)
+    except ValueError as error:
+        fail(f"options wire evidence: {error}")
+    for summary in summaries:
+        print(f"[options] {summary}")
 
 
 def run_listener_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
@@ -866,7 +987,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "http", "http-public", "all"), default="all")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -901,6 +1022,14 @@ def main() -> None:
             "silent unadmitted SYNs, single-reset backlog and accepted-limit refusals, half-close in both "
             "directions, simultaneous close, reset on unread close, FIN after unsent data, and numeric "
             "reclamation proved"
+        )
+    if arguments.arm == "tcp-options":
+        mac, limits = check_options_fixture()
+        run_options_arm(build_image(OPTIONS_CLOSURE), mac, limits, arguments.transcript)
+        print(
+            "seL4 I/O tcp options check: per-binding Nagle, keep-alive, hop limit and idle timeout declared "
+            "in generation data and observed on the wire, Reno selected and stated, a client mutation refused, "
+            "and both mute connections reclaimed by typed timeout proved"
         )
     if arguments.arm in ("authority", "all"):
         check_fixture()

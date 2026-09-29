@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import link_peer as lp  # noqa: E402
 import tcp_impairment_peer as tip  # noqa: E402
 import tcp_listener_peer as tlp  # noqa: E402
+import tcp_options_peer as top  # noqa: E402
 from harness import load_script  # noqa: E402
 
 GUEST_MAC = bytes.fromhex("5254005" "34c01")
@@ -1650,6 +1651,555 @@ def check_listener_controls(ledger: tlp.Ledger) -> int:
     refused("the script stopped", unfinished)
     return count
 
+# The socket-options script against a model guest: a reduced smoltcp client
+# that applies one binding's declared Nagle, keep-alive, hop limit and idle
+# timeout, and the options probe's program for both holders, run concurrently
+# in virtual time. Like the models above, it proves the script and the
+# qualifier agree on what a conforming guest does before the controls corrupt it.
+
+OPTIONS_LIMITS = {port: 16 for port in top.SCENARIOS}
+OPTIONS_WRITE_GAP = 0.02
+OPTIONS_TIMEOUT_INITIAL = 1.0
+
+
+@dataclasses.dataclass
+class OptionsModelSocket:
+    """smoltcp's client behavior under one binding's declared options."""
+
+    port: int
+    local_port: int
+    isn: int
+    options: top.Options
+    syn_due: float = 0.0
+    state: str = "syn-sent"
+    peer_isn: int = 0
+    mss: int = 536
+    tx: bytearray = dataclasses.field(default_factory=bytearray)
+    snd_una: int = 0
+    snd_nxt: int = 0
+    fin_queued: bool = False
+    fin_sent: bool = False
+    fin_acked: bool = False
+    remote_window: int = 0
+    rx: bytearray = dataclasses.field(default_factory=bytearray)
+    rcv_nxt: int = 0
+    peer_fin: bool = False
+    handshake_ack: bool = False
+    ack_due: bool = False
+    retransmit_timeout: float = OPTIONS_TIMEOUT_INITIAL
+    retransmit_due: float | None = None
+    fast_retransmit: bool = False
+    last_ack: int = 0
+    dup_acks: int = 0
+    remote_last: float | None = None
+    idle_due: float | None = None
+    terminal: str | None = None
+
+    def frame(self, flags: int, offset: int = 0, payload: bytes = b"") -> bytes:
+        syn = bool(flags & lp.TCP_SYN)
+        window = top.SOCKET_BUFFER_BYTES - len(self.rx)
+        acknowledgment = (self.peer_isn + 1 + self.rcv_nxt + int(self.peer_fin)) & lp.TCP_SEQUENCE_MASK if flags & lp.TCP_ACK else 0
+        sequence = self.isn if syn else self.isn + 1 + offset
+        options = b"\x02\x04\x05\xb4" if syn else b""
+        segment = lp.tcp(lp.GUEST_IP, lp.PEER_IP, self.local_port, self.port, sequence, acknowledgment, flags, payload, window, options)
+        return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, top.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment, self.options.hop_limit))
+
+    def abort(self, reason: str) -> bytes:
+        self.state = "closed"
+        self.terminal = reason
+        return self.frame(lp.TCP_RST | lp.TCP_ACK, self.snd_nxt)
+
+    def write(self, data: bytes, now: float) -> int:
+        count = min(len(data), top.SOCKET_BUFFER_BYTES - len(self.tx))
+        if count and not self.tx:
+            # smoltcp restarts the idle clock when an empty transmit buffer fills.
+            self.remote_last = now
+        self.tx.extend(data[:count])
+        return count
+
+    def read(self) -> bytes:
+        data = bytes(self.rx)
+        self.rx.clear()
+        return data
+
+    def touch(self, now: float) -> None:
+        self.idle_due = now + self.options.keepalive_ms / 1000 if self.options.keepalive_ms else None
+
+    def tick(self, now: float) -> list[bytes]:
+        idle = self.options.idle_timeout_ms / 1000
+        if self.state == "syn-sent":
+            if self.remote_last is not None and now - self.remote_last >= idle:
+                return [self.abort("timeout")]
+            if now < self.syn_due:
+                return []
+            if self.remote_last is None:
+                self.remote_last = now
+            self.syn_due = now + self.retransmit_timeout
+            self.retransmit_timeout = min(self.retransmit_timeout * 2, 60.0)
+            return [self.frame(lp.TCP_SYN)]
+        if self.state != "established":
+            return []
+        out: list[bytes] = []
+        if self.handshake_ack:
+            out.append(self.frame(lp.TCP_ACK))
+            self.handshake_ack = False
+        end = self.snd_una + len(self.tx)
+        armed = bool(self.tx) or self.fin_sent and not self.fin_acked or self.options.keepalive_ms
+        if armed and self.remote_last is not None and now - self.remote_last >= idle:
+            return [self.abort("timeout")]
+        if self.fast_retransmit or self.retransmit_due is not None and now >= self.retransmit_due:
+            self.snd_nxt = self.snd_una
+            self.fin_sent = self.fin_acked
+            if not self.fast_retransmit:
+                self.retransmit_timeout = min(self.retransmit_timeout * 2, 60.0)
+            self.fast_retransmit = False
+            self.retransmit_due = None
+        while self.snd_nxt < end:
+            size = min(self.mss, end - self.snd_nxt, self.snd_una + self.remote_window - self.snd_nxt)
+            if size <= 0 or self.options.nagle and size < self.mss and self.snd_nxt > self.snd_una:
+                break
+            start = self.snd_nxt - self.snd_una
+            out.append(self.frame(lp.TCP_ACK | lp.TCP_PSH, self.snd_nxt, bytes(self.tx[start : start + size])))
+            self.snd_nxt += size
+            self.ack_due = False
+            if self.retransmit_due is None:
+                self.retransmit_due = now + self.retransmit_timeout
+        if self.fin_queued and not self.fin_sent and self.snd_nxt == end:
+            out.append(self.frame(lp.TCP_ACK | lp.TCP_FIN, end))
+            self.fin_sent = True
+            self.ack_due = False
+            if self.retransmit_due is None:
+                self.retransmit_due = now + self.retransmit_timeout
+        if self.ack_due:
+            out.append(self.frame(lp.TCP_ACK, self.snd_nxt + int(self.fin_sent)))
+            self.ack_due = False
+        if not out and self.idle_due is not None and now >= self.idle_due:
+            out.append(self.frame(lp.TCP_ACK, self.snd_nxt - 1, top.KEEPALIVE_PROBE))
+        if out:
+            self.touch(now)
+        if self.fin_acked and self.peer_fin:
+            self.state = "done"
+        return out
+
+    def receive(self, frame: lp.Frame, now: float) -> None:
+        if self.state not in ("syn-sent", "established"):
+            return
+        self.remote_last = now
+        if frame.tcp_flags & lp.TCP_RST:
+            self.state = "closed"
+            self.terminal = "reset"
+            return
+        if self.state == "syn-sent":
+            if frame.tcp_flags == lp.TCP_SYN | lp.TCP_ACK and frame.tcp_acknowledgment == (self.isn + 1) & lp.TCP_SEQUENCE_MASK:
+                self.peer_isn = frame.tcp_sequence
+                self.remote_window = frame.tcp_window
+                if frame.tcp_options[:2] == b"\x02\x04":
+                    self.mss = int.from_bytes(frame.tcp_options[2:4], "big")
+                self.state = "established"
+                self.handshake_ack = True
+                self.retransmit_timeout = OPTIONS_TIMEOUT_INITIAL
+            return
+        if not frame.tcp_flags & lp.TCP_ACK:
+            return
+        self.touch(now)
+        offset = (frame.tcp_sequence - self.peer_isn - 1) & lp.TCP_SEQUENCE_MASK
+        payload = frame.tcp_payload
+        acked = (frame.tcp_acknowledgment - self.isn - 1) & lp.TCP_SEQUENCE_MASK
+        end = self.snd_una + len(self.tx)
+        if self.snd_una <= acked <= end + int(self.fin_sent):
+            if acked > self.snd_una or self.fin_sent and not self.fin_acked and acked == end + 1:
+                del self.tx[: min(acked, end) - self.snd_una]
+                self.snd_una = min(acked, end)
+                self.fin_acked = self.fin_acked or self.fin_sent and acked == end + 1
+                self.dup_acks = 0
+                self.last_ack = acked
+                self.remote_window = frame.tcp_window
+                self.retransmit_timeout = OPTIONS_TIMEOUT_INITIAL
+                in_flight = self.snd_nxt > self.snd_una or self.fin_sent and not self.fin_acked
+                self.retransmit_due = now + self.retransmit_timeout if in_flight else None
+            elif acked == self.last_ack and not payload and frame.tcp_window == self.remote_window and self.snd_nxt > self.snd_una:
+                self.dup_acks += 1
+                if self.dup_acks == 3:
+                    self.fast_retransmit = True
+            else:
+                self.remote_window = frame.tcp_window
+                self.last_ack = acked
+            self.snd_nxt = max(self.snd_nxt, self.snd_una)
+        if payload:
+            if offset == self.rcv_nxt:
+                self.rx.extend(payload)
+                self.rcv_nxt += len(payload)
+            self.ack_due = True
+        if frame.tcp_flags & lp.TCP_FIN and offset + len(payload) == self.rcv_nxt and not self.peer_fin:
+            self.peer_fin = True
+            self.ack_due = True
+
+
+class OptionsModelProbe:
+    """One holder's scenario sequence, driving one model socket at a time."""
+
+    def __init__(self, role: str, base_port: int, isn_base: int) -> None:
+        self.options = top.HOLDERS[role]
+        self.ports = top.HOLDER_PORTS[role]
+        self.base_port = base_port
+        self.isn_base = isn_base
+        self.step = -1
+        self.socket: OptionsModelSocket | None = None
+        self.results: list[tuple[int, str | None, bytes]] = []
+        self.done = False
+        self.start(0.0)
+
+    def start(self, now: float) -> None:
+        self.step += 1
+        if self.step == len(self.ports):
+            self.done = True
+            self.socket = None
+            return
+        port = self.ports[self.step]
+        self.socket = OptionsModelSocket(port, self.base_port + self.step, self.isn_base + self.step * 0x100000, self.options, syn_due=now)
+        self.stream = top.GUEST_STREAMS[port]
+        self.written = 0
+        self.write_after = 0.0
+        self.received = bytearray()
+
+    def tick(self, now: float) -> list[bytes]:
+        socket = self.socket
+        if socket is None:
+            return []
+        if socket.state == "established":
+            self.application(socket, now)
+        out = socket.tick(now)
+        if socket.state in ("done", "closed"):
+            self.results.append((socket.port, socket.terminal, bytes(self.received)))
+            self.start(now)
+        return out
+
+    def application(self, socket: OptionsModelSocket, now: float) -> None:
+        if self.written < len(self.stream) and now >= self.write_after:
+            # The probe writes the burst one small write at a time, pausing
+            # between writes; every other stream goes down in one write.
+            chunk = top.BURST_WRITE_BYTES if self.stream is top.BURST else len(self.stream) - self.written
+            count = socket.write(self.stream[self.written : self.written + chunk], now)
+            self.written += count
+            if count:
+                self.write_after = now + OPTIONS_WRITE_GAP
+        self.received.extend(socket.read())
+        if self.received == top.DONE and not socket.fin_queued:
+            socket.fin_queued = True
+
+
+def options_simulate() -> tuple[top.OptionsPeer, dict[str, OptionsModelProbe]]:
+    peer = top.OptionsPeer()
+    probes = {
+        "baseline": OptionsModelProbe("baseline", 49200, 0x61000000),
+        "tuned": OptionsModelProbe("tuned", 49300, 0x62000000),
+    }
+    arp = lp.ethernet(lp.BROADCAST, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), lp.PEER_IP))
+    to_peer: list[tuple[float, bytes]] = [(MODEL_LATENCY, arp)]
+    to_guest: list[tuple[float, bytes]] = []
+    next_poll = 0.0
+    tick = 0
+    drain = 0
+    while drain < 500 and tick < 120_000:
+        tick += 1
+        drain += int(all(probe.done for probe in probes.values()))
+        now = tick * MODEL_TICK
+        due = [raw for when, raw in to_peer if when <= now]
+        to_peer = [(when, raw) for when, raw in to_peer if when > now]
+        for raw in due:
+            to_guest.extend((now + MODEL_LATENCY, reply) for reply in peer.handle(raw, now))
+        if now >= next_poll:
+            to_guest.extend((now + MODEL_LATENCY, reply) for reply in peer.poll(now))
+            next_poll = now + MODEL_POLL
+        due = [raw for when, raw in to_guest if when <= now]
+        to_guest = [(when, raw) for when, raw in to_guest if when > now]
+        for raw in due:
+            frame = lp.decode(raw)
+            if frame is None or frame.kind != "tcp":
+                continue
+            for probe in probes.values():
+                if probe.socket is not None and frame.tcp_destination_port == probe.socket.local_port:
+                    probe.socket.receive(frame, now)
+        for probe in probes.values():
+            to_peer.extend((now + MODEL_LATENCY, raw) for raw in probe.tick(now))
+    expect(all(probe.done for probe in probes.values()), f"the model guests did not finish every scenario: {peer.ledger.summary()}")
+    return peer, probes
+
+
+def options_guest(port: int, sequence: int, acknowledgment: int, flags: int, payload: bytes = b"", source_port: int = 50000, ttl: int = 64) -> bytes:
+    segment = lp.tcp(lp.GUEST_IP, lp.PEER_IP, source_port, port, sequence, acknowledgment, flags, payload, top.SOCKET_BUFFER_BYTES)
+    return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, top.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment, ttl))
+
+
+def options_open(peer: top.OptionsPeer, port: int, now: float = 0.0) -> top.Connection:
+    replies = peer.handle(options_guest(port, 100, 0, lp.TCP_SYN), now)
+    expect(len(replies) == 1 and lp.decode(replies[0]).tcp_options == top.MSS_OPTION, "an options SYN did not receive exactly one SYN-ACK declaring the peer MSS")
+    connection = peer.ledger.connections[-1]
+    peer.handle(options_guest(port, 101, connection.peer_isn + 1, lp.TCP_ACK), now)
+    expect(connection.handshake == (port not in top.MUTE_PORTS), "an options handshake settled against the script")
+    return connection
+
+
+def check_options_scripts() -> None:
+    expect(len(top.BURST) == top.PEER_MSS and top.BURST_WRITE_BYTES < top.PEER_MSS, "the burst must total exactly one peer MSS of sub-MSS writes")
+    expect(top.STREAM_BYTES == 2 * top.SOCKET_BUFFER_BYTES and top.SOCKET_BUFFER_BYTES == 4 * top.PEER_MSS, "the loss stream must fill the guest's transmit buffer exactly twice, four segments at a time")
+    expect(top.NAGLE_HOLD_SECONDS < OPTIONS_TIMEOUT_INITIAL and top.FAST_RETRANSMIT_SECONDS < OPTIONS_TIMEOUT_INITIAL, "the Nagle hold and fast-retransmit bound must stay inside smoltcp's one-second retransmission floor")
+    interval = top.TUNED.keepalive_ms / 1000
+    expect(interval * top.KEEPALIVE_PROBES_MIN <= top.KEEPALIVE_QUIET_SECONDS <= interval * top.KEEPALIVE_PROBES_MAX and top.KEEPALIVE_SPACING_SECONDS < interval, "the keep-alive probe bounds do not follow from the interval and the quiet period")
+    expect(top.TUNED.idle_timeout_ms < top.BASELINE.idle_timeout_ms and top.TUNED.hop_limit != top.BASELINE.hop_limit and top.TUNED.nagle != top.BASELINE.nagle and bool(top.TUNED.keepalive_ms) != bool(top.BASELINE.keepalive_ms), "the tuned binding must flip every toggle of the baseline")
+    for options in top.HOLDERS.values():
+        expect(options.keepalive_ms == 0 or top.KEEPALIVE_MIN_MS <= options.keepalive_ms <= top.KEEPALIVE_MAX_MS, "a declared keep-alive is outside the contract bounds")
+        expect(top.HOP_LIMIT_MIN <= options.hop_limit <= top.HOP_LIMIT_MAX and top.IDLE_TIMEOUT_MIN_MS <= options.idle_timeout_ms <= top.IDLE_TIMEOUT_MAX_MS, "a declared hop limit or idle timeout is outside the contract bounds")
+    expect(set(top.PORT_HOLDER) == set(top.SCENARIOS) and len(top.PORT_HOLDER) == 6, "every scenario port belongs to exactly one holder")
+    peer = top.OptionsPeer()
+    connection = options_open(peer, top.NAGLE_ON_PORT)
+    ack = connection.peer_isn + 1
+    expect(peer.handle(options_guest(top.NAGLE_ON_PORT, 101, ack, lp.TCP_ACK | lp.TCP_PSH, top.BURST[:64]), 0.0) == [], "the first small segment was acknowledged before the hold")
+    expect(peer.handle(options_guest(top.NAGLE_ON_PORT, 165, ack, lp.TCP_ACK | lp.TCP_PSH, top.BURST[64:128]), 0.1) == [] and len(connection.received) == 128, "a second small segment was answered during the hold or not kept")
+    expect(peer.poll(top.NAGLE_HOLD_SECONDS - 0.01) == [], "the hold ended early")
+    released = [lp.decode(raw) for raw in peer.poll(top.NAGLE_HOLD_SECONDS)]
+    expect(len(released) == 1 and released[0].tcp_acknowledgment == 101 + 128 and not released[0].tcp_payload, "the hold did not end with one acknowledgment of everything received")
+    peer = top.OptionsPeer()
+    connection = options_open(peer, top.LOSS_PORT)
+    ack = connection.peer_isn + 1
+    expect(peer.handle(options_guest(top.LOSS_PORT, 101, ack, lp.TCP_ACK | lp.TCP_PSH, top.STREAM[:512]), 0.0) == [] and not peer.ledger.received[-1].delivered, "the first segment was not dropped")
+    duplicates = [lp.decode(peer.handle(options_guest(top.LOSS_PORT, 101 + 512 * index, ack, lp.TCP_ACK | lp.TCP_PSH, top.STREAM[512 * index : 512 * index + 512]), 0.0)[0]) for index in (1, 2, 3)]
+    expect(all(frame.tcp_acknowledgment == 101 and not frame.tcp_payload for frame in duplicates), "out-of-order segments did not each draw a duplicate acknowledgment")
+    recovered = lp.decode(peer.handle(options_guest(top.LOSS_PORT, 101, ack, lp.TCP_ACK | lp.TCP_PSH, top.STREAM[:512]), 0.1)[0])
+    expect(recovered.tcp_acknowledgment == 101 + 2048 and len(connection.received) == 2048, "the retransmitted segment did not release the held ones")
+    peer = top.OptionsPeer()
+    connection = options_open(peer, top.SILENT_PORT)
+    expect(peer.handle(options_guest(top.SILENT_PORT, 101, connection.peer_isn + 1, lp.TCP_ACK | lp.TCP_PSH, top.SILENT), 0.0) == [] and not peer.ledger.received[-1].delivered and peer.poll(30.0) == [], "the mute peer answered")
+    peer = top.OptionsPeer()
+    connection = options_open(peer, top.KEEPALIVE_PORT)
+    probe = lp.decode(peer.handle(options_guest(top.KEEPALIVE_PORT, 100, connection.peer_isn + 1, lp.TCP_ACK, top.KEEPALIVE_PROBE), 0.5)[0])
+    expect(probe.tcp_acknowledgment == 101 and not probe.tcp_payload and connection.keepalives == 1 and not connection.received, "a keep-alive probe was not answered with the unchanged acknowledgment")
+    expect(peer.poll(top.KEEPALIVE_QUIET_SECONDS - 0.01) == [], "the quiet period ended early")
+    done = [lp.decode(raw) for raw in peer.poll(top.KEEPALIVE_QUIET_SECONDS)]
+    expect(len(done) == 1 and done[0].tcp_payload == top.DONE, "the quiet period did not end with the completion byte")
+
+
+def check_options_simulation() -> top.Ledger:
+    peer, probes = options_simulate()
+    summaries = top.qualify_options_ledger(peer.ledger, GUEST_MAC, OPTIONS_LIMITS)
+    expect(len(summaries) == len(top.SCENARIOS), f"the options qualifier did not summarize every scenario: {summaries}")
+    outcomes = {port: (terminal, received) for probe in probes.values() for port, terminal, received in probe.results}
+    expect(all(outcomes[port][0] == "timeout" for port in top.MUTE_PORTS), "a model mute connection did not time out")
+    expect(all(outcomes[port] == (None, top.DONE) for port in top.SCENARIOS if port not in top.MUTE_PORTS), "a model scenario did not complete on the peer's byte")
+    return peer.ledger
+
+
+def forge_options(observation: top.Observation, **changes: object) -> top.Observation:
+    frame = observation.frame
+    fields: dict[str, object] = {"sequence": frame.tcp_sequence, "acknowledgment": frame.tcp_acknowledgment, "flags": frame.tcp_flags, "payload": frame.tcp_payload, "window": frame.tcp_window, "options": frame.tcp_options}
+    fields.update(changes)
+    assert frame.ip_source is not None and frame.ip_destination is not None and frame.tcp_source_port is not None and frame.tcp_destination_port is not None
+    segment = lp.tcp(frame.ip_source, frame.ip_destination, frame.tcp_source_port, frame.tcp_destination_port, fields["sequence"], fields["acknowledgment"], fields["flags"], fields["payload"], fields["window"], fields["options"])  # type: ignore[arg-type]
+    decoded = lp.decode(lp.ethernet(frame.destination, frame.source, lp.ETHERTYPE_IPV4, lp.ipv4(frame.ip_source, frame.ip_destination, lp.IP_PROTOCOL_TCP, segment)))
+    assert decoded is not None
+    return dataclasses.replace(observation, frame=decoded)
+
+
+def check_options_controls(ledger: top.Ledger) -> int:
+    count = 0
+
+    def flow(altered: top.Ledger, port: int) -> tuple[top.Flow, list[int], list[int]]:
+        found = next(entry for entry in top.split_flows(altered, GUEST_MAC) if entry.port == port)
+        top.handshake(found)
+        return found, [altered.received.index(entry) for entry in found.guest], [altered.sent.index(entry) for entry in found.peer]
+
+    def refused(fragment: str, mutate: object, limits: dict[int, int] = OPTIONS_LIMITS) -> None:
+        nonlocal count
+        altered = copy.deepcopy(ledger)
+        mutate(altered)  # type: ignore[operator]
+        try:
+            top.qualify_options_ledger(altered, GUEST_MAC, limits)
+        except ValueError as error:
+            expect(fragment in str(error), f"an options control was refused for another reason: expected {fragment!r}, got {error}")
+            count += 1
+            return
+        fail(f"options qualification accepted corrupted evidence: {fragment}")
+
+    def data_positions(altered: top.Ledger, port: int) -> list[int]:
+        found, guest, _ = flow(altered, port)
+        probes = top.probe_orders(found)
+        return [position for position in guest if altered.received[position].frame.tcp_payload and altered.received[position].order not in probes and not altered.received[position].frame.tcp_flags & lp.TCP_RST]
+
+    def first_peer_ack(altered: top.Ledger, port: int) -> int:
+        _, _, peer = flow(altered, port)
+        first = altered.received[data_positions(altered, port)[0]]
+        return next(position for position in peer if altered.sent[position].order > first.order and not altered.sent[position].frame.tcp_flags & lp.TCP_SYN)
+
+    def probe_positions(altered: top.Ledger, port: int) -> list[int]:
+        found, guest, _ = flow(altered, port)
+        orders = top.probe_orders(found)
+        return [position for position in guest if altered.received[position].order in orders]
+
+    def recovery_position(altered: top.Ledger) -> int:
+        found, _, _ = flow(altered, top.LOSS_PORT)
+        return next(position for position in data_positions(altered, top.LOSS_PORT)[1:] if found.guest_offset(altered.received[position].frame) == 0)
+
+    def wrong_ttl(altered: top.Ledger) -> None:
+        position = data_positions(altered, top.NAGLE_OFF_PORT)[0]
+        altered.received[position] = dataclasses.replace(altered.received[position], ttl=top.BASELINE.hop_limit)
+
+    def missing_ttl(altered: top.Ledger) -> None:
+        position = data_positions(altered, top.LOSS_PORT)[0]
+        altered.received[position] = dataclasses.replace(altered.received[position], ttl=None)
+
+    def early_second_write(altered: top.Ledger) -> None:
+        positions = data_positions(altered, top.NAGLE_ON_PORT)
+        ack = first_peer_ack(altered, top.NAGLE_ON_PORT)
+        second, answer = altered.received[positions[1]], altered.sent[ack]
+        altered.received[positions[1]] = dataclasses.replace(second, order=answer.order, time=answer.time)
+        altered.sent[ack] = dataclasses.replace(answer, order=second.order, time=second.time)
+
+    def coalesce_burst(altered: top.Ledger) -> None:
+        positions = data_positions(altered, top.NAGLE_OFF_PORT)
+        altered.received[positions[0]] = forge_options(altered.received[positions[0]], payload=top.BURST)
+        for position in sorted(positions[1:], reverse=True):
+            del altered.received[position]
+
+    def serialize_burst(altered: top.Ledger) -> None:
+        """Acknowledge every small write as soon as it lands, as a peer facing a Nagle sender would."""
+        found, _, _ = flow(altered, top.NAGLE_OFF_PORT)
+        answer = altered.sent[first_peer_ack(altered, top.NAGLE_OFF_PORT)]
+        for position in data_positions(altered, top.NAGLE_OFF_PORT):
+            segment = altered.received[position]
+            end = found.guest_offset(segment.frame) + len(segment.frame.tcp_payload)
+            acknowledgment = forge_options(answer, acknowledgment=(found.guest_isn + 1 + end) & lp.TCP_SEQUENCE_MASK)
+            altered.sent.append(dataclasses.replace(acknowledgment, order=segment.order))
+        altered.sent.sort(key=lambda entry: entry.order)
+
+    def early_hold(altered: top.Ledger) -> None:
+        ack = first_peer_ack(altered, top.NAGLE_ON_PORT)
+        altered.sent[ack] = dataclasses.replace(altered.sent[ack], time=altered.sent[ack].time - top.NAGLE_HOLD_SECONDS)
+
+    def deliver_drop(altered: top.Ledger) -> None:
+        position = next(index for index, entry in enumerate(altered.received) if not entry.delivered and entry.frame.tcp_destination_port == top.LOSS_PORT)
+        altered.received[position] = dataclasses.replace(altered.received[position], delivered=True)
+
+    def remove_duplicates(altered: top.Ledger) -> None:
+        found, _, peer = flow(altered, top.LOSS_PORT)
+        for position in sorted(peer, reverse=True):
+            frame = altered.sent[position].frame
+            if frame.tcp_flags == lp.TCP_ACK and not frame.tcp_payload and found.peer_acked(frame) == 0:
+                del altered.sent[position]
+
+    def slow_recovery(altered: top.Ledger) -> None:
+        recovery = recovery_position(altered)
+        altered.received[recovery] = dataclasses.replace(altered.received[recovery], time=altered.received[recovery].time + top.FAST_RETRANSMIT_SECONDS)
+
+    def hasty_recovery(altered: top.Ledger) -> None:
+        found, _, peer = flow(altered, top.LOSS_PORT)
+        recovery = recovery_position(altered)
+        third = [position for position in peer if altered.sent[position].frame.tcp_flags == lp.TCP_ACK and not altered.sent[position].frame.tcp_payload and found.peer_acked(altered.sent[position].frame) == 0][2]
+        altered.received[recovery] = dataclasses.replace(altered.received[recovery], order=altered.sent[third].order - 1)
+
+    def remove_reset(altered: top.Ledger) -> None:
+        _, guest, _ = flow(altered, top.SILENT_PORT)
+        del altered.received[guest[-1]]
+
+    def late_reset(altered: top.Ledger) -> None:
+        _, guest, _ = flow(altered, top.DEAD_PEER_PORT)
+        altered.received[guest[-1]] = dataclasses.replace(altered.received[guest[-1]], time=altered.received[guest[-1]].time + top.TIMEOUT_SLACK_SECONDS + 1)
+
+    def early_reset(altered: top.Ledger) -> None:
+        _, guest, _ = flow(altered, top.SILENT_PORT)
+        altered.received[guest[-1]] = dataclasses.replace(altered.received[guest[-1]], time=altered.received[guest[-1]].time - top.BASELINE.idle_timeout_ms / 1000)
+
+    def probe_silent(altered: top.Ledger) -> None:
+        found, guest, _ = flow(altered, top.SILENT_PORT)
+        positions = data_positions(altered, top.SILENT_PORT)
+        high = max(found.guest_offset(altered.received[position].frame) + len(altered.received[position].frame.tcp_payload) for position in positions)
+        reset = altered.received[guest[-1]]
+        probe = forge_options(altered.received[positions[0]], sequence=(found.guest_isn + high) & lp.TCP_SEQUENCE_MASK, payload=top.KEEPALIVE_PROBE, flags=lp.TCP_ACK)
+        altered.received.insert(guest[-1], dataclasses.replace(probe, order=reset.order, delivered=False))
+        altered.received[guest[-1] + 1] = dataclasses.replace(reset, order=reset.order + 1)
+
+    def remove_dead_probes(altered: top.Ledger) -> None:
+        for position in sorted(probe_positions(altered, top.DEAD_PEER_PORT), reverse=True):
+            del altered.received[position]
+
+    def crowd_dead_probes(altered: top.Ledger) -> None:
+        position = probe_positions(altered, top.DEAD_PEER_PORT)[0]
+        altered.received.insert(position + 1, dataclasses.replace(altered.received[position], time=altered.received[position].time + 0.1))
+
+    def remove_keepalive_probes(altered: top.Ledger) -> None:
+        for position in sorted(probe_positions(altered, top.KEEPALIVE_PORT), reverse=True)[:-1]:
+            del altered.received[position]
+
+    def ignore_probe(altered: top.Ledger) -> None:
+        _, _, peer = flow(altered, top.KEEPALIVE_PORT)
+        probe = altered.received[probe_positions(altered, top.KEEPALIVE_PORT)[0]]
+        del altered.sent[next(position for position in peer if altered.sent[position].order > probe.order)]
+
+    def hasty_done(altered: top.Ledger) -> None:
+        _, _, peer = flow(altered, top.KEEPALIVE_PORT)
+        done = next(position for position in peer if altered.sent[position].frame.tcp_payload)
+        altered.sent[done] = dataclasses.replace(altered.sent[done], time=altered.sent[done].time - top.KEEPALIVE_QUIET_SECONDS)
+
+    def answer_mute(altered: top.Ledger) -> None:
+        _, guest, peer = flow(altered, top.DEAD_PEER_PORT)
+        synack = altered.sent[peer[0]]
+        answer = forge_options(synack, flags=lp.TCP_ACK, sequence=(synack.frame.tcp_sequence + 1) & lp.TCP_SEQUENCE_MASK, options=b"")
+        altered.sent.insert(peer[0] + 1, dataclasses.replace(answer, order=altered.received[guest[-1]].order - 1))
+
+    def bare_synack(altered: top.Ledger) -> None:
+        _, _, peer = flow(altered, top.LOSS_PORT)
+        altered.sent[peer[0]] = forge_options(altered.sent[peer[0]], options=b"")
+
+    def corrupt_stream(altered: top.Ledger) -> None:
+        position = data_positions(altered, top.LOSS_PORT)[1]
+        payload = altered.received[position].frame.tcp_payload
+        altered.received[position] = forge_options(altered.received[position], payload=bytes([payload[0] ^ 1]) + payload[1:])
+
+    def widen_window(altered: top.Ledger) -> None:
+        _, guest, _ = flow(altered, top.NAGLE_ON_PORT)
+        altered.received[guest[-1]] = forge_options(altered.received[guest[-1]], window=top.SOCKET_BUFFER_BYTES + 1)
+
+    def swap_program(altered: top.Ledger) -> None:
+        _, first, _ = flow(altered, top.NAGLE_ON_PORT)
+        _, second, _ = flow(altered, top.LOSS_PORT)
+        a, b = altered.received[first[0]], altered.received[second[0]]
+        altered.received[first[0]] = dataclasses.replace(a, order=b.order)
+        altered.received[second[0]] = dataclasses.replace(b, order=a.order)
+
+    def foreign_source(altered: top.Ledger) -> None:
+        altered.received[0] = dataclasses.replace(altered.received[0], frame=dataclasses.replace(altered.received[0].frame, source=bytes(6)))
+
+    def malformed(altered: top.Ledger) -> None:
+        altered.malformed_received = 1
+
+    refused("not the declared hop limit", wrong_ttl)
+    refused("no recorded IPv4 time-to-live", missing_ttl)
+    refused("although Nagle was declared on", early_second_write)
+    refused("did not leave as a small segment", coalesce_burst)
+    refused("although Nagle was declared off", serialize_burst)
+    refused("before its declared", early_hold)
+    refused("drop exactly one", deliver_drop)
+    refused("duplicate acknowledgments at the gap", remove_duplicates)
+    refused("fast-retransmit bound", slow_recovery)
+    refused("before the third duplicate", hasty_recovery)
+    refused("declared retry limit", lambda altered: None, {**OPTIONS_LIMITS, top.LOSS_PORT: 0})
+    refused("exactly one reset", remove_reset)
+    refused("outside its declared", late_reset)
+    refused("outside its declared", early_reset)
+    refused("although no interval was declared", probe_silent)
+    refused("keep-alive probes to the dead peer", remove_dead_probes)
+    refused("spaced below", crowd_dead_probes)
+    refused("keep-alive probes during", remove_keepalive_probes)
+    refused("not answered", ignore_probe)
+    refused("quiet period", hasty_done)
+    refused("more than its SYN-ACK", answer_mute)
+    refused("MSS", bare_synack)
+    refused("declared stream bytes", corrupt_stream)
+    refused("receive buffer", widen_window)
+    refused("program order", swap_program)
+    refused("source MAC", foreign_source)
+    refused("unclassifiable", malformed)
+    return count
+
 
 def main() -> None:
     check_checksums()
@@ -1669,11 +2219,14 @@ def main() -> None:
     check_impairment_controls(check_impairment_simulation())
     check_listener_scripts()
     listener_controls = check_listener_controls(check_listener_simulation())
+    check_options_scripts()
+    options_controls = check_options_controls(check_options_simulation())
     (kind,) = struct.unpack("!H", struct.pack("!H", lp.ETHERTYPE_ARP))
     expect(kind == lp.ETHERTYPE_ARP, "struct sanity")
     print("link peer check: ARP/ICMP preserved; bounded real TCP echo, checksums, stream delivery, windows, retransmissions, refusal, and close verified")
     print("link peer check: scripted reorder, loss, silence and window impairments qualified against a model stack; 24 corrupted-evidence controls refused")
     print(f"link peer check: scripted external-listener refusals, half-close, simultaneous close and unread/unsent close qualified against a model stack; {listener_controls} corrupted-evidence controls refused")
+    print(f"link peer check: scripted Nagle, loss recovery, keep-alive, hop limit and idle-timeout scenarios qualified against model guests under both declared bindings; {options_controls} corrupted-evidence controls refused")
 
 
 if __name__ == "__main__":

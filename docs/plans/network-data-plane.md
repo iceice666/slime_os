@@ -326,6 +326,86 @@ The gate observes accepted external connections. The loopback backend shares
 the engine's close path; its host tests are implementation evidence, not this
 gate. No physical NIC is qualified.
 
+### TCP socket options and congestion control
+
+Work item `01a0e239-a96d-7db6-8b7f-d6efef5f8b19` declares every TCP socket
+option the pinned release exposes and selects its congestion control. Its
+declarations and wire policy are stated here before the implementation;
+`just io_tcp_options_check` holds the wire to them. Nothing below is
+implemented or qualified yet.
+
+**Declaration.** `network-application/v3` keeps every v2 field and carves four
+option fields from the entry's reserved tail, so `entryBytes` stays 320; the
+format version becomes 3 and v2 is retained unchanged. Each application row,
+client or listener, declares the options the service applies to every socket
+that row opens or accepts. A client never chooses or changes them: the
+service holds no option-mutation operation, and a request carrying an
+operation code outside `network-service/v1` is refused as unsupported.
+Generation validation refuses an out-of-bound value.
+
+| Field | Wire | Bound | Applied as |
+| --- | --- | --- | --- |
+| `keepaliveMs` | `keepalive_ms : u32` | 0 (off) or 100–60000 | `set_keep_alive` |
+| `nagle` | `nagle : u8` | 0 or 1 | `set_nagle_enabled` |
+| `hopLimit` | `hop_limit : u8` | 1–255 | `set_hop_limit`, the IPv4 TTL of every packet |
+| `idleTimeoutMs` | `idle_timeout_ms : u32` | 1000–60000 | `set_timeout`: abort after this long without a peer packet while sending, or while keep-alive is on |
+
+Fixed service policy, recorded in the matrix rather than declared: delayed
+ACK stays disabled, the 10 s per-operation timeout is unchanged, and the
+engine's own connect and close deadlines are unchanged. Every socket a row
+opens states its applied options once at activation as
+`[network-service] tcp options holder=<holder> keepalive_ms=<n> nagle=<0|1> hop_limit=<n> idle_timeout_ms=<n>`.
+
+**Congestion control.** The service enables exactly `socket-tcp-reno` and
+states `[network-service] tcp congestion control=reno` at activation. Reno is
+integer arithmetic only; CUBIC in the pinned release computes its window in
+`f64` with a cube root, and the service is `no_std` userspace that does not
+otherwise touch the FPU. The cost is one `Reno` struct of four `usize` per
+socket and no timer. In the pinned release the congestion window bounds only
+whether the next segment may leave and never falls below one MSS, and every
+in-flight byte is already bounded by the 2048-byte transmit buffer and the
+peer window, so the choice has no separately observable wire effect at these
+bounds; the qualification observes fast retransmit and loss recovery, which
+every controller shares, and the matrix's feature-delta check proves the
+enabled feature is the recorded one.
+
+| Declared value | Qualified composition |
+| --- | --- |
+| `options-baseline` | keep-alive off, Nagle on, hop limit 64, idle timeout 4000 ms |
+| `options-tuned` | keep-alive 500 ms, Nagle off, hop limit 7, idle timeout 2000 ms |
+| Peer | `10.0.0.2`, MSS 512, window 4096 |
+
+**Wire policy and qualification.** Composition `sel4-io-tcp-options`
+(generation 163) runs `io-tcp-options-probe` twice, as the two holders above,
+each holding one exact `10.0.0.2` destination per scenario port with
+`connect`, `send` and `recv` and a declared `retryLimit`. The frame peer
+(`scripts/lib/tcp_options_peer.py`) records the IPv4 TTL of every guest packet
+and answers each port on a script; every stream byte `i` is
+`(31·i + seed) mod 256` with the seeds in the peer module. Each probe writes
+its burst 64 bytes at a time, waiting for each write's acceptance and at
+least 20 ms before the next, and closes once it reads the peer's one
+completion byte.
+
+| Port | Holder | Peer script | Required wire effect |
+| --- | --- | --- | --- |
+| 4290 | baseline | withholds its acknowledgment of the first small segment for 600 ms | 8 × 64-byte writes: the first leaves alone, no second sub-MSS segment leaves before the acknowledgment, at most one sub-MSS segment in flight |
+| 4291 | baseline | drops the first 512-byte segment once, answers the next three with duplicate acknowledgments | 2048 bytes were sent before recovery; the retransmission follows the third duplicate within 500 ms; the 4096-byte stream completes within the destination's `retryLimit` |
+| 4292 | baseline | mute after its SYN-ACK | 256 bytes sent and retransmitted, no keep-alive probe, exactly one reset 3.75–6 s after the SYN-ACK, typed timeout reclamation |
+| 4293 | tuned | as 4290 | at least two sub-MSS segments in flight at once |
+| 4294 | tuned | answers every probe, completes after 3 s of quiet | 4–8 keep-alive probes (one null byte below the sent edge) at least 400 ms apart, each answered before the next |
+| 4295 | tuned | mute after its SYN-ACK | 2–5 keep-alive probes, no data, exactly one reset 1.75–4 s after the SYN-ACK, typed timeout reclamation |
+
+Every guest packet on a holder's ports carries that holder's hop limit; the
+arm also requires the two option declarations, the congestion-control
+statement, the composition's rows, and the probes' typed results, and it
+refuses a `network-service` manifest that enables `socket-tcp-cubic` or omits
+`socket-tcp-reno`. `check-link-peer.py` runs the script against a model guest
+under both bindings and refuses 27 corrupted-evidence variants first.
+
+The gate observes external connections only; the loopback backend applies the
+same rows through the shared engine, and its host tests are implementation
+evidence, not this gate. No physical NIC is qualified.
+
 ## smoltcp support matrix
 
 Pinned release: smoltcp `0.13.0`, crate checksum `ac729b0a77bd092a3f06ddaddc59fe0d67f48ba0de45a9abe707c2842c7f8767`.
@@ -355,7 +435,7 @@ owning slices, chiefly the media and backend classification.
 | TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, 2048-byte buffers | `just io_tcp_check` |
 | TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | `network-application/v2` listener row: one interface address and port, one exact admitted IPv4; other sources dropped before smoltcp | Backlog 1, 1–4 accepted connections at 4096 bytes each, shared 4-socket pool | `just io_tcp_listener_check` |
 | TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | supported | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | 4 out-of-order ranges, 2048-byte RX and TX per socket, retransmissions within the destination `retryLimit`, 10 s socket timeout | `just io_tcp_impairment_check` |
-| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per application binding, never client-chosen | Declared by the owning slice | Owning slice's recipe |
+| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v3` row, never client-chosen; ack delay stays fixed service policy | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` once it lands |
 | TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Fixed service policy | 10 s operation timeout, no ack delay | `just io_network_qualification_check` |
 | UDP resolver socket | socket | `src/socket/udp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service resolver only; answers never authorize destinations | 1 socket, 512-byte packets | `just io_network_qualification_check` |
 | UDP application endpoints | socket | `src/socket/udp.rs` | planned | QEMU `LinkDevice` | 01a0e239-b54c-7782-8dd6-b403038fa3dd | Exact local bind and per-peer datagram grants | Declared by the owning slice | Owning slice's recipe |
@@ -566,9 +646,9 @@ of its optional dependencies, has exactly one row.
 | `socket-mdns` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-de7f-7bb7-ae5c-756b8cbfe637 | mDNS classified against the multicast grant boundary | Declared by the owning slice | Owning slice's recipe |
 | `socket-raw` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Raw sockets; applications never gain raw-packet authority | Declared by the owning slice | Owning slice's recipe |
 | `socket-tcp` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9, 01a0ddaa-825f-7309-8508-ed49ffe33a8d | TCP sockets exist only inside the service; clients hold typed handles for exact granted destinations and listeners | 4 sockets, 2048-byte RX and TX buffers each, 10 s operation timeout | `just io_network_qualification_check` |
-| `socket-tcp-cubic` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected | Declared by the owning slice | Owning slice's recipe |
+| `socket-tcp-cubic` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected. Not enabled: `f64` cube-root window in `no_std` userspace; Reno is selected | Declared by the owning slice | Owning slice's recipe |
 | `socket-tcp-pause-synack` | feature | `Cargo.toml` `[features]` | not-applicable | — | 01a0e239-ad77-7754-874f-b8703be81c04 | Nothing to decide: the service drops an unadmitted listener SYN before smoltcp, so no SYN-ACK is ever withheld | — | — |
-| `socket-tcp-reno` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected | Declared by the owning slice | Owning slice's recipe |
+| `socket-tcp-reno` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected. Selected: integer-only controller, one four-word struct per socket, no timer | Declared by the owning slice | Owning slice's recipe |
 | `socket-udp` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Only the service's resolver holds a UDP socket; no client UDP authority exists yet | 1 socket, 512-byte DNS packet buffers, 1 packet of metadata each way | `just io_network_qualification_check` |
 | `std` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Host standard library; the service is `no_std` | Declared by the owning slice | Owning slice's recipe |
 | `verbose` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Verbose `log` output | Declared by the owning slice | Owning slice's recipe |
