@@ -1,7 +1,0 @@
-{
-  formatVersion = 1;
-  name = "sel4-b40-wrong-rights";
-  baseClosureIdentity = "1f4acf67da60af789933331ba013181c7a5af7fed9b49c79624297ada9751f41";
-  mutation = "wrong_rights";
-  expectedRefusal = "CSpaceMismatch";
-}
