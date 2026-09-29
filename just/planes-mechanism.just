@@ -34,6 +34,15 @@ io_tcp_listener_check: sel4_pin_check link_peer_check
 io_tcp_options_check: sel4_pin_check link_peer_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-options
 
+# The product shell beside the network stack: seven Slisp lines typed one at a
+# time into the resident shell, a spawned numeric fetch judged against the
+# controlled peer, and refusals that leave no forbidden packet on the wire, with
+# the spawn, product-graph, Slisp and host regressions the spawn/v2 migration
+# touches. Explicit, never part of `all`.
+[group('planes / mechanism')]
+sel4_net_check: sel4_pin_check sel4_spawn_check sel4_component_graph_check slisp_core_check test_host
+    python3 scripts/check/check-sel4-io-network-plane.py --arm net
+
 [group('planes / mechanism')]
 io_tcp_host_check:
     cargo test -p slime-network-tcp-tests --locked

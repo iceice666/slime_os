@@ -30,7 +30,7 @@ from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 # silently weaken a gate. Boot-layout fixture equality is controlled separately.
 GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
-    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 177),
+    ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 193),
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 109),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
@@ -852,7 +852,7 @@ memory_mib = 64
     )
     terminal = re.compile(r"SLIME CONTROL TERMINAL")
 
-    def run(mode: str, timeout: int, *, launch_input: bool = False) -> str:
+    def run(mode: str, timeout: int, *, launch_input: bool = False, stepped: str | None = None) -> str:
         pid_path = root / f"{mode}.pid"
         stop_path = root / f"{mode}.stopped"
         try:
@@ -873,6 +873,7 @@ memory_mib = 64
                     input_trigger=re.compile("SLIME CONTROL READY") if launch_input else None,
                     input_text="private launch control\n" if launch_input else None,
                     input_character_delay=0,
+                    input_steps=(((re.compile(stepped),), "private launch control\n"),) if stepped is not None else (),
                 ),
             )
             return str(result)
@@ -890,6 +891,14 @@ memory_mib = 64
         "missing launch readiness control",
         "without accepting launch input",
         lambda: run("terminal", 2, launch_input=True),
+    )
+    transcript = run("input", 2, stepped="SLIME CONTROL READY")
+    if transcript != "SLIME CONTROL READY\nSLIME CONTROL TERMINAL":
+        fail("stepped input was not readiness-gated or leaked into the transcript")
+    require_rejection(
+        "missing stepped readiness control",
+        "without accepting launch input",
+        lambda: run("terminal", 2, stepped="SLIME CONTROL NEVER"),
     )
 
     require_rejection(

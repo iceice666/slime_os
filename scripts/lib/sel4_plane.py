@@ -74,24 +74,35 @@ def run_plane(
     input_trigger: Pattern[str] | None = None,
     input_text: str | None = None,
     input_character_delay: float = 0.001,
+    input_steps: Sequence[tuple[Sequence[Pattern[str]], str]] = (),
 ) -> str:
     """Run QEMU until terminal evidence, exit, or the bounded timeout.
 
     Optional launch input is sent once after the declared readiness marker.
-    The harness does not log input; callers supplying secrets must use a guest
-    input path that does not echo them to the serial output.
+    `input_steps` instead sends each text only after every one of its patterns
+    has matched a line printed since the previous step's text was sent, so a
+    step never races the guest output it depends on. The harness does not log
+    input; callers supplying secrets must use a guest input path that does not
+    echo them to the serial output.
     """
     if (input_trigger is None) != (input_text is None):
         fail("QEMU launch input requires both a readiness trigger and input text")
+    if input_trigger is not None and input_steps:
+        fail("QEMU input is either one triggered launch input or ordered steps, not both")
+    if any(not patterns for patterns, _text in input_steps):
+        fail("every QEMU input step needs at least one readiness pattern")
     if input_character_delay < 0:
         fail("QEMU input pacing delay must be nonnegative")
+    steps: list[tuple[Sequence[Pattern[str]], str]] = list(input_steps)
+    if input_trigger is not None and input_text is not None:
+        steps.append(((input_trigger,), input_text))
     command = qemu_base_command(image=image, fail=fail, pins_path=pins_path)
     command.extend(additional_arguments)
     try:
         process = subprocess.Popen(
             command,
             cwd=cwd,
-            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+            stdin=subprocess.PIPE if steps else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -117,22 +128,27 @@ def run_plane(
     watchdog.start()
     lines: list[str] = []
     terminal_reached = False
-    input_sent = False
+    sent_steps = 0
+    matched: set[int] = set()
     try:
         assert process.stdout is not None
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
-            if input_trigger is not None and not input_sent and input_trigger.search(line):
-                assert process.stdin is not None and input_text is not None
-                try:
-                    for character in input_text:
-                        process.stdin.write(character)
-                        process.stdin.flush()
-                        if input_character_delay:
-                            time.sleep(input_character_delay)
-                except (BrokenPipeError, OSError):
-                    fail("QEMU closed the launch-input stream")
-                input_sent = True
+            if sent_steps < len(steps):
+                patterns, text = steps[sent_steps]
+                matched.update(index for index, pattern in enumerate(patterns) if pattern.search(line))
+                if len(matched) == len(patterns):
+                    assert process.stdin is not None
+                    try:
+                        for character in text:
+                            process.stdin.write(character)
+                            process.stdin.flush()
+                            if input_character_delay:
+                                time.sleep(input_character_delay)
+                    except (BrokenPipeError, OSError):
+                        fail("QEMU closed the launch-input stream")
+                    sent_steps += 1
+                    matched = set()
             if terminal_condition.search(line):
                 terminal_reached = True
                 break
@@ -153,6 +169,6 @@ def run_plane(
         fail(f"QEMU timed out after {timeout}s before terminal condition\nLast serial output:\n{diagnostic_tail}")
     if not terminal_reached:
         fail(f"QEMU exited with status {process.returncode} before terminal condition\nLast serial output:\n{diagnostic_tail}")
-    if input_text is not None and not input_sent:
-        fail("QEMU reached terminal evidence without accepting launch input")
+    if sent_steps != len(steps):
+        fail(f"QEMU reached terminal evidence without accepting launch input ({sent_steps} of {len(steps)} input steps sent)")
     return transcript

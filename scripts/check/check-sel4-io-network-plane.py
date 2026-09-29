@@ -22,6 +22,10 @@ The tcp-options arm boots `sel4-io-tcp-options` behind a peer
 (`scripts/lib/tcp_options_peer.py`) that holds acknowledgments, drops a
 segment, answers keep-alives and falls mute so each binding's declared Nagle,
 keep-alive, hop limit and idle timeout shows on the wire; it is also explicit.
+The net arm boots `sel4-net`, the product shell beside the network stack, and
+types seven Slisp lines into the resident shell one at a time: a spawned
+numeric fetch judged against the controlled HTTP peer, and refusals that must
+leave no forbidden packet on the captured wire; it is also explicit.
 The HTTP arms instead use QEMU user networking and ordinary host TCP/UDP sockets;
 public DNS/HTTP remains an explicitly requested smoke, never part of ``all``.
 """
@@ -39,7 +43,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
@@ -52,6 +56,7 @@ import tcp_options_peer  # noqa: E402
 import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
+import devloop_observations  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from sel4_plane import run_plane  # noqa: E402
 
@@ -80,6 +85,16 @@ OPTIONS_FIXTURE = COMPOSITIONS / "sel4-io-tcp-options.zti"
 OPTIONS_PROBE = "io-tcp-options-probe"
 OPTIONS_HOLDERS = {"baseline": "options-baseline", "tuned": "options-tuned"}
 OPTIONS_GENERATION = 163
+NET_CLOSURE = "sel4-net"
+NET_FIXTURE = COMPOSITIONS / "sel4-net.zti"
+NET_GENERATION = 164
+NET_PEER = "10.0.2.2"
+# Exactly the numeric grants sel4-net gives http-get: the controlled peer, and
+# 1.1.1.1:80 for the opt-in manual demonstration. No resolver row exists.
+NET_DESTINATIONS = {
+    ("http-get", NET_PEER, "ipv4", str(http_peer.HTTP_PORT), "tcp"),
+    ("http-get", "1.1.1.1", "ipv4", "80", "tcp"),
+}
 NETWORK_SERVICE_MANIFEST = ROOT / "components" / "services" / "network-service" / "Cargo.toml"
 TIMEOUT = 240
 # The MAC the composition declares for the service, which is also the one the
@@ -429,8 +444,66 @@ OPTIONS_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("options health", (rf"SLIME_GRAPH HEALTHY generation={OPTIONS_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
 )
 
+# The shell arm. Each case is one line typed into the resident Slisp shell,
+# sent only after the previous case's chains and settle marker have all
+# matched. A case's chains are ordered within themselves but not against each
+# other: a spawned child and the shell's reply to its spawn race on the console.
+# A fetch settles on its completion. A failed completion is a shared failure
+# marker and a successful one satisfies the HTTP arm's own completion pattern,
+# so completions are judged as settle markers and by exact count rather than
+# registered as chains.
+NET_FETCH = next(case for case in http_peer.cases() if case.name == "numeric-content-length")
+_NET_ABORTED = (
+    r"\[network-service\] application aborted sessions_released=1",
+    r"\[http-get\] cleanup close=0 detach=1 abort=1",
+)
+_NET_REFUSED = r"\[http-get\] complete success=0 status=0 bytes=0 error=transport"
+_NET_FETCHED = rf"\[http-get\] complete success=1 status={NET_FETCH.status} bytes={len(NET_FETCH.body)} error=none"
+
+
+class NetCase(NamedTuple):
+    name: str
+    line: str
+    chains: tuple[tuple[str, ...], ...]
+    settle: str | None = None
+
+    def settle_patterns(self) -> tuple[str, ...]:
+        return tuple(chain[-1] for chain in self.chains) + ((self.settle,) if self.settle is not None else ())
+
+
+NET_CASES: tuple[NetCase, ...] = (
+    NetCase("bare-symbol", "echo", ((r"=> spawned echo",), (r"\[echo-agent\] command=echo args=0 ",))),
+    NetCase("string-outside-spawn", '"slime"', ((r"! type",),)),
+    NetCase("unterminated-string", f"(spawn 'http-get \"http://{NET_PEER}:{http_peer.HTTP_PORT}/", ((r"! syntax",),)),
+    NetCase("unbound-command", f"(spawn 'wget \"http://{NET_PEER}:{http_peer.HTTP_PORT}/\")", ((r"! spawn",),)),
+    NetCase("undeclared-destination", f"(spawn 'http-get \"http://10.0.2.9:{http_peer.HTTP_PORT}/\")", ((r"=> spawned http-get",), _NET_ABORTED), _NET_REFUSED),
+    NetCase("hostname", f"(spawn 'http-get \"http://example.test:{http_peer.HTTP_PORT}/\")", ((r"=> spawned http-get",), _NET_ABORTED), _NET_REFUSED),
+    NetCase("numeric-fetch", f"(spawn 'http-get \"{NET_FETCH.url}\")", (
+        (r"=> spawned http-get",),
+        (r"\[network-service\] application buffers released", r"\[http-get\] cleanup close=1 detach=1"),
+    ), _NET_FETCHED),
+)
+NET_READY: tuple[tuple[str, ...], ...] = (
+    (rf"SLIME_ROOT generation admitted number={NET_GENERATION} executables=[0-9]+ instances=[0-9]+ grants=[0-9]+ ", r"\[slisp\] resident input wait"),
+)
+NET_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("net shell ready", NET_READY[0]),
+    *((f"net {case.name}", chain) for case in NET_CASES for chain in case.chains),
+)
+# Exact totals over the whole session: one spawn per accepted spawn line, one
+# completion per http-get instance, and a network service that stays resident.
+NET_COUNTS: tuple[tuple[str, str, int], ...] = (
+    ("spawned children", r"\[spawn-service\] spawning child", 4),
+    ("http-get completions", r"\[http-get\] complete ", 3),
+    ("refused http-get completions", _NET_REFUSED, 2),
+    ("successful http-get completions", _NET_FETCHED, 1),
+    ("aborted sessions", r"\[network-service\] application aborted sessions_released=1", 2),
+    ("released sessions", r"\[network-service\] application buffers released", 1),
+    ("link releases", r"\[network-service\] link released", 0),
+)
+
 # Every arm participates in the shared missing/reordered/failure controls.
-CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS + OPTIONS_CHAINS
+CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS + OPTIONS_CHAINS + NET_CHAINS
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -799,6 +872,162 @@ def check_tcp_ledger(ledger: link_peer.Ledger, guest_mac: bytes) -> None:
         fail(f"peer wire evidence: {error}")
 
 
+def check_net_fixture() -> str:
+    """Return the interface MAC once sel4-net binds http-get as a command and grants exactly the numeric destinations."""
+    if not NET_FIXTURE.is_file():
+        fail(f"{NET_FIXTURE.relative_to(ROOT)} does not exist; the sel4-net composition has not landed")
+    text = NET_FIXTURE.read_text(encoding="utf-8")
+    macs = MAC_DECLARATION.findall(text)
+    if len(macs) != 1:
+        fail(f"sel4-net fixture declares {len(macs)} interface MACs, expected exactly one")
+    for pattern in (
+        rf"generation\s*=\s*{NET_GENERATION};",
+        *(rf'name\s*=\s*"{name}"' for name in ("slisp", "spawn-service", "network-service", "virtio-net-driver", "spawn-service-http-get", "spawn-service-http-get-context")),
+    ):
+        if re.search(pattern, text) is None:
+            fail(f"sel4-net fixture is missing {pattern!r}")
+    if "http-launcher" in text:
+        fail("sel4-net launches http-get through spawn-service, not through the testkit launcher")
+    rows = fixture_destinations(text)
+    declared = {(row.get("holder"), row.get("address"), row.get("addressKind"), row.get("port"), row.get("transport")) for row in rows}
+    if declared != NET_DESTINATIONS or len(rows) != len(NET_DESTINATIONS):
+        fail(f"sel4-net must declare exactly the numeric destinations {sorted(NET_DESTINATIONS)}, found {sorted(map(str, declared))}")
+    if any(set(row["rights"].split(",")) != {"connect", "send", "recv"} for row in rows):
+        fail("every sel4-net destination is exactly a connect/send/recv grant")
+    return macs[0]
+
+
+class NetRefusal(Exception):
+    """A judged sel4-net transcript was refused; raised instead of exiting so controls can count it."""
+
+
+def _net_reject(message: str) -> NoReturn:
+    raise NetRefusal(message)
+
+
+def judge_net_transcript(transcript: str, reject: Callable[[str], NoReturn]) -> tuple[int, int]:
+    """Return (cases observed, body bytes matched) for one shell session, or reject it."""
+    failures = tuple(marker for marker in FAILURE_MARKERS if marker != r"\[http-get\] complete success=0 ")
+    match_marker_contract(transcript, NET_CHAINS, failures, reject)
+    position = 0
+    for chain in NET_READY:
+        for pattern in chain:
+            found = re.compile(pattern).search(transcript, position)
+            if found is None:
+                reject(f"net shell never became ready: {pattern}")
+            position = found.end()
+    cases = 0
+    for case in NET_CASES:
+        end = position
+        for chain in case.chains:
+            cursor = position
+            for pattern in chain:
+                found = re.compile(pattern).search(transcript, cursor)
+                if found is None:
+                    reject(f"net {case.name}: missing or out-of-order marker after the previous case: {pattern}")
+                cursor = found.end()
+            end = max(end, cursor)
+        if case.settle is not None:
+            # After the case's final chain marker, so it cannot be an earlier case's.
+            found = re.compile(case.settle).search(transcript, position)
+            if found is None:
+                reject(f"net {case.name}: missing settle marker after the previous case: {case.settle}")
+            end = max(end, found.end())
+        position = end
+        cases += 1
+    for label, pattern, expected in NET_COUNTS:
+        observed = len(re.findall(pattern, transcript))
+        if observed != expected:
+            reject(f"net session: {label} observed {observed}, expected exactly {expected}")
+    body = bytearray()
+    for line in transcript.splitlines():
+        if line.startswith("[http-get] body "):
+            record = re.fullmatch(r"\[http-get\] body hex=([0-9a-f]{2,128})", line)
+            if record is None or len(record[1]) % 2:
+                reject("malformed or oversized HTTP body record")
+            body.extend(bytes.fromhex(record[1]))
+    if bytes(body) != NET_FETCH.body:
+        reject(f"spawned fetch body differs from the controlled peer's {len(NET_FETCH.body)} bytes (decoded {len(body)})")
+    return cases, len(body)
+
+
+def net_controls(transcript: str) -> int:
+    """Mutate an accepted transcript and require every mutation to be refused; return the count."""
+    completion = re.search(_NET_FETCHED, transcript)
+    first_body = re.search(r"\[http-get\] body hex=([0-9a-f])", transcript)
+    refused_fetch = re.search(_NET_REFUSED, transcript)
+    typed_error = re.search(r"! type", transcript)
+    syntax_error = re.search(r"! syntax", transcript)
+    if completion is None or refused_fetch is None or first_body is None or typed_error is None or syntax_error is None:
+        fail("net controls need the accepted transcript's completion, body, type and syntax evidence")
+    flipped = "0" if first_body[1] != "0" else "1"
+    controls = (
+        ("missing fetch completion", transcript[:completion.start()] + transcript[completion.end():]),
+        ("missing refused completion", transcript[:refused_fetch.start()] + transcript[refused_fetch.end():]),
+        ("reordered shell errors", transcript.replace("! type", "\0").replace("! syntax", "! type").replace("\0", "! syntax")),
+        ("explicit failure", transcript + "\n[http-get] fail: injected control"),
+        ("altered body byte", transcript[:first_body.start(1)] + flipped + transcript[first_body.end(1):]),
+        ("extra spawned child", transcript + "\n[spawn-service] spawning child"),
+        ("released link", transcript + "\n[network-service] link released"),
+    )
+    refused = 0
+    for label, mutated in controls:
+        try:
+            judge_net_transcript(mutated, _net_reject)
+        except NetRefusal:
+            refused += 1
+            continue
+        fail(f"net control accepted a mutated transcript: {label}")
+    return refused
+
+
+def run_net_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
+    identity = http_identity(image, "sel4-net")
+    print(identity, flush=True)
+    failures = tuple(marker for marker in FAILURE_MARKERS if marker != r"\[http-get\] complete success=0 ")
+    terminal = re.compile(_NET_FETCHED + "|" + "|".join(failures))
+    ready = tuple(re.compile(pattern) for pattern in NET_READY[0])
+    steps = [(ready, NET_CASES[0].line + "\n")]
+    for previous, case in zip(NET_CASES, NET_CASES[1:], strict=False):
+        steps.append((tuple(re.compile(pattern) for pattern in previous.settle_patterns()), case.line + "\n"))
+    netdev = f"user,id=slimenet,net=10.0.2.0/24,host={NET_PEER},dhcpstart=10.0.2.15,ipv6=off"
+    try:
+        with http_peer.Peer(NET_FETCH) as peer, tempfile.TemporaryDirectory(prefix="slime-net-capture-") as directory:
+            capture = Path(directory) / "network.pcap"
+            transcript = run_plane(
+                image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS,
+                additional_arguments=(
+                    "-netdev", netdev,
+                    "-device", f"virtio-net-device,netdev=slimenet,mac={mac}",
+                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",
+                ),
+                input_steps=steps, input_character_delay=0.005,
+            )
+            if not capture.is_file():
+                fail("QEMU did not produce the sel4-net packet observation")
+            packets = capture.read_bytes()
+        if transcript_path is not None:
+            transcript_path.write_text(identity + "\n" + transcript + "\n", encoding="utf-8")
+            transcript_path.with_suffix(".pcap").write_bytes(packets)
+        peer.qualify()
+        # One capture covers the whole session: any DNS/UDP packet, or a SYN to
+        # anything but the controlled peer's declared port, is refused here.
+        wire = http_capture.verify_capture(packets, hostname=None, resolver=(NET_PEER, http_peer.DNS_PORT), port=http_peer.HTTP_PORT, expected_destination=NET_PEER)
+    except (OSError, RuntimeError, ValueError) as error:
+        fail(f"sel4-net controlled peer or wire evidence refused: {error}")
+    if wire["dns_queries"] != 0 or wire["tcp_connections"] != 1:
+        fail(f"sel4-net wire must hold exactly one TCP connection and no DNS, observed {wire}")
+    try:
+        cases, count = judge_net_transcript(transcript, _net_reject)
+    except NetRefusal as error:
+        print(transcript)
+        fail(str(error))
+    refused = net_controls(transcript)
+    print(f"[net-wire] frames={wire['frames']} tcp-connections={wire['tcp_connections']} dns-queries={wire['dns_queries']} tcp-payload-bytes={wire['tcp_payload_bytes']}")
+    print(f"[net-shell] cases={cases} body-bytes={count} controls-refused={refused}")
+    devloop_observations.record(casesObserved=cases, bytesObserved=count, negativeControlsRefused=refused)
+
+
 def http_launch_text(url: str) -> str:
     """Serialize only through the schema-generated launch binding."""
     encoded = url.encode("ascii")
@@ -987,7 +1216,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "http", "http-public", "all"), default="all")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -1030,6 +1259,14 @@ def main() -> None:
             "seL4 I/O tcp options check: per-binding Nagle, keep-alive, hop limit and idle timeout declared "
             "in generation data and observed on the wire, Reno selected and stated, a client mutation refused, "
             "and both mute connections reclaimed by typed timeout proved"
+        )
+    if arguments.arm == "net":
+        mac = check_net_fixture()
+        run_net_arm(build_image(NET_CLOSURE), mac, arguments.transcript)
+        print(
+            "seL4 net check: the resident shell spawned http-get with a string argument through spawn-service, "
+            "the fetched body matched the controlled peer, undeclared destinations, hostnames, stray strings "
+            "and unbound commands were refused without forbidden packets, and the network service stayed resident"
         )
     if arguments.arm in ("authority", "all"):
         check_fixture()
