@@ -130,6 +130,10 @@ that also reads an unrecorded clock or entropy source.
   stream minted by the spawner. A seeded fixture is an explicit input; decide
   whether its seed belongs in the generation, replay trace, or both. Evaluate
   replay composition before proposing the entropy mechanism's kernel work.
+  [Entropy authority](../docs/decisions/entropy-authority.md) proposes a
+  userspace service with generation-declared hardware and seeded holders
+  instead of either; the deterministic-component sealing rule and replay
+  recording remain here.
 - A manifest declares absence of real clock/entropy grants so the builder can
   check it statically and grant-graph tooling can audit it. Preserve that negative
   declaration under `derive` and later peer transfers: the sealing mechanism
