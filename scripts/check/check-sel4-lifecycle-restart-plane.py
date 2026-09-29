@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""C9.4 gate: a userspace supervisor restarts under declared policy, and the bound is terminal."""
+"""C9.4 gate: a userspace supervisor restarts under declared policy, and the bound is terminal.
+
+The lifetime arm boots `sel4-lifetime` and `sel4-lifetime-exit` and judges the
+root's enforcement of each instance's declared lifetime: a resident instance
+that stays live under a certification with it counted live, a bounded instance
+that completes, a resident optional instance whose exit is recorded unhealthy,
+and a resident required instance whose exit fails the graph. It is explicit and
+fails until those compositions land.
+"""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -10,12 +19,14 @@ import subprocess
 import sys
 import threading
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
+import devloop_observations  # noqa: E402
 from harness import GENERATION_COMPOSITIONS, profile_integer, profile_text, sha256_file  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from zutai_cli import STDLIB, binary  # noqa: E402
@@ -26,7 +37,6 @@ FIXTURE = GENERATION_COMPOSITIONS / "sel4-lifecycle-restart.zti"
 # The closure identity names the build's inputs and is re-resolved from repository
 # state before the build, so stale input is refused instead of silently changing the image.
 CLOSURE = "sel4-lifecycle-restart"
-IMAGE: Path | None = None
 GENERATION = 44
 TIMEOUT = 300
 
@@ -96,7 +106,7 @@ RESTART_PRIVATE_PAGES = 4
 # does anything and its refusal branch is unreachable.
 DEPENDENCY_REQUIRED_STATE = "Running"
 
-CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+RESTART_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the declared lifecycle policy the root resolved",
         (
@@ -269,29 +279,104 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_LIFECYCLE FAIL",
     r"\[lifecycle\] FAIL",
     r"SLIME_GRAPH FAIL required instance",
+    r"\[lifetime-probe\] FAIL",
 )
+
+# The lifetime arm. `sel4-lifetime` declares one resident required instance
+# that stays live (`lifetime-holder`), a bounded required instance that exits 0
+# (`lifetime-worker`), and a bounded required owner (`lifetime-owner`) that spawns
+# a resident optional child (`lifetime-quitter`) which exits 0. The root answers
+# each instance's lifetime query with a root-attributed line, records the
+# quitter's exit as unhealthy rather than as a clean exit, and certifies once
+# every bounded required instance has completed with the holder still counted
+# live. `sel4-lifetime-exit` declares one resident required instance
+# (`lifetime-leaver`) whose clean exit ends the graph.
+LIFETIME_CLOSURE = "sel4-lifetime"
+LIFETIME_FIXTURE = GENERATION_COMPOSITIONS / "sel4-lifetime.zti"
+LIFETIME_GENERATION = 166
+LIFETIME_EXIT_CLOSURE = "sel4-lifetime-exit"
+LIFETIME_EXIT_FIXTURE = GENERATION_COMPOSITIONS / "sel4-lifetime-exit.zti"
+LIFETIME_EXIT_GENERATION = 167
+# (instance, lifetime, health, owner, autostart) exactly as each fixture declares it.
+LIFETIME_INSTANCES = {
+    "lifetime-holder": ("resident", "required", "root", True),
+    "lifetime-worker": ("bounded", "required", "root", True),
+    "lifetime-owner": ("bounded", "required", "root", True),
+    "lifetime-quitter": ("resident", "optional", "lifetime-owner", False),
+}
+LIFETIME_EXIT_INSTANCES = {
+    "lifetime-leaver": ("resident", "required", "root", True),
+}
+_CERTIFIED = rf"SLIME_GRAPH HEALTHY generation={LIFETIME_GENERATION} required=(\d+) live=1 completed=(\d+) failed=0"
+_QUITTER_RECORDED = r"SLIME_GRAPH resident exit instance=lifetime-quitter status=0 recorded=unhealthy"
+_LEAVER_FAILED = "SLIME_ROOT FATAL SLIME_GRAPH FAIL resident instance lifetime-leaver exit status=0"
+
+
+def _answered(instance: str, lifetime: str) -> str:
+    return rf"SLIME_GRAPH lifetime task=\d+ instance={instance} lifetime={lifetime}"
+
+
+def _probe(role: str, lifetime: str) -> str:
+    return rf"\[lifetime-probe\] role={role} lifetime={lifetime}"
+
+
+LIFETIME_RUN_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("a resident instance is told it is resident", (_answered("lifetime-holder", "resident"), _probe("holder", "resident"))),
+    ("a bounded instance is told it is bounded", (_answered("lifetime-worker", "bounded"), _probe("worker", "bounded"))),
+    (
+        "a resident optional instance's exit is recorded unhealthy, and its owner sees that",
+        (
+            _answered("lifetime-quitter", "resident"),
+            _probe("quitter", "resident"),
+            _QUITTER_RECORDED,
+            r"\[lifetime-probe\] role=owner quitter outcome=unhealthy",
+        ),
+    ),
+    ("the graph certifies with the resident instance live", (_CERTIFIED.replace("(\\d+)", "\\d+"),)),
+)
+LIFETIME_EXIT_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("a resident required instance is told it is resident", (_answered("lifetime-leaver", "resident"), _probe("leaver", "resident"))),
+)
+
+# Every arm participates in the shared missing/reordered/failure controls. The
+# leaver's fatal line is the exit boot's expected terminal evidence, and is a
+# failure marker everywhere else, so it is judged by `judge_lifetime_exit`
+# rather than registered as a chain.
+CHAINS = RESTART_CHAINS + LIFETIME_RUN_CHAINS + LIFETIME_EXIT_CHAINS
 
 
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 lifecycle-restart plane check: {message}")
 
 
-def build_image() -> None:
-    global IMAGE
+def build_image(closure: str = CLOSURE) -> Path:
     try:
-        built = build_closure_image(CLOSURE)
+        built = build_closure_image(closure)
     except ClosureImageError as error:
         fail(str(error))
-    IMAGE = built.image
-    actual = sha256_file(IMAGE, fail)
+    image = built.image
+    actual = sha256_file(image, fail)
     if actual != built.digest():
         fail(
-            f"{IMAGE} SHA-256 is {actual}, but the build result records "
+            f"{image} SHA-256 is {actual}, but the build result records "
             f"{built.digest()}; the image changed after it was built"
         )
+    return image
 
 
-def boot(profile: dict[str, object]) -> str:
+RESTART_TERMINAL = re.compile(
+    rf"SLIME_GRAPH HEALTHY generation={GENERATION} required={REQUIRED_INSTANCES} "
+    rf"live=0 completed={REQUIRED_INSTANCES} failed=0"
+    r"|SLIME_ROOT FATAL|SLIME_LIFECYCLE FAIL|\[lifecycle\] FAIL"
+)
+
+
+def boot(
+    profile: dict[str, object],
+    image: Path,
+    terminal: re.Pattern[str] = RESTART_TERMINAL,
+    log_name: str = "lifecycle-restart",
+) -> str:
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
@@ -309,7 +394,7 @@ def boot(profile: dict[str, object]) -> str:
         "-serial",
         "mon:stdio",
         "-kernel",
-        str(IMAGE),
+        str(image),
     ]
     process = subprocess.Popen(
         command,
@@ -323,11 +408,6 @@ def boot(profile: dict[str, object]) -> str:
     watchdog = threading.Timer(TIMEOUT, process.kill)
     watchdog.start()
     lines: list[str] = []
-    terminal = re.compile(
-        rf"SLIME_GRAPH HEALTHY generation={GENERATION} required={REQUIRED_INSTANCES} "
-        rf"live=0 completed={REQUIRED_INSTANCES} failed=0"
-        r"|SLIME_ROOT FATAL|SLIME_LIFECYCLE FAIL|\[lifecycle\] FAIL"
-    )
     try:
         assert process.stdout is not None
         for line in process.stdout:
@@ -344,20 +424,20 @@ def boot(profile: dict[str, object]) -> str:
             process.kill()
             process.wait()
     transcript = "\n".join(lines)
-    (ROOT / "build" / "lifecycle-restart.serial.log").write_text(
+    (ROOT / "build" / f"{log_name}.serial.log").write_text(
         transcript + "\n", encoding="utf-8"
     )
     if timed_out:
-        fail("QEMU timed out; transcript: build/lifecycle-restart.serial.log")
+        fail(f"QEMU timed out; transcript: build/{log_name}.serial.log")
     return transcript
 
 
-def fixture_manifest() -> dict[str, object]:
+def fixture_manifest(fixture: Path = FIXTURE) -> dict[str, object]:
     """Decode the exercised lifecycle policy through Zutai."""
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
-        [str(binary()), "json", str(FIXTURE)],
+        [str(binary()), "json", str(fixture)],
         cwd=ROOT,
         env=environment,
         check=False,
@@ -800,12 +880,168 @@ def check_denials(transcript: str) -> None:
         fail("lifecycle-denied was not refused its own parameters")
 
 
+def check_lifetime_fixture(fixture: Path, generation: int, declared: dict[str, tuple[str, str, str, bool]]) -> int:
+    """Require the fixture's declared lifetimes; return how many autostart instances are required."""
+    if not fixture.is_file():
+        fail(f"{fixture.relative_to(ROOT)} does not exist; the instance-lifetime compositions have not landed")
+    manifest = fixture_manifest(fixture)
+    if manifest.get("generation") != generation:
+        fail(f"{fixture.name} declares generation {manifest.get('generation')!r}, expected {generation}")
+    instances = {entry["name"]: entry for entry in manifest["instances"]}
+    for name, (lifetime, health, owner, autostart) in declared.items():
+        entry = instances.get(name)
+        if entry is None:
+            fail(f"{fixture.name} declares no {name} instance")
+        observed = (entry.get("lifetime"), entry.get("health"), entry.get("owner"), entry.get("autostart"))
+        if observed != (lifetime, health, owner, autostart):
+            fail(f"{fixture.name} declares {name} as {observed!r}, expected {(lifetime, health, owner, autostart)!r}")
+    # Exactly the probe instances listed are resident, so every other instance
+    # (init included) is bounded and a live=1 certification can only be the holder.
+    residents = {name for name, entry in instances.items() if entry.get("lifetime") == "resident"}
+    expected = {name for name, (lifetime, *_rest) in declared.items() if lifetime == "resident"}
+    if residents != expected:
+        fail(f"{fixture.name} declares resident instances {sorted(residents)}, expected {sorted(expected)}")
+    if any(entry.get("lifetime") not in ("resident", "bounded") for entry in instances.values()):
+        fail(f"{fixture.name} declares an instance without a resident or bounded lifetime")
+    return sum(1 for entry in instances.values() if entry["autostart"] and entry["health"] == "required")
+
+
+class LifetimeRefusal(Exception):
+    """A judged lifetime transcript was refused; raised instead of exiting so controls can count it."""
+
+
+def _lifetime_reject(message: str) -> NoReturn:
+    raise LifetimeRefusal(message)
+
+
+def _task(transcript: str, instance: str, reject: Callable[[str], NoReturn]) -> str:
+    found = re.findall(rf"SLIME_GRAPH lifetime task=(\d+) instance={instance} lifetime=\w+", transcript)
+    if len(set(found)) != 1:
+        reject(f"the root answered {instance}'s lifetime for tasks {found!r}, expected exactly one task")
+    return found[0]
+
+
+def judge_lifetime_run(transcript: str, required: int, reject: Callable[[str], NoReturn]) -> int:
+    """Return the cases observed on `sel4-lifetime` (three), or reject the transcript."""
+    match_marker_contract(transcript, LIFETIME_RUN_CHAINS, FAILURE_MARKERS, reject)
+    holder = _task(transcript, "lifetime-holder", reject)
+    worker = _task(transcript, "lifetime-worker", reject)
+    certified = re.findall(_CERTIFIED, transcript)
+    if certified != [(str(required), str(required - 1))]:
+        reject(f"expected one certification with required={required} live=1 completed={required - 1}, observed {certified!r}")
+    certification = re.search(_CERTIFIED, transcript)
+    assert certification is not None
+    before = transcript[: certification.start()]
+    # The bounded worker completed before the certification that counts it; the
+    # holder never exited and was never recorded as a resident exit.
+    if len(re.findall(rf"SLIME_GRAPH component exit task={worker} status=0\b", before)) != 1:
+        reject("the bounded worker did not exit 0 exactly once before the certification")
+    if re.search(rf"SLIME_GRAPH component exit task={holder} ", transcript) or "instance=lifetime-holder status=" in transcript:
+        reject("the resident holder exited")
+    if len(re.findall(_QUITTER_RECORDED, transcript)) != 1:
+        reject("the resident quitter's exit was not recorded unhealthy exactly once")
+    if re.search(r"\[lifetime-probe\] role=owner quitter outcome=(?!unhealthy)", transcript):
+        reject("the owner observed the resident quitter as something other than unhealthy")
+    if re.search(rf"SLIME_GRAPH HEALTHY generation={LIFETIME_GENERATION} required=\d+ live=0 ", transcript):
+        reject("the graph certified live=0 while a resident required instance was declared")
+    return 3
+
+
+def judge_lifetime_exit(transcript: str, reject: Callable[[str], NoReturn]) -> int:
+    """Return the cases observed on `sel4-lifetime-exit` (one), or reject the transcript."""
+    lines = transcript.splitlines()
+    if lines.count(_LEAVER_FAILED) != 1 or not lines or lines[-1] != _LEAVER_FAILED:
+        reject(f"the exit boot did not end on exactly one {_LEAVER_FAILED!r}")
+    before = "\n".join(lines[:-1])
+    match_marker_contract(before, LIFETIME_EXIT_CHAINS, FAILURE_MARKERS, reject)
+    leaver = _task(before, "lifetime-leaver", reject)
+    if not re.search(rf"SLIME_GRAPH component exit task={leaver} status=0\b", before):
+        reject("the root recorded no clean exit for the resident leaver before failing the graph")
+    return 1
+
+
+def lifetime_controls(run: str, exit_transcript: str, required: int) -> int:
+    """Mutate the accepted transcripts and require every mutation to be refused; return the count."""
+    certification = re.search(_CERTIFIED, run)
+    recorded = re.search(_QUITTER_RECORDED, run)
+    if certification is None or recorded is None:
+        fail("lifetime controls need the accepted certification and resident-exit evidence")
+    worker = re.findall(r"SLIME_GRAPH lifetime task=(\d+) instance=lifetime-worker", run)[0]
+    holder = re.findall(r"SLIME_GRAPH lifetime task=(\d+) instance=lifetime-holder", run)[0]
+    observed = r"[lifetime-probe] role=owner quitter outcome=unhealthy"
+    runs = (
+        ("missing certification", run[: certification.start()] + run[certification.end():]),
+        ("missing resident-exit record", run[: recorded.start()] + run[recorded.end():]),
+        ("reordered resident exit", run.replace(recorded.group(0), "\0").replace(observed, recorded.group(0)).replace("\0", observed)),
+        ("explicit failure", run + "\n[lifetime-probe] FAIL injected control"),
+        ("worker exited nonzero", re.sub(rf"component exit task={worker} status=0\b", f"component exit task={worker} status=1", run)),
+        ("holder exited", run[: certification.start()] + f"SLIME_GRAPH component exit task={holder} status=0\n" + run[certification.start():]),
+        ("resident counted completed", run + f"\nSLIME_GRAPH HEALTHY generation={LIFETIME_GENERATION} required={required} live=0 completed={required} failed=0"),
+    )
+    exits = (
+        ("missing resident failure", exit_transcript.replace("\n" + _LEAVER_FAILED, "")),
+        ("failure names another instance", exit_transcript.replace(_LEAVER_FAILED, _LEAVER_FAILED.replace("lifetime-leaver", "lifetime-holder"))),
+    )
+    refused = 0
+    for label, mutated in runs:
+        try:
+            judge_lifetime_run(mutated, required, _lifetime_reject)
+        except LifetimeRefusal:
+            refused += 1
+            continue
+        fail(f"lifetime control accepted a mutated transcript: {label}")
+    for label, mutated in exits:
+        try:
+            judge_lifetime_exit(mutated, _lifetime_reject)
+        except LifetimeRefusal:
+            refused += 1
+            continue
+        fail(f"lifetime control accepted a mutated transcript: {label}")
+    return refused
+
+
+def run_lifetime_arm(profile: dict[str, object]) -> None:
+    required = check_lifetime_fixture(LIFETIME_FIXTURE, LIFETIME_GENERATION, LIFETIME_INSTANCES)
+    check_lifetime_fixture(LIFETIME_EXIT_FIXTURE, LIFETIME_EXIT_GENERATION, LIFETIME_EXIT_INSTANCES)
+    failures = "|".join(FAILURE_MARKERS)
+    run = boot(
+        profile,
+        build_image(LIFETIME_CLOSURE),
+        re.compile(_CERTIFIED + "|" + failures),
+        "lifetime",
+    )
+    exit_transcript = boot(
+        profile,
+        build_image(LIFETIME_EXIT_CLOSURE),
+        re.compile(failures),
+        "lifetime-exit",
+    )
+    try:
+        cases = judge_lifetime_run(run, required, _lifetime_reject)
+        cases += judge_lifetime_exit(exit_transcript, _lifetime_reject)
+    except LifetimeRefusal as error:
+        fail(f"{error}; transcripts: build/lifetime.serial.log, build/lifetime-exit.serial.log")
+    refused = lifetime_controls(run, exit_transcript, required)
+    print(f"[lifetime] cases={cases} controls-refused={refused}")
+    devloop_observations.record(casesObserved=cases, negativeControlsRefused=refused)
+    print(
+        "seL4 lifetime check: the root answered each instance's declared lifetime, certified the graph "
+        "with a resident instance live, counted a bounded instance completed, recorded a resident optional "
+        "exit as unhealthy for its owner, and failed the graph when a resident required instance exited"
+    )
+
+
 def main() -> None:
-    check_fixture_shape()
-    build_image()
+    parser = argparse.ArgumentParser(description="Boot and check the seL4 lifecycle planes")
+    parser.add_argument("--arm", choices=("restart", "lifetime"), default="restart")
+    arguments = parser.parse_args()
     profile = tomllib.loads(PINS.read_text(encoding="utf-8"))["qemu_arm_virt"]
-    transcript = boot(profile)
-    match_marker_contract(transcript, CHAINS, FAILURE_MARKERS, fail)
+    if arguments.arm == "lifetime":
+        run_lifetime_arm(profile)
+        return
+    check_fixture_shape()
+    transcript = boot(profile, build_image())
+    match_marker_contract(transcript, RESTART_CHAINS, FAILURE_MARKERS, fail)
     for pattern in EXPECTED_UNORDERED:
         if not re.search(pattern, transcript):
             fail(f"missing evidence: {pattern}")
