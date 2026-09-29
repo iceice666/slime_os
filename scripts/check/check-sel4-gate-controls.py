@@ -53,6 +53,9 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # contradict itself. It is controlled by `check_private_adaptive_controls`.
     ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 161),
     ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
+    # The device-present boot only; the device-less boot's chains contradict its
+    # hardware draws and are controlled by the gate's own mutations.
+    ("sel4_entropy_plane", "check/check-sel4-entropy-plane.py", 17),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
     ("sel4_lifecycle_restart_plane", "check/check-sel4-lifecycle-restart-plane.py", 55),

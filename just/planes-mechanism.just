@@ -43,6 +43,14 @@ io_tcp_options_check: sel4_pin_check link_peer_check
 sel4_net_check: sel4_pin_check sel4_spawn_check sel4_component_graph_check slisp_core_check test_host
     python3 scripts/check/check-sel4-io-network-plane.py --arm net
 
+# Entropy authority: a userspace entropy service over virtio-rng, booted twice
+# with the device and once without, with seeded draws judged against the
+# host's HMAC-DRBG and the contract and host regressions its tables add.
+# Explicit, never part of `all`.
+[group('planes / mechanism')]
+sel4_entropy_check: sel4_pin_check contracts_check system_spec_check test_host
+    python3 scripts/check/check-sel4-entropy-plane.py
+
 [group('planes / mechanism')]
 io_tcp_host_check:
     cargo test -p slime-network-tcp-tests --locked
