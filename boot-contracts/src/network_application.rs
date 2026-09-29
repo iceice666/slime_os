@@ -1,4 +1,9 @@
-//! Exact application bindings and bounded loopback-listener authority.
+//! Exact application bindings and bounded listener authority.
+//!
+//! A loopback listener admits one declared local client holder; an external
+//! listener admits one exact remote IPv4 address. Neither is a wildcard, and
+//! an external listener's local address is checked against the service's
+//! declared interface where that declaration is visible, not here.
 
 pub use crate::network_destination::holder_identity;
 include!("generated/network_application.rs");
@@ -38,6 +43,8 @@ pub struct Application<'a> {
     pub request_notification: &'a [u8],
     pub completion_notification: &'a [u8],
     pub allowed_peer_identity: [u8; 32],
+    /// The one remote address an external listener admits; zero otherwise.
+    pub admitted_peer_ipv4: [u8; 4],
     pub local_ipv4: [u8; 4],
     pub local_port: u16,
     pub rights: u16,
@@ -98,23 +105,24 @@ impl<'a> NetworkApplications<'a> {
         }
         for index in 0..count {
             let entry = table.application(index).ok_or(DecodeError::Truncated)?;
-            if entry.role == Role::Listener {
+            if entry.role == Role::Listener && entry.backend == Backend::Loopback {
                 let peer = table
                     .by_holder(&entry.allowed_peer_identity)
                     .ok_or(DecodeError::InvalidPeer)?;
                 if peer.role != Role::Client || peer.backend != Backend::Loopback {
                     return Err(DecodeError::InvalidPeer);
                 }
-                if (0..index)
+            }
+            if entry.role == Role::Listener
+                && (0..index)
                     .filter_map(|prior| table.application(prior))
                     .any(|prior| {
                         prior.role == Role::Listener
                             && prior.local_ipv4 == entry.local_ipv4
                             && prior.local_port == entry.local_port
                     })
-                {
-                    return Err(DecodeError::InvalidEntry);
-                }
+            {
+                return Err(DecodeError::InvalidEntry);
             }
         }
         Ok(table)
@@ -152,6 +160,7 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
         BACKEND_LOOPBACK => Backend::Loopback,
         _ => return Err(DecodeError::InvalidEntry),
     };
+    let peer_kind = bytes[OFF_ENTRY_PEER_KIND];
     if bytes[OFF_ENTRY_RESERVED0..OFF_ENTRY_RESERVED0_END]
         .iter()
         .any(|byte| *byte != 0)
@@ -189,6 +198,9 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
             [OFF_ENTRY_ALLOWED_PEER_IDENTITY..OFF_ENTRY_ALLOWED_PEER_IDENTITY_END]
             .try_into()
             .unwrap(),
+        admitted_peer_ipv4: bytes[OFF_ENTRY_ADMITTED_PEER_IPV4..OFF_ENTRY_ADMITTED_PEER_IPV4_END]
+            .try_into()
+            .unwrap(),
         local_ipv4: bytes[OFF_ENTRY_LOCAL_IPV4..OFF_ENTRY_LOCAL_IPV4_END]
             .try_into()
             .unwrap(),
@@ -215,9 +227,11 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
     }
     match role {
         Role::Client => {
-            if entry.local_ipv4 != [0; 4]
+            if peer_kind != PEER_NONE
+                || entry.local_ipv4 != [0; 4]
                 || entry.local_port != 0
                 || entry.allowed_peer_identity != [0; 32]
+                || entry.admitted_peer_ipv4 != [0; 4]
                 || entry.rights != 0
                 || entry.backlog != 0
                 || entry.accepted_socket_limit != 0
@@ -231,13 +245,23 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
             }
         }
         Role::Listener => {
-            if backend != Backend::Loopback
-                || entry.local_ipv4 != [127, 0, 0, 1]
-                || entry.local_port == 0
-                || entry.allowed_peer_identity == [0; 32]
-                || entry.allowed_peer_identity == entry.holder_identity
-                || entry.rights & RIGHT_LISTEN == 0
-            {
+            let peer_valid = match backend {
+                Backend::Loopback => {
+                    peer_kind == PEER_HOLDER
+                        && entry.local_ipv4 == [127, 0, 0, 1]
+                        && entry.allowed_peer_identity != [0; 32]
+                        && entry.allowed_peer_identity != entry.holder_identity
+                        && entry.admitted_peer_ipv4 == [0; 4]
+                }
+                Backend::External => {
+                    peer_kind == PEER_IPV4
+                        && unicast_host(entry.local_ipv4)
+                        && unicast_host(entry.admitted_peer_ipv4)
+                        && entry.admitted_peer_ipv4 != entry.local_ipv4
+                        && entry.allowed_peer_identity == [0; 32]
+                }
+            };
+            if !peer_valid || entry.local_port == 0 || entry.rights & RIGHT_LISTEN == 0 {
                 return Err(DecodeError::InvalidEntry);
             }
             if entry.backlog != 1
@@ -258,6 +282,12 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
         }
     }
     Ok(entry)
+}
+
+/// An exact host address: not unspecified, loopback, multicast, reserved or
+/// limited broadcast.
+pub const fn unicast_host(address: [u8; 4]) -> bool {
+    address[0] != 0 && address[0] != 127 && address[0] < 224
 }
 
 fn binding(bytes: &[u8], required: bool) -> Result<&[u8], DecodeError> {
@@ -306,6 +336,7 @@ mod tests {
     fn listener() -> [u8; ENTRY_BYTES] {
         let mut bytes = client(2, BACKEND_LOOPBACK);
         bytes[OFF_ENTRY_ROLE] = ROLE_LISTENER;
+        bytes[OFF_ENTRY_PEER_KIND] = PEER_HOLDER;
         bytes[OFF_ENTRY_ALLOWED_PEER_IDENTITY..OFF_ENTRY_ALLOWED_PEER_IDENTITY_END].fill(1);
         bytes[OFF_ENTRY_LOCAL_IPV4..OFF_ENTRY_LOCAL_IPV4_END].copy_from_slice(&[127, 0, 0, 1]);
         bytes[OFF_ENTRY_LOCAL_PORT..OFF_ENTRY_LOCAL_PORT_END]
@@ -321,6 +352,16 @@ mod tests {
         ] {
             put32(&mut bytes, offset, value);
         }
+        bytes
+    }
+    fn external_listener() -> [u8; ENTRY_BYTES] {
+        let mut bytes = listener();
+        bytes[OFF_ENTRY_BACKEND] = BACKEND_EXTERNAL;
+        bytes[OFF_ENTRY_PEER_KIND] = PEER_IPV4;
+        bytes[OFF_ENTRY_ALLOWED_PEER_IDENTITY..OFF_ENTRY_ALLOWED_PEER_IDENTITY_END].fill(0);
+        bytes[OFF_ENTRY_LOCAL_IPV4..OFF_ENTRY_LOCAL_IPV4_END].copy_from_slice(&[10, 0, 0, 1]);
+        bytes[OFF_ENTRY_ADMITTED_PEER_IPV4..OFF_ENTRY_ADMITTED_PEER_IPV4_END]
+            .copy_from_slice(&[10, 0, 0, 2]);
         bytes
     }
     fn object(entries: &[[u8; ENTRY_BYTES]]) -> Vec<u8> {
@@ -375,7 +416,7 @@ mod tests {
         for (offset, value, expected) in [
             (
                 OFF_HEADER_FORMAT_VERSION,
-                2,
+                1,
                 DecodeError::UnsupportedVersion,
             ),
             (OFF_HEADER_HEADER_SIZE, 0, DecodeError::UnsupportedVersion),
@@ -423,8 +464,10 @@ mod tests {
         for offset in [
             OFF_ENTRY_ROLE,
             OFF_ENTRY_BACKEND,
+            OFF_ENTRY_PEER_KIND,
             OFF_ENTRY_RESERVED0,
             OFF_ENTRY_RESERVED,
+            OFF_ENTRY_ADMITTED_PEER_IPV4,
             OFF_ENTRY_RIGHTS,
             OFF_ENTRY_LOCAL_IPV4,
             OFF_ENTRY_LOCAL_PORT,
@@ -491,7 +534,7 @@ mod tests {
             BINDING_BYTES
         );
         let peer = client(1, BACKEND_LOOPBACK);
-        for backend in [BACKEND_EXTERNAL, 0, 3] {
+        for backend in [0, 3] {
             let mut entry = listener();
             entry[OFF_ENTRY_BACKEND] = backend;
             assert!(NetworkApplications::decode(&object(&[peer, entry])).is_err());
@@ -539,6 +582,7 @@ mod tests {
             OFF_ENTRY_LOCAL_PORT,
             OFF_ENTRY_ALLOWED_PEER_IDENTITY,
             OFF_ENTRY_RIGHTS,
+            OFF_ENTRY_PEER_KIND,
         ] {
             let mut entry = valid;
             entry[offset] = 0;
@@ -613,5 +657,68 @@ mod tests {
             entry[OFF_ENTRY_RIGHTS..OFF_ENTRY_RIGHTS_END].copy_from_slice(&rights.to_le_bytes());
             assert!(NetworkApplications::decode(&object(&[peer, entry])).is_ok());
         }
+    }
+
+    #[test]
+    fn external_listener_admits_one_exact_remote_address_and_no_holder() {
+        let valid = external_listener();
+        let table_bytes = object(&[valid]);
+        let table = NetworkApplications::decode(&table_bytes).unwrap();
+        let entry = table.application(0).unwrap();
+        assert_eq!(entry.backend, Backend::External);
+        assert_eq!(entry.admitted_peer_ipv4, [10, 0, 0, 2]);
+        assert_eq!(entry.allowed_peer_identity, [0; 32]);
+        // A loopback listener cannot carry a remote address, nor an external
+        // one a holder; the discriminant must match the backend.
+        let mut remote_loopback = listener();
+        remote_loopback[OFF_ENTRY_ADMITTED_PEER_IPV4..OFF_ENTRY_ADMITTED_PEER_IPV4_END]
+            .copy_from_slice(&[10, 0, 0, 2]);
+        assert!(
+            NetworkApplications::decode(&object(&[client(1, BACKEND_LOOPBACK), remote_loopback]))
+                .is_err()
+        );
+        let mut holder_external = valid;
+        holder_external[OFF_ENTRY_ALLOWED_PEER_IDENTITY..OFF_ENTRY_ALLOWED_PEER_IDENTITY_END]
+            .fill(1);
+        assert!(
+            NetworkApplications::decode(&object(&[client(1, BACKEND_LOOPBACK), holder_external]))
+                .is_err()
+        );
+        let mut wrong_kind = valid;
+        wrong_kind[OFF_ENTRY_PEER_KIND] = PEER_HOLDER;
+        assert!(NetworkApplications::decode(&object(&[wrong_kind])).is_err());
+        for (offset, address) in [
+            (OFF_ENTRY_ADMITTED_PEER_IPV4, [0, 0, 0, 0]),
+            (OFF_ENTRY_ADMITTED_PEER_IPV4, [127, 0, 0, 1]),
+            (OFF_ENTRY_ADMITTED_PEER_IPV4, [224, 0, 0, 1]),
+            (OFF_ENTRY_ADMITTED_PEER_IPV4, [255, 255, 255, 255]),
+            (OFF_ENTRY_ADMITTED_PEER_IPV4, [10, 0, 0, 1]),
+            (OFF_ENTRY_LOCAL_IPV4, [0, 0, 0, 0]),
+            (OFF_ENTRY_LOCAL_IPV4, [127, 0, 0, 1]),
+            (OFF_ENTRY_LOCAL_IPV4, [10, 0, 0, 2]),
+        ] {
+            let mut entry = valid;
+            entry[offset..offset + 4].copy_from_slice(&address);
+            assert_eq!(
+                NetworkApplications::decode(&object(&[entry])).err(),
+                Some(DecodeError::InvalidEntry),
+                "offset={offset} address={address:?}"
+            );
+        }
+        let mut client_address = client(1, BACKEND_EXTERNAL);
+        client_address[OFF_ENTRY_ADMITTED_PEER_IPV4] = 10;
+        assert!(NetworkApplications::decode(&object(&[client_address])).is_err());
+        let mut duplicate = valid;
+        duplicate[OFF_ENTRY_HOLDER_IDENTITY..OFF_ENTRY_HOLDER_IDENTITY_END].fill(3);
+        assert_eq!(
+            NetworkApplications::decode(&object(&[valid, duplicate])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        let mut backlog = valid;
+        put32(&mut backlog, OFF_ENTRY_BACKLOG, 2);
+        assert_eq!(
+            NetworkApplications::decode(&object(&[backlog])).err(),
+            Some(DecodeError::Impossible)
+        );
     }
 }

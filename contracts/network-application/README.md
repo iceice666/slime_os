@@ -1,14 +1,17 @@
-# Network application authority, version 1
+# Network application authority, version 2
 
-`v1/schema.zt` defines the generation resource for explicit application bindings
-and exact local TCP listener authority. Generate its Python layout and Rust
+`v2/schema.zt` defines the generation resource for explicit application bindings
+and exact TCP listener authority. Generate its Python layout and Rust
 constants with `python3 scripts/generate/generate-boot-bindings.py`.
-`boot-contracts/src/network_application.rs` owns semantic decoding.
+`boot-contracts/src/network_application.rs` owns semantic decoding. `v1/`
+remains as the retained source of format version 1, which named a listener's
+admitted peer only as a local holder; the decoder refuses version 1.
 
 ## Encoding
 
-The 32-byte header contains magic `SLIMENA\0`, format version 1, header size,
-zero required flags, application count, and exact total length. At most four
+The 32-byte header contains magic `SLIMENA\0`, format version, header size,
+zero required flags, application count, and exact total length. The header
+carries format version 2. At most four
 320-byte entries follow, sorted strictly by their 32-byte holder identities.
 Zero and duplicate holders, trailing bytes, unknown discriminants/flags/rights,
 and nonzero reserved bytes are refused. Holder identities use the existing
@@ -18,7 +21,9 @@ Each entry contains:
 
 - Holder identity; control, provisioning, and optional supervision binding names;
   optional request/completion notification binding names.
-- Exact allowed peer identity, local IPv4 address/port, role, backend, and rights.
+- Exact allowed peer holder identity, local IPv4 address/port, role, backend,
+  rights, and the admitted-peer kind: none (`0`), holder (`1`) or IPv4 (`2`).
+- The admitted remote IPv4 address of an external listener.
 - Backlog, accepted-socket limit, byte/timer budgets, queue depth, retry limit,
   and reconnect limit; explicit reserved padding.
 
@@ -50,14 +55,27 @@ must be zero. Remote connect/send/receive authority remains exclusively in
 `network-destination/v1`; this resource never reinterprets a destination tuple
 as listener permission.
 
-A **listener** entry permits only the loopback backend and the exact address
+A **loopback listener** entry has peer kind holder and the exact address
 `127.0.0.1` with a nonzero port. Its peer must be a distinct holder present as a
-loopback client in this same table. Two holders cannot declare the same local
-listener endpoint. `LISTEN = 8` is mandatory; independent
-`SEND = 2` and `RECV = 4` may additionally be granted. No wildcard address, arbitrary
-external listener, unknown right, or implicit peer is admitted.
+loopback client in this same table, and its admitted address is zero.
 
-The v1 contract, encoder, decoder and service admit **only backlog one**; all
+An **external listener** entry has peer kind IPv4, a zero peer holder, a
+nonzero port and a local address that must be one the admitted generation
+declares for the network service's interface; the builder and the service check
+that, since this table cannot see the interface. Its admitted address is one
+exact unicast host other than the local address: not unspecified, loopback,
+multicast, reserved or limited broadcast. It admits any source port from that
+address; there is no prefix, range or wildcard.
+
+For both, two holders cannot declare the same local listener endpoint.
+`LISTEN = 8` is mandatory; independent `SEND = 2` and `RECV = 4` may
+additionally be granted. No wildcard address, unknown right, or implicit peer is
+admitted, and listen authority never comes from a destination row. In system
+specs and derived manifests `admittedPeer` names the holder and
+`admittedPeerAddress` the IPv4 address; exactly one is nonempty for a listener
+and both are empty for a client.
+
+The contract, encoder, decoder and service admit **only backlog one**; all
 other values fail closed. That slot
 includes a handshake or a connected socket awaiting accept. Accepted-socket
 limit is independently 1–4, and a successful accept may rearm the pending slot

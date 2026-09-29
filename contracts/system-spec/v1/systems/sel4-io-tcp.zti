@@ -458,6 +458,7 @@
       localAddress = "0.0.0.0";
       localPort = 0;
       admittedPeer = "";
+      admittedPeerAddress = "";
       rights = [];
       backlog = 0;
       acceptedSocketLimit = 0;

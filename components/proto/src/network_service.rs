@@ -40,6 +40,7 @@ pub const RING_BYTES: usize = 4096;
 pub const DATA_BYTES: usize = 4096;
 pub const OP_ATTACH: u8 = 8;
 pub const OP_ABORT: u8 = 9;
+pub const OP_SHUTDOWN: u8 = 10;
 pub const STATUS_SUCCESS: i32 = 0;
 pub const STATUS_DENIED: i32 = -1;
 pub const STATUS_MALFORMED: i32 = -2;

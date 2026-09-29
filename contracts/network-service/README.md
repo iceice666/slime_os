@@ -13,7 +13,7 @@ performs TCP I/O; a successful legacy endpoint request is not transport evidence
 The client resolves separate declared control and provisioning endpoints. The
 control endpoint is nontransferable; it carries the endpoint `OP_ATTACH` request
 with all operation fields zero. After admitting the binding declared by
-[`network-application/v1`](../network-application/README.md), the service allocates two distinct backing buffers through
+[`network-application/v2`](../network-application/README.md), the service allocates two distinct backing buffers through
 its explicit shared-buffer factory: one ring page and one 4096-byte payload page.
 It formats an IO0 ring with `QUEUE_SLOTS = 4`, then delegates a writable
 `SharedBufferLoan` for each page to the client on the provisioning endpoint,
@@ -234,7 +234,17 @@ handshake/accept slot, separate from already accepted children. A successful
 accept rearms that slot when the accepted-child, byte, timer, queue and fixed-pool
 limits permit; multiple live children of one listener are allowed. The bounded
 service-owned DNS path above is separate from the TCP pools; general application
-UDP, IPv6 and arbitrary external listener transport remain unsupported.
+UDP, IPv6 and wildcard or multi-peer external listeners remain unsupported.
+An external listener admits one exact remote IPv4 address on an address the
+service's interface owns; the service drops TCP to its endpoint from any other
+source before smoltcp, and publishes the reset smoltcp answers an excess
+admitted SYN with only for that address and endpoint.
+
+`OP_SHUTDOWN = 10` half-closes a connection: it carries only the connection
+capability, like close, queues a FIN after the bytes already queued, refuses
+later sends with `refused` and leaves receive open until EOF. A close whose
+connection still holds unread receive bytes aborts it with one reset and reports
+success, meaning local disposal; the peer learns the bytes were not consumed.
 
 The destination byte reservation covers the socket buffers only. The separate
 application ring and payload page, link frame pages, and fixed engine metadata
@@ -289,7 +299,8 @@ The fixed link buffers bound storage, not a per-holder control-traffic rate; no
 claim of all-frame holder authorization or ICMP/ARP rate limiting is made.
 
 Close success means local handle disposal, not a certificate of graceful remote
-delivery. An active close normally reaches TIME-WAIT; unexpected closure before
+delivery. A close with no unread bytes queues its FIN after any unsent bytes.
+An active close normally reaches TIME-WAIT; unexpected closure before
 that state reports `reset`. For a peer-first FIN, smoltcp's public state cannot
 distinguish a later reset from the final acknowledgment, so passive-close success
 still means local disposal only. Successful close preserves TIME-WAIT rather

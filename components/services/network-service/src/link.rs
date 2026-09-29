@@ -24,6 +24,8 @@ use slime_rt::{
     notification_signal, shared_buffer_create, shared_buffer_loan, shared_buffer_map, yield_now,
 };
 use smoltcp::phy::{self, Checksum, ChecksumCapabilities, DeviceCapabilities, Medium};
+
+use super::tcp::{Ingress, ListenerRule, listener_ingress};
 use smoltcp::time::Instant;
 
 const BASE: u64 = 0x0000_0019_0000_0000;
@@ -211,6 +213,9 @@ pub struct Link {
     pub tx: TxSide,
     peer: u32,
     state_changed: u32,
+    rules: [Option<ListenerRule>; super::tcp::SOCKETS],
+    /// Bare SYNs dropped because their source is not the listener's admitted peer.
+    pub unadmitted: u32,
 }
 
 impl TxSide {
@@ -336,6 +341,27 @@ impl Link {
             },
             peer: peer_slot,
             state_changed,
+            rules: [None; super::tcp::SOCKETS],
+            unadmitted: 0,
+        }
+    }
+
+    pub fn admit_listener(&mut self, rule: ListenerRule) -> bool {
+        let Some(slot) = self.rules.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+        *slot = Some(rule);
+        true
+    }
+
+    /// Whether a received frame may reach the stack; counts unadmitted SYNs.
+    fn ingress_admitted(&mut self, frame: &[u8]) -> bool {
+        match listener_ingress(&self.rules, frame) {
+            Ingress::Deliver => true,
+            Ingress::Drop { syn } => {
+                self.unadmitted += u32::from(syn);
+                false
+            }
         }
     }
 
@@ -527,10 +553,18 @@ impl phy::Device for Link {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if !self.rx.slots.has_ready() || self.tx.free_slot().is_none() {
-            return None;
-        }
-        let (slot, len) = self.rx.slots.take_ready()?;
+        self.tx.free_slot()?;
+        let (slot, len) = loop {
+            if !self.rx.slots.has_ready() {
+                return None;
+            }
+            let (slot, len) = self.rx.slots.take_ready()?;
+            // A taken slot is already free; a dropped frame is simply not delivered.
+            let frame = &self.rx.side.pages[slot].bytes()[..len];
+            if self.ingress_admitted(frame) {
+                break (slot, len);
+            }
+        };
         Some((
             RxToken {
                 rx: &mut self.rx,

@@ -22,7 +22,7 @@ and [protocol semantics](../../contracts/network-service/README.md) own that
 implementation and its limits. The first stream item is
 `01a08ff0-0bae-741e-9318-331fdafe0b96`; state remains in the work-item store.
 
-Generation-declared application bindings, separate exact local listener/peer
+Generation-declared application bindings, separate exact listener/peer
 authority, real loopback connect/listen/accept and notification-backed bounded
 waiting are now implemented. Local QEMU has observed bidirectional bytes, EOF,
 normal teardown and coalesced readiness. The supervised lifetime path has observed
@@ -36,8 +36,10 @@ advance and supervised recovery with a fresh 4096-byte stream. Its controlled pe
 abandons the first acknowledged, unechoed 1024-byte session on a new SYN; this is
 not transparent continuation or ordinary-server interoperability across reset.
 Local qualification also observes authority refusals and a typed receive timeout
-followed by resumed traffic. Physical-device recovery, general application UDP,
-arbitrary external listeners and broader backends remain separate work. The
+followed by resumed traffic. One exact external listener with half-close and
+the other close orderings is qualified by `just io_tcp_listener_check`.
+Physical-device recovery, general application UDP, wildcard external listeners
+and broader backends remain separate work. The
 bounded HTTP/DNS slice below extends this transport without broad DNS coverage.
 
 ## Planned scope
@@ -248,12 +250,14 @@ slices, and no physical NIC is qualified.
 
 Work item `01a0e239-ad77-7754-874f-b8703be81c04` admits one exact external
 listener and fixes close semantics for every TCP connection. Its declarations
-and wire policy are stated here before the implementation;
-`just io_tcp_listener_check` holds the wire to them.
+and wire policy were stated here before the implementation;
+`just io_tcp_listener_check` holds the wire to them. The
+[network service page](../architecture/network-service.md#external-listener)
+owns the implemented behavior.
 
-**Declaration.** `network-application/v1` names a listener's admitted peer only
-as a holder in the same table, which cannot express a remote host. The slice
-introduces `network-application/v2`, keeping v1's bindings, budgets and
+**Declaration.** `network-application/v1` named a listener's admitted peer only
+as a holder in the same table, which cannot express a remote host.
+`network-application/v2` keeps v1's bindings, budgets and
 loopback rules, and separating local and remote identity: a listener row
 carries its exact local IPv4 address and port, and an admitted-peer kind that
 is either a holder (loopback only, as in v1) or one exact remote IPv4 address
@@ -349,7 +353,7 @@ owning slices, chiefly the media and backend classification.
 | ICMPv4 echo reply | protocol | `src/iface/interface/ipv4.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Automatic reply to the service's own address only | Same frame budget | `just io_network_qualification_check` |
 | TCP external connect | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service-held; clients reach it only through exact destination grants | 4 sockets, 2048-byte buffers, 10 s timeout | `just io_network_qualification_check` |
 | TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, 2048-byte buffers | `just io_tcp_check` |
-| TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | Exact external listener grants with admitted peer policy | Declared by the owning slice | Owning slice's recipe |
+| TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | `network-application/v2` listener row: one interface address and port, one exact admitted IPv4; other sources dropped before smoltcp | Backlog 1, 1–4 accepted connections at 4096 bytes each, shared 4-socket pool | `just io_tcp_listener_check` |
 | TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | supported | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | 4 out-of-order ranges, 2048-byte RX and TX per socket, retransmissions within the destination `retryLimit`, 10 s socket timeout | `just io_tcp_impairment_check` |
 | TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per application binding, never client-chosen | Declared by the owning slice | Owning slice's recipe |
 | TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Fixed service policy | 10 s operation timeout, no ack delay | `just io_network_qualification_check` |
@@ -563,7 +567,7 @@ of its optional dependencies, has exactly one row.
 | `socket-raw` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Raw sockets; applications never gain raw-packet authority | Declared by the owning slice | Owning slice's recipe |
 | `socket-tcp` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9, 01a0ddaa-825f-7309-8508-ed49ffe33a8d | TCP sockets exist only inside the service; clients hold typed handles for exact granted destinations and listeners | 4 sockets, 2048-byte RX and TX buffers each, 10 s operation timeout | `just io_network_qualification_check` |
 | `socket-tcp-cubic` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected | Declared by the owning slice | Owning slice's recipe |
-| `socket-tcp-pause-synack` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | Lets the service refuse a SYN for an unadmitted peer before SYN-ACK | Declared by the owning slice | Owning slice's recipe |
+| `socket-tcp-pause-synack` | feature | `Cargo.toml` `[features]` | not-applicable | — | 01a0e239-ad77-7754-874f-b8703be81c04 | Nothing to decide: the service drops an unadmitted listener SYN before smoltcp, so no SYN-ACK is ever withheld | — | — |
 | `socket-tcp-reno` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected | Declared by the owning slice | Owning slice's recipe |
 | `socket-udp` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Only the service's resolver holds a UDP socket; no client UDP authority exists yet | 1 socket, 512-byte DNS packet buffers, 1 packet of metadata each way | `just io_network_qualification_check` |
 | `std` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Host standard library; the service is `no_std` | Declared by the owning slice | Owning slice's recipe |

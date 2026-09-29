@@ -1,0 +1,134 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-tcp-listener";
+  generation = 162;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [ "init"; "io-tcp-listener-probe"; "network-service"; "virtio-net-driver"; ];
+  placements = [
+    { component = "init"; spawnBudget = 0; };
+    { component = "io-tcp-listener-probe"; dependencies = []; };
+    { component = "network-service"; dependencies = [ "virtio-net-driver"; ]; };
+    { component = "virtio-net-driver"; };
+  ];
+  instances = [
+    { name = "init"; executable = "init"; };
+    { name = "virtio-net-driver"; executable = "virtio-net-driver"; mappingCount = 10; loanCount = 10; };
+    { name = "network-service"; executable = "network-service"; dependencies = [ "virtio-net-driver"; ]; bufferBytePages = 14; bufferCount = 14; mappingCount = 14; loanCount = 14; };
+    { name = "listener-session"; executable = "io-tcp-listener-probe"; dependencies = []; mappingCount = 2; loanCount = 2; };
+    { name = "intruder-session"; executable = "io-tcp-listener-probe"; dependencies = []; mappingCount = 2; loanCount = 2; };
+  ];
+  grants = [
+    { name = "listener-session-control"; capabilityKind = "endpoint"; source = "listener-session"; target = "network-service"; rights = [ "send"; "recv"; ]; transferable = false; };
+    { name = "listener-session-provision"; capabilityKind = "endpoint"; source = "network-service"; target = "listener-session"; rights = [ "send"; "recv"; ]; transferable = true; };
+    { name = "intruder-session-control"; capabilityKind = "endpoint"; source = "intruder-session"; target = "network-service"; rights = [ "send"; "recv"; ]; transferable = false; };
+    { name = "intruder-session-provision"; capabilityKind = "endpoint"; source = "network-service"; target = "intruder-session"; rights = [ "send"; "recv"; ]; transferable = true; };
+    { name = "network-service-link-peer"; capabilityKind = "endpoint"; source = "network-service"; target = "virtio-net-driver"; rights = [ "send"; "recv"; ]; transferable = true; };
+    { name = "network-service-buffer-factory"; capabilityKind = "sharedBufferFactory"; source = "init"; target = "network-service"; rights = [ "bufferCreate"; ]; transferable = false; };
+    { name = "virtio-net-device"; capabilityKind = "device"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "mapMmio"; ]; transferable = false; };
+    { name = "virtio-net-mmio"; capabilityKind = "mmioRegion"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "mapMmio"; ]; transferable = false; };
+    { name = "virtio-net-interrupt"; capabilityKind = "interruptSource"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "irqAck"; ]; transferable = false; };
+    { name = "virtio-net-dma"; capabilityKind = "dmaAccount"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "dmaPin"; "dmaRelease"; ]; transferable = false; };
+  ];
+  slotPins = [
+    { holder = "network-service"; grant = "network-service-link-peer"; slot = 0; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "network-service-buffer-factory"; slot = 1; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "listener-session-control"; slot = 2; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "intruder-session-control"; slot = 3; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "listener-session-provision"; slot = 29; reason = "encodedLayout"; };
+    { holder = "network-service"; grant = "intruder-session-provision"; slot = 30; reason = "encodedLayout"; };
+    { holder = "virtio-net-driver"; grant = "network-service-link-peer"; slot = 0; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-device"; slot = 1; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-mmio"; slot = 2; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-interrupt"; slot = 3; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-dma"; slot = 4; reason = "componentAbi"; };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [ { component = "network-service"; bytes = 262144; }; ];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    { name = "io-link-tx-request-ready"; source = "network-service"; target = "virtio-net-driver"; };
+    { name = "io-link-rx-request-ready"; source = "network-service"; target = "virtio-net-driver"; };
+    { name = "io-link-tx-completion-ready"; source = "virtio-net-driver"; target = "network-service"; };
+    { name = "io-link-rx-completion-ready"; source = "virtio-net-driver"; target = "network-service"; };
+    { name = "io-link-state-changed"; source = "virtio-net-driver"; target = "network-service"; };
+    { name = "listener-network-request"; source = "listener-session"; target = "network-service"; };
+    { name = "listener-session-done"; source = "network-service"; target = "listener-session"; };
+    { name = "intruder-session-done"; source = "network-service"; target = "intruder-session"; };
+  ];
+  notificationBindings = [
+    { grant = "io-link-tx-request-ready"; holder = "network-service"; role = "signal"; slot = 0; };
+    { grant = "io-link-tx-request-ready"; holder = "virtio-net-driver"; role = "wait"; slot = 0; };
+    { grant = "io-link-rx-request-ready"; holder = "network-service"; role = "signal"; slot = 1; };
+    { grant = "io-link-rx-request-ready"; holder = "virtio-net-driver"; role = "wait"; slot = 1; };
+    { grant = "io-link-tx-completion-ready"; holder = "virtio-net-driver"; role = "signal"; slot = 2; };
+    { grant = "io-link-tx-completion-ready"; holder = "network-service"; role = "wait"; slot = 2; };
+    { grant = "io-link-rx-completion-ready"; holder = "virtio-net-driver"; role = "signal"; slot = 3; };
+    { grant = "io-link-rx-completion-ready"; holder = "network-service"; role = "wait"; slot = 3; };
+    { grant = "io-link-state-changed"; holder = "virtio-net-driver"; role = "signal"; slot = 4; };
+    { grant = "io-link-state-changed"; holder = "network-service"; role = "wait"; slot = 4; };
+    { grant = "listener-network-request"; holder = "listener-session"; role = "signal"; slot = 0; };
+    { grant = "listener-network-request"; holder = "intruder-session"; role = "signal"; slot = 1; };
+    { grant = "listener-network-request"; holder = "network-service"; role = "wait"; slot = 5; };
+    { grant = "listener-session-done"; holder = "network-service"; role = "signal"; slot = 6; };
+    { grant = "listener-session-done"; holder = "listener-session"; role = "wait"; slot = 1; };
+    { grant = "intruder-session-done"; holder = "network-service"; role = "signal"; slot = 7; };
+    { grant = "intruder-session-done"; holder = "intruder-session"; role = "wait"; slot = 0; };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    { holder = "network-service"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "listener-network-request"; timerBadgeBit = 7; };
+    { holder = "listener-session"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "listener-session-done"; timerBadgeBit = 7; };
+    { holder = "intruder-session"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "intruder-session-done"; timerBadgeBit = 6; };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [
+    { holder = "virtio-net-driver"; bufferLoans = 16; dmaMappings = 18; dmaPages = 20; irqSources = 1; mmioBytes = 4096; mmioMappings = 1; outstandingRequests = 16; };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [
+    { holder = "listener-session"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4280; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 4096; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+  ];
+  networkDestinationsObject = true;
+  networkApplications = [
+    { holder = "listener-session"; controlBinding = "listener-session-control"; provisionBinding = "listener-session-provision"; supervisionBinding = ""; requestNotification = "listener-network-request"; completionNotification = "listener-session-done"; role = "listener"; backend = "external"; localAddress = "10.0.0.1"; localPort = 4270; admittedPeer = ""; admittedPeerAddress = "10.0.0.2"; rights = [ "listen"; "send"; "recv"; ]; backlog = 1; acceptedSocketLimit = 2; byteBudget = 8192; timerBudget = 4; queueDepth = 4; retryLimit = 16; reconnectLimit = 0; };
+    { holder = "intruder-session"; controlBinding = "intruder-session-control"; provisionBinding = "intruder-session-provision"; supervisionBinding = ""; requestNotification = "listener-network-request"; completionNotification = "intruder-session-done"; role = "client"; backend = "external"; localAddress = "0.0.0.0"; localPort = 0; admittedPeer = ""; admittedPeerAddress = ""; rights = []; backlog = 0; acceptedSocketLimit = 0; byteBudget = 0; timerBudget = 0; queueDepth = 0; retryLimit = 0; reconnectLimit = 0; };
+  ];
+  networkApplicationsObject = true;
+  networkInterfaces = [
+    { holder = "network-service"; address = "10.0.0.1"; prefixLen = 24; gateway = "0.0.0.0"; mac = "52:54:00:53:4c:01"; };
+  ];
+  networkInterfacesObject = true;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [
+    { waiter = "network-service"; notification = "listener-network-request"; badgeBit = 0; kind = "stream"; drainSlot = 2; };
+    { waiter = "network-service"; notification = "listener-network-request"; badgeBit = 1; kind = "stream"; drainSlot = 3; };
+    { waiter = "network-service"; notification = "listener-network-request"; badgeBit = 7; kind = "timer"; };
+    { waiter = "listener-session"; notification = "listener-session-done"; badgeBit = 6; kind = "stream"; drainSlot = 0; };
+    { waiter = "listener-session"; notification = "listener-session-done"; badgeBit = 7; kind = "timer"; };
+    { waiter = "intruder-session"; notification = "intruder-session-done"; badgeBit = 7; kind = "stream"; drainSlot = 0; };
+    { waiter = "intruder-session"; notification = "intruder-session-done"; badgeBit = 6; kind = "timer"; };
+  ];
+  waitSetObject = true;
+  lifecyclePolicy = {
+    initialState = "Initialize";
+    terminalState = "Error";
+    transitions = [ { from = "Initialize"; to = "Running"; }; { from = "Running"; to = "Error"; }; ];
+    restarts = [];
+    dependencies = [];
+    parameters = [ { holder = "network-service"; subject = "network-service"; read = true; write = true; }; ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "AArch64 seL4 QEMU external TCP listener behind a scripted frame peer; no physical NIC claim.";
+  acceptanceCriteria = "One exact external listener accepts only its admitted peer, refuses excess attempts deterministically, and settles half-close, simultaneous close and close with unread or unsent bytes with reclamation, judged from the wire.";
+}

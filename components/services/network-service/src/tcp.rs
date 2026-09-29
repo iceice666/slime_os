@@ -83,13 +83,104 @@ struct Connection {
     terminal: Option<Status>,
     peer_fin_seen: bool,
     listener: Option<u64>,
+    shutdown: bool,
+    /// Receive and transmit queue depths when the holder requested close.
+    close_queues: (usize, usize),
+}
+
+/// Whom a listener admits: one declared loopback client holder, or one exact
+/// remote address on an external interface.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Peer {
+    Holder([u8; 32]),
+    Address([u8; 4]),
+}
+
+/// How an accepted connection's close settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminal {
+    TimeWait,
+    Closed,
+    Reset,
+    Timeout,
+}
+
+/// Engine observations the service reports, in the order they happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    /// An accepted connection's close settled; the queues are those at the
+    /// close request, and its whole socket reservation was returned.
+    AcceptedClose {
+        unread: usize,
+        unsent: usize,
+        terminal: Terminal,
+        bytes: usize,
+    },
+    ListenerClosed {
+        children: usize,
+    },
+}
+
+const EVENTS: usize = 4;
+
+/// One external listener's ingress rule: TCP to `local:port` reaches the stack
+/// only from `admitted`. Anything else is dropped before smoltcp can answer it
+/// or hold it in the listener's backlog slot.
+#[derive(Clone, Copy)]
+pub struct ListenerRule {
+    pub local: [u8; 4],
+    pub port: u16,
+    pub admitted: [u8; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ingress {
+    Deliver,
+    /// Dropped; `syn` marks a bare SYN, an unadmitted connection attempt.
+    Drop {
+        syn: bool,
+    },
+}
+
+/// Classify one received Ethernet frame against the listener rules. Frames
+/// that are not IPv4 TCP to a ruled endpoint pass; smoltcp validates them.
+pub fn listener_ingress(rules: &[Option<ListenerRule>], frame: &[u8]) -> Ingress {
+    let Ok(ethernet) = EthernetFrame::new_checked(frame) else {
+        return Ingress::Deliver;
+    };
+    if ethernet.ethertype() != EthernetProtocol::Ipv4 {
+        return Ingress::Deliver;
+    }
+    let Ok(ip) = Ipv4Packet::new_checked(ethernet.payload()) else {
+        return Ingress::Deliver;
+    };
+    if ip.next_header() != IpProtocol::Tcp {
+        return Ingress::Deliver;
+    }
+    let Ok(tcp) = TcpPacket::new_checked(ip.payload()) else {
+        return Ingress::Deliver;
+    };
+    let destination = ip.dst_addr().octets();
+    let Some(rule) = rules
+        .iter()
+        .flatten()
+        .find(|rule| rule.local == destination && rule.port == tcp.dst_port())
+    else {
+        return Ingress::Deliver;
+    };
+    if rule.admitted == ip.src_addr().octets() {
+        return Ingress::Deliver;
+    }
+    Ingress::Drop {
+        syn: tcp.syn() && !tcp.ack(),
+    }
 }
 
 #[derive(Clone, Copy)]
 struct Listener {
     id: u64,
     holder: [u8; 32],
-    peer: [u8; 32],
+    peer: Peer,
     address: [u8; 4],
     port: u16,
     rights: u16,
@@ -157,6 +248,9 @@ pub struct Engine<'a> {
     dns_observation: Option<DnsObservation>,
     peaks: Peaks,
     timeout_reclaimed: Option<Reclaimed>,
+    loopback: bool,
+    excess_refusals: u32,
+    events: [Option<Event>; EVENTS],
 }
 
 /// The most bytes any socket held queued at once in each direction.
@@ -205,6 +299,9 @@ impl<'a> Engine<'a> {
             dns_observation: None,
             peaks: Peaks::default(),
             timeout_reclaimed: None,
+            loopback: backend == 1,
+            excess_refusals: 0,
+            events: [None; EVENTS],
         })
     }
 
@@ -234,6 +331,61 @@ impl<'a> Engine<'a> {
             Err(error) => {
                 self.sockets.remove(handle);
                 Err(error)
+            }
+        }
+    }
+
+    /// The oldest unreported engine observation.
+    pub fn take_event(&mut self) -> Option<Event> {
+        let event = self.events[0].take()?;
+        self.events.rotate_left(1);
+        Some(event)
+    }
+
+    /// Admitted-peer SYNs refused with a reset because no listening socket
+    /// was armed: the backlog slot was occupied or the accepted limit reached.
+    pub const fn excess_refusals(&self) -> u32 {
+        self.excess_refusals
+    }
+
+    fn record(&mut self, event: Event) {
+        // A full queue keeps the oldest observations; the service drains it
+        // after every dispatch, so it holds at most one event per socket.
+        if let Some(slot) = self.events.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
+        }
+    }
+
+    fn backend(&self) -> Backend {
+        if self.loopback {
+            Backend::Loopback
+        } else {
+            Backend::External
+        }
+    }
+
+    /// Whether a listener's peer policy admits the socket at `remote`.
+    fn admits(&self, peer: Peer, local: Option<IpEndpoint>, remote: Option<IpEndpoint>) -> bool {
+        match peer {
+            Peer::Address(address) => remote
+                .is_some_and(|remote| remote.addr == IpAddress::Ipv4(Ipv4Address::from(address))),
+            Peer::Holder(holder) => {
+                self.connections
+                    .iter()
+                    .enumerate()
+                    .any(|(peer_index, connection)| {
+                        connection.is_some_and(|connection| connection.holder == holder)
+                            && self
+                                .sockets
+                                .get::<Socket>(self.handles[peer_index])
+                                .local_endpoint()
+                                == remote
+                            && self
+                                .sockets
+                                .get::<Socket>(self.handles[peer_index])
+                                .remote_endpoint()
+                                == local
+                    })
             }
         }
     }
@@ -485,6 +637,25 @@ impl<'a> Engine<'a> {
                 self.resets[index] = None;
                 return true;
             }
+            // smoltcp acknowledges only a bare SYN it refuses. Publish that
+            // refusal solely for an external listener's admitted peer at its
+            // declared endpoint, where no socket was armed to take it.
+            let unknown = !self.handles.iter().any(|handle| {
+                let socket = self.sockets.get::<Socket>(*handle);
+                socket.local_endpoint() == Some(local) && socket.remote_endpoint() == Some(remote)
+            });
+            if tcp.ack()
+                && unknown
+                && self.listeners.iter().flatten().any(|listener| {
+                    listener.active
+                        && listener.peer == Peer::Address(ip.dst_addr().octets())
+                        && listener.address == ip.src_addr().octets()
+                        && listener.port == tcp.src_port()
+                })
+            {
+                self.excess_refusals += 1;
+                return true;
+            }
             return false;
         }
         let Some(index) = self.handles.iter().position(|handle| {
@@ -499,24 +670,7 @@ impl<'a> Engine<'a> {
             .position(|listener| listener.is_some_and(|listener| listener.socket == Some(index)))
         {
             let listener = self.listeners[listener_index].expect("located listener");
-            let admitted_peer =
-                self.connections
-                    .iter()
-                    .enumerate()
-                    .any(|(peer_index, connection)| {
-                        connection.is_some_and(|connection| connection.holder == listener.peer)
-                            && self
-                                .sockets
-                                .get::<Socket>(self.handles[peer_index])
-                                .local_endpoint()
-                                == Some(remote)
-                            && self
-                                .sockets
-                                .get::<Socket>(self.handles[peer_index])
-                                .remote_endpoint()
-                                == Some(local)
-                    });
-            if !admitted_peer {
+            if !self.admits(listener.peer, Some(local), Some(remote)) {
                 return false;
             }
             let length = tcp.payload().len() + usize::from(tcp.syn()) + usize::from(tcp.fin());
@@ -739,6 +893,7 @@ impl<'a> Engine<'a> {
         policy: &Application<'_>,
         request: WireNetworkRequest,
         now: Instant,
+        iface: &Interface,
     ) -> Outcome {
         self.last_now = now;
         let fail = |status| Outcome::Complete(Completion::status(status));
@@ -747,7 +902,7 @@ impl<'a> Engine<'a> {
         }
         if policy.holder_identity != holder
             || policy.role != Role::Listener
-            || policy.backend != Backend::Loopback
+            || policy.backend != self.backend()
             || policy.backlog != 1
             || policy.rights & boot_contracts::network_application::RIGHT_LISTEN == 0
             || request.transport != wire::TRANSPORT_TCP
@@ -757,6 +912,16 @@ impl<'a> Engine<'a> {
         {
             return fail(Status::Denied);
         }
+        let peer = match policy.backend {
+            Backend::Loopback => Peer::Holder(policy.allowed_peer_identity),
+            Backend::External => {
+                // An external listener needs an address this interface owns.
+                if !iface.has_ip_addr(IpAddress::Ipv4(Ipv4Address::from(policy.local_ipv4))) {
+                    return fail(Status::Denied);
+                }
+                Peer::Address(policy.admitted_peer_ipv4)
+            }
+        };
         self.refresh_listeners();
         if self.listeners.iter().flatten().any(|listener| {
             listener.address == policy.local_ipv4 && listener.port == policy.local_port
@@ -772,7 +937,7 @@ impl<'a> Engine<'a> {
         self.listeners[index] = Some(Listener {
             id,
             holder,
-            peer: policy.allowed_peer_identity,
+            peer,
             address: policy.local_ipv4,
             port: policy.local_port,
             rights: policy.rights,
@@ -816,24 +981,8 @@ impl<'a> Engine<'a> {
         if !matches!(socket.state(), State::Established | State::CloseWait) {
             return fail(Status::WouldBlock);
         }
-        let peer_ok = self
-            .connections
-            .iter()
-            .enumerate()
-            .any(|(peer_index, connection)| {
-                connection.is_some_and(|connection| connection.holder == listener.peer)
-                    && self
-                        .sockets
-                        .get::<Socket>(self.handles[peer_index])
-                        .local_endpoint()
-                        == socket.remote_endpoint()
-                    && self
-                        .sockets
-                        .get::<Socket>(self.handles[peer_index])
-                        .remote_endpoint()
-                        == socket.local_endpoint()
-            });
-        if !peer_ok {
+        let (local, remote) = (socket.local_endpoint(), socket.remote_endpoint());
+        if !self.admits(listener.peer, local, remote) {
             return fail(Status::Denied);
         }
         let Some(id) = self.next_id() else {
@@ -852,6 +1001,8 @@ impl<'a> Engine<'a> {
             terminal: None,
             peer_fin_seen: false,
             listener: Some(listener.id),
+            shutdown: false,
+            close_queues: (0, 0),
         });
         self.listeners[index]
             .as_mut()
@@ -883,17 +1034,18 @@ impl<'a> Engine<'a> {
         }
         let Some(policy) = applications
             .by_holder(&holder)
-            .filter(|policy| policy.backend == Backend::Loopback)
+            .filter(|policy| policy.backend == self.backend())
         else {
             return fail(Status::Denied);
         };
         if request.op == wire::OP_LISTEN {
-            return self.listen(holder, &policy, request, now);
+            return self.listen(holder, &policy, request, now, iface);
         }
         if request.op == wire::OP_ACCEPT {
             return self.accept(holder, request.capability, now);
         }
-        if request.op == wire::OP_CONNECT {
+        // External connects take the destination-authority path in `handle`.
+        if request.op == wire::OP_CONNECT && self.loopback {
             if policy.role != Role::Client
                 || request.transport != wire::TRANSPORT_TCP
                 || request.address_kind != wire::ADDRESS_IPV4
@@ -956,9 +1108,12 @@ impl<'a> Engine<'a> {
         {
             let listener = self.listeners[index].as_mut().expect("located listener");
             listener.active = false;
+            let id = listener.id;
             if let Some(slot) = listener.socket.take() {
                 self.abort_socket(slot);
             }
+            let children = self.children(id);
+            self.record(Event::ListenerClosed { children });
             self.refresh_listeners();
             return fail(Status::Success);
         }
@@ -1077,7 +1232,10 @@ impl<'a> Engine<'a> {
         if request.op == wire::OP_CONNECT {
             return self.connect(destinations, holder, request, now, iface);
         }
-        if !matches!(request.op, wire::OP_SEND | wire::OP_RECV | wire::OP_CLOSE) {
+        if !matches!(
+            request.op,
+            wire::OP_SEND | wire::OP_RECV | wire::OP_CLOSE | wire::OP_SHUTDOWN
+        ) {
             return Outcome::Complete(Completion::status(Status::Unsupported));
         }
         let Some(index) = self.find(holder, request.capability) else {
@@ -1097,12 +1255,31 @@ impl<'a> Engine<'a> {
         }
         let socket = self.sockets.get_mut::<Socket>(self.handles[index]);
         if request.op == wire::OP_CLOSE {
-            let peer_fin_seen = socket.state() == State::CloseWait;
+            let queues = (socket.recv_queue(), socket.send_queue());
+            if connection.terminal.is_none() && queues.0 != 0 {
+                // Unread bytes would be lost silently behind a FIN; abort so
+                // the peer learns they were not consumed. Close still reports
+                // local disposal.
+                self.abort_socket(index);
+                self.connections[index] = None;
+                if connection.listener.is_some() {
+                    self.record(Event::AcceptedClose {
+                        unread: queues.0,
+                        unsent: queues.1,
+                        terminal: Terminal::Reset,
+                        bytes: 2 * BUFFER_BYTES,
+                    });
+                }
+                return Outcome::Complete(Completion::status(Status::Success));
+            }
+            // LAST-ACK follows a shutdown after the peer's FIN.
+            let peer_fin_seen = matches!(socket.state(), State::CloseWait | State::LastAck);
             socket.close();
             self.connections[index] = Some(Connection {
                 phase: Phase::Closing,
                 peer_fin_seen,
                 deadline: now + OPERATION_TIMEOUT,
+                close_queues: queues,
                 ..connection
             });
             return Outcome::Pending {
@@ -1111,6 +1288,20 @@ impl<'a> Engine<'a> {
         }
         if let Some(status) = connection.terminal {
             return Outcome::Complete(Completion::status(status));
+        }
+        if request.op == wire::OP_SHUTDOWN {
+            // FIN follows the bytes already queued; receive continues to EOF.
+            if !connection.shutdown {
+                socket.close();
+                self.connections[index] = Some(Connection {
+                    shutdown: true,
+                    ..connection
+                });
+            }
+            return Outcome::Complete(Completion::status(Status::Success));
+        }
+        if request.op == wire::OP_SEND && connection.shutdown {
+            return Outcome::Complete(Completion::status(Status::Refused));
         }
         let mut completion = Completion::status(Status::Success);
         match request.op {
@@ -1254,6 +1445,8 @@ impl<'a> Engine<'a> {
             terminal: None,
             peer_fin_seen: false,
             listener: None,
+            shutdown: false,
+            close_queues: (0, 0),
         });
         if named {
             if let Err(status) = self.resolver.as_mut().expect("enabled resolver").start(
@@ -1327,8 +1520,23 @@ impl<'a> Engine<'a> {
             Phase::Closing if now >= connection.deadline => Status::Timeout,
             _ => return None,
         };
+        let socket_state = socket.state();
         if status != Status::Success {
             self.abort_socket(index);
+        }
+        if connection.phase == Phase::Closing && connection.listener.is_some() {
+            let terminal = match (status, socket_state) {
+                (Status::Success, State::TimeWait) => Terminal::TimeWait,
+                (Status::Success, _) => Terminal::Closed,
+                (Status::Timeout, _) => Terminal::Timeout,
+                _ => Terminal::Reset,
+            };
+            self.record(Event::AcceptedClose {
+                unread: connection.close_queues.0,
+                unsent: connection.close_queues.1,
+                terminal,
+                bytes: 2 * BUFFER_BYTES,
+            });
         }
         if status == Status::Timeout {
             let reclaimed = self
@@ -1515,6 +1723,7 @@ mod tests {
                 app::ROLE_CLIENT
             };
             if index == 1 {
+                row[app::OFF_ENTRY_PEER_KIND] = app::PEER_HOLDER;
                 row[app::OFF_ENTRY_ALLOWED_PEER_IDENTITY..app::OFF_ENTRY_ALLOWED_PEER_IDENTITY_END]
                     .copy_from_slice(&HOLDER);
                 row[app::OFF_ENTRY_LOCAL_IPV4..app::OFF_ENTRY_LOCAL_IPV4_END]
@@ -1564,6 +1773,14 @@ mod tests {
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 44, 1).unwrap();
+        let mut device = crate::loopback::Loopback::new();
+        let iface = Interface::new(
+            Config::new(HardwareAddress::Ethernet(EthernetAddress([
+                2, 0, 0, 0, 0, 1,
+            ]))),
+            &mut device,
+            Instant::ZERO,
+        );
         let bytes = local_applications(RIGHT_LISTEN | RIGHT_RECV);
         let applications = NetworkApplications::decode(&bytes).unwrap();
         let policy = applications.by_holder(&[2; 32]).unwrap();
@@ -1583,6 +1800,7 @@ mod tests {
                 &denied,
                 local_request(wire::OP_LISTEN, 0),
                 Instant::ZERO,
+                &iface,
             ))
             .status;
             assert_eq!(
@@ -1601,7 +1819,8 @@ mod tests {
                 HOLDER,
                 &policy,
                 local_request(wire::OP_LISTEN, 0),
-                Instant::ZERO
+                Instant::ZERO,
+                &iface,
             ))
             .status,
             Status::Denied
@@ -1611,6 +1830,7 @@ mod tests {
             &policy,
             local_request(wire::OP_LISTEN, 0),
             Instant::ZERO,
+            &iface,
         ))
         .capability;
         let listener = engine.listeners.iter_mut().flatten().next().unwrap();
@@ -3056,3 +3276,7 @@ mod tests {
 #[cfg(test)]
 #[path = "dns_tests.rs"]
 mod dns_integration_tests;
+
+#[cfg(test)]
+#[path = "listener_tests.rs"]
+mod listener_tests;

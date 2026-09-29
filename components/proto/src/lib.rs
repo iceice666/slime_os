@@ -1446,7 +1446,10 @@ pub fn valid_network_request(request: &network_service::WireNetworkRequest) -> b
                 && request.endpoint[name_len..].iter().all(|byte| *byte == 0)
                 && valid_network_name(&request.endpoint[..name_len])
         }
-        network_service::OP_SEND | network_service::OP_RECV | network_service::OP_CLOSE => {
+        network_service::OP_SEND
+        | network_service::OP_RECV
+        | network_service::OP_CLOSE
+        | network_service::OP_SHUTDOWN => {
             request.transport == network_service::TRANSPORT_NONE
                 && request.capability != 0
                 && request.port == 0
@@ -1548,6 +1551,7 @@ pub fn valid_network_completion(completion: &network_service::WireNetworkComplet
         network_service::OP_SEND
         | network_service::OP_RECV
         | network_service::OP_CLOSE
+        | network_service::OP_SHUTDOWN
         | network_service::OP_ATTACH
         | network_service::OP_ABORT => {
             completion.capability == 0
