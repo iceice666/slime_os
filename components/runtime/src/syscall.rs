@@ -27,6 +27,7 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
 // before, silently garbling keystrokes (see `slime-root/src/console.rs`).
 /// C9.5's role vocabulary, decoded from the same contract the resource is
 /// encoded against rather than restated here as three integers.
+pub use boot_contracts::instance_lifetime::Lifetime;
 pub use boot_contracts::recording_policy::Role as RecordingRole;
 pub use slime_proto::syscall_abi::{
     ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
@@ -1144,6 +1145,24 @@ pub fn recording_participation() -> Result<RecordingParticipation, i64> {
         record_capacity: (packed & 0xffff_ffff) as u32,
         deterministic: packed >> 32 != 0,
     })
+}
+
+/// This instance's declared lifetime, asked of the root.
+///
+/// Self-scoped: the answer is the authenticated caller's own, from the
+/// generation's `instance-lifetime/v1` object, and a generation without one
+/// answers bounded. A resident instance is one whose exit the root treats as a
+/// failure, so a service reads this to decide whether to keep serving after its
+/// clients are done rather than probing for them.
+pub fn lifetime() -> Result<Lifetime, i64> {
+    let result = transport::lifetime_read();
+    if result < 0 {
+        return Err(result);
+    }
+    u8::try_from(result)
+        .ok()
+        .and_then(Lifetime::from_id)
+        .ok_or(ERR_INVALID_ARG)
 }
 
 /// Atomically swaps a directory namespace root after the new snapshot object

@@ -108,6 +108,8 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-io-driver-reset": "sel4-io-driver-reset.zti",
     "sel4-io-queue": "sel4-io-queue.zti",
     "sel4-lifecycle-restart": "sel4-lifecycle-restart.zti",
+    "sel4-lifetime": "sel4-lifetime.zti",
+    "sel4-lifetime-exit": "sel4-lifetime-exit.zti",
     "sel4-loan": "sel4-loan.zti",
     "sel4-mavlink": "sel4-mavlink.zti",
     "sel4-operation": "sel4-operation.zti",
@@ -362,6 +364,8 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
             )
         if "health" in entry and entry["health"] not in ("required", "optional"):
             _fail(f"instances: {entry['name']}: unknown health {entry['health']!r}")
+        if "lifetime" in entry and entry["lifetime"] not in ("resident", "bounded"):
+            _fail(f"instances: {entry['name']}: unknown lifetime {entry['lifetime']!r}")
         instance_owners[entry["name"]] = entry["executable"]
     if declared_instances:
         uncovered = sorted(emitted_names - set(instance_owners.values()))
@@ -409,6 +413,8 @@ def _validate(spec: dict, components: dict[str, dict], contract: ModuleType) -> 
             _fail(f"placements: {entry['component']!r} is not an admitted component")
         if "health" in entry and entry["health"] not in ("required", "optional"):
             _fail(f"placements: {entry['component']}: unknown health {entry['health']!r}")
+        if "lifetime" in entry and entry["lifetime"] not in ("resident", "bounded"):
+            _fail(f"placements: {entry['component']}: unknown lifetime {entry['lifetime']!r}")
         if "role" in entry and entry["role"] not in ("init", "service", "application"):
             _fail(f"placements: {entry['component']}: unknown role {entry['role']!r}")
         if "stackBytes" in entry and not 0 < entry["stackBytes"] <= _builder.COMPONENT_MAX_STACK_BYTES:
@@ -1128,6 +1134,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
             "dependencies": declared.get("dependencies", component["dependencies"]),
             "executable": executable_name,
             "health": declared.get("health", component["health"]),
+            "lifetime": declared.get("lifetime", component["lifetime"]),
             "name": name,
             "owner": declared.get("owner", component["owner"]),
         }
@@ -1221,6 +1228,11 @@ def derive_manifest(system: CompiledSystem) -> dict:
         objects.append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
     if policy is not None:
         objects.append({"id": "private-memory-policy", "kind": "resource", "size": 4096})
+    # Strictly derived like `private-memory-budget`: the builder encodes the
+    # resident instances and nothing else, so the object is present exactly when
+    # one is declared.
+    if any(entry["lifetime"] == "resident" for entry in instances):
+        objects.append({"id": "instance-lifetime", "kind": "resource", "size": 4096})
     # The remaining eight sections follow `sharedBufferBudgetObject`'s pattern
     # exactly: object presence is a declared fact, independent of whether the
     # accompanying list happens to be empty.

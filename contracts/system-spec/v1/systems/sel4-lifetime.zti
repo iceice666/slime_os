@@ -1,0 +1,112 @@
+{
+  formatVersion = 1;
+  name = "sel4-lifetime";
+  generation = 166;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "lifetime";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "init";
+    "lifetime-probe";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+    {
+      component = "lifetime-probe";
+      spawnBudget = 1;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "lifetime-holder";
+      executable = "lifetime-probe";
+      lifetime = "resident";
+    };
+    {
+      name = "lifetime-owner";
+      executable = "lifetime-probe";
+    };
+    {
+      name = "lifetime-quitter";
+      executable = "lifetime-probe";
+      owner = "lifetime-owner";
+      autostart = false;
+      health = "optional";
+      lifetime = "resident";
+      dependencies = [
+        "lifetime-owner";
+      ];
+    };
+    {
+      name = "lifetime-worker";
+      executable = "lifetime-probe";
+    };
+  ];
+  grants = [
+    {
+      name = "lifetime-quitter-executable";
+      capabilityKind = "executable";
+      source = "lifetime-owner";
+      target = "lifetime-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    {
+      name = "lifetime-quitter-exit";
+      source = "lifetime-owner";
+      target = "lifetime-quitter";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "lifetime-quitter-exit";
+      holder = "lifetime-owner";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "lifetime-quitter-exit";
+      holder = "lifetime-quitter";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

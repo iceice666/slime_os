@@ -30,6 +30,7 @@
     "Running";
     "Error";
   ];
+  lifetime = "bounded";
   name = "private-adaptive-pool-b";
   owner = "root";
   provides = [];

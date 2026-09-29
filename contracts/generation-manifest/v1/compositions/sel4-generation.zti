@@ -224,6 +224,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -246,6 +247,7 @@
       ];
       executable = "sel4-generation-client";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-generation-client";
       owner = "init";
     };
@@ -263,6 +265,7 @@
       ];
       executable = "sel4-generation-client";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-generation-client-idle";
       owner = "root";
     };
@@ -295,6 +298,7 @@
       ];
       executable = "sel4-generation-manager";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-generation-manager";
       owner = "init";
     };
@@ -312,6 +316,7 @@
       ];
       executable = "sel4-generation-manager";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-generation-manager-idle";
       owner = "root";
     };
@@ -347,6 +352,7 @@
       dependencies = [];
       executable = "virtio-blk-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-blk-driver";
       owner = "root";
     };

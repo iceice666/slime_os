@@ -76,6 +76,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -87,6 +88,7 @@
       ];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "supervision-child";
       owner = "init";
     };
@@ -98,6 +100,7 @@
       ];
       executable = "sysinfo";
       health = "required";
+      lifetime = "bounded";
       name = "sysinfo";
       owner = "init";
     };

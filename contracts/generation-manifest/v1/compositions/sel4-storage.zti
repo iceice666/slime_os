@@ -163,6 +163,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -190,6 +191,7 @@
       ];
       executable = "sel4-storage-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-storage-probe";
       owner = "init";
     };
@@ -207,6 +209,7 @@
       ];
       executable = "sel4-storage-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-storage-probe-idle";
       owner = "root";
     };
@@ -242,6 +245,7 @@
       dependencies = [];
       executable = "virtio-blk-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-blk-driver";
       owner = "root";
     };

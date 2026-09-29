@@ -183,6 +183,10 @@ Implementation :: type {
 --
 -- `health` is the named health policy this component is admitted under,
 -- matching the manifest's closed `required`/`optional` instance vocabulary.
+--
+-- `lifetime` is the default a composition's placement may override, as with
+-- `health`: `resident` runs for the life of its graph and its exit is a
+-- failure, `bounded` may finish its work and exit.
 ComponentSpec :: type {
   formatVersion : Int;
   name : Text;
@@ -200,6 +204,7 @@ ComponentSpec :: type {
   lifecycle : List Text;
   runtime : RuntimeRequirement;
   health : Text;
+  lifetime : Text;
   compatibility : Compatibility;
   test : TestSpecification;
 };
@@ -309,6 +314,9 @@ constraintNone :: Text = "none";
 healthRequired :: Text = "required";
 healthOptional :: Text = "optional";
 
+lifetimeResident :: Text = "resident";
+lifetimeBounded :: Text = "bounded";
+
 decodeComponentSpec :: Data -> Validation DecodeIssue ComponentSpec
   = data => decode data;
 
@@ -370,4 +378,6 @@ decodeComponentSpec :: Data -> Validation DecodeIssue ComponentSpec
   constraintNone =;
   healthRequired =;
   healthOptional =;
+  lifetimeResident =;
+  lifetimeBounded =;
 }

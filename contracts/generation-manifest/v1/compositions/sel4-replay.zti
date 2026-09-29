@@ -130,6 +130,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -139,6 +140,7 @@
       dependencies = [];
       executable = "replay-probe";
       health = "required";
+      lifetime = "bounded";
       name = "replay-observer";
       owner = "root";
     };
@@ -159,6 +161,7 @@
       dependencies = [];
       executable = "replay-probe";
       health = "required";
+      lifetime = "bounded";
       name = "replay-recorder";
       owner = "root";
     };
@@ -174,6 +177,7 @@
       dependencies = [];
       executable = "replay-probe";
       health = "required";
+      lifetime = "bounded";
       name = "replay-replayer";
       owner = "root";
     };
@@ -183,6 +187,7 @@
       dependencies = [];
       executable = "replay-probe";
       health = "required";
+      lifetime = "bounded";
       name = "replay-unnamed";
       owner = "root";
     };
@@ -203,6 +208,7 @@
       dependencies = [];
       executable = "replay-probe";
       health = "required";
+      lifetime = "bounded";
       name = "replay-unrecorded";
       owner = "root";
     };
@@ -238,6 +244,7 @@
       dependencies = [];
       executable = "virtio-blk-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-blk-driver";
       owner = "root";
     };

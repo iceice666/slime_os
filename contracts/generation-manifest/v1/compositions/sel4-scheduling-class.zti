@@ -56,6 +56,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -65,6 +66,7 @@
       dependencies = [];
       executable = "scheduling-class-probe";
       health = "required";
+      lifetime = "bounded";
       name = "sched-burner";
       owner = "root";
     };
@@ -80,6 +82,7 @@
       dependencies = [];
       executable = "scheduling-class-probe";
       health = "required";
+      lifetime = "bounded";
       name = "sched-controller";
       owner = "root";
     };
@@ -89,6 +92,7 @@
       dependencies = [];
       executable = "scheduling-class-probe";
       health = "required";
+      lifetime = "bounded";
       name = "sched-denied";
       owner = "root";
     };
@@ -98,6 +102,7 @@
       dependencies = [];
       executable = "scheduling-class-probe";
       health = "required";
+      lifetime = "bounded";
       name = "sched-foreground";
       owner = "root";
     };
@@ -109,6 +114,7 @@
       ];
       executable = "supervision-child";
       health = "optional";
+      lifetime = "bounded";
       name = "sched-promotable";
       owner = "sched-controller";
     };

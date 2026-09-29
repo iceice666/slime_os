@@ -113,6 +113,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -122,6 +123,7 @@
       dependencies = [];
       executable = "io-link-intruder";
       health = "required";
+      lifetime = "bounded";
       name = "io-link-intruder";
       owner = "root";
     };
@@ -142,6 +144,7 @@
       dependencies = [];
       executable = "io-link-probe";
       health = "required";
+      lifetime = "bounded";
       name = "io-link-probe";
       owner = "root";
     };
@@ -177,6 +180,7 @@
       dependencies = [];
       executable = "virtio-net-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-net-driver";
       owner = "root";
     };

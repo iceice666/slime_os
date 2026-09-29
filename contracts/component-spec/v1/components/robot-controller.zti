@@ -79,6 +79,7 @@
     devices = [];
   };
   health = "optional";
+  lifetime = "bounded";
   compatibility = {
     platform = "aarch64-sel4-qemu-virt";
     interface = "contracts/interface-schema/v1";

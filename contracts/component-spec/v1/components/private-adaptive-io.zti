@@ -28,6 +28,7 @@
     "Running";
     "Error";
   ];
+  lifetime = "bounded";
   name = "private-adaptive-io";
   owner = "root";
   provides = [];

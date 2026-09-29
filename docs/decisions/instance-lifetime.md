@@ -1,6 +1,6 @@
 # Instance lifetime
 
-**Status:** Proposed
+**Status:** Accepted
 **Related work items:** `01a0ed72-626c-7675-af57-8510e473b774`,
 `01a0ebea-7ffe-7ca1-956f-006c13dd7251` (sel4-net),
 `01a0ec3a-a91f-7349-a28a-26a60d8d7f4e` (entropy authority)
@@ -109,8 +109,12 @@ The fixtures carry each instance's resolved `lifetime`.
   console, which init shuts down after Slisp exits, keeps it bounded.
 - A graph with a live resident required instance never reaches `live=0`.
   A plane that certifies on `live=0` must not declare one.
-- The root gains one query label and one object decoder. Each service keeps its
-  own session policy; the root states only whether exiting is allowed.
+- The root gains one query label (`LIFETIME_READ`, 73) and one object decoder,
+  and `SUPERVISION STATUS` now answers kind `4` (unhealthy), which the runtime
+  already decoded but the root had never produced. Each service keeps its own
+  session policy; the root states only whether exiting is allowed.
+- The qualification compositions use a new boot action, `lifetime` (40), under
+  which init launches nothing and every probe is root-launched or owner-spawned.
 
 ## Revisit when
 

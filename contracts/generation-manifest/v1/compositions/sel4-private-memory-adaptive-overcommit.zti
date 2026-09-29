@@ -169,6 +169,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -208,6 +209,7 @@
       ];
       executable = "private-adaptive-coordinator";
       health = "required";
+      lifetime = "bounded";
       name = "private-adaptive-coordinator";
       owner = "root";
     };
@@ -223,6 +225,7 @@
       ];
       executable = "private-adaptive-denied";
       health = "optional";
+      lifetime = "bounded";
       name = "private-adaptive-denied";
       owner = "private-adaptive-coordinator";
     };
@@ -238,6 +241,7 @@
       ];
       executable = "private-adaptive-guaranteed";
       health = "optional";
+      lifetime = "bounded";
       name = "private-adaptive-guaranteed";
       owner = "private-adaptive-coordinator";
     };
@@ -253,6 +257,7 @@
       ];
       executable = "private-adaptive-pool-a";
       health = "optional";
+      lifetime = "bounded";
       name = "private-adaptive-pool-a";
       owner = "private-adaptive-coordinator";
     };
@@ -268,6 +273,7 @@
       ];
       executable = "private-adaptive-pool-b";
       health = "optional";
+      lifetime = "bounded";
       name = "private-adaptive-pool-b";
       owner = "root";
     };
@@ -283,6 +289,7 @@
       ];
       executable = "private-adaptive-restart";
       health = "optional";
+      lifetime = "bounded";
       name = "private-adaptive-restart";
       owner = "private-adaptive-coordinator";
     };

@@ -131,6 +131,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -153,6 +154,7 @@
       ];
       executable = "sample-lender";
       health = "required";
+      lifetime = "bounded";
       name = "sample-lender";
       owner = "init";
     };
@@ -170,6 +172,7 @@
       ];
       executable = "sample-receiver";
       health = "required";
+      lifetime = "bounded";
       name = "sample-receiver";
       owner = "init";
     };
@@ -185,6 +188,7 @@
       dependencies = [];
       executable = "sample-worker";
       health = "required";
+      lifetime = "bounded";
       name = "sample-worker";
       owner = "root";
       extraThreads = 1;

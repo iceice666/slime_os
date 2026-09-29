@@ -20,6 +20,7 @@
   };
   interfaces = [];
   lifecycle = ["Initialize"; "Start"; "Running"; "Error";];
+  lifetime = "bounded";
   name = "private-matrix-probe";
   owner = "private-matrix-coordinator";
   provides = [];

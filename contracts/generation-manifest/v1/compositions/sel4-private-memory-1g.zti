@@ -161,6 +161,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -179,6 +180,7 @@
       ];
       executable = "private-memory-1g-holder-a";
       health = "optional";
+      lifetime = "bounded";
       name = "private-memory-1g-holder-a";
       owner = "private-memory-1g-probe";
     };
@@ -194,6 +196,7 @@
       ];
       executable = "private-memory-1g-holder-b";
       health = "optional";
+      lifetime = "bounded";
       name = "private-memory-1g-holder-b";
       owner = "private-memory-1g-probe";
     };
@@ -209,6 +212,7 @@
       ];
       executable = "private-memory-1g-holder-c";
       health = "optional";
+      lifetime = "bounded";
       name = "private-memory-1g-holder-c";
       owner = "private-memory-1g-probe";
     };
@@ -224,6 +228,7 @@
       ];
       executable = "private-memory-1g-holder-d";
       health = "optional";
+      lifetime = "bounded";
       name = "private-memory-1g-holder-d";
       owner = "private-memory-1g-probe";
     };
@@ -260,6 +265,7 @@
       ];
       executable = "private-memory-1g-probe";
       health = "required";
+      lifetime = "bounded";
       name = "private-memory-1g-probe";
       owner = "root";
     };

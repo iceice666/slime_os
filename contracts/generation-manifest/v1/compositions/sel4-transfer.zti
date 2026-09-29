@@ -216,6 +216,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -248,6 +249,7 @@
       ];
       executable = "sel4-transfer-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-transfer-probe";
       owner = "init";
     };
@@ -265,6 +267,7 @@
       ];
       executable = "sel4-transfer-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-transfer-probe-idle";
       owner = "root";
     };
@@ -300,6 +303,7 @@
       dependencies = [];
       executable = "virtio-blk-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-blk-receiver";
       owner = "root";
     };
@@ -335,6 +339,7 @@
       dependencies = [];
       executable = "virtio-blk-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-blk-source";
       owner = "root";
     };

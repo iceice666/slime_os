@@ -170,6 +170,7 @@
       ];
       executable = "console";
       health = "required";
+      lifetime = "bounded";
       name = "console";
       owner = "init";
     };
@@ -235,6 +236,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -282,6 +284,7 @@
       ];
       executable = "sysinfo";
       health = "required";
+      lifetime = "bounded";
       name = "sysinfo";
       owner = "init";
     };

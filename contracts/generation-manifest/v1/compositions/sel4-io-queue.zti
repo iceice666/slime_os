@@ -64,6 +64,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -84,6 +85,7 @@
       dependencies = [];
       executable = "io-queue-client";
       health = "required";
+      lifetime = "bounded";
       name = "io-queue-client";
       owner = "root";
     };
@@ -99,6 +101,7 @@
       dependencies = [];
       executable = "io-queue-driver";
       health = "required";
+      lifetime = "bounded";
       name = "io-queue-driver";
       owner = "root";
     };

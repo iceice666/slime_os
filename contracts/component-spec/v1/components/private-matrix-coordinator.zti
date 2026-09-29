@@ -30,6 +30,7 @@
     "Running";
     "Error";
   ];
+  lifetime = "bounded";
   name = "private-matrix-coordinator";
   owner = "root";
   provides = [];

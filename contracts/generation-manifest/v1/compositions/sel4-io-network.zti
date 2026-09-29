@@ -93,6 +93,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -106,6 +107,7 @@
       dependencies = [];
       executable = "io-link-loopback";
       health = "required";
+      lifetime = "bounded";
       name = "io-link-loopback";
       owner = "root";
     };
@@ -121,6 +123,7 @@
       dependencies = [];
       executable = "io-network-intruder";
       health = "required";
+      lifetime = "bounded";
       name = "io-network-intruder";
       owner = "root";
     };
@@ -136,6 +139,7 @@
       dependencies = [];
       executable = "io-network-probe";
       health = "required";
+      lifetime = "bounded";
       name = "io-network-probe";
       owner = "root";
     };
@@ -157,6 +161,7 @@
       dependencies = [];
       executable = "network-service";
       health = "required";
+      lifetime = "bounded";
       name = "network-service";
       owner = "root";
     };

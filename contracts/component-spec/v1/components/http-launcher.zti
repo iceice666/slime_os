@@ -28,6 +28,7 @@
     "Running";
     "Error";
   ];
+  lifetime = "bounded";
   name = "http-launcher";
   owner = "root";
   provides = [];

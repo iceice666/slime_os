@@ -43,6 +43,7 @@
       dependencies = [];
       executable = "slisp";
       health = "required";
+      lifetime = "bounded";
       name = "slisp";
       owner = "root";
     };

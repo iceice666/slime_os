@@ -106,6 +106,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -133,6 +134,7 @@
       ];
       executable = "powerbox-chooser";
       health = "optional";
+      lifetime = "bounded";
       name = "powerbox-chooser";
       owner = "init";
     };
@@ -150,6 +152,7 @@
       ];
       executable = "powerbox-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "powerbox-probe";
       owner = "init";
     };

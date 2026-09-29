@@ -93,7 +93,10 @@ SORTED_SECTIONS = {
 # future divergence hide inside these names, which is exactly the failure
 # `KNOWN_DEAD_BINDINGS` is written to avoid on its own axis.
 POST_BASELINE_SECTIONS = ("privateMemoryBudget",)
-POST_BASELINE_OBJECTS = ("private-memory-budget",)
+POST_BASELINE_OBJECTS = ("private-memory-budget", "instance-lifetime")
+# Every baseline predates declared instance lifetime; `check_post_baseline`
+# asserts each instance's resolved value and the object's presence instead.
+POST_BASELINE_EVERY_INSTANCE_FIELDS = ("lifetime",)
 
 # Sections one *specific* system's frozen baseline predates, unlike the ones
 # above. Keyed per system, on the same terms as
@@ -233,6 +236,8 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-io-tcp-impairment",
     "sel4-io-tcp-listener",
     "sel4-io-tcp-options",
+    "sel4-lifetime",
+    "sel4-lifetime-exit",
     "sel4-private-memory-stress",
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",
@@ -435,6 +440,8 @@ def split_post_baseline(manifest: dict, name: str) -> tuple[dict, dict]:
     for instance in value.get("instances", []):
         for field in POST_BASELINE_INSTANCE_FIELDS.get(name, frozenset()):
             instance.pop(field, None)
+        for field in POST_BASELINE_EVERY_INSTANCE_FIELDS:
+            instance.pop(field, None)
     for instance in value.get("instances", []):
         for binding in instance.get("bindings", []):
             for field in POST_BASELINE_BINDING_FIELDS:
@@ -458,6 +465,21 @@ def check_post_baseline(name: str, derived: dict, system, source: dict) -> None:
         entry.get("executableName", entry["component"]): entry["component"]
         for entry in system.spec["placements"]
     }
+    # Each instance's lifetime is the instance record's, else its component's
+    # placement, else the component spec's; the object exists exactly when one
+    # is resident.
+    lifetimes = {}
+    for instance in resolved_instances(system.spec):
+        component = component_by_executable.get(instance["executable"], instance["executable"])
+        lifetimes[instance["name"]] = instance.get(
+            "lifetime", placements.get(component, {}).get("lifetime", COMPONENTS[component]["lifetime"])
+        )
+    derived_lifetimes = {entry["name"]: entry.get("lifetime") for entry in derived["instances"]}
+    if derived_lifetimes != lifetimes:
+        fail(f"{name}: derived instance lifetimes {derived_lifetimes} do not match the spec {lifetimes}")
+    has_object = any(entry["id"] == "instance-lifetime" for entry in derived["objects"])
+    if has_object != ("resident" in lifetimes.values()):
+        fail(f"{name}: instance-lifetime object present={has_object} disagrees with its resident instances")
     expected = {}
     for instance in resolved_instances(system.spec):
         component = component_by_executable.get(instance["executable"], instance["executable"])
@@ -1759,6 +1781,54 @@ for section in ("lifecyclePolicy", "objects"):
     refusals += 1
 
 refusals += network_application_controls(derive_manifest(systems["sel4-io-tcp"]))
+
+
+def instance_lifetime_controls(source: dict) -> int:
+    """The lifetime encoder names exactly the resident instances, and refuses the rest."""
+    import boot_contracts as wire
+
+    manifest = copy.deepcopy(source)
+    encoded = BUILDER.build_instance_lifetime(manifest)
+    residents = sorted(
+        BUILDER.instance_lifetime_identity(entry["name"])
+        for entry in manifest["instances"]
+        if entry["lifetime"] == "resident"
+    )
+    rows = [
+        encoded[offset : offset + 32]
+        for offset in range(
+            wire.INSTANCE_LIFETIME_HEADER_BYTES, len(encoded), wire.INSTANCE_LIFETIME_ENTRY_BYTES
+        )
+    ]
+    if not residents or rows != residents:
+        fail("instance lifetime encoder did not emit exactly the sorted resident instances")
+    reverse = copy.deepcopy(manifest)
+    reverse["instances"].reverse()
+    if BUILDER.build_instance_lifetime(reverse) != encoded:
+        fail("instance lifetime encoding depends on authoring order")
+    refused = 0
+    for label, mutate, reason in (
+        ("an unknown lifetime", lambda altered: altered["instances"][0].update(lifetime="forever"), "invalid lifetime"),
+        (
+            "a table naming nobody",
+            lambda altered: [entry.update(lifetime="bounded") for entry in altered["instances"]],
+            "without a resident instance",
+        ),
+    ):
+        altered = copy.deepcopy(manifest)
+        mutate(altered)
+        try:
+            BUILDER.build_instance_lifetime(altered)
+        except SystemExit as error:
+            if reason not in str(error):
+                fail(f"instance lifetime {label} refused at wrong boundary: {error}")
+        else:
+            fail(f"instance lifetime encoder accepted {label}")
+        refused += 1
+    return refused
+
+
+refusals += instance_lifetime_controls(derive_manifest(systems["sel4-lifetime"]))
 
 parameter_instance = {"name": "network-service", "bindings": []}
 parameter_executable = {"role": "service", "spawnBudget": 0}

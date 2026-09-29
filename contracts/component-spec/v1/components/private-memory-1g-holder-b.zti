@@ -30,6 +30,7 @@
     "Running";
     "Error";
   ];
+  lifetime = "bounded";
   name = "private-memory-1g-holder-b";
   owner = "private-memory-1g-probe";
   provides = [];

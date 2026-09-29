@@ -95,6 +95,24 @@ unhealthiness. Timeout and native-endpoint peer-death are not declared causes
 because no current mechanism produces them.
 These terminal causes remain distinguishable.
 
+## Declared instance lifetime
+
+`contracts/instance-lifetime/v1/` names the instances a composition declares
+`resident`. Every other instance is `bounded`. The component spec carries the
+default, and a placement or instance record overrides it, as `health` does. The
+root treats a resident instance's exit as a failure, never as completion:
+
+- A resident required instance that exits, with any status, ends the graph.
+- A resident optional instance that exits is recorded as unhealthy, which is
+  the outcome its supervisor reads.
+- A resident instance never counts as completed, so a graph holding a live
+  resident required instance certifies with it counted live.
+
+A component reads its own lifetime through `LIFECYCLE LIFETIME READ`
+(`slime_rt::lifetime()`). No operation stops a resident instance on purpose,
+so a composition that shuts an instance down declares it bounded. The rationale
+is in [the decision record](../decisions/instance-lifetime.md).
+
 ## Recording and determinism
 
 `contracts/recording-policy/v1/` binds declared record/replay participants to one

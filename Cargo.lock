@@ -1207,6 +1207,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-lifetime-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-mavlink-heartbeat"
 version = "0.1.0"
 dependencies = [

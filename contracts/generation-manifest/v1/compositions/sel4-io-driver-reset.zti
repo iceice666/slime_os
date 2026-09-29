@@ -185,6 +185,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -208,6 +209,7 @@
       dependencies = [];
       executable = "io-tcp-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "io-tcp-probe";
       owner = "network-supervisor";
     };
@@ -238,6 +240,7 @@
       dependencies = [];
       executable = "network-service";
       health = "optional";
+      lifetime = "bounded";
       name = "network-service";
       owner = "network-supervisor";
     };
@@ -266,6 +269,7 @@
       dependencies = [];
       executable = "io-network-lifetime-probe";
       health = "required";
+      lifetime = "bounded";
       name = "network-supervisor";
       owner = "root";
     };
@@ -301,6 +305,7 @@
       dependencies = [];
       executable = "virtio-net-driver";
       health = "optional";
+      lifetime = "bounded";
       name = "virtio-net-driver";
       owner = "network-supervisor";
     };

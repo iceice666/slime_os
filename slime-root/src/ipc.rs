@@ -74,6 +74,9 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         // about a peer and lets one image run in a generation that records it
         // and one that does not.
         lifecycle_labels::RECORDING_SOURCES => Some(SERVICE_LIFECYCLE),
+        // The caller's own declared lifetime, on `RECORDING_SOURCES`' terms:
+        // self-scoped by badge and a property of being that instance.
+        lifecycle_labels::LIFETIME_READ => Some(SERVICE_LIFECYCLE),
         // B70's boot action. Lifecycle rather than the capability table, though
         // the label sits in that table's namespace, because the service is the
         // *authority gate* and this operation needs the one every instance
@@ -225,6 +228,7 @@ pub const fn lifecycle_request_len(label: sel4::Word) -> Option<usize> {
         // No operand at all: the caller is the badge, and naming another
         // instance's recording participation is authority no C9.5 field grants.
         lifecycle_labels::RECORDING_SOURCES => Some(0),
+        lifecycle_labels::LIFETIME_READ => Some(0),
         _ => None,
     }
 }
@@ -1540,6 +1544,16 @@ pub fn read_recording_entry(
     ))
 }
 
+/// The caller's declared lifetime. A generation without the lifetime object,
+/// or one that does not name this instance, answers bounded; a malformed object
+/// was already refused at admission.
+pub fn read_lifetime(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+) -> boot_contracts::instance_lifetime::Lifetime {
+    crate::generation::instance_lifetime(generation, instance)
+}
+
 /// The bounds `resolve_binding_slot` applies before it looks anything up.
 ///
 /// Separated from the lookup so the guards are reachable without a decoded
@@ -1828,6 +1842,7 @@ mod tests {
             // `WAIT_SOURCES`' reason: whether the generation claims this instance
             // deterministic is a property of being that instance, not of a grant.
             (lifecycle_labels::RECORDING_SOURCES, SERVICE_LIFECYCLE),
+            (lifecycle_labels::LIFETIME_READ, SERVICE_LIFECYCLE),
         ] {
             assert_eq!(
                 service_for_root_label(label),
@@ -1959,6 +1974,10 @@ mod tests {
         // it ignored, because request shape is part of the ABI.
         assert_eq!(
             lifecycle_request_len(lifecycle_labels::RECORDING_SOURCES),
+            Some(0)
+        );
+        assert_eq!(
+            lifecycle_request_len(lifecycle_labels::LIFETIME_READ),
             Some(0)
         );
         // A label this table does not own reports no shape, so the dispatcher's

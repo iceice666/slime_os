@@ -114,6 +114,9 @@ render :: Text = t.join "" {
   tuple "HEALTH_POLICIES" { schema.healthRequired; schema.healthOptional; };
   text "HEALTH_REQUIRED" schema.healthRequired;
   text "HEALTH_OPTIONAL" schema.healthOptional;
+  tuple "LIFETIMES" { schema.lifetimeResident; schema.lifetimeBounded; };
+  text "LIFETIME_RESIDENT" schema.lifetimeResident;
+  text "LIFETIME_BOUNDED" schema.lifetimeBounded;
 };
 
 main :: { write : FsWrite; env : Env; }

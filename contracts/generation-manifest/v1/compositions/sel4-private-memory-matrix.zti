@@ -140,6 +140,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -155,6 +156,7 @@
       ];
       executable = "private-matrix-bulk";
       health = "optional";
+      lifetime = "bounded";
       name = "private-matrix-bulk";
       owner = "private-matrix-coordinator";
     };
@@ -188,6 +190,7 @@
       ];
       executable = "private-matrix-coordinator";
       health = "required";
+      lifetime = "bounded";
       name = "private-matrix-coordinator";
       owner = "root";
     };
@@ -203,6 +206,7 @@
       ];
       executable = "private-matrix-guaranteed";
       health = "optional";
+      lifetime = "bounded";
       name = "private-matrix-guaranteed";
       owner = "private-matrix-coordinator";
     };
@@ -214,6 +218,7 @@
       ];
       executable = "private-matrix-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "private-matrix-probe";
       owner = "private-matrix-coordinator";
     };
@@ -229,6 +234,7 @@
       ];
       executable = "private-matrix-small";
       health = "optional";
+      lifetime = "bounded";
       name = "private-matrix-small";
       owner = "private-matrix-coordinator";
     };
