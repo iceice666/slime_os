@@ -111,6 +111,15 @@ wait_set_check: sel4_pin_check
 lifecycle_restart_check: sel4_pin_check
     python3 scripts/check/check-sel4-lifecycle-restart-plane.py
 
+# Declared instance lifetime, enforced by the root: a resident instance that
+# stays live, a bounded one that completes, a resident optional one recorded
+# unhealthy, and a resident required one whose exit fails the graph, with the
+# host, root, lifecycle and product-graph regressions every existing (bounded)
+# instance must keep passing. Explicit, never part of `all`.
+[group('planes / runtime')]
+sel4_lifetime_check: sel4_pin_check test_host test_sel4_root lifecycle_restart_check sel4_component_graph_check
+    python3 scripts/check/check-sel4-lifecycle-restart-plane.py --arm lifetime
+
 [group('planes / runtime')]
 replay_check: sel4_pin_check
     python3 scripts/check/check-sel4-replay-plane.py

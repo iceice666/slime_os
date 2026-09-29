@@ -216,6 +216,7 @@ For how the planes work and how to add one, read
 | --- | --- |
 | `just clock_authority_check` | C9.1 gate: declared clock authority is independent, bounded, and deny-by-default. |
 | `just lifecycle_restart_check` | C9.4 gate: a userspace supervisor restarts under declared policy, and the bound is terminal. |
+| `just sel4_lifetime_check` | Declared instance lifetime enforced by the root on `sel4-lifetime` and `sel4-lifetime-exit`: a resident instance stays live under certification, a bounded one completes, a resident optional exit is recorded unhealthy and a resident required exit fails the graph, with the host, root, lifecycle and product-graph regressions; fails until those compositions land. |
 | `just private_memory_adaptive_check` | MEM-ADAPTIVE's declared-policy plane. |
 | `just private_memory_bootstrap_check` | Prove bootstrap reserve bounds and independent refusal before publication. |
 | `just private_memory_check` | C10.2 gate: the generation's declared private-memory budget is the live ceiling. |

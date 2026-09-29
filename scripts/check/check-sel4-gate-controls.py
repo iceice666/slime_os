@@ -58,7 +58,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_entropy_plane", "check/check-sel4-entropy-plane.py", 17),
     ("sel4_wait_set_plane", "check/check-sel4-wait-set-plane.py", 15),
     ("sel4_scheduling_class_plane", "check/check-sel4-scheduling-class-plane.py", 25),
-    ("sel4_lifecycle_restart_plane", "check/check-sel4-lifecycle-restart-plane.py", 55),
+    ("sel4_lifecycle_restart_plane", "check/check-sel4-lifecycle-restart-plane.py", 66),
     ("sel4_replay_plane", "check/check-sel4-replay-plane.py", 29),
     ("sel4_robot_runtime_plane", "check/check-sel4-robot-runtime-plane.py", 45),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
