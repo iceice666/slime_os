@@ -27,6 +27,13 @@ io_tcp_impairment_check: sel4_pin_check link_peer_check
 io_tcp_listener_check: sel4_pin_check link_peer_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-listener
 
+# Per-binding TCP options (Nagle, keep-alive, hop limit, idle timeout) declared
+# in generation data and judged from the wire, with Reno selected and stated.
+# Explicit, never part of `all`.
+[group('planes / mechanism')]
+io_tcp_options_check: sel4_pin_check link_peer_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-options
+
 [group('planes / mechanism')]
 io_tcp_host_check:
     cargo test -p slime-network-tcp-tests --locked
