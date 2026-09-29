@@ -7,13 +7,20 @@ MyQue under `.tasks/items/`. Human-created Issues are intake for bugs and
 proposals; bot-created Issues carrying MyQue identity markers are projections
 of accepted canonical work.
 
-**For non-trivial work, first land a dedicated work-item PR. Only after the
-item exists on `main` may you open an implementation PR.** Do not combine a new
-item and its implementation, or stack implementation on unmerged planning.
-A work-item proposal PR is the bootstrap exception: it needs no existing item.
+**For a product or grader change, first land a dedicated work-item PR. Only
+after the item exists on `main` may you open an implementation PR.** Do not
+combine a new item and its implementation, or stack implementation on
+unmerged planning; CI refuses a pull request that does both. A work-item
+proposal PR is the bootstrap exception: it needs no existing item. A pull
+request that touches neither the product tree nor the grader closure — CI
+workflows, this file, `AGENTS.md`, `docs/` — needs no work item at all; see
+[Pull request scope](#pull-request-scope).
 
 **PR merged != work item done.** Completion requires the item's exit conditions
-to be observed and recorded, not just an implementation to land.
+to be observed and recorded, not just an implementation to land. For a
+spec-driven item that recorded its gate evidence, a workflow on `main` runs
+`just devloop complete` and proposes the transition as a `.tasks`-only PR;
+a human merges it.
 
 If those two rules read as ceremony, start with
 [How work flows](docs/getting-started/00-how-work-flows.md): the same process
@@ -225,13 +232,33 @@ These guides own the tutorials; this document owns the contribution workflow.
 
 ## Pull requests
 
+### Pull request scope
+
+`scripts/check/check-pr-scope.py` classifies every path a pull request
+changes, from lists the repository already maintains rather than a third
+table, and CI runs it on every pull request:
+
+| Class | Paths | Rule |
+|---|---|---|
+| **grader** | `scripts/`, `just/`, `Justfile`, `.devloop/` — the closure `devloop-approval.py` pins to `origin/main` | needs a landed work item; may land with the item as its exam |
+| **product** | every other `codePaths` entry in `.devloop/policy.json`: `slime-root/`, `components/`, `contracts/`, `boot-contracts/`, `sel4/`, build inputs, pins, toolchain configuration | needs a landed work item; **never** in a PR that adds one |
+| **derived** | regenerated closure records under `contracts/system-image-closure/v2/{closures,negative}/` and `contracts/system-test-run/v1/runs/` | mirrors whatever else changed; never decides |
+| **other** | `.github/`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
+
+Two rules follow. A pull request that **adds** a `.tasks/items/*.md` file may
+change grader, derived and other paths — the exam lands with the item — but
+not product paths; CI fails and names both. A pull request confined to
+derived and other paths is a **process change**: it needs no landed item,
+still runs every applicable check, and its description states what it
+changes. Product and grader changes keep the landed-item requirement below.
+
 ### Canonical work-item requirement
 
-Every non-trivial implementation PR must implement at least one canonical UUID
-**already present on `main` before the PR opens**. This includes features, bug
-fixes, architecture changes, behavioral refactors, CI/gate semantic changes,
+Every product or grader implementation PR must implement at least one canonical
+UUID **already present on `main` before the PR opens**. This includes features,
+bug fixes, architecture changes, behavioral refactors, gate semantic changes,
 new verification gates, protocols/schemas, drivers, hardware bring-up,
-authority/security changes, and substantial documentation or policy changes.
+authority/security changes, and policy changes to the grader closure.
 
 Use the existing [change](.github/PULL_REQUEST_TEMPLATE/change.md) or
 [system-change](.github/PULL_REQUEST_TEMPLATE/system-change.md) template. State
@@ -303,6 +330,29 @@ boundary; use it only for items that carry no `devloop` record.
 Commit the canonical `.tasks` transition. After it reaches `main`, `myque-gh`
 subsequently closes the projected Issue. Leave unfinished work unfinished.
 
+### Automated closeout PRs
+
+`just devloop complete` refuses on an implementation branch whenever that
+branch changed its own grader, and always grades against `origin/main`, so
+the transition is ordinarily made after merge. `myque-closeout.yml` does
+this: on every push to `main` that touches the store or the grader closure it
+clones canonical `main`, runs `just tasks_check`, and for every open or
+active spec-driven item with recorded evidence recovers the inputs file,
+target and image from the evidence identity, asks `just devloop eligible`,
+and runs `just devloop complete` for each item devloop accepts. It commits
+only those items' `.tasks/items` files, pushes `automation/myque-closeout/<main>`
+and opens one PR; a human reviews and merges after normal CI. Items devloop
+refuses — expired evidence, a changed code closure, an unmet acceptance — are
+listed in the PR body with devloop's reason and left open.
+
+The workflow never writes `main`, never records or edits evidence, and never
+decides eligibility itself. `workflow_dispatch` runs a preview that completes
+items in a throwaway clone and publishes nothing; the push trigger publishes
+only while the `MYQUE_CLOSEOUT_ENABLED` repository variable is `true`. A
+proposal whose base `main` has since advanced is closed and regenerated, not
+rebased. Preview locally with
+`python3 scripts/lib/work_item_closeout_publish.py` in the pinned environment.
+
 ### Storage-only retirement PRs
 
 The separate `myque-retire.yml` workflow proposes retirement of live `done`
@@ -358,10 +408,13 @@ enforced by GitHub's publication request, not promised by a local preflight.
 
 ## Trivial-change exception
 
-A genuine typo, broken link, format-only change, tiny wording correction, or
-mechanical maintenance with **no behavioral or project-state consequence** may
-skip the landed-item requirement. Judge semantics, not line count. When
-uncertain, create the item. This exception does not waive applicable checks.
+Within the product tree or the grader closure, a genuine typo, broken link,
+format-only change, tiny wording correction, or mechanical maintenance with
+**no behavioral or project-state consequence** may skip the landed-item
+requirement. Judge semantics, not line count. When uncertain, create the item.
+This exception does not waive applicable checks. Outside those two classes the
+[process escape hatch](#pull-request-scope) applies mechanically and no
+judgement call is needed.
 
 ## Continuous integration
 
