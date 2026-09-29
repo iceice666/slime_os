@@ -1,17 +1,19 @@
-# Network application authority, version 2
+# Network application authority, version 3
 
-`v2/schema.zt` defines the generation resource for explicit application bindings
-and exact TCP listener authority. Generate its Python layout and Rust
-constants with `python3 scripts/generate/generate-boot-bindings.py`.
-`boot-contracts/src/network_application.rs` owns semantic decoding. `v1/`
-remains as the retained source of format version 1, which named a listener's
-admitted peer only as a local holder; the decoder refuses version 1.
+`v3/schema.zt` defines the generation resource for explicit application
+bindings, exact TCP listener authority and each binding's declared TCP socket
+options. Generate its Python layout and Rust constants with
+`python3 scripts/generate/generate-boot-bindings.py`.
+`boot-contracts/src/network_application.rs` owns semantic decoding. `v1/` and
+`v2/` remain as the retained sources of format versions 1 and 2: version 1
+named a listener's admitted peer only as a local holder, and version 2 declared
+no socket options. The decoder refuses both.
 
 ## Encoding
 
 The 32-byte header contains magic `SLIMENA\0`, format version, header size,
 zero required flags, application count, and exact total length. The header
-carries format version 2. At most four
+carries format version 3. At most four
 320-byte entries follow, sorted strictly by their 32-byte holder identities.
 Zero and duplicate holders, trailing bytes, unknown discriminants/flags/rights,
 and nonzero reserved bytes are refused. Holder identities use the existing
@@ -25,7 +27,9 @@ Each entry contains:
   rights, and the admitted-peer kind: none (`0`), holder (`1`) or IPv4 (`2`).
 - The admitted remote IPv4 address of an external listener.
 - Backlog, accepted-socket limit, byte/timer budgets, queue depth, retry limit,
-  and reconnect limit; explicit reserved padding.
+  and reconnect limit.
+- The TCP options: keep-alive interval, idle timeout, hop limit and Nagle;
+  explicit reserved padding.
 
 Binding fields are 32-byte, zero-padded names containing lowercase ASCII letters,
 digits, hyphens, or underscores. Control and provisioning names must be nonempty
@@ -37,6 +41,24 @@ A supervision binding name does not prove its runtime task subject: that subject
 must be established by the trusted capability issuer and checked at activation.
 Service activation can require optional lifecycle
 bindings that the wire decoder permits to be absent for a polling-only profile.
+
+## TCP socket options
+
+Every row, client or listener, declares the options the service applies to
+each socket it opens or accepts for that holder. Version 3 carves them from
+version 2's reserved tail, so an entry stays 320 bytes.
+
+| Field | Wire | Bound | Meaning |
+| --- | --- | --- | --- |
+| `keepaliveMs` | `keepalive_ms : u32` | 0 (off) or 100–60000 | Interval of zero-payload keep-alive probes on an idle connection |
+| `idleTimeoutMs` | `idle_timeout_ms : u32` | 1000–60000 | Abort after this long without a peer packet while data is unacknowledged or keep-alive is on |
+| `hopLimit` | `hop_limit : u8` | 1–255 | IPv4 time-to-live of every packet |
+| `nagle` | `nagle : u8` | 0 or 1 | Coalesce small writes while a small segment is unacknowledged |
+
+The builder and the decoder refuse any other value. A request never names an
+option: the service holds no operation that selects or changes one. Delayed
+ACK, the connect and close deadlines and the congestion controller are fixed
+service policy, not declarations.
 
 ## Service incarnation parameter
 

@@ -232,6 +232,7 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-io-driver-reset",
     "sel4-io-tcp-impairment",
     "sel4-io-tcp-listener",
+    "sel4-io-tcp-options",
     "sel4-private-memory-stress",
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",
@@ -684,7 +685,7 @@ def network_application_controls(source: dict) -> int:
         "backend": "loopback", "localAddress": "0.0.0.0", "localPort": 0,
         "admittedPeer": "", "admittedPeerAddress": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
         "byteBudget": 0, "timerBudget": 0, "queueDepth": 0, "retryLimit": 0,
-        "reconnectLimit": 0,
+        "reconnectLimit": 0, "keepaliveMs": 0, "idleTimeoutMs": 10000, "hopLimit": 64, "nagle": True,
     }
     listener = dict(client, holder="io-network-intruder", controlBinding="local-control",
                     provisionBinding="local-provision", role="listener", localAddress="127.0.0.1",
@@ -706,6 +707,22 @@ def network_application_controls(source: dict) -> int:
         for index in range(2)]
     if identities != sorted(set(identities)):
         fail("network application encoder did not emit strictly ordered holders")
+    # Each row's declared options land in its own entry, bounds inclusive.
+    tuned = copy.deepcopy(manifest)
+    tuned["networkApplications"][0].update(keepaliveMs=60000, idleTimeoutMs=1000, hopLimit=1, nagle=False)
+    tuned["networkApplications"][1].update(keepaliveMs=100, idleTimeoutMs=60000, hopLimit=255)
+    tuned_bytes = BUILDER.build_network_applications(tuned)
+    options = {
+        row[10]: row[22:26]
+        for row in (wire.NETWORK_APPLICATION_ENTRY.unpack_from(
+            tuned_bytes, wire.NETWORK_APPLICATION_HEADER_BYTES + index * wire.NETWORK_APPLICATION_ENTRY_BYTES)
+            for index in range(2))
+    }
+    if options != {
+        wire.NETWORK_APPLICATION_ROLE_CLIENT: (60000, 1000, 1, 0),
+        wire.NETWORK_APPLICATION_ROLE_LISTENER: (100, 60000, 255, 1),
+    }:
+        fail(f"network application encoder misplaced declared socket options: {options}")
     reverse = copy.deepcopy(manifest)
     reverse["networkApplications"].reverse()
     if BUILDER.build_network_applications(reverse) != encoded:
@@ -741,6 +758,15 @@ def network_application_controls(source: dict) -> int:
         ("localPort", True, "invalid numeric bound"),
         ("byteBudget", 1, "client row carries listener authority"),
         ("admittedPeerAddress", "10.0.0.2", "client row carries listener authority"),
+        ("keepaliveMs", 99, "socket options exceed contract"),
+        ("keepaliveMs", 60001, "socket options exceed contract"),
+        ("idleTimeoutMs", 999, "socket options exceed contract"),
+        ("idleTimeoutMs", 60001, "socket options exceed contract"),
+        ("hopLimit", 0, "socket options exceed contract"),
+        ("hopLimit", 256, "socket options exceed contract"),
+        ("hopLimit", True, "invalid socket option"),
+        ("nagle", 1, "invalid socket option"),
+        ("keepaliveMs", "500", "invalid socket option"),
     ):
         reject(f"client {field}={value!r}",
                lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][0].update({field: value}), reason)
@@ -783,6 +809,8 @@ def network_application_controls(source: dict) -> int:
         ("queueDepth", 3, "listener bounds exceed contract"),
         ("retryLimit", 17, "listener bounds exceed contract"),
         ("reconnectLimit", 17, "listener bounds exceed contract"),
+        ("idleTimeoutMs", 0, "socket options exceed contract"),
+        ("hopLimit", 0, "socket options exceed contract"),
     ):
         reject(f"listener {field}={value!r}",
                lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][1].update({field: value}), reason)

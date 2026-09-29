@@ -113,7 +113,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "78f900d307dfb058a22455d6bf113e320b702b6c24dd4088cef8505e8e9d44c6";
+      identity = "cd8f8e320feba90883c4d5bc24cff6e33babf4df815504f77aeda6c6a52f723a";
     };
     parameters = [
       "qemuKeyboard";
@@ -134,7 +134,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "38e04697994eeeb3e582a5a00ed74284a86a68674f47861cf908424d6481c37a";
+        identity = "79ef1786f18ed4284eb71317dd3306c365665bc4fa8af503316a27b7c441bed1";
       };
     };
     {
@@ -142,7 +142,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "f54bdc41334fb13f4fe100e96a01f0f72004f562e6154475ebd1826b2bd28a21";
+        identity = "925703c813aaf828d0d4afa717d18fe9f23db8274f2eff3fa94c23f799b9301f";
       };
     };
     {
@@ -166,7 +166,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "7fe57af8ab58d32bfcc831a51748f0dad97d183b92c2df35a9a85f064e9b6523";
+        identity = "62de5c040ffe4ca1738ae8419ebf74dfd3e8888b746f7d9ab769bb7bc509cf00";
       };
     };
     {
@@ -190,7 +190,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "e123dd66c275631685f3f7a8c0b391012213f94247da24ba4225be8192fc569a";
+        identity = "20679f9c249d30b6be8bd874ce4c038e7a511d5f3c9674329ed9c921524a48af";
       };
     };
     {
@@ -270,7 +270,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "aeb8d4352bd1cbd39611eacdb419827a71b33be8e7ce11d57145b074a858a351";
+        identity = "be4e150ddf4d9ea25e9717b4ee09448cb603753f8cb8a5bd59297a0ada7c6524";
       };
     };
   ];

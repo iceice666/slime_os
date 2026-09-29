@@ -329,10 +329,9 @@ gate. No physical NIC is qualified.
 ### TCP socket options and congestion control
 
 Work item `01a0e239-a96d-7db6-8b7f-d6efef5f8b19` declares every TCP socket
-option the pinned release exposes and selects its congestion control. Its
-declarations and wire policy are stated here before the implementation;
-`just io_tcp_options_check` holds the wire to them. Nothing below is
-implemented or qualified yet.
+option the pinned release exposes and selects its congestion control.
+`just io_tcp_options_check` holds the wire to the declarations and policy
+below.
 
 **Declaration.** `network-application/v3` keeps every v2 field and carves four
 option fields from the entry's reserved tail, so `entryBytes` stays 320; the
@@ -352,8 +351,9 @@ Generation validation refuses an out-of-bound value.
 
 Fixed service policy, recorded in the matrix rather than declared: delayed
 ACK stays disabled, the 10 s per-operation timeout is unchanged, and the
-engine's own connect and close deadlines are unchanged. Every socket a row
-opens states its applied options once at activation as
+engine's own connect and close deadlines are unchanged. At activation the
+service states once per row the options it applies to every socket that row
+opens or accepts, as
 `[network-service] tcp options holder=<holder> keepalive_ms=<n> nagle=<0|1> hop_limit=<n> idle_timeout_ms=<n>`.
 
 **Congestion control.** The service enables exactly `socket-tcp-reno` and
@@ -435,8 +435,8 @@ owning slices, chiefly the media and backend classification.
 | TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, 2048-byte buffers | `just io_tcp_check` |
 | TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | `network-application/v2` listener row: one interface address and port, one exact admitted IPv4; other sources dropped before smoltcp | Backlog 1, 1–4 accepted connections at 4096 bytes each, shared 4-socket pool | `just io_tcp_listener_check` |
 | TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | supported | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | 4 out-of-order ranges, 2048-byte RX and TX per socket, retransmissions within the destination `retryLimit`, 10 s socket timeout | `just io_tcp_impairment_check` |
-| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v3` row, never client-chosen; ack delay stays fixed service policy | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` once it lands |
-| TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Fixed service policy | 10 s operation timeout, no ack delay | `just io_network_qualification_check` |
+| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v3` row and applied to every socket it opens or accepts, never client-chosen; ack delay stays fixed service policy and Reno the only controller | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` |
+| TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9, 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Fixed service policy; the socket idle timeout is each row's declared `idleTimeoutMs` | 10 s connect and close deadlines, no ack delay | `just io_network_qualification_check` |
 | UDP resolver socket | socket | `src/socket/udp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service resolver only; answers never authorize destinations | 1 socket, 512-byte packets | `just io_network_qualification_check` |
 | UDP application endpoints | socket | `src/socket/udp.rs` | planned | QEMU `LinkDevice` | 01a0e239-b54c-7782-8dd6-b403038fa3dd | Exact local bind and per-peer datagram grants | Declared by the owning slice | Owning slice's recipe |
 | UDP bounds, truncation and DDS endpoint profile | resource | `src/socket/udp.rs` | planned | QEMU `LinkDevice` | 01a0e239-b927-7d7d-bb54-16c2bc465faa | Declared queues and datagram sizes | Declared by the owning slice | Owning slice's recipe |
@@ -646,9 +646,9 @@ of its optional dependencies, has exactly one row.
 | `socket-mdns` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-de7f-7bb7-ae5c-756b8cbfe637 | mDNS classified against the multicast grant boundary | Declared by the owning slice | Owning slice's recipe |
 | `socket-raw` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Raw sockets; applications never gain raw-packet authority | Declared by the owning slice | Owning slice's recipe |
 | `socket-tcp` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9, 01a0ddaa-825f-7309-8508-ed49ffe33a8d | TCP sockets exist only inside the service; clients hold typed handles for exact granted destinations and listeners | 4 sockets, 2048-byte RX and TX buffers each, 10 s operation timeout | `just io_network_qualification_check` |
-| `socket-tcp-cubic` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected. Not enabled: `f64` cube-root window in `no_std` userspace; Reno is selected | Declared by the owning slice | Owning slice's recipe |
+| `socket-tcp-cubic` | feature | `Cargo.toml` `[features]` | not-applicable | — | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | The unselected value of the one congestion controller. Not enabled: its window is an `f64` cube root, and the `no_std` service touches no FPU; Reno is selected | — | — |
 | `socket-tcp-pause-synack` | feature | `Cargo.toml` `[features]` | not-applicable | — | 01a0e239-ad77-7754-874f-b8703be81c04 | Nothing to decide: the service drops an unadmitted listener SYN before smoltcp, so no SYN-ACK is ever withheld | — | — |
-| `socket-tcp-reno` | feature | `Cargo.toml` `[features]` | planned | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Congestion control; exactly one of CUBIC or Reno is selected. Selected: integer-only controller, one four-word struct per socket, no timer | Declared by the owning slice | Owning slice's recipe |
+| `socket-tcp-reno` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | The one congestion controller, selected on every open and stated at activation; exactly one of CUBIC or Reno is enabled. Selected: integer-only arithmetic | One four-word `Reno` per socket, 4 sockets, no timer | `just io_tcp_options_check` |
 | `socket-udp` | feature | `Cargo.toml` `[features]` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Only the service's resolver holds a UDP socket; no client UDP authority exists yet | 1 socket, 512-byte DNS packet buffers, 1 packet of metadata each way | `just io_network_qualification_check` |
 | `std` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Host standard library; the service is `no_std` | Declared by the owning slice | Owning slice's recipe |
 | `verbose` | feature | `Cargo.toml` `[features]` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Verbose `log` output | Declared by the owning slice | Owning slice's recipe |

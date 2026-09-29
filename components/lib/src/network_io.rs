@@ -572,6 +572,30 @@ impl<'a> NetworkIo<'a> {
         Ok(reply)
     }
 
+    /// Like [`Self::recv`], but an empty receive queue answers `would-block`
+    /// at once rather than being retained by a notification-enabled service,
+    /// so a typed terminal status is never confused with a wait that expired.
+    pub fn recv_nonblocking(
+        &mut self,
+        connection: &Connection,
+        bytes: &mut [u8],
+    ) -> Result<NetworkReply, NetworkError> {
+        self.check_connection(connection)?;
+        self.check_length(bytes.len())?;
+        let mut request = request(net::OP_RECV, connection.id);
+        request.flags = net::FLAG_NONBLOCKING;
+        let reply = self.transact_raw(
+            request,
+            io_queue::DIRECTION_DEVICE_WRITE,
+            bytes.len() as u64,
+        )?;
+        if reply.is_success() {
+            let count = reply.transferred as usize;
+            bytes[..count].copy_from_slice(&self.data.as_ref().ok_or(NetworkError::Lost)?[..count]);
+        }
+        Ok(reply)
+    }
+
     /// Half-close: the service queues a FIN after the bytes already sent and
     /// refuses later sends; receive continues until the peer's FIN.
     pub fn shutdown(&mut self, connection: &Connection) -> Result<NetworkReply, NetworkError> {

@@ -44,6 +44,10 @@ fn applications() -> Vec<u8> {
         row[app::OFF_ENTRY_PROVISION_BINDING..app::OFF_ENTRY_PROVISION_BINDING + 9]
             .copy_from_slice(b"provision");
         row[app::OFF_ENTRY_BACKEND] = app::BACKEND_EXTERNAL;
+        row[app::OFF_ENTRY_IDLE_TIMEOUT_MS..app::OFF_ENTRY_IDLE_TIMEOUT_MS_END]
+            .copy_from_slice(&10_000u32.to_le_bytes());
+        row[app::OFF_ENTRY_HOP_LIMIT] = 64;
+        row[app::OFF_ENTRY_NAGLE] = 1;
         row[app::OFF_ENTRY_ROLE] = app::ROLE_CLIENT;
         if *holder == LISTENER {
             row[app::OFF_ENTRY_ROLE] = app::ROLE_LISTENER;

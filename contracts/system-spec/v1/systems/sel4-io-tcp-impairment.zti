@@ -493,6 +493,10 @@
       queueDepth = 0;
       retryLimit = 0;
       reconnectLimit = 0;
+      keepaliveMs = 0;
+      idleTimeoutMs = 10000;
+      hopLimit = 64;
+      nagle = true;
     };
   ];
   networkApplicationsObject = true;

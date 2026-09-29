@@ -674,8 +674,12 @@
       completionNotification = "network-http-completion";
       controlBinding = "network-http-service";
       holder = "http-get";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
+      nagle = true;
       provisionBinding = "network-http-provision";
       queueDepth = 0;
       reconnectLimit = 0;

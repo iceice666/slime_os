@@ -606,8 +606,12 @@
       completionNotification = "listener-session-done";
       controlBinding = "listener-session-control";
       holder = "listener-session";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "10.0.0.1";
       localPort = 4270;
+      nagle = true;
       provisionBinding = "listener-session-provision";
       queueDepth = 4;
       reconnectLimit = 0;
@@ -632,8 +636,12 @@
       completionNotification = "intruder-session-done";
       controlBinding = "intruder-session-control";
       holder = "intruder-session";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
+      nagle = true;
       provisionBinding = "intruder-session-provision";
       queueDepth = 0;
       reconnectLimit = 0;
