@@ -281,7 +281,14 @@ impl Application {
             return true;
         }
         let Some(request) = request.filter(valid_network_request) else {
-            self.refuse(submission, op, network_service::STATUS_MALFORMED);
+            // No operation beyond network-service/v1 exists; in particular a
+            // client has none that selects or changes its socket options.
+            let status = if request.is_some_and(unknown_operation) {
+                network_service::STATUS_UNSUPPORTED
+            } else {
+                network_service::STATUS_MALFORMED
+            };
+            self.refuse(submission, op, status);
             return true;
         };
         if self.disconnected && request.op != network_service::OP_CLOSE {
@@ -506,4 +513,26 @@ impl Application {
         let ring_ok = ring.release();
         data_ok && ring_ok
     }
+}
+
+/// A well-formed envelope naming an operation network-service/v1 does not
+/// define. Known operations with invalid fields remain malformed.
+fn unknown_operation(request: WireNetworkRequest) -> bool {
+    request.magic == network_service::NETWORK_MAGIC
+        && request.version == network_service::FORMAT_VERSION
+        && request.flags & !network_service::KNOWN_REQUEST_FLAGS == 0
+        && request.reserved.iter().all(|byte| *byte == 0)
+        && !matches!(
+            request.op,
+            network_service::OP_CONNECT
+                | network_service::OP_SEND
+                | network_service::OP_RECV
+                | network_service::OP_CLOSE
+                | network_service::OP_LISTEN
+                | network_service::OP_ACCEPT
+                | network_service::OP_RESOLVE
+                | network_service::OP_ATTACH
+                | network_service::OP_ABORT
+                | network_service::OP_SHUTDOWN
+        )
 }

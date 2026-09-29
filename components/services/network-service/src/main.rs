@@ -258,6 +258,12 @@ fn main(_: u32) {
     };
     let mut engine = tcp::Engine::new(&mut socket_storage, rx_storage, tx_storage, incarnation, 0)
         .unwrap_or_else(|_| fail(b"external engine incarnation"));
+    if let Some(table) = application_table.as_ref() {
+        report_socket_options(table);
+        debug_write(b"[network-service] tcp congestion control=");
+        debug_write(engine.congestion_control());
+        debug_write(b"\n");
+    }
     let mut dns_rx = [0; resolver::BUFFER_BYTES];
     let mut dns_tx = [0; resolver::BUFFER_BYTES];
     let mut dns_rx_meta = [smoltcp::socket::udp::PacketMetadata::EMPTY];
@@ -548,7 +554,7 @@ fn main(_: u32) {
             progress |= stack.link.replenish();
             engine.observe_peaks();
             report_events(&mut engine);
-            if let Some(reclaimed) = engine.take_timeout_reclamation() {
+            while let Some(reclaimed) = engine.take_timeout_reclamation() {
                 write_number(
                     b"[network-service] tcp timeout handles=",
                     reclaimed.handles as u64,
@@ -754,6 +760,34 @@ fn admit_external_listeners(
         count += 1;
     }
     count
+}
+
+/// State the TCP options each application row declares, which the service
+/// applies to every socket that row opens or accepts. A row is named by its
+/// control binding up to the last hyphen only when that prefix hashes to the
+/// row's holder identity; the table itself carries no holder names.
+fn report_socket_options(table: &NetworkApplications<'_>) {
+    for index in 0..table.application_count() {
+        let entry = table.application(index).unwrap();
+        debug_write(b"[network-service] tcp options holder=");
+        match entry
+            .control_binding
+            .iter()
+            .rposition(|byte| *byte == b'-')
+            .and_then(|end| core::str::from_utf8(&entry.control_binding[..end]).ok())
+            .filter(|stem| {
+                boot_contracts::network_destination::holder_identity(stem) == entry.holder_identity
+            }) {
+            Some(stem) => debug_write(stem.as_bytes()),
+            None => debug_write(b"unnamed"),
+        };
+        let options = entry.options;
+        write_number(b" keepalive_ms=", u64::from(options.keepalive_ms));
+        write_number(b" nagle=", u64::from(options.nagle));
+        write_number(b" hop_limit=", u64::from(options.hop_limit));
+        write_number(b" idle_timeout_ms=", u64::from(options.idle_timeout_ms));
+        debug_write(b"\n");
+    }
 }
 
 fn report_events(engine: &mut tcp::Engine<'_>) {

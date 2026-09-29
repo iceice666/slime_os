@@ -21,6 +21,7 @@ smoltcp = { version = "=0.13.0", default-features = false, features = [
     "medium-ethernet",
     "proto-ipv4",
     "socket-tcp",
+    "socket-tcp-reno",
     "socket-udp",
     "auto-icmp-echo-reply",
     "assembler-max-segment-count-4",

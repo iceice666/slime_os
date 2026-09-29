@@ -17,10 +17,10 @@ Owners:
   transport-independent), `components/lib/src/link_frames.rs`;
 - contracts: `contracts/network-service/v1/` (operations, bounds, waiting,
   retry, timeout, cleanup — see its [README](../../contracts/network-service/README.md)),
-  `contracts/network-application/v2/`, `contracts/network-destination/v1/`,
+  `contracts/network-application/v3/`, `contracts/network-destination/v1/`,
   `contracts/network-interface/v1/`, `contracts/link-device/v1/`;
 - compositions: `sel4-io-network`, `sel4-io-tcp`, `sel4-io-tcp-impairment`,
-  `sel4-io-tcp-listener`,
+  `sel4-io-tcp-listener`, `sel4-io-tcp-options`,
   `sel4-io-local`, `sel4-io-lifetime`, `sel4-io-service-fault`,
   `sel4-io-driver-reset`, `sel4-http`, `sel4-http-public` under
   `contracts/system-spec/v1/`;
@@ -50,12 +50,12 @@ Each external socket owns fixed 2048-byte receive and transmit buffers, and
 smoltcp's out-of-order assembler holds four disjoint ranges
 (`assembler-max-segment-count-4`); a fifth range is dropped and recovered only
 by the peer's retransmission. The service states these bounds and its 10 s
-socket timeout at attach (`tcp bounds …`) and, at shutdown, the deepest
+operation timeout at attach (`tcp bounds …`) and, at shutdown, the deepest
 receive and transmit queues any socket reached (`tcp peaks …`). A peer that
-stops acknowledging exhausts the destination's `retryLimit` or that timeout:
-the socket is aborted with one reset, the holder's operations and its close
-report `timeout`, and the close releases the connection's reservation
-(`tcp timeout handles=1 sockets=1 bytes=4096`).
+stops acknowledging exhausts the destination's `retryLimit` or the row's
+declared idle timeout: the socket is aborted with one reset, the holder's
+operations and its close report `timeout`, and the close releases the
+connection's reservation (`tcp timeout handles=1 sockets=1 bytes=4096`).
 
 Received frames reach smoltcp in the order the device completed them, however
 recycling placed them in receive slots. smoltcp discards a segment whose
@@ -77,9 +77,34 @@ sockets in the fixed four-socket pool for ten seconds, so the probe retries a
 connect refused as `exhausted`. The declared values are in the
 [plan](../plans/network-data-plane.md#tcp-loss-reordering-retransmission-and-window-bounds).
 
+## Declared TCP options
+
+Every application row, client or listener, declares the TCP options the
+service applies to each socket that row opens or accepts: keep-alive interval
+(or off), Nagle, the IPv4 hop limit and the idle timeout after which a
+connection that hears nothing from its peer, while it has unacknowledged data
+or keep-alive on, is aborted. A pooled socket keeps smoltcp's configuration
+across connections, so every open applies the whole row together with the
+fixed policy: no delayed ACK and Reno, the one congestion controller the
+service enables. No request names an option, and an operation code outside
+`network-service/v1` is refused as `unsupported`. At activation the service
+states each row's options (`tcp options holder=…`), naming a row by its
+control binding's stem only when that stem hashes to the row's holder
+identity, and its controller (`tcp congestion control=reno`).
+
+The egress guard charges no retry for a keep-alive probe, which repeats one
+null byte just below the transmitted edge while nothing is queued. smoltcp
+forgets a connection's tuple as it sends the one reset that ends an idle
+timeout, so the engine records each connection's tuple at open and attributes
+that reset: it is published, and the connection ends with a typed `timeout`.
+The `sel4-io-tcp-options` composition qualifies both settings of every option
+behind a scripted frame peer (`scripts/lib/tcp_options_peer.py`); the declared
+values are in the
+[plan](../plans/network-data-plane.md#tcp-socket-options-and-congestion-control).
+
 ## Application authority and listeners
 
-`network-application/v2` declares each application's control/provisioning
+`network-application/v3` declares each application's control/provisioning
 bindings, backend, optional readiness/supervision bindings, and separate exact
 listener authority. A loopback listener row permits only `127.0.0.1`, a nonzero
 port and one declared local client holder; local-peer admission precedes SYN

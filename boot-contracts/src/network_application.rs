@@ -1,9 +1,12 @@
-//! Exact application bindings and bounded listener authority.
+//! Exact application bindings, bounded listener authority and declared TCP
+//! socket options.
 //!
 //! A loopback listener admits one declared local client holder; an external
 //! listener admits one exact remote IPv4 address. Neither is a wildcard, and
 //! an external listener's local address is checked against the service's
-//! declared interface where that declaration is visible, not here.
+//! declared interface where that declaration is visible, not here. Every row
+//! declares the TCP options the service applies to each socket it opens or
+//! accepts for that holder; no request can select or change them.
 
 pub use crate::network_destination::holder_identity;
 include!("generated/network_application.rs");
@@ -57,6 +60,18 @@ pub struct Application<'a> {
     pub queue_depth: u32,
     pub retry_limit: u32,
     pub reconnect_limit: u32,
+    pub options: SocketOptions,
+}
+
+/// The TCP options one row declares. Keep-alive zero means off; the idle
+/// timeout aborts a connection that hears nothing from its peer for that long
+/// while it has unacknowledged data or keep-alive on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketOptions {
+    pub keepalive_ms: u32,
+    pub idle_timeout_ms: u32,
+    pub hop_limit: u8,
+    pub nagle: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,7 +230,22 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
         queue_depth: u32_at(bytes, OFF_ENTRY_QUEUE_DEPTH),
         retry_limit: u32_at(bytes, OFF_ENTRY_RETRY_LIMIT),
         reconnect_limit: u32_at(bytes, OFF_ENTRY_RECONNECT_LIMIT),
+        options: SocketOptions {
+            keepalive_ms: u32_at(bytes, OFF_ENTRY_KEEPALIVE_MS),
+            idle_timeout_ms: u32_at(bytes, OFF_ENTRY_IDLE_TIMEOUT_MS),
+            hop_limit: bytes[OFF_ENTRY_HOP_LIMIT],
+            nagle: bytes[OFF_ENTRY_NAGLE] == 1,
+        },
     };
+    let options = entry.options;
+    if bytes[OFF_ENTRY_NAGLE] > 1
+        || (options.keepalive_ms != 0
+            && !(MIN_KEEPALIVE_MS..=MAX_KEEPALIVE_MS).contains(&options.keepalive_ms))
+        || !(MIN_IDLE_TIMEOUT_MS..=MAX_IDLE_TIMEOUT_MS).contains(&options.idle_timeout_ms)
+        || !(MIN_HOP_LIMIT..=MAX_HOP_LIMIT).contains(&options.hop_limit)
+    {
+        return Err(DecodeError::Impossible);
+    }
     if entry.holder_identity == [0; 32]
         || entry.control_binding == entry.provision_binding
         || entry.request_notification.is_empty() != entry.completion_notification.is_empty()
@@ -331,6 +361,9 @@ mod tests {
         name(&mut bytes, OFF_ENTRY_PROVISION_BINDING, b"client-provision");
         bytes[OFF_ENTRY_ROLE] = ROLE_CLIENT;
         bytes[OFF_ENTRY_BACKEND] = backend;
+        put32(&mut bytes, OFF_ENTRY_IDLE_TIMEOUT_MS, 10_000);
+        bytes[OFF_ENTRY_HOP_LIMIT] = 64;
+        bytes[OFF_ENTRY_NAGLE] = 1;
         bytes
     }
     fn listener() -> [u8; ENTRY_BYTES] {
@@ -719,6 +752,85 @@ mod tests {
         assert_eq!(
             NetworkApplications::decode(&object(&[backlog])).err(),
             Some(DecodeError::Impossible)
+        );
+    }
+
+    #[test]
+    fn declared_socket_options_are_decoded_and_bounded_for_every_role() {
+        let peer = client(1, BACKEND_LOOPBACK);
+        for row in [client(1, BACKEND_EXTERNAL), external_listener()] {
+            let mut tuned = row;
+            put32(&mut tuned, OFF_ENTRY_KEEPALIVE_MS, 500);
+            put32(&mut tuned, OFF_ENTRY_IDLE_TIMEOUT_MS, 2000);
+            tuned[OFF_ENTRY_HOP_LIMIT] = 7;
+            tuned[OFF_ENTRY_NAGLE] = 0;
+            let bytes = object(&[tuned]);
+            let table = NetworkApplications::decode(&bytes).unwrap();
+            assert_eq!(
+                table.application(0).unwrap().options,
+                SocketOptions {
+                    keepalive_ms: 500,
+                    idle_timeout_ms: 2000,
+                    hop_limit: 7,
+                    nagle: false,
+                }
+            );
+            for (offset, value, valid) in [
+                (OFF_ENTRY_KEEPALIVE_MS, 0, true),
+                (OFF_ENTRY_KEEPALIVE_MS, MIN_KEEPALIVE_MS, true),
+                (OFF_ENTRY_KEEPALIVE_MS, MAX_KEEPALIVE_MS, true),
+                (OFF_ENTRY_KEEPALIVE_MS, MIN_KEEPALIVE_MS - 1, false),
+                (OFF_ENTRY_KEEPALIVE_MS, MAX_KEEPALIVE_MS + 1, false),
+                (OFF_ENTRY_IDLE_TIMEOUT_MS, MIN_IDLE_TIMEOUT_MS, true),
+                (OFF_ENTRY_IDLE_TIMEOUT_MS, MAX_IDLE_TIMEOUT_MS, true),
+                (OFF_ENTRY_IDLE_TIMEOUT_MS, 0, false),
+                (OFF_ENTRY_IDLE_TIMEOUT_MS, MIN_IDLE_TIMEOUT_MS - 1, false),
+                (OFF_ENTRY_IDLE_TIMEOUT_MS, MAX_IDLE_TIMEOUT_MS + 1, false),
+            ] {
+                let mut entry = tuned;
+                put32(&mut entry, offset, value);
+                assert_eq!(
+                    NetworkApplications::decode(&object(&[entry])).is_ok(),
+                    valid,
+                    "offset={offset} value={value}"
+                );
+                if !valid {
+                    assert_eq!(
+                        NetworkApplications::decode(&object(&[entry])).err(),
+                        Some(DecodeError::Impossible)
+                    );
+                }
+            }
+            for (offset, value, valid) in [
+                (OFF_ENTRY_HOP_LIMIT, 0, false),
+                (OFF_ENTRY_HOP_LIMIT, MIN_HOP_LIMIT, true),
+                (OFF_ENTRY_HOP_LIMIT, MAX_HOP_LIMIT, true),
+                (OFF_ENTRY_NAGLE, 1, true),
+                (OFF_ENTRY_NAGLE, 2, false),
+                (OFF_ENTRY_NAGLE, 255, false),
+            ] {
+                let mut entry = tuned;
+                entry[offset] = value;
+                assert_eq!(
+                    NetworkApplications::decode(&object(&[entry])).is_ok(),
+                    valid,
+                    "offset={offset} value={value}"
+                );
+            }
+        }
+        // A loopback listener's options are bounded like any other row's.
+        let mut listener = listener();
+        listener[OFF_ENTRY_HOP_LIMIT] = 0;
+        assert_eq!(
+            NetworkApplications::decode(&object(&[peer, listener])).err(),
+            Some(DecodeError::Impossible)
+        );
+        // Version 2 rows, which carry no options, are refused whole.
+        let mut version_two = object(&[client(1, BACKEND_EXTERNAL)]);
+        put32(&mut version_two, OFF_HEADER_FORMAT_VERSION, 2);
+        assert_eq!(
+            NetworkApplications::decode(&version_two).err(),
+            Some(DecodeError::UnsupportedVersion)
         );
     }
 }

@@ -1,13 +1,15 @@
 //! Bounded, holder-bound TCP connections over the service's smoltcp interface.
 
 use crate::{dns, resolver};
-use boot_contracts::network_application::{Application, Backend, NetworkApplications, Role};
+use boot_contracts::network_application::{
+    Application, Backend, NetworkApplications, Role, SocketOptions,
+};
 use boot_contracts::network_destination::{
     Address, NetworkDestinations, RIGHT_CONNECT, RIGHT_RECV, RIGHT_SEND, Transport,
 };
 use slime_proto::network_service::{self as wire, WireNetworkRequest};
 use smoltcp::iface::{Interface, SocketHandle, SocketSet, SocketStorage};
-use smoltcp::socket::tcp::{Socket, SocketBuffer, State};
+use smoltcp::socket::tcp::{CongestionControl, Socket, SocketBuffer, State};
 use smoltcp::socket::udp;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
@@ -20,6 +22,31 @@ pub const BUFFER_BYTES: usize = 2048;
 pub const MAX_INCARNATION: u64 = (1 << 30) - 1;
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_EPHEMERAL_PORT: u16 = 49152;
+/// What a socket gets when no application row declares its options: smoltcp's
+/// defaults with the service's ten-second idle timeout.
+pub const DEFAULT_OPTIONS: SocketOptions = SocketOptions {
+    keepalive_ms: 0,
+    idle_timeout_ms: OPERATION_TIMEOUT.total_millis() as u32,
+    hop_limit: 64,
+    nagle: true,
+};
+
+/// Apply one row's declared options and the fixed service policy. Every open
+/// applies all of them, since a pooled socket keeps its configuration across
+/// connections and holders.
+fn apply(socket: &mut Socket<'_>, options: SocketOptions) {
+    socket.set_ack_delay(None);
+    socket.set_congestion_control(CongestionControl::Reno);
+    socket.set_nagle_enabled(options.nagle);
+    // smoltcp panics on zero; a decoded row is never zero.
+    socket.set_hop_limit(Some(options.hop_limit.max(1)));
+    socket.set_timeout(Some(Duration::from_millis(u64::from(
+        options.idle_timeout_ms,
+    ))));
+    socket.set_keep_alive(
+        (options.keepalive_ms != 0).then(|| Duration::from_millis(u64::from(options.keepalive_ms))),
+    );
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -86,6 +113,9 @@ struct Connection {
     shutdown: bool,
     /// Receive and transmit queue depths when the holder requested close.
     close_queues: (usize, usize),
+    options: SocketOptions,
+    /// The tuple, kept because smoltcp forgets it as it sends a timeout reset.
+    endpoints: Option<(IpEndpoint, IpEndpoint)>,
 }
 
 /// Whom a listener admits: one declared loopback client holder, or one exact
@@ -189,6 +219,7 @@ struct Listener {
     timer_budget: u32,
     queue_depth: u32,
     retry_limit: u32,
+    options: SocketOptions,
     socket: Option<usize>,
     active: bool,
     retries: u32,
@@ -247,7 +278,8 @@ pub struct Engine<'a> {
     name_connect: Option<NameConnect>,
     dns_observation: Option<DnsObservation>,
     peaks: Peaks,
-    timeout_reclaimed: Option<Reclaimed>,
+    /// Connections ended by a typed timeout whose release is unreported.
+    timeout_reclaimed: usize,
     loopback: bool,
     excess_refusals: u32,
     events: [Option<Event>; EVENTS],
@@ -276,10 +308,12 @@ impl<'a> Engine<'a> {
         let mut buffers = rx.iter_mut().zip(tx.iter_mut());
         let handles = core::array::from_fn(|_| {
             let (rx, tx) = buffers.next().expect("one buffer pair per socket");
-            sockets.add(Socket::new(
+            let mut socket = Socket::new(
                 SocketBuffer::new(&mut rx[..]),
                 SocketBuffer::new(&mut tx[..]),
-            ))
+            );
+            apply(&mut socket, DEFAULT_OPTIONS);
+            sockets.add(socket)
         });
         Ok(Self {
             sockets,
@@ -298,7 +332,7 @@ impl<'a> Engine<'a> {
             name_connect: None,
             dns_observation: None,
             peaks: Peaks::default(),
-            timeout_reclaimed: None,
+            timeout_reclaimed: 0,
             loopback: backend == 1,
             excess_refusals: 0,
             events: [None; EVENTS],
@@ -332,6 +366,19 @@ impl<'a> Engine<'a> {
                 self.sockets.remove(handle);
                 Err(error)
             }
+        }
+    }
+
+    /// The congestion controller every socket runs; `apply` selects it on
+    /// every open, so the first socket speaks for the pool.
+    pub fn congestion_control(&self) -> &'static [u8] {
+        match self
+            .sockets
+            .get::<Socket>(self.handles[0])
+            .congestion_control()
+        {
+            CongestionControl::Reno => b"reno",
+            CongestionControl::None => b"none",
         }
     }
 
@@ -394,10 +441,15 @@ impl<'a> Engine<'a> {
         self.dns_observation.take()
     }
 
-    /// Resources released with connections that ended in a typed timeout since
-    /// the last call, counted once each when the holder disposes of the handle.
+    /// The resources one connection that ended in a typed timeout released
+    /// when its holder disposed of the handle; one report per connection.
     pub fn take_timeout_reclamation(&mut self) -> Option<Reclaimed> {
-        self.timeout_reclaimed.take()
+        self.timeout_reclaimed = self.timeout_reclaimed.checked_sub(1)?;
+        Some(Reclaimed {
+            handles: 1,
+            sockets: 1,
+            bytes: 2 * BUFFER_BYTES,
+        })
     }
 
     /// Fold the current receive and transmit queue depths into the peaks.
@@ -513,7 +565,9 @@ impl<'a> Engine<'a> {
             {
                 self.sockets
                     .get_mut::<Socket>(self.handles[pending.index])
-                    .set_timeout(Some(OPERATION_TIMEOUT));
+                    .set_timeout(Some(Duration::from_millis(u64::from(
+                        connection.options.idle_timeout_ms,
+                    ))));
                 self.name_connect = None;
                 return;
             }
@@ -551,8 +605,9 @@ impl<'a> Engine<'a> {
             self.fail_dns(pending.index, Status::Refused);
             return;
         }
+        apply(socket, connection.options);
         socket.set_timeout(Some(Duration::from_secs(2)));
-        socket.set_ack_delay(None);
+        let endpoints = socket.local_endpoint().zip(socket.remote_endpoint());
         self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
         if let Some(destination) = destinations.destination(connection.destination)
             && let Address::Dns(name) = destination.address
@@ -580,6 +635,7 @@ impl<'a> Engine<'a> {
             deadline: now + Duration::from_secs(2),
             terminal: None,
             sent_end: None,
+            endpoints,
             ..connection
         });
         self.name_connect = Some(pending);
@@ -635,6 +691,23 @@ impl<'a> Engine<'a> {
                 reset.is_some_and(|reset| reset.local == local && reset.remote == remote)
             }) {
                 self.resets[index] = None;
+                return true;
+            }
+            // smoltcp aborts a connection whose peer stayed silent past its
+            // declared idle timeout with one reset, forgetting the tuple as it
+            // sends it; that reset ends the connection with a typed timeout.
+            if let Some(index) = self.connections.iter().position(|connection| {
+                connection.is_some_and(|connection| {
+                    connection.terminal.is_none()
+                        && matches!(connection.phase, Phase::Connected | Phase::Closing)
+                        && connection.endpoints == Some((local, remote))
+                })
+            }) && self.sockets.get::<Socket>(self.handles[index]).state() == State::Closed
+            {
+                self.connections[index]
+                    .as_mut()
+                    .expect("located connection")
+                    .terminal = Some(Status::Timeout);
                 return true;
             }
             // smoltcp acknowledges only a bare SYN it refuses. Publish that
@@ -706,6 +779,21 @@ impl<'a> Engine<'a> {
             return true;
         }
         let end = tcp.seq_number() + length;
+        // A keep-alive probe repeats one null byte just below the transmitted
+        // edge while nothing is queued; it is no retransmission of data.
+        let keep_alive = tcp.payload() == [0]
+            && !tcp.syn()
+            && !tcp.fin()
+            && connection.sent_end == Some(end)
+            && self.sockets.get::<Socket>(self.handles[index]).send_queue() == 0
+            && self
+                .sockets
+                .get::<Socket>(self.handles[index])
+                .keep_alive()
+                .is_some();
+        if keep_alive {
+            return true;
+        }
         if connection
             .sent_end
             .is_some_and(|sent| tcp.seq_number() < sent)
@@ -855,8 +943,7 @@ impl<'a> Engine<'a> {
         {
             return false;
         }
-        socket.set_timeout(Some(OPERATION_TIMEOUT));
-        socket.set_ack_delay(None);
+        apply(socket, listener.options);
         self.listeners[index] = Some(Listener {
             socket: Some(socket_index),
             retries: 0,
@@ -946,6 +1033,7 @@ impl<'a> Engine<'a> {
             timer_budget: policy.timer_budget,
             queue_depth: policy.queue_depth,
             retry_limit: policy.retry_limit,
+            options: policy.options,
             socket: None,
             active: true,
             retries: 0,
@@ -982,6 +1070,7 @@ impl<'a> Engine<'a> {
             return fail(Status::WouldBlock);
         }
         let (local, remote) = (socket.local_endpoint(), socket.remote_endpoint());
+        let endpoints = local.zip(remote);
         if !self.admits(listener.peer, local, remote) {
             return fail(Status::Denied);
         }
@@ -1003,6 +1092,8 @@ impl<'a> Engine<'a> {
             listener: Some(listener.id),
             shutdown: false,
             close_queues: (0, 0),
+            options: listener.options,
+            endpoints,
         });
         self.listeners[index]
             .as_mut()
@@ -1117,7 +1208,15 @@ impl<'a> Engine<'a> {
             self.refresh_listeners();
             return fail(Status::Success);
         }
-        self.handle(destinations, holder, request, payload, now, iface)
+        self.handle_with(
+            destinations,
+            holder,
+            request,
+            payload,
+            now,
+            iface,
+            policy.options,
+        )
     }
 
     /// At least one live connection exists, and all of its queued bytes have
@@ -1215,7 +1314,8 @@ impl<'a> Engine<'a> {
         reclaimed
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Serve a holder without a declared application row: its sockets get
+    /// [`DEFAULT_OPTIONS`].
     pub fn handle(
         &mut self,
         destinations: &NetworkDestinations<'_>,
@@ -1225,12 +1325,35 @@ impl<'a> Engine<'a> {
         now: Instant,
         iface: &mut Interface,
     ) -> Outcome {
+        self.handle_with(
+            destinations,
+            holder,
+            request,
+            payload,
+            now,
+            iface,
+            DEFAULT_OPTIONS,
+        )
+    }
+
+    /// `options` are the holder's declared row; the request cannot name any.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_with(
+        &mut self,
+        destinations: &NetworkDestinations<'_>,
+        holder: [u8; 32],
+        request: WireNetworkRequest,
+        payload: &mut [u8],
+        now: Instant,
+        iface: &mut Interface,
+        options: SocketOptions,
+    ) -> Outcome {
         self.last_now = now;
         if !slime_proto::valid_network_request(&request) {
             return Outcome::Complete(Completion::status(Status::Malformed));
         }
         if request.op == wire::OP_CONNECT {
-            return self.connect(destinations, holder, request, now, iface);
+            return self.connect(destinations, holder, request, now, iface, options);
         }
         if !matches!(
             request.op,
@@ -1348,6 +1471,7 @@ impl<'a> Engine<'a> {
         request: WireNetworkRequest,
         now: Instant,
         iface: &mut Interface,
+        options: SocketOptions,
     ) -> Outcome {
         let fail = |status| Outcome::Complete(Completion::status(status));
         if request.transport != wire::TRANSPORT_TCP
@@ -1421,8 +1545,12 @@ impl<'a> Engine<'a> {
         {
             return fail(Status::Refused);
         }
-        socket.set_timeout(Some(OPERATION_TIMEOUT));
-        socket.set_ack_delay(None);
+        apply(socket, options);
+        let endpoints = if named {
+            None
+        } else {
+            socket.local_endpoint().zip(socket.remote_endpoint())
+        };
         if !named {
             self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
         }
@@ -1447,6 +1575,8 @@ impl<'a> Engine<'a> {
             listener: None,
             shutdown: false,
             close_queues: (0, 0),
+            options,
+            endpoints,
         });
         if named {
             if let Err(status) = self.resolver.as_mut().expect("enabled resolver").start(
@@ -1539,12 +1669,7 @@ impl<'a> Engine<'a> {
             });
         }
         if status == Status::Timeout {
-            let reclaimed = self
-                .timeout_reclaimed
-                .get_or_insert_with(Reclaimed::default);
-            reclaimed.handles += 1;
-            reclaimed.sockets += 1;
-            reclaimed.bytes += 2 * BUFFER_BYTES;
+            self.timeout_reclaimed += 1;
         }
         self.connections[index] = None;
         Some(Completion::status(status))
@@ -1717,6 +1842,10 @@ mod tests {
             row[app::OFF_ENTRY_PROVISION_BINDING..app::OFF_ENTRY_PROVISION_BINDING + 9]
                 .copy_from_slice(b"provision");
             row[app::OFF_ENTRY_BACKEND] = app::BACKEND_LOOPBACK;
+            row[app::OFF_ENTRY_IDLE_TIMEOUT_MS..app::OFF_ENTRY_IDLE_TIMEOUT_MS_END]
+                .copy_from_slice(&10_000u32.to_le_bytes());
+            row[app::OFF_ENTRY_HOP_LIMIT] = 64;
+            row[app::OFF_ENTRY_NAGLE] = 1;
             row[app::OFF_ENTRY_ROLE] = if index == 1 {
                 app::ROLE_LISTENER
             } else {
@@ -3280,3 +3409,7 @@ mod dns_integration_tests;
 #[cfg(test)]
 #[path = "listener_tests.rs"]
 mod listener_tests;
+
+#[cfg(test)]
+#[path = "options_tests.rs"]
+mod options_tests;

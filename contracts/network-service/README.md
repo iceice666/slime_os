@@ -13,7 +13,7 @@ performs TCP I/O; a successful legacy endpoint request is not transport evidence
 The client resolves separate declared control and provisioning endpoints. The
 control endpoint is nontransferable; it carries the endpoint `OP_ATTACH` request
 with all operation fields zero. After admitting the binding declared by
-[`network-application/v2`](../network-application/README.md), the service allocates two distinct backing buffers through
+[`network-application/v3`](../network-application/README.md), the service allocates two distinct backing buffers through
 its explicit shared-buffer factory: one ring page and one 4096-byte payload page.
 It formats an IO0 ring with `QUEUE_SLOTS = 4`, then delegates a writable
 `SharedBufferLoan` for each page to the client on the provisioning endpoint,
@@ -270,20 +270,32 @@ remote delivery. Receive reports the actual copied length and sets EOF only
 after an orderly peer FIN and drainage of queued receive bytes. Applications
 must handle partial transfers and distinguish EOF from temporary unreadiness.
 
-Connect and close have ten-second deadlines. smoltcp also has a ten-second
-socket timeout for an unanswered connect or outstanding transmit data. Explicit
-engine deadlines and retry-budget exhaustion report `timeout`; after an
-established socket closes internally, smoltcp's public state does not expose
-whether a reset or its internal timeout caused the closure, so the engine can
-report `reset`. A pending connect that closes before its deadline reports
-`refused`.
+Connect and close have ten-second deadlines. Each socket also carries the idle
+timeout its application row declares (`network-application/v3`, ten seconds
+for a holder without a row): smoltcp aborts a connect, or an established
+connection with unacknowledged data or keep-alive on, that hears nothing from
+its peer for that long, with one reset. The engine records every connection's
+tuple at open because smoltcp forgets it as it sends that reset; it publishes
+the reset and ends the connection with `timeout`. Explicit engine deadlines
+and retry-budget exhaustion also report `timeout`. An established socket closed
+by the peer's reset reports `reset`. A pending connect that closes before its
+deadline reports `refused`.
+
+The row's keep-alive interval, Nagle setting and IPv4 hop limit apply to the
+same sockets; delayed ACK stays disabled and Reno is the one congestion
+controller. No operation selects or changes an option, and a request whose
+otherwise valid envelope names an operation this contract does not define is
+refused as `unsupported`; a known operation with invalid fields remains
+`malformed`.
 
 Before publishing a TCP frame, the egress guard charges each segment whose
 sequence range begins below the previous transmitted high-water mark as one
 retry. The destination's `retry_limit` bounds these repeated segments over the
 whole connection lifetime, including SYN, payload, and FIN retransmissions.
 This is more conservative than a per-segment retry limit: legitimate overlap
-can consume the budget. Pure acknowledgments do not consume retries. The engine
+can consume the budget. Pure acknowledgments and keep-alive probes, which
+repeat one null byte below the transmitted edge while nothing is queued, do not
+consume retries. The engine
 performs no automatic reconnects. The destination and application
 `reconnect_limit` fields bound automatic recovery attempts, not explicit
 application `OP_CONNECT` requests or listener rearming after accept; this engine

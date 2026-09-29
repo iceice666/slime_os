@@ -397,11 +397,13 @@ def build_network_interfaces(declarations: list[dict]) -> bytes:
 
 
 def build_network_applications(manifest: dict) -> bytes:
-    """Encode exact application bindings and listener policy (network-application/v2).
+    """Encode exact application bindings, listener policy and TCP options (network-application/v3).
 
     A loopback listener admits one declared local client holder; an external
     listener listens on an address the service's declared interface owns and
-    admits one exact remote unicast IPv4 address, any source port.
+    admits one exact remote unicast IPv4 address, any source port. Every row,
+    client or listener, declares the TCP options the service applies to each
+    socket it opens or accepts for that holder.
     """
     c = wire_contracts
     declarations = manifest.get("networkApplications") or []
@@ -476,6 +478,15 @@ def build_network_applications(manifest: dict) -> bytes:
         limits = tuple(declaration[field] for field in limit_fields)
         if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in (port, *limits)):
             fail("network application: invalid numeric bound")
+        keepalive, idle_timeout, hop_limit, nagle = (declaration[field] for field in ("keepaliveMs", "idleTimeoutMs", "hopLimit", "nagle"))
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in (keepalive, idle_timeout, hop_limit)) or not isinstance(nagle, bool):
+            fail("network application: invalid socket option")
+        if not (
+            (keepalive == 0 or c.NETWORK_APPLICATION_MIN_KEEPALIVE_MS <= keepalive <= c.NETWORK_APPLICATION_MAX_KEEPALIVE_MS)
+            and c.NETWORK_APPLICATION_MIN_IDLE_TIMEOUT_MS <= idle_timeout <= c.NETWORK_APPLICATION_MAX_IDLE_TIMEOUT_MS
+            and c.NETWORK_APPLICATION_MIN_HOP_LIMIT <= hop_limit <= c.NETWORK_APPLICATION_MAX_HOP_LIMIT
+        ):
+            fail("network application: socket options exceed contract")
         peer = declaration["admittedPeer"]
         peer_address_text = declaration["admittedPeerAddress"]
         peer_kind = c.NETWORK_APPLICATION_PEER_NONE
@@ -514,7 +525,7 @@ def build_network_applications(manifest: dict) -> bytes:
                     fail("network application: admitted peer is not a distinct declared local client")
         identity = network_destination_holder_identity(holder)
         peer_identity = network_destination_holder_identity(peer) if peer else bytes(32)
-        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, peer_kind, bytes(1), *limits, peer_address, bytes(52))
+        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, peer_kind, bytes(1), *limits, peer_address, keepalive, idle_timeout, hop_limit, int(nagle), bytes(42))
         entries.append((identity, packed))
     entries.sort(key=lambda entry: entry[0])
     total = c.NETWORK_APPLICATION_HEADER_BYTES + len(entries) * c.NETWORK_APPLICATION_ENTRY_BYTES

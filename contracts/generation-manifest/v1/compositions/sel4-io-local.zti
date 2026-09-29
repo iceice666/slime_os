@@ -376,8 +376,12 @@
       completionNotification = "local-publisher-done";
       controlBinding = "local-publisher-control";
       holder = "publisher-session";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
+      nagle = true;
       provisionBinding = "local-publisher-provision";
       queueDepth = 0;
       reconnectLimit = 0;
@@ -398,8 +402,12 @@
       completionNotification = "local-subscriber-done";
       controlBinding = "local-subscriber-control";
       holder = "subscriber-session";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "127.0.0.1";
       localPort = 7447;
+      nagle = true;
       provisionBinding = "local-subscriber-provision";
       queueDepth = 4;
       reconnectLimit = 0;

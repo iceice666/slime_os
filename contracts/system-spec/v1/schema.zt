@@ -286,6 +286,11 @@ SystemNetworkApplication :: type {
   queueDepth : Int;
   retryLimit : Int;
   reconnectLimit : Int;
+  -- network-application/v3 TCP options for every socket the row opens or accepts.
+  keepaliveMs : Int;
+  idleTimeoutMs : Int;
+  hopLimit : Int;
+  nagle : Bool;
 };
 
 -- B83 exact per-ring block authority, as `BlockRingAuthorityEntry`.

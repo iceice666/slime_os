@@ -300,6 +300,11 @@ NetworkApplicationEntry :: type {
   queueDepth : Int;
   retryLimit : Int;
   reconnectLimit : Int;
+  -- network-application/v3 TCP options for every socket the row opens or accepts.
+  keepaliveMs : Int;
+  idleTimeoutMs : Int;
+  hopLimit : Int;
+  nagle : Bool;
 };
 
 -- One instance's C9.1 root-brokered clock service authority. The four

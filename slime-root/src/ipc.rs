@@ -1689,6 +1689,9 @@ mod tests {
                 .copy_from_slice(b"app-provision");
             row[OFF_ENTRY_ROLE] = ROLE_CLIENT;
             row[OFF_ENTRY_BACKEND] = BACKEND_EXTERNAL;
+            row[OFF_ENTRY_IDLE_TIMEOUT_MS..OFF_ENTRY_IDLE_TIMEOUT_MS_END]
+                .copy_from_slice(&MIN_IDLE_TIMEOUT_MS.to_le_bytes());
+            row[OFF_ENTRY_HOP_LIMIT] = MIN_HOP_LIMIT;
         }
         let table = NetworkApplications::decode(&bytes).unwrap();
         let mut out = [0xa5; MAX_APPLICATIONS * ENTRY_BYTES];

@@ -601,8 +601,12 @@
       completionNotification = "impairment-client-done";
       controlBinding = "impairment-probe-service";
       holder = "io-tcp-impairment-probe";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
+      nagle = true;
       provisionBinding = "impairment-probe-provision";
       queueDepth = 0;
       reconnectLimit = 0;

@@ -599,8 +599,12 @@
       completionNotification = "";
       controlBinding = "network-tcp-probe-service";
       holder = "io-tcp-probe";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
+      nagle = true;
       provisionBinding = "network-tcp-probe-provision";
       queueDepth = 0;
       reconnectLimit = 0;
