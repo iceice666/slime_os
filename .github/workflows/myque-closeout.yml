@@ -49,10 +49,6 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
-          # devloop's code identity covers `.devloop/policy.json` codePaths
-          # inside submodules (`deps/rust-sel4`, `deps/zutai`); without them
-          # every spec-driven item is refused with E_CODE.
-          submodules: recursive
 
       - uses: nixbuild/nix-quick-install-action@v35
         with:
