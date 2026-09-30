@@ -114,6 +114,14 @@ smoltcp_matrix_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# The tree the closeout script runs devloop in must contain every policy
+# codePaths entry: a real checkout of canonical main through the script's own
+# prepare function, and a bare checkout the check must refuse. Needs network;
+# explicit, never part of CI.
+[group('quality')]
+closeout_checkout_check:
+    python3 scripts/lib/work_item_closeout_publish_controls.py --checkout
+
 [group('quality')]
 tasks_list:
     myque list

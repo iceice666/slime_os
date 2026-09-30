@@ -1,14 +1,25 @@
-"""Offline closeout publication controls: the record parser and the commit guard."""
+"""Closeout publication controls.
+
+`check_controls` is offline: the record parser and the commit guard. The
+`--checkout` case (`just closeout_checkout_check`) clones canonical main and is
+explicit because it needs the network.
+"""
 
 from __future__ import annotations
 
+import inspect
+import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import devloop_observations
 import work_item_closeout_publish as closeout
+import work_item_retirement_publish as retirement_publish
+from harness import ROOT
 from work_item_retirement import RetirementError
 
 _ITEM = "01a0ec61-d599-73ec-9e42-1ee6966420fd"
@@ -140,3 +151,43 @@ def check_controls() -> None:
         eligible, reasons = closeout.evaluate(Path("."), [candidate])
     if eligible or len(reasons) != 1 or "E_EXPIRED" not in reasons[0]:
         raise RetirementError("closeout control: a devloop refusal was not reported")
+
+
+def _uncovered(root: Path, code_paths: list[str]) -> list[str]:
+    """The codePaths devloop would refuse in `root`: missing or a symlink."""
+    return [name for name in code_paths if not (root / name).exists() or (root / name).is_symlink()]
+
+
+def check_checkout() -> int:
+    """The closeout checkout covers every codePaths entry; a bare one does not.
+
+    Returns the negative controls refused.
+    """
+    code_paths = json.loads((ROOT / ".devloop" / "policy.json").read_text(encoding="utf-8"))["codePaths"]
+    prepare = getattr(closeout, "prepare", None)
+    if prepare is None:
+        raise RetirementError("closeout checkout: work_item_closeout_publish has no prepare function")
+    if "prepare(source, root)" not in inspect.getsource(closeout.run):
+        raise RetirementError("closeout checkout: run() does not prepare its tree with prepare()")
+    with tempfile.TemporaryDirectory(prefix="closeout-checkout-") as temporary:
+        bare = Path(temporary) / "bare"
+        retirement_publish.prepare_checkout(ROOT, bare)
+        if not _uncovered(bare, code_paths):
+            raise RetirementError("closeout checkout control: a checkout without submodules covered every codePaths entry")
+        refused = 1
+        full = Path(temporary) / "full"
+        prepare(ROOT, full)
+        missing = _uncovered(full, code_paths)
+        if missing:
+            raise RetirementError(f"closeout checkout: codePaths missing or symlinked: {missing}")
+    print(f"closeout checkout: {len(code_paths)} codePaths covered; bare checkout refused")
+    return refused
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["--checkout"]:
+        raise SystemExit("usage: work_item_closeout_publish_controls.py --checkout")
+    try:
+        devloop_observations.record(negativeControlsRefused=check_checkout())
+    except RetirementError as error:
+        raise SystemExit(str(error)) from error
