@@ -101,6 +101,18 @@ def inputs_by_digest(root: Path) -> dict[str, str]:
     return table
 
 
+def prepare(source: Path, destination: Path) -> str:
+    """Clone canonical main with its submodules, and return the base commit.
+
+    devloop's code identity covers `.devloop/policy.json` codePaths inside
+    submodules, so a tree without them is refused for every item. Submodules are
+    checked out at the commits main records, never at their remote heads.
+    """
+    base = prepare_checkout(source, destination)
+    command(destination, "git", "submodule", "update", "--init", "--recursive")
+    return base
+
+
 def require_workflow_context() -> None:
     if (
         os.environ.get("GITHUB_ACTIONS") != "true"
@@ -311,7 +323,7 @@ def run(source: Path, apply: bool) -> None:
         require_workflow_context()
     with tempfile.TemporaryDirectory(prefix="myque-closeout-") as temporary:
         root = Path(temporary) / "checkout"
-        base = prepare_checkout(source, root)
+        base = prepare(source, root)
         command(root, "just", "tasks_check")
         candidates, skipped = select_candidates(root)
         eligible, refused = evaluate(root, candidates)
