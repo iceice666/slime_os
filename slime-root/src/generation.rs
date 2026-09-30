@@ -13,6 +13,7 @@ use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
+use boot_contracts::instance_lifetime::{self, InstanceLifetime, Lifetime};
 use boot_contracts::io_resource::{self, IoResourceBudget};
 use boot_contracts::lifecycle_policy::{self, LifecyclePolicy};
 use boot_contracts::network_application::{self, NetworkApplications};
@@ -138,6 +139,9 @@ pub enum GenerationError {
     /// reason: every case is the same decision, and the marker the root prints
     /// names the failing entry itself.
     UnsatisfiableRecordingPolicy,
+    /// The generation carries an instance-lifetime resource that is malformed
+    /// or names an instance this generation does not declare.
+    UnsatisfiableInstanceLifetime,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -1190,6 +1194,59 @@ pub fn recording_policy_object<'a>(
     None
 }
 
+pub fn instance_lifetime_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<InstanceLifetime<'a>, instance_lifetime::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE && object.bytes.starts_with(&instance_lifetime::MAGIC) {
+            return Some(InstanceLifetime::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// Every resident row names an instance this generation declares, so a
+/// resident declaration can never silently fail to apply.
+fn instance_lifetime_admission(generation: &Generation<'_>) -> Result<(), GenerationError> {
+    let Some(table) = instance_lifetime_object(generation) else {
+        return Ok(());
+    };
+    let table = table.map_err(|_| GenerationError::UnsatisfiableInstanceLifetime)?;
+    for index in 0..table.row_count() {
+        let identity = table
+            .resident(index)
+            .ok_or(GenerationError::UnsatisfiableInstanceLifetime)?;
+        let mut named = false;
+        for candidate in 0..generation.instance_count() {
+            let instance = generation
+                .instance(candidate)
+                .map_err(|_| GenerationError::UnsatisfiableInstanceLifetime)?;
+            if instance_lifetime::instance_identity(instance.name) == identity {
+                named = true;
+                break;
+            }
+        }
+        if !named {
+            return Err(GenerationError::UnsatisfiableInstanceLifetime);
+        }
+    }
+    Ok(())
+}
+
+/// The declared lifetime of `instance`. Bounded when the generation carries no
+/// lifetime object or does not name the instance; admission has already refused
+/// a malformed object.
+pub fn instance_lifetime(generation: &Generation<'_>, instance: usize) -> Lifetime {
+    let Some(Ok(table)) = instance_lifetime_object(generation) else {
+        return Lifetime::Bounded;
+    };
+    match generation.instance(instance) {
+        Ok(instance) => table.lifetime_of(&instance_lifetime::instance_identity(instance.name)),
+        Err(_) => Lifetime::Bounded,
+    }
+}
+
 /// Every right `instance` holds at launch, excluding the one grant its recording
 /// stream travels over.
 ///
@@ -1896,6 +1953,7 @@ impl Admission {
         // generation edited after build is refused here too. The resource's
         // stream pairing and capacity ceiling are the decoder's.
         let recording_entries = recording_policy_admission(generation)?;
+        instance_lifetime_admission(generation)?;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {

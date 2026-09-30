@@ -95,6 +95,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -104,6 +105,7 @@
       dependencies = [];
       executable = "io-driver-intruder";
       health = "required";
+      lifetime = "bounded";
       name = "io-driver-intruder";
       owner = "root";
     };
@@ -133,6 +135,7 @@
       dependencies = [];
       executable = "io-driver-probe";
       health = "required";
+      lifetime = "bounded";
       name = "io-driver-supervisor";
       owner = "root";
     };
@@ -165,6 +168,7 @@
       ];
       executable = "io-driver-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "io-driver-worker";
       owner = "io-driver-supervisor";
     };

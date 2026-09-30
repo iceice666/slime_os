@@ -124,6 +124,8 @@ from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT
 from generation_resources import (
     build_block_ring_authority,
     build_clock_authority,
+    build_instance_lifetime,
+    instance_lifetime_identity,  # noqa: F401 -- read by check-system-spec.py through this module
     build_io_resource_budget,
     build_network_destinations,
     build_network_interfaces,
@@ -3124,6 +3126,18 @@ def build_sel4_generation(
         # the manifest claimed a graph, which is exactly the "declared but never
         # applied" shape B71 closed.
         fail("lifecyclePolicy declared without a lifecycle-policy resource object")
+    residents = [
+        instance["name"]
+        for instance in manifest["instances"]
+        if instance.get("lifetime", "bounded") == "resident"
+    ]
+    if "instance-lifetime" in object_ids:
+        payloads["instance-lifetime"] = build_instance_lifetime(manifest)
+    elif residents:
+        # A resident declaration nothing carries is one the root cannot enforce:
+        # it reads lifetimes from the resource object, so every such instance
+        # would boot bounded while the manifest claimed otherwise.
+        fail(f"resident instances {residents} declared without an instance-lifetime resource object")
     if "recording-policy" in object_ids:
         payloads["recording-policy"] = build_recording_policy(manifest)
     elif manifest.get("recording") is not None:

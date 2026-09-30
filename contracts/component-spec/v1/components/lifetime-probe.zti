@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "lifetime-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Observes declared instance lifetime as holder, worker, owner, quitter and leaver roles; the root never counts a resident exit as completion.";
+  implementation = {
+    provider = "workspace";
+    binary = "lifetime-probe";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [
+    "executable";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_lifetime_check gate boots the generations declaring lifetime-probe";
+    expectedResult = "each instance is told its declared lifetime, and the root never counts a resident exit as completion";
+    passFailCriteria = "[lifetime-probe] role=owner quitter outcome=unhealthy";
+    requiredTestEnvironment = "sel4_lifetime_check";
+  };
+}

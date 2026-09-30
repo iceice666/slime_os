@@ -1458,6 +1458,11 @@ pub fn recording_sources() -> (i64, u64) {
     pair_of(lifecycle_labels::RECORDING_SOURCES, &[])
 }
 
+/// The caller's own declared lifetime, self-scoped by badge with no operand.
+pub fn lifetime_read() -> i64 {
+    pair_of(lifecycle_labels::LIFETIME_READ, &[]).0
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

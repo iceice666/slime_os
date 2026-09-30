@@ -225,6 +225,22 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-lifecycle-restart.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-lifetime";
+      deferralReason = "";
+      owningGate = "sel4_lifetime_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-lifetime.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-lifetime-exit";
+      deferralReason = "";
+      owningGate = "sel4_lifetime_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-lifetime-exit.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-loan.zti";
       composition = "sel4-loan";
       deferralReason = "";

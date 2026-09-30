@@ -47,6 +47,7 @@
     ];
   };
   health = "required";
+  lifetime = "bounded";
   compatibility = {
     platform = "aarch64-sel4-qemu-virt";
     interface = "contracts/serial-device/v1";

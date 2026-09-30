@@ -30,6 +30,7 @@
     "Running";
     "Error";
   ];
+  lifetime = "bounded";
   name = "private-memory-1g-probe";
   owner = "root";
   provides = [];

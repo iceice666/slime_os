@@ -248,6 +248,7 @@
       dependencies = [];
       executable = "fabric-call-worker";
       health = "required";
+      lifetime = "bounded";
       name = "fabric-call-worker";
       owner = "init";
     };
@@ -268,6 +269,7 @@
       dependencies = [];
       executable = "fabric-service";
       health = "required";
+      lifetime = "bounded";
       name = "fabric-service";
       owner = "init";
     };
@@ -308,6 +310,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -323,6 +326,7 @@
       dependencies = [];
       executable = "robot-actuator";
       health = "required";
+      lifetime = "bounded";
       name = "robot-actuator";
       owner = "init";
     };
@@ -332,6 +336,7 @@
       dependencies = [];
       executable = "robot-burner";
       health = "required";
+      lifetime = "bounded";
       name = "robot-burner";
       owner = "root";
     };
@@ -352,6 +357,7 @@
       dependencies = [];
       executable = "robot-clock";
       health = "required";
+      lifetime = "bounded";
       name = "robot-clock";
       owner = "init";
     };
@@ -379,6 +385,7 @@
       ];
       executable = "robot-controller";
       health = "optional";
+      lifetime = "bounded";
       name = "robot-controller";
       owner = "robot-supervisor";
     };
@@ -394,6 +401,7 @@
       dependencies = [];
       executable = "robot-sensor";
       health = "required";
+      lifetime = "bounded";
       name = "robot-sensor";
       owner = "init";
     };
@@ -409,6 +417,7 @@
       dependencies = [];
       executable = "robot-supervisor";
       health = "required";
+      lifetime = "bounded";
       name = "robot-supervisor";
       owner = "root";
     };

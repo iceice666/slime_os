@@ -186,6 +186,7 @@
       dependencies = [];
       executable = "http-get";
       health = "optional";
+      lifetime = "bounded";
       name = "http-get";
       owner = "root";
     };
@@ -205,6 +206,7 @@
       dependencies = [];
       executable = "http-launcher";
       health = "required";
+      lifetime = "bounded";
       name = "http-launcher";
       owner = "root";
     };
@@ -214,6 +216,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -249,6 +252,7 @@
       ];
       executable = "network-service";
       health = "required";
+      lifetime = "bounded";
       name = "network-service";
       owner = "root";
     };
@@ -284,6 +288,7 @@
       dependencies = [];
       executable = "virtio-net-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-net-driver";
       owner = "root";
     };

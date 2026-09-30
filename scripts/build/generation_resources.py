@@ -980,6 +980,51 @@ def build_wait_set(manifest: dict) -> bytes:
     return header + b"".join(WAIT_SET_ENTRY.pack(*entry) for entry in entries)
 
 
+def instance_lifetime_identity(name: str) -> bytes:
+    """Stable per-instance identity, matching boot_contracts::instance_lifetime."""
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-instance-lifetime-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def build_instance_lifetime(manifest: dict) -> bytes:
+    """Encode the instance-lifetime resource object: one row per resident instance.
+
+    A bounded instance is expressed by its absence, so a table naming nobody is
+    refused rather than encoded: the object exists exactly when some instance is
+    resident.
+    """
+    residents = []
+    for instance in manifest["instances"]:
+        lifetime = instance.get("lifetime", "bounded")
+        if lifetime not in ("resident", "bounded"):
+            fail(f"instance {instance['name']}: invalid lifetime {lifetime!r}")
+        if lifetime == "resident":
+            residents.append(instance_lifetime_identity(instance["name"]))
+    if not residents:
+        fail("instance-lifetime resource object declared without a resident instance")
+    if len(residents) > wire_contracts.MAX_INSTANCE_LIFETIME_ROWS:
+        fail("instance-lifetime exceeds its row bound")
+    residents.sort()
+    total_len = (
+        wire_contracts.INSTANCE_LIFETIME_HEADER_BYTES
+        + len(residents) * wire_contracts.INSTANCE_LIFETIME_ENTRY_BYTES
+    )
+    header = wire_contracts.INSTANCE_LIFETIME_HEADER.pack(
+        wire_contracts.INSTANCE_LIFETIME_MAGIC,
+        wire_contracts.INSTANCE_LIFETIME_VERSION,
+        wire_contracts.INSTANCE_LIFETIME_HEADER_BYTES,
+        0,
+        len(residents),
+        total_len,
+    )
+    return header + b"".join(
+        wire_contracts.INSTANCE_LIFETIME_ENTRY.pack(
+            identity, wire_contracts.INSTANCE_LIFETIME_RESIDENT, bytes(3)
+        )
+        for identity in residents
+    )
+
+
 def scheduling_class_instance_identity(name: str) -> bytes:
     """Stable per-instance identity, matching boot_contracts::scheduling_class.
 

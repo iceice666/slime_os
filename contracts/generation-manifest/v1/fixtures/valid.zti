@@ -815,6 +815,7 @@
       ];
       executable = "console";
       health = "required";
+      lifetime = "bounded";
       name = "console";
       owner = "root";
     };
@@ -850,6 +851,7 @@
       ];
       executable = "dango";
       health = "required";
+      lifetime = "bounded";
       name = "dango";
       owner = "root";
     };
@@ -872,6 +874,7 @@
       ];
       executable = "directory-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "directory-probe";
       owner = "root";
     };
@@ -881,6 +884,7 @@
       dependencies = [];
       executable = "echo-agent";
       health = "optional";
+      lifetime = "bounded";
       name = "echo-agent";
       owner = "root";
     };
@@ -899,6 +903,7 @@
       ];
       executable = "fabric-call-client";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-client";
       owner = "root";
     };
@@ -914,6 +919,7 @@
       ];
       executable = "fabric-call-client-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-client-b";
       owner = "root";
     };
@@ -932,6 +938,7 @@
       ];
       executable = "fabric-call-server";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-server";
       owner = "root";
     };
@@ -947,6 +954,7 @@
       ];
       executable = "fabric-call-time";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-time";
       owner = "root";
     };
@@ -964,6 +972,7 @@
       ];
       executable = "fabric-call-worker";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-worker";
       owner = "root";
     };
@@ -979,6 +988,7 @@
       ];
       executable = "fabric-intruder";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-intruder";
       owner = "root";
     };
@@ -994,6 +1004,7 @@
       ];
       executable = "fabric-observer";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-observer";
       owner = "root";
     };
@@ -1009,6 +1020,7 @@
       ];
       executable = "fabric-op-client";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-client";
       owner = "root";
     };
@@ -1024,6 +1036,7 @@
       ];
       executable = "fabric-op-client-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-client-b";
       owner = "root";
     };
@@ -1039,6 +1052,7 @@
       ];
       executable = "fabric-op-client-b-restart";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-client-b-restart";
       owner = "root";
     };
@@ -1054,6 +1068,7 @@
       ];
       executable = "fabric-op-server";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-server";
       owner = "root";
     };
@@ -1069,6 +1084,7 @@
       ];
       executable = "fabric-op-time";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-time";
       owner = "root";
     };
@@ -1080,6 +1096,7 @@
       ];
       executable = "fabric-op-worker";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-worker";
       owner = "root";
     };
@@ -1095,6 +1112,7 @@
       ];
       executable = "fabric-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-probe";
       owner = "root";
     };
@@ -1110,6 +1128,7 @@
       ];
       executable = "fabric-proxy";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-proxy";
       owner = "root";
     };
@@ -1125,6 +1144,7 @@
       ];
       executable = "fabric-publisher";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-publisher";
       owner = "root";
     };
@@ -1143,6 +1163,7 @@
       ];
       executable = "fabric-publisher-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-publisher-b";
       owner = "root";
     };
@@ -1248,6 +1269,7 @@
       ];
       executable = "fabric-service";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-service";
       owner = "root";
     };
@@ -1263,6 +1285,7 @@
       ];
       executable = "fabric-subscriber";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-subscriber";
       owner = "root";
     };
@@ -1278,6 +1301,7 @@
       ];
       executable = "fabric-subscriber-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-subscriber-b";
       owner = "root";
     };
@@ -1293,6 +1317,7 @@
       ];
       executable = "filesystem-service";
       health = "optional";
+      lifetime = "bounded";
       name = "filesystem-service";
       owner = "root";
     };
@@ -1308,6 +1333,7 @@
       ];
       executable = "generation-inspect";
       health = "optional";
+      lifetime = "bounded";
       name = "generation-inspect";
       owner = "root";
     };
@@ -1323,6 +1349,7 @@
       ];
       executable = "generation-list";
       health = "optional";
+      lifetime = "bounded";
       name = "generation-list";
       owner = "root";
     };
@@ -1360,6 +1387,7 @@
       ];
       executable = "generation-manager";
       health = "optional";
+      lifetime = "bounded";
       name = "generation-manager";
       owner = "root";
     };
@@ -1375,6 +1403,7 @@
       ];
       executable = "generation-rollback";
       health = "optional";
+      lifetime = "bounded";
       name = "generation-rollback";
       owner = "root";
     };
@@ -1390,6 +1419,7 @@
       ];
       executable = "generation-select";
       health = "optional";
+      lifetime = "bounded";
       name = "generation-select";
       owner = "root";
     };
@@ -1405,6 +1435,7 @@
       ];
       executable = "generation-stage";
       health = "optional";
+      lifetime = "bounded";
       name = "generation-stage";
       owner = "root";
     };
@@ -1425,6 +1456,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -1452,6 +1484,7 @@
       ];
       executable = "powerbox-chooser";
       health = "optional";
+      lifetime = "bounded";
       name = "powerbox-chooser";
       owner = "root";
     };
@@ -1467,6 +1500,7 @@
       ];
       executable = "powerbox-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "powerbox-probe";
       owner = "root";
     };
@@ -1492,6 +1526,7 @@
       ];
       executable = "sample-lender";
       health = "optional";
+      lifetime = "bounded";
       name = "sample-lender";
       owner = "root";
     };
@@ -1507,6 +1542,7 @@
       ];
       executable = "sample-receiver";
       health = "optional";
+      lifetime = "bounded";
       name = "sample-receiver";
       owner = "root";
     };
@@ -1535,6 +1571,7 @@
       ];
       executable = "spawn-service";
       health = "optional";
+      lifetime = "bounded";
       name = "spawn-service";
       owner = "root";
     };
@@ -1544,6 +1581,7 @@
       dependencies = [];
       executable = "storage-fault-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "storage-fault-probe";
       owner = "root";
     };
@@ -1553,6 +1591,7 @@
       dependencies = [];
       executable = "storage-probe";
       health = "required";
+      lifetime = "bounded";
       name = "storage-probe";
       owner = "root";
     };
@@ -1562,6 +1601,7 @@
       dependencies = [];
       executable = "storage-store-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "storage-store-probe";
       owner = "root";
     };
@@ -1571,6 +1611,7 @@
       dependencies = [];
       executable = "storage-writer";
       health = "optional";
+      lifetime = "bounded";
       name = "storage-writer";
       owner = "root";
     };
@@ -1580,6 +1621,7 @@
       dependencies = [];
       executable = "sysinfo";
       health = "optional";
+      lifetime = "bounded";
       name = "sysinfo";
       owner = "root";
     };

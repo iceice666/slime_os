@@ -264,6 +264,7 @@
       ];
       executable = "console";
       health = "required";
+      lifetime = "bounded";
       name = "console";
       owner = "init";
     };
@@ -281,6 +282,7 @@
       ];
       executable = "echo-agent";
       health = "optional";
+      lifetime = "bounded";
       name = "echo-agent";
       owner = "spawn-service";
     };
@@ -331,6 +333,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -348,6 +351,7 @@
       ];
       executable = "mavlink-heartbeat";
       health = "required";
+      lifetime = "bounded";
       name = "mavlink-heartbeat";
       owner = "init";
     };
@@ -376,6 +380,7 @@
       ];
       executable = "slisp";
       health = "required";
+      lifetime = "bounded";
       name = "slisp";
       owner = "init";
     };
@@ -412,6 +417,7 @@
       ];
       executable = "spawn-service";
       health = "required";
+      lifetime = "bounded";
       name = "spawn-service";
       owner = "init";
     };
@@ -429,6 +435,7 @@
       ];
       executable = "sysinfo";
       health = "optional";
+      lifetime = "bounded";
       name = "sysinfo";
       owner = "spawn-service";
     };
@@ -454,6 +461,7 @@
       dependencies = [];
       executable = "uart16550-driver";
       health = "required";
+      lifetime = "bounded";
       name = "uart16550-driver";
       owner = "init";
     };

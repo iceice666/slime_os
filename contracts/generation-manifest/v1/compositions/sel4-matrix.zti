@@ -419,6 +419,7 @@
       ];
       executable = "fabric-observer";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-observer";
       owner = "init";
     };
@@ -436,6 +437,7 @@
       ];
       executable = "fabric-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-probe";
       owner = "init";
     };
@@ -473,6 +475,7 @@
       ];
       executable = "fabric-proxy";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-proxy";
       owner = "init";
     };
@@ -495,6 +498,7 @@
       ];
       executable = "fabric-publisher";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-publisher";
       owner = "init";
     };
@@ -522,6 +526,7 @@
       ];
       executable = "fabric-publisher-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-publisher-b";
       owner = "init";
     };
@@ -624,6 +629,7 @@
       ];
       executable = "fabric-service";
       health = "required";
+      lifetime = "bounded";
       name = "fabric-service";
       owner = "init";
     };
@@ -656,6 +662,7 @@
       ];
       executable = "fabric-subscriber";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-subscriber";
       owner = "init";
     };
@@ -683,6 +690,7 @@
       ];
       executable = "fabric-subscriber-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-subscriber-b";
       owner = "init";
     };
@@ -738,6 +746,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };

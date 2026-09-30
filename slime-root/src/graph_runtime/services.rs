@@ -86,6 +86,26 @@ pub(super) fn serve_instance_graph(
         })
         .count();
     let mut completed_required = [false; generation::MAX_ADMITTED_INSTANCES];
+    // Resident instances never complete, so a graph holding a live resident
+    // required instance certifies once every bounded required instance has
+    // completed, with the residents still counted live.
+    let mut resident_instances = [false; generation::MAX_ADMITTED_INSTANCES];
+    for (index, resident) in resident_instances
+        .iter_mut()
+        .enumerate()
+        .take(generation.instance_count())
+    {
+        *resident = crate::generation::instance_lifetime(generation, index) == Lifetime::Resident;
+    }
+    let resident_required = (0..generation.instance_count())
+        .filter(|index| {
+            resident_instances[*index]
+                && generation.instance(*index).is_ok_and(|instance| {
+                    instance.autostart && instance.health == InstanceHealth::Required
+                })
+        })
+        .count();
+    let mut resident_certified = false;
     // The last thing rendered before the loop blocks in `seL4_Recv`. Without
     // it, a graph whose components never send is indistinguishable on the
     // panel from one that crashed on entry: both leave `COMPONENTS RUNNING`
@@ -159,6 +179,28 @@ pub(super) fn serve_instance_graph(
                 fatal!("SLIME_GRAPH FAIL cleanup timer programming error={error:?}")
             });
             cleanup_timer_armed = !retirements.is_empty();
+        }
+        // Checked here rather than after dispatch: the last bounded instance's
+        // retirement completes on a cleanup-timer wake, and a resident instance
+        // that is merely running sends the root nothing that would reach the
+        // post-dispatch check.
+        if resident_required != 0
+            && healthy_emitted
+            && !resident_certified
+            && retirements.is_empty()
+            && let (live_required, completed) =
+                required_accounting(generation, tasks, &completed_required)
+            && live_required == resident_required
+            && completed + resident_required == required
+        {
+            sel4::debug_println!(
+                "SLIME_GRAPH HEALTHY generation={} required={} live={} completed={} failed=0",
+                generation.number,
+                required,
+                live_required,
+                completed,
+            );
+            resident_certified = true;
         }
         if live == 0 && retirements.is_empty() {
             sel4::debug_println!(
@@ -471,8 +513,31 @@ pub(super) fn serve_instance_graph(
                         });
                     }
                 }
+                // A resident instance runs for the life of its graph, so its
+                // exit is never completion, whatever the status. A required one
+                // ends the graph; an optional one is recorded unhealthy, which is
+                // the outcome its supervisor observes instead of a clean exit.
+                let exiting = tasks.get(id).and_then(|task| task.instance);
+                let resident = exiting.is_some_and(|index| {
+                    crate::generation::instance_lifetime(generation, index) == Lifetime::Resident
+                });
+                if resident
+                    && let Some(instance_index) = exiting
+                    && let Ok(instance) = generation.instance(instance_index)
+                {
+                    if instance.health == InstanceHealth::Required {
+                        fatal!(
+                            "SLIME_GRAPH FAIL resident instance {} exit status={status}",
+                            instance.name
+                        )
+                    }
+                    sel4::debug_println!(
+                        "SLIME_GRAPH resident exit instance={} status={status} recorded=unhealthy",
+                        instance.name
+                    );
+                }
                 if status != 0
-                    && let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
+                    && let Some(instance_index) = exiting
                     && let Ok(instance) = generation.instance(instance_index)
                     && instance.health == InstanceHealth::Required
                 {
@@ -482,7 +547,8 @@ pub(super) fn serve_instance_graph(
                     )
                 }
                 if status == 0
-                    && let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
+                    && !resident
+                    && let Some(instance_index) = exiting
                     && generation
                         .instance(instance_index)
                         .is_ok_and(|instance| instance.health == InstanceHealth::Required)
@@ -494,7 +560,11 @@ pub(super) fn serve_instance_graph(
                     &mut terminations,
                     tasks,
                     id,
-                    supervision::Termination::Exit(status),
+                    if resident {
+                        supervision::Termination::Unhealthy
+                    } else {
+                        supervision::Termination::Exit(status)
+                    },
                 );
                 if let Some(task) = tasks.get(id) {
                     let _ = task.suspend();
@@ -515,8 +585,13 @@ pub(super) fn serve_instance_graph(
                 // path runs for a death already recorded as `unhealthy`, and
                 // printing the argument would put a second, contradictory
                 // root-attributed line in the transcript (found by review).
+                let terminal = if resident {
+                    lifecycle::Terminal::Unhealthy
+                } else {
+                    lifecycle::Terminal::Exit
+                };
                 if let Some((instance, recorded)) =
-                    lifecycle_service.record_termination(id, lifecycle::Terminal::Exit)
+                    lifecycle_service.record_termination(id, terminal)
                 {
                     sel4::debug_println!(
                         "SLIME_LIFECYCLE terminated task={} instance={instance} cause={}",
@@ -1007,6 +1082,24 @@ pub(super) fn serve_instance_graph(
                     }
                 };
                 ipc::reply(response);
+            }
+            // The caller's own declared lifetime, answered only about the
+            // caller itself and never refused: an instance the generation does
+            // not name resident is bounded.
+            lifecycle_labels::LIFETIME_READ => {
+                let lifetime = ipc::read_lifetime(generation, instance);
+                sel4::debug_println!(
+                    "SLIME_GRAPH lifetime task={} instance={} lifetime={}",
+                    id.0,
+                    generation
+                        .instance(instance)
+                        .map_or("?", |instance| instance.name),
+                    match lifetime {
+                        Lifetime::Resident => "resident",
+                        Lifetime::Bounded => "bounded",
+                    },
+                );
+                ipc::reply(Response::success(i64::from(lifetime.id()), 0));
             }
             // The graph index for a route the caller names by identity (B70).
             capability_table_labels::GRAPH_ROUTE_INDEX => {
@@ -1718,6 +1811,9 @@ pub(super) fn serve_instance_graph(
                         live_required,
                         completed,
                     );
+                    resident_certified |= resident_required != 0
+                        && live_required == resident_required
+                        && completed + resident_required == required;
                 }
                 healthy_emitted = true;
             }
@@ -1840,6 +1936,30 @@ use io_resource::{revoke_buffer_lease, serve_io_resource};
 use boot_contracts::generation::{
     RIGHT_BUFFER_CREATE, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE, RIGHT_SPAWN, RIGHT_SUPERVISE,
 };
+use boot_contracts::instance_lifetime::Lifetime;
+
+/// `(live, completed)` over the autostart required instances.
+fn required_accounting(
+    generation: &boot_contracts::generation::Generation<'_>,
+    tasks: &TaskTable<MAX_TASKS>,
+    completed_required: &[bool],
+) -> (usize, usize) {
+    let (mut live, mut completed) = (0, 0);
+    for index in 0..generation.instance_count() {
+        let Ok(instance) = generation.instance(index) else {
+            continue;
+        };
+        if !instance.autostart || instance.health != InstanceHealth::Required {
+            continue;
+        }
+        if completed_required.get(index).copied().unwrap_or(false) {
+            completed += 1;
+        } else if tasks.tasks().any(|task| task.instance == Some(index)) {
+            live += 1;
+        }
+    }
+    (live, completed)
+}
 
 /// Grants one spawn call may carry. **B15 is closed here.**
 ///

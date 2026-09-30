@@ -230,6 +230,7 @@
       ];
       executable = "fabric-intruder";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-intruder";
       owner = "init";
     };
@@ -250,6 +251,7 @@
       ];
       executable = "fabric-publisher";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-publisher";
       owner = "init";
     };
@@ -272,6 +274,7 @@
       ];
       executable = "fabric-publisher-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-publisher-b";
       owner = "init";
     };
@@ -319,6 +322,7 @@
       ];
       executable = "fabric-service";
       health = "required";
+      lifetime = "bounded";
       name = "fabric-service";
       owner = "init";
     };
@@ -336,6 +340,7 @@
       ];
       executable = "fabric-subscriber";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-subscriber";
       owner = "init";
     };
@@ -353,6 +358,7 @@
       ];
       executable = "fabric-subscriber-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-subscriber-b";
       owner = "init";
     };
@@ -398,6 +404,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };

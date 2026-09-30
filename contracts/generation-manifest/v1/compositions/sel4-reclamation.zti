@@ -74,6 +74,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -85,6 +86,7 @@
       ];
       executable = "reclamation-fault";
       health = "optional";
+      lifetime = "bounded";
       name = "reclamation-fault";
       owner = "init";
     };
@@ -96,6 +98,7 @@
       ];
       executable = "supervision-child";
       health = "optional";
+      lifetime = "bounded";
       name = "supervision-child";
       owner = "init";
     };

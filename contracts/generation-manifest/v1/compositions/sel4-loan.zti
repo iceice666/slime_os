@@ -121,6 +121,7 @@
       ];
       executable = "console";
       health = "required";
+      lifetime = "bounded";
       name = "console";
       owner = "root";
     };
@@ -150,6 +151,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -167,6 +169,7 @@
       ];
       executable = "sample-receiver";
       health = "required";
+      lifetime = "bounded";
       name = "sample-receiver";
       owner = "init";
     };

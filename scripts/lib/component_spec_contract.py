@@ -48,3 +48,6 @@ CONSTRAINT_NONE = "none"
 HEALTH_POLICIES = ("required", "optional", )
 HEALTH_REQUIRED = "required"
 HEALTH_OPTIONAL = "optional"
+LIFETIMES = ("resident", "bounded", )
+LIFETIME_RESIDENT = "resident"
+LIFETIME_BOUNDED = "bounded"

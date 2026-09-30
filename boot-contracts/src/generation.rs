@@ -232,6 +232,10 @@ pub enum BootAction {
     /// root has reclaimed and re-served that quota twenty times, half of the
     /// incarnations ending by exit and half by a deliberate fault.
     PrivateMemoryCycles = 39,
+    /// Declared instance lifetime: a resident instance that stays live, a
+    /// bounded one that completes, and resident ones whose exit the root
+    /// records as a failure rather than as completion.
+    Lifetime = 40,
 }
 
 impl BootAction {
@@ -292,6 +296,7 @@ impl BootAction {
         Self::CRuntime,
         Self::Slisp,
         Self::PrivateMemoryCycles,
+        Self::Lifetime,
     ];
 
     /// The composition a wire id names, or `None` for an id this build does not
@@ -343,6 +348,7 @@ impl BootAction {
                 Self::CRuntime => Self::CRuntime.id(),
                 Self::Slisp => Self::Slisp.id(),
                 Self::PrivateMemoryCycles => Self::PrivateMemoryCycles.id(),
+                Self::Lifetime => Self::Lifetime.id(),
             };
             declared == id
         })
@@ -380,6 +386,7 @@ impl BootAction {
             "demo" => Self::Demo,
             "private-memory" => Self::PrivateMemory,
             "private-memory-cycles" => Self::PrivateMemoryCycles,
+            "lifetime" => Self::Lifetime,
             "clock-authority" => Self::ClockAuthority,
             "wait-set" => Self::WaitSet,
             "scheduling-class" => Self::SchedulingClass,
@@ -3048,7 +3055,7 @@ mod tests {
     ///
     /// Shared with `boot_action_ids_round_trip`, which uses it as the
     /// independent second source proving `BootAction::ALL` is complete.
-    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 38] = [
+    const FROZEN_BOOT_ACTIONS: [(BootAction, u32); 39] = [
         (BootAction::Product, 1),
         (BootAction::Boot, 2),
         (BootAction::Call, 3),
@@ -3087,6 +3094,7 @@ mod tests {
         (BootAction::CRuntime, 37),
         (BootAction::Slisp, 38),
         (BootAction::PrivateMemoryCycles, 39),
+        (BootAction::Lifetime, 40),
     ];
 
     #[test]

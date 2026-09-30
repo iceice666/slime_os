@@ -55,6 +55,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -64,6 +65,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-00";
       owner = "root";
     };
@@ -73,6 +75,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-01";
       owner = "root";
     };
@@ -82,6 +85,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-02";
       owner = "root";
     };
@@ -91,6 +95,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-03";
       owner = "root";
     };
@@ -100,6 +105,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-04";
       owner = "root";
     };
@@ -109,6 +115,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-05";
       owner = "root";
     };
@@ -118,6 +125,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-06";
       owner = "root";
     };
@@ -127,6 +135,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-07";
       owner = "root";
     };
@@ -136,6 +145,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-08";
       owner = "root";
     };
@@ -145,6 +155,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-09";
       owner = "root";
     };
@@ -154,6 +165,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-10";
       owner = "root";
     };
@@ -163,6 +175,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-11";
       owner = "root";
     };
@@ -172,6 +185,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-12";
       owner = "root";
     };
@@ -181,6 +195,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-13";
       owner = "root";
     };
@@ -190,6 +205,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-14";
       owner = "root";
     };
@@ -199,6 +215,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-15";
       owner = "root";
     };
@@ -208,6 +225,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-16";
       owner = "root";
     };
@@ -217,6 +235,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-17";
       owner = "root";
     };
@@ -226,6 +245,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-18";
       owner = "root";
     };
@@ -235,6 +255,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-19";
       owner = "root";
     };
@@ -244,6 +265,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-20";
       owner = "root";
     };
@@ -253,6 +275,7 @@
       dependencies = [];
       executable = "supervision-child";
       health = "required";
+      lifetime = "bounded";
       name = "stress-21";
       owner = "root";
     };

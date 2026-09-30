@@ -81,6 +81,7 @@
       ];
       executable = "crossing-peer";
       health = "required";
+      lifetime = "bounded";
       name = "crossing-peer";
       owner = "init";
     };
@@ -106,6 +107,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };

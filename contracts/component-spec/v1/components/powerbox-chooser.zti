@@ -49,6 +49,7 @@
     ];
   };
   health = "optional";
+  lifetime = "bounded";
   compatibility = {
     platform = "x86_64-qemu-virtio";
     interface = "contracts/interface-schema/v1";

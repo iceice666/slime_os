@@ -62,6 +62,7 @@
       ];
       executable = "console";
       health = "required";
+      lifetime = "bounded";
       name = "console";
       owner = "init";
     };
@@ -78,6 +79,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };

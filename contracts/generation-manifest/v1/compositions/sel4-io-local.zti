@@ -99,6 +99,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -134,6 +135,7 @@
       dependencies = [];
       executable = "network-service";
       health = "required";
+      lifetime = "bounded";
       name = "network-service";
       owner = "root";
     };
@@ -150,6 +152,7 @@
       dependencies = [];
       executable = "io-local-network-probe";
       health = "required";
+      lifetime = "bounded";
       name = "publisher-session";
       owner = "root";
     };
@@ -166,6 +169,7 @@
       dependencies = [];
       executable = "io-local-network-probe";
       health = "required";
+      lifetime = "bounded";
       name = "subscriber-session";
       owner = "root";
     };

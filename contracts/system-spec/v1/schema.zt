@@ -404,6 +404,9 @@ SystemRecordingEntry :: type {
 -- component spec cannot own it. The component spec's
 -- `runtime.resource.spawnBudget` remains the reference
 -- generation's value and is the default when a system declares no placement.
+-- `lifetime` overrides the component spec's default on the same terms: a
+-- composition that keeps a service up for the life of its graph declares it
+-- `resident`, where another composition runs the same component `bounded`.
 -- `health` overrides the component spec's own default the same way `owner`
 -- does: `supervision-child` is `required` composed alone under
 -- `sel4-supervision.zti` and `optional` composed alongside the reclamation
@@ -447,6 +450,7 @@ Placement :: type {
   owner? : Text;
   autostart? : Bool;
   health? : Text;
+  lifetime? : Text;
   role? : Text;
   dependencies? : List Text;
   spawnBudget? : Int;
@@ -495,6 +499,7 @@ SystemInstance :: type {
   owner? : Text;
   autostart? : Bool;
   health? : Text;
+  lifetime? : Text;
   dependencies? : List Text;
   bufferBytePages? : Int;
   bufferCount? : Int;

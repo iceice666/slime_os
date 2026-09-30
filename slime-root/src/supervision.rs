@@ -115,6 +115,9 @@ pub enum Termination {
     /// reason code, not an address: an address would leak the child's layout
     /// to its parent.
     Fault(u64),
+    /// A resident instance exited. Its exit is never completion, so its
+    /// supervisor observes it as unhealthy rather than as a clean exit.
+    Unhealthy,
 }
 
 impl Termination {
@@ -123,6 +126,7 @@ impl Termination {
         match self {
             Self::Exit(status) => (0, status as u64),
             Self::Fault(reason) => (1, reason),
+            Self::Unhealthy => (4, 0),
         }
     }
 }

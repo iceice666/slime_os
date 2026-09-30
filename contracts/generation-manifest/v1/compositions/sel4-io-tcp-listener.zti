@@ -159,6 +159,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -175,6 +176,7 @@
       dependencies = [];
       executable = "io-tcp-listener-probe";
       health = "required";
+      lifetime = "bounded";
       name = "intruder-session";
       owner = "root";
     };
@@ -191,6 +193,7 @@
       dependencies = [];
       executable = "io-tcp-listener-probe";
       health = "required";
+      lifetime = "bounded";
       name = "listener-session";
       owner = "root";
     };
@@ -233,6 +236,7 @@
       ];
       executable = "network-service";
       health = "required";
+      lifetime = "bounded";
       name = "network-service";
       owner = "root";
     };
@@ -268,6 +272,7 @@
       dependencies = [];
       executable = "virtio-net-driver";
       health = "required";
+      lifetime = "bounded";
       name = "virtio-net-driver";
       owner = "root";
     };

@@ -66,6 +66,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -75,6 +76,7 @@
       dependencies = [];
       executable = "wait-set-probe";
       health = "required";
+      lifetime = "bounded";
       name = "wait-set-denied";
       owner = "root";
     };
@@ -86,6 +88,7 @@
       ];
       executable = "supervision-child";
       health = "optional";
+      lifetime = "bounded";
       name = "wait-set-peer";
       owner = "wait-set-waiter";
     };
@@ -101,6 +104,7 @@
       dependencies = [];
       executable = "wait-set-probe";
       health = "required";
+      lifetime = "bounded";
       name = "wait-set-signaller";
       owner = "root";
     };
@@ -121,6 +125,7 @@
       dependencies = [];
       executable = "wait-set-probe";
       health = "required";
+      lifetime = "bounded";
       name = "wait-set-waiter";
       owner = "root";
     };

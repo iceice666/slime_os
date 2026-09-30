@@ -104,6 +104,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -126,6 +127,7 @@
       ];
       executable = "sel4-directory-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-directory-probe";
       owner = "init";
     };
@@ -148,6 +150,7 @@
       ];
       executable = "sel4-directory-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "sel4-directory-probe-idle";
       owner = "root";
     };

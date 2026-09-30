@@ -212,6 +212,7 @@
       ];
       executable = "fabric-call-client";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-client";
       owner = "init";
     };
@@ -234,6 +235,7 @@
       ];
       executable = "fabric-call-client-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-client-b";
       owner = "init";
     };
@@ -251,6 +253,7 @@
       ];
       executable = "fabric-call-server";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-server";
       owner = "init";
     };
@@ -273,6 +276,7 @@
       ];
       executable = "fabric-call-time";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-call-time";
       owner = "init";
     };
@@ -305,6 +309,7 @@
       ];
       executable = "fabric-service";
       health = "required";
+      lifetime = "bounded";
       name = "fabric-service";
       owner = "init";
     };
@@ -345,6 +350,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };

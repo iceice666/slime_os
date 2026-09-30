@@ -26,6 +26,7 @@
       dependencies = [];
       executable = "c-runtime-probe";
       health = "required";
+      lifetime = "bounded";
       name = "c-runtime-probe";
       owner = "root";
     };

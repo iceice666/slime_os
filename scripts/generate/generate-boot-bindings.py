@@ -121,6 +121,11 @@ GENERATORS = (
         "network_interface.py",
         "network_interface.rs",
     ),
+    (
+        ROOT / "contracts" / "instance-lifetime" / "v1" / "schema.zt",
+        "instance_lifetime.py",
+        "instance_lifetime.rs",
+    ),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.

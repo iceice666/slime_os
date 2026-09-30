@@ -44,6 +44,6 @@ readable and link to the decision that replaced them.
 - [AMD IOMMU ownership on x86-64](amd-iommu-ownership.md) — proposed; seL4
   supports only Intel VT-d, so `slime-root` programs the AMD IOMMU behind IO1's
   existing DMA mediation instead of extending the kernel.
-- [Instance lifetime](instance-lifetime.md) — proposed; a composition declares
+- [Instance lifetime](instance-lifetime.md) — accepted; a composition declares
   an instance `resident` or `bounded`, and the root treats a resident
   instance's exit as a failure rather than as completion.

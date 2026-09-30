@@ -14,9 +14,9 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "0012a63510b70507948056b6e1147e370a2d0f468e747b7f6acc0c14353f1750";
+        identity = "78bcbb03d66f44f633e7c3574bc2edd9872f8818ebdbeeb556b41d1c365014d6";
       };
-      identity = "94a8c99fd9a7fe6f19d92cff7191602fe78cb6404b313d5c623cd191529a5a8e";
+      identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
     };
     {
@@ -27,7 +27,7 @@
         kind = "tree";
         identity = "0c3c409a744fd0450e96f806cfe741ba15d2c06458528b36a157c4812da82c25";
       };
-      identity = "c9b768e3cff0509cd5493edfde4566a5a2f85f9181c623fdb7254ffb7bd4b861";
+      identity = "48585b2debcfa37afcecce797b3a66119733ad8e7e57ebdf0409177ef9556cc6";
       buildProfile = "default";
     };
     {
@@ -38,7 +38,7 @@
         kind = "tree";
         identity = "4f86e7358b0fe747f80aaf55abbb92ba463a352092b9dd86700d6621bdcc18a0";
       };
-      identity = "2908e9fc552f2986479383df3126b0e54c5f80e55478bf72c249b78c5aec72bb";
+      identity = "c57447d40b4e7925d73888df55bf773c526affd6bebbaeeff47be5981fa58e90";
       buildProfile = "default";
     };
   ];
@@ -58,7 +58,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "cd8f8e320feba90883c4d5bc24cff6e33babf4df815504f77aeda6c6a52f723a";
+      identity = "a4b6326e3e16adc68618cf57071ae4884187d75c9ef3e6a7f650af0a55733756";
     };
     parameters = [];
   };
@@ -77,7 +77,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "79ef1786f18ed4284eb71317dd3306c365665bc4fa8af503316a27b7c441bed1";
+        identity = "04fddf4140c239eeb9f61f29a4a6a04a99c3790ff89e1195b37de4659c34cd9f";
       };
     };
     {
@@ -85,7 +85,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "925703c813aaf828d0d4afa717d18fe9f23db8274f2eff3fa94c23f799b9301f";
+        identity = "8af73e4639f0c1a8a97182cb46acc626725159a7ed34ce85ab1cf7537ca706e5";
       };
     };
     {
@@ -117,7 +117,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "d1cd4dfa09636a483f745ed8078cbd607ac5e1261a589e342538d8584165a173";
+        identity = "5425cd4a64c2e40d23ff0a8ca13d749f5fc9c6e88a0e9fdf8d8cea23a28e5a3b";
       };
     };
     {
@@ -125,7 +125,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "c4a8d14313256ca186814f697c50b698d0e7f27a0ca515b29acad40b08ff20b8";
+        identity = "a4f5540333aff01e7180140dac35604e2c792f98d5fd37ede6dfad11f1068a13";
       };
     };
     {
@@ -133,7 +133,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "20679f9c249d30b6be8bd874ce4c038e7a511d5f3c9674329ed9c921524a48af";
+        identity = "d0a93dd200ab09489833fd261908050003bd0e6fb1f6d533383cf266d37d67f6";
       };
     };
     {
@@ -149,7 +149,7 @@
       artifact = {
         path = "scripts/build/build-generation.py";
         kind = "file";
-        identity = "1f3ff7341a05228b5a55b4e3c9b296a2bb15273d0edf7f8453f0124f82b25841";
+        identity = "e43d12a59254d6a0941f9215e0ec9bdc7aa2006bc9d1c342efde5f326423c0c7";
       };
     };
     {
@@ -213,7 +213,7 @@
       artifact = {
         path = "Cargo.toml";
         kind = "file";
-        identity = "be4e150ddf4d9ea25e9717b4ee09448cb603753f8cb8a5bd59297a0ada7c6524";
+        identity = "0195d14af36fa0ebe4010291f40d38c46ccd16fc754f17cb0b93b8298fdabfde";
       };
     };
   ];

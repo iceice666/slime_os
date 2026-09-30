@@ -284,6 +284,7 @@
       ];
       executable = "fabric-op-client";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-client";
       owner = "init";
     };
@@ -306,6 +307,7 @@
       ];
       executable = "fabric-op-client-b";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-client-b";
       owner = "init";
     };
@@ -333,6 +335,7 @@
       ];
       executable = "fabric-op-client-b-restart";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-client-b-restart";
       owner = "init";
     };
@@ -350,6 +353,7 @@
       ];
       executable = "fabric-op-server";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-server";
       owner = "init";
     };
@@ -372,6 +376,7 @@
       ];
       executable = "fabric-op-time";
       health = "optional";
+      lifetime = "bounded";
       name = "fabric-op-time";
       owner = "init";
     };
@@ -419,6 +424,7 @@
       ];
       executable = "fabric-service";
       health = "required";
+      lifetime = "bounded";
       name = "fabric-service";
       owner = "init";
     };
@@ -464,6 +470,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };

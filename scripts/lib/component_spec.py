@@ -87,6 +87,7 @@ _SPEC_FIELDS = {
     "lifecycle",
     "runtime",
     "health",
+    "lifetime",
     "compatibility",
     "test",
 }
@@ -670,6 +671,7 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
             _fail(f"runtime.devices: {device!r} appears in neither provides nor requires")
 
     health = _member(raw["health"], contract.HEALTH_POLICIES, "health")
+    lifetime = _member(raw["lifetime"], contract.LIFETIMES, "lifetime")
 
     compatibility_keys = {"platform", "interface", "dependency", "resource", "runtime", "qos"}
     compatibility_raw = _exact_record(raw["compatibility"], compatibility_keys, "compatibility")
@@ -787,6 +789,7 @@ def _normalize(raw: dict, catalogue: dict[str, str], contract: ModuleType) -> di
             "devices": devices,
         },
         "health": health,
+        "lifetime": lifetime,
         "compatibility": compatibility,
         "test": test,
     }

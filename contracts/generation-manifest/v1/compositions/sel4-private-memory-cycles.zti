@@ -66,6 +66,7 @@
       dependencies = [];
       executable = "init";
       health = "required";
+      lifetime = "bounded";
       name = "init";
       owner = "root";
     };
@@ -83,6 +84,7 @@
       ];
       executable = "private-cycle-probe";
       health = "optional";
+      lifetime = "bounded";
       name = "private-cycle-probe";
       owner = "init";
     };

@@ -58,6 +58,7 @@ mod boot_action {
 
     /// MEM-64M's private-memory reuse clause.
     pub const PRIVATE_MEMORY_CYCLES: u32 = 39;
+    pub const LIFETIME: u32 = 40;
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
     // file matches on it. Renumbering a variant in the contract without
@@ -100,6 +101,7 @@ mod boot_action {
     const _: () = assert!(REPLAY == BootAction::Replay.id());
     const _: () = assert!(ROBOT_RUNTIME == BootAction::RobotRuntime.id());
     const _: () = assert!(PRIVATE_MEMORY_CYCLES == BootAction::PrivateMemoryCycles.id());
+    const _: () = assert!(LIFETIME == BootAction::Lifetime.id());
 }
 
 /// Compose the graph the generation selected.
@@ -174,6 +176,12 @@ pub(super) fn compose_declared_graph(startup_arg: u32) {
         }
         action::CLOCK_AUTHORITY => {
             slime_rt::debug_write(b"[init] clock authority plane is root-launched\n");
+            slime_rt::exit(0)
+        }
+        // Every lifetime probe is root-autostart, and the owner spawns the one
+        // it supervises itself, so init has nothing to launch.
+        action::LIFETIME => {
+            slime_rt::debug_write(b"[init] lifetime plane is root-launched\n");
             slime_rt::exit(0)
         }
         // C9.2's waiter, signaller, and denied instances are all root-autostart,

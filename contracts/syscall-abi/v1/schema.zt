@@ -353,6 +353,14 @@ operations :: List Operation = {
   -- shared buffer between the two participants; this operation only reports what
   -- the generation already decided about the caller.
   operation "lifecycle" "RECORDING_SOURCES" 57;
+  -- The caller's own declared lifetime, `instance-lifetime/v1`'s bounded (0)
+  -- or resident (1). Self-scoped by badge with no operand, on
+  -- `RECORDING_SOURCES`' terms: whether an instance is meant to outlive its
+  -- clients is a property of being that instance, so it is gated on
+  -- `lifecycle` and never refused for want of authority. A generation that
+  -- declares no lifetime object answers bounded, which is what lets one image
+  -- run resident in one composition and bounded in another.
+  operation "lifecycle" "LIFETIME_READ" 73;
   -- IO4's authenticated exact-destination table, paged through the transfer
   -- window. The request names only a cursor; the root derives the caller from
   -- its badge and answers rows only when that instance is the declared network
