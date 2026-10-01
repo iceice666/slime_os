@@ -164,20 +164,25 @@ adding these entry points is not completion evidence.
 
 ### Spawned HTTP from the resident shell
 
-The `sel4-net` composition (generation 164, unimplemented) puts the product
+The `sel4-net` composition (generation 164) puts the product
 graph beside the network stack and binds `http-get` as a spawn-service command,
 so an operator types `(spawn 'http-get "http://10.0.2.2:18080/")` into Slisp.
 The URL travels as a spawn argument: a new spawn contract version declares an
 argument count and byte total (at most 4 arguments, 256 bytes) and carries the
 bytes in numbered continuation frames that spawn-service validates in full
-before it spawns anything. Slisp gains a double-quoted string literal that is
-valid only as a spawn argument.
+before it spawns anything (`contracts/spawn/v2`). Each request and frame is
+one 64-byte exchange; a request with arguments is answered "would block" until
+its final frame, and a fresh header abandons an unfinished one. Slisp gains a
+double-quoted string literal that is valid only as a spawn argument.
 
 `http-get` holds exact numeric grants only: the controlled peer on
 `10.0.2.2:18080` and `1.1.1.1:80`. The composition declares no resolver and no
 launch seed, so a hostname URL fails closed without a DNS packet; hostname
-support waits for an entropy authority. The network service stays resident and
-admits each new `http-get` instance afresh. Typing
+support waits for an entropy authority. The network service and the
+virtio-net driver are declared `resident` (`contracts/instance-lifetime/v1`):
+the service reads its own lifetime and, when resident, keeps every control
+endpoint open after a session closes or aborts, so each new `http-get`
+instance attaches afresh. Bounded network planes still end after their session. Typing
 `(spawn 'http-get "http://1.1.1.1/")` into a manually booted image is an opt-in
 public demonstration that ends at the 301 the server returns; it is not
 qualification evidence.
@@ -189,7 +194,7 @@ unterminated string, and an unbound command with an argument. It compares the
 guest's body with the controlled peer byte for byte, refuses any DNS packet or
 SYN other than the one fetch in the session's capture, pins exact spawn,
 completion and session counts, and refuses seven mutations of the accepted
-transcript. It fails until the composition lands and is not part of `all`.
+transcript. It is explicit and not part of `all`.
 
 ## Long-term authority-compatible smoltcp coverage
 

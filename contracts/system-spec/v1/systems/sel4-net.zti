@@ -1,0 +1,857 @@
+{
+  acceptanceCriteria = "The native Slisp prompt retains echo and sysinfo, accepts launch-supplied HTTP URLs through spawn-service, and uses only the two declared IPv4 TCP destinations with explicit request cleanup.";
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  bootAction = "product";
+  bootAttempts = 3;
+  bootLayoutObject = true;
+  bootProfiles = [];
+  bootstrapInstance = "init";
+  clockAuthority = [
+    {
+      holder = "http-get";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 1;
+      timerNotification = "network-http-completion";
+      timerQuota = 1;
+      timerUse = true;
+    };
+    {
+      holder = "network-service";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 1;
+      timerNotification = "network-http-request";
+      timerQuota = 1;
+      timerUse = true;
+    };
+  ];
+  clockAuthorityObject = true;
+  commandBindings = [
+    {
+      commands = [
+        "echo";
+        "http-get";
+        "sysinfo";
+      ];
+      component = "spawn-service";
+    };
+  ];
+  components = [
+    "console";
+    "echo-agent";
+    "http-get";
+    "init";
+    "network-service";
+    "slisp";
+    "spawn-service";
+    "sysinfo";
+    "virtio-net-driver";
+  ];
+  defaultImageBytes = 65536;
+  deploymentConstraint = "Boots the native Slisp product graph with root-owned resident network services under aarch64-sel4-qemu-virt; no physical-device qualification is claimed.";
+  extraBindings = [
+    {
+      grant = "spawn-service-sysinfo";
+      holder = "spawn-service";
+    };
+  ];
+  formatVersion = 1;
+  generation = 164;
+  grants = [
+    {
+      capabilityKind = "executable";
+      name = "init-console";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "init-spawn-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "init-slisp";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "slisp";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "spawn-service-rpc";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "slisp";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "spawn-service-sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      capabilityKind = "executable";
+      name = "spawn-service-echo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "spawn-service-sysinfo-context";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "spawn-service-echo-context";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      capabilityKind = "sharedBufferFactory";
+      name = "spawn-service-shared-buffer-factory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "slisp-console-rpc";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "slisp";
+      target = "console";
+      transferable = false;
+    };
+    {
+      capabilityKind = "input";
+      name = "slisp-input";
+      rights = [
+        "inputRead";
+      ];
+      source = "slisp";
+      target = "slisp";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "network-http-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "http-get";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "network-http-provision";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "http-get";
+      transferable = true;
+    };
+    {
+      capabilityKind = "endpoint";
+      name = "network-service-link-peer";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "virtio-net-driver";
+      transferable = true;
+    };
+    {
+      capabilityKind = "sharedBufferFactory";
+      name = "network-service-buffer-factory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      capabilityKind = "device";
+      name = "virtio-net-device";
+      rights = [
+        "mapMmio";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      capabilityKind = "mmioRegion";
+      name = "virtio-net-mmio";
+      rights = [
+        "mapMmio";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      capabilityKind = "interruptSource";
+      name = "virtio-net-interrupt";
+      rights = [
+        "irqAck";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      capabilityKind = "dmaAccount";
+      name = "virtio-net-dma";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-http-get";
+      capabilityKind = "executable";
+      source = "init";
+      target = "http-get";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-http-get-context";
+      capabilityKind = "endpoint";
+      source = "spawn-service";
+      target = "http-get";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+  ];
+  imageSizes = [
+    {
+      component = "console";
+      bytes = 65536;
+    };
+    {
+      component = "echo-agent";
+      bytes = 65536;
+    };
+    {
+      component = "http-get";
+      bytes = 131072;
+    };
+    {
+      component = "init";
+      bytes = 65536;
+    };
+    {
+      component = "network-service";
+      bytes = 262144;
+    };
+    {
+      component = "slisp";
+      bytes = 131072;
+    };
+    {
+      component = "spawn-service";
+      bytes = 65536;
+    };
+    {
+      component = "sysinfo";
+      bytes = 65536;
+    };
+    {
+      component = "virtio-net-driver";
+      bytes = 65536;
+    };
+  ];
+  instances = [];
+  interfaceSchemas = [];
+  ioResourceBudget = [
+    {
+      bufferLoans = 16;
+      dmaMappings = 18;
+      dmaPages = 20;
+      holder = "virtio-net-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 16;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  mintedBindings = [];
+  name = "sel4-net";
+  networkDestinations = [
+    {
+      address = "10.0.2.2";
+      addressKind = "ipv4";
+      byteBudget = 1048576;
+      dnsRecordLimit = 0;
+      holder = "http-get";
+      listenerLimit = 0;
+      port = 18080;
+      queueDepth = 4;
+      reconnectLimit = 0;
+      retryLimit = 3;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 4;
+      transport = "tcp";
+    };
+    {
+      address = "1.1.1.1";
+      addressKind = "ipv4";
+      byteBudget = 1048576;
+      dnsRecordLimit = 0;
+      holder = "http-get";
+      listenerLimit = 0;
+      port = 80;
+      queueDepth = 4;
+      reconnectLimit = 0;
+      retryLimit = 3;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 4;
+      transport = "tcp";
+    };
+  ];
+  networkDestinationsObject = true;
+  notificationBindings = [
+    {
+      grant = "io-link-tx-request-ready";
+      holder = "network-service";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "io-link-tx-request-ready";
+      holder = "virtio-net-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-link-rx-request-ready";
+      holder = "network-service";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "io-link-rx-request-ready";
+      holder = "virtio-net-driver";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "io-link-tx-completion-ready";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "io-link-tx-completion-ready";
+      holder = "network-service";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "io-link-rx-completion-ready";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "io-link-rx-completion-ready";
+      holder = "network-service";
+      role = "wait";
+      slot = 3;
+    };
+    {
+      grant = "io-link-state-changed";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 4;
+    };
+    {
+      grant = "io-link-state-changed";
+      holder = "network-service";
+      role = "wait";
+      slot = 4;
+    };
+    {
+      grant = "network-http-request";
+      holder = "http-get";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "network-http-request";
+      holder = "network-service";
+      role = "wait";
+      slot = 5;
+    };
+    {
+      grant = "network-http-completion";
+      holder = "network-service";
+      role = "signal";
+      slot = 6;
+    };
+    {
+      grant = "network-http-completion";
+      holder = "http-get";
+      role = "wait";
+      slot = 1;
+    };
+  ];
+  notifications = [
+    {
+      name = "io-link-tx-request-ready";
+      source = "network-service";
+      target = "virtio-net-driver";
+    };
+    {
+      name = "io-link-rx-request-ready";
+      source = "network-service";
+      target = "virtio-net-driver";
+    };
+    {
+      name = "io-link-tx-completion-ready";
+      source = "virtio-net-driver";
+      target = "network-service";
+    };
+    {
+      name = "io-link-rx-completion-ready";
+      source = "virtio-net-driver";
+      target = "network-service";
+    };
+    {
+      name = "io-link-state-changed";
+      source = "virtio-net-driver";
+      target = "network-service";
+    };
+    {
+      name = "network-http-request";
+      source = "http-get";
+      target = "network-service";
+    };
+    {
+      name = "network-http-completion";
+      source = "network-service";
+      target = "http-get";
+    };
+  ];
+  placements = [
+    {
+      component = "console";
+      owner = "init";
+      stackBytes = 16384;
+    };
+    {
+      autostart = false;
+      component = "echo-agent";
+      dependencies = [
+        "spawn-service";
+      ];
+      owner = "spawn-service";
+      stackBytes = 16384;
+    };
+    {
+      component = "http-get";
+      owner = "spawn-service";
+      autostart = false;
+      health = "optional";
+      dependencies = [
+        "spawn-service";
+        "network-service";
+      ];
+      stackBytes = 65536;
+      mappingCount = 2;
+      loanCount = 2;
+    };
+    {
+      component = "init";
+      stackBytes = 16384;
+    };
+    {
+      component = "network-service";
+      owner = "root";
+      autostart = true;
+      health = "required";
+      lifetime = "resident";
+      dependencies = [
+        "virtio-net-driver";
+      ];
+      stackBytes = 131072;
+      bufferBytePages = 12;
+      bufferCount = 12;
+      mappingCount = 12;
+      loanCount = 12;
+    };
+    {
+      component = "slisp";
+      dependencies = [
+        "console";
+        "spawn-service";
+      ];
+      owner = "init";
+      stackBytes = 16384;
+    };
+    {
+      component = "spawn-service";
+      health = "required";
+      owner = "init";
+      stackBytes = 16384;
+    };
+    {
+      autostart = false;
+      component = "sysinfo";
+      dependencies = [
+        "spawn-service";
+      ];
+      owner = "spawn-service";
+      stackBytes = 16384;
+    };
+    {
+      component = "virtio-net-driver";
+      owner = "root";
+      autostart = true;
+      health = "required";
+      lifetime = "resident";
+      dependencies = [];
+      stackBytes = 16384;
+      mappingCount = 10;
+      loanCount = 10;
+    };
+  ];
+  recording = [];
+  recordingObject = false;
+  sharedBufferBudgetObject = true;
+  slotPins = [
+    {
+      grant = "init-console";
+      holder = "init";
+      reason = "bootLayout";
+      slot = 1;
+    };
+    {
+      grant = "init-spawn-service";
+      holder = "init";
+      reason = "bootLayout";
+      slot = 5;
+    };
+    {
+      grant = "spawn-service-sysinfo";
+      holder = "init";
+      reason = "bootLayout";
+      slot = 6;
+    };
+    {
+      grant = "spawn-service-echo";
+      holder = "init";
+      reason = "bootLayout";
+      slot = 7;
+    };
+    {
+      grant = "spawn-service-shared-buffer-factory";
+      holder = "init";
+      reason = "bootLayout";
+      slot = 8;
+    };
+    {
+      grant = "init-slisp";
+      holder = "init";
+      reason = "bootLayout";
+      slot = 9;
+    };
+    {
+      grant = "slisp-console-rpc";
+      holder = "console";
+      reason = "componentAbi";
+      slot = 0;
+    };
+    {
+      grant = "spawn-service-echo";
+      holder = "spawn-service";
+      reason = "allocatorOrder";
+      slot = 2;
+    };
+    {
+      grant = "spawn-service-shared-buffer-factory";
+      holder = "spawn-service";
+      reason = "allocatorOrder";
+      slot = 4;
+    };
+    {
+      grant = "spawn-service-echo-context";
+      holder = "spawn-service";
+      reason = "allocatorOrder";
+      slot = 5;
+    };
+    {
+      grant = "slisp-console-rpc";
+      holder = "slisp";
+      reason = "componentAbi";
+      slot = 0;
+    };
+    {
+      grant = "slisp-input";
+      holder = "slisp";
+      reason = "componentAbi";
+      slot = 1;
+    };
+    {
+      grant = "spawn-service-rpc";
+      holder = "slisp";
+      reason = "componentAbi";
+      slot = 2;
+    };
+    {
+      grant = "spawn-service-sysinfo-context";
+      holder = "sysinfo";
+      reason = "componentAbi";
+      slot = 0;
+    };
+    {
+      grant = "spawn-service-echo-context";
+      holder = "echo-agent";
+      reason = "componentAbi";
+      slot = 0;
+    };
+    {
+      grant = "network-http-provision";
+      holder = "network-service";
+      reason = "allocatorOrder";
+      slot = 30;
+    };
+    {
+      grant = "network-service-link-peer";
+      holder = "network-service";
+      reason = "allocatorOrder";
+      slot = 0;
+    };
+    {
+      grant = "network-service-buffer-factory";
+      holder = "network-service";
+      reason = "allocatorOrder";
+      slot = 1;
+    };
+    {
+      grant = "network-service-link-peer";
+      holder = "virtio-net-driver";
+      reason = "componentAbi";
+      slot = 0;
+    };
+    {
+      grant = "virtio-net-device";
+      holder = "virtio-net-driver";
+      reason = "componentAbi";
+      slot = 1;
+    };
+    {
+      grant = "virtio-net-mmio";
+      holder = "virtio-net-driver";
+      reason = "componentAbi";
+      slot = 2;
+    };
+    {
+      grant = "virtio-net-interrupt";
+      holder = "virtio-net-driver";
+      reason = "componentAbi";
+      slot = 3;
+    };
+    {
+      grant = "virtio-net-dma";
+      holder = "virtio-net-driver";
+      reason = "componentAbi";
+      slot = 4;
+    };
+    {
+      holder = "init";
+      grant = "spawn-service-http-get";
+      slot = 10;
+      reason = "bootLayout";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-http-get";
+      slot = 6;
+      reason = "allocatorOrder";
+    };
+    {
+      holder = "spawn-service";
+      grant = "spawn-service-http-get-context";
+      slot = 7;
+      reason = "allocatorOrder";
+    };
+  ];
+  state = [
+    {
+      name = "echo-agent-session";
+      owner = "echo-agent";
+      policy = "ephemeral";
+      schemaVersion = 1;
+    };
+  ];
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  waitSet = [
+    {
+      badgeBit = 0;
+      drainSlot = 2;
+      kind = "stream";
+      notification = "network-http-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 1;
+      kind = "timer";
+      notification = "network-http-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 6;
+      drainSlot = 1;
+      kind = "stream";
+      notification = "network-http-completion";
+      waiter = "http-get";
+    };
+    {
+      badgeBit = 1;
+      kind = "timer";
+      notification = "network-http-completion";
+      waiter = "http-get";
+    };
+  ];
+  waitSetObject = true;
+  networkInterfaces = [
+    {
+      address = "10.0.2.15";
+      gateway = "10.0.2.2";
+      holder = "network-service";
+      mac = "52:54:00:53:4c:01";
+      prefixLen = 24;
+    };
+  ];
+  networkInterfacesObject = true;
+  networkApplications = [
+    {
+      acceptedSocketLimit = 0;
+      admittedPeer = "";
+      admittedPeerAddress = "";
+      backend = "external";
+      backlog = 0;
+      byteBudget = 0;
+      completionNotification = "network-http-completion";
+      controlBinding = "network-http-service";
+      holder = "http-get";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
+      localAddress = "0.0.0.0";
+      localPort = 0;
+      nagle = true;
+      provisionBinding = "network-http-provision";
+      queueDepth = 0;
+      reconnectLimit = 0;
+      requestNotification = "network-http-request";
+      retryLimit = 0;
+      rights = [];
+      role = "client";
+      supervisionBinding = "";
+      timerBudget = 0;
+    };
+  ];
+  networkApplicationsObject = true;
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "network-service";
+        read = true;
+        subject = "network-service";
+        write = true;
+      };
+    ];
+    restarts = [];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+    ];
+  };
+}

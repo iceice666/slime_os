@@ -171,10 +171,15 @@ fn launch_context() -> [u8; slime_proto::spawn::REQUEST_LEN] {
         capability_roles: 0,
         client_budget: 0,
         command,
-        arguments: [0u8; 8],
+        argument_len0: 0,
+        argument_len1: 0,
+        argument_len2: 0,
+        argument_len3: 0,
+        argument_bytes: 0,
+        supervision_handle: 0,
         environment: [0u8; 8],
         grant_rights: 0,
-        reserved: [0u8; 6],
+        reserved: [0u8; 4],
     }
     .encode()
 }

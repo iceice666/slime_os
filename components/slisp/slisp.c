@@ -15,6 +15,7 @@ enum NodeKind {
     NODE_BOOL,
     NODE_INT,
     NODE_SYMBOL,
+    NODE_STRING,
     NODE_PAIR,
     NODE_CLOSURE
 };
@@ -25,6 +26,10 @@ typedef struct {
         int64_t integer;
         uint8_t boolean;
         char symbol[SLISP_MAX_SYMBOL_BYTES];
+        struct {
+            size_t offset;
+            size_t length;
+        } string;
         struct {
             NodeRef car;
             NodeRef cdr;
@@ -99,7 +104,8 @@ static int is_digit(char character)
 
 static int is_delimiter(char character)
 {
-    return character == '\0' || is_space(character) || character == '(' || character == ')';
+    return character == '\0' || is_space(character) || character == '(' || character == ')'
+        || character == '\'' || character == '"';
 }
 
 static void skip_space(State *state)
@@ -225,9 +231,69 @@ static SlispStatus parse_atom(State *state, NodeRef *result)
     return SLISP_OK;
 }
 
+static SlispStatus parse_string(State *state, NodeRef *result)
+{
+    size_t start = ++state->cursor;
+    SlispStatus status;
+    while (state->source[state->cursor] != '"') {
+        if (state->source[state->cursor] == '\0') {
+            return SLISP_ERR_SYNTAX;
+        }
+        ++state->cursor;
+    }
+    status = allocate_node(state, NODE_STRING, result);
+    if (status != SLISP_OK) {
+        return status;
+    }
+    state->nodes[*result].value.string.offset = start;
+    state->nodes[*result].value.string.length = state->cursor - start;
+    ++state->cursor;
+    return SLISP_OK;
+}
+
+static SlispStatus parse_quote(State *state, NodeRef *result)
+{
+    NodeRef quote;
+    NodeRef expression;
+    NodeRef arguments;
+    SlispStatus status = allocate_node(state, NODE_SYMBOL, &quote);
+    if (status != SLISP_OK) {
+        return status;
+    }
+    text_copy(state->nodes[quote].value.symbol, "quote", SLISP_MAX_SYMBOL_BYTES);
+    ++state->cursor;
+    status = parse_expression(state, &expression);
+    if (status != SLISP_OK) {
+        return status;
+    }
+    status = make_pair(state, expression, 0, &arguments);
+    if (status != SLISP_OK) {
+        return status;
+    }
+    return make_pair(state, quote, arguments, result);
+}
+
+/* Source-backed string nodes may only be consumed by the current spawn effect;
+ * no retained value or closure may refer to a session's reused input buffer. */
+static int parsed_strings(State *state, NodeRef first_node)
+{
+    for (NodeRef node = first_node; node < state->node_count; ++node) {
+        if (state->nodes[node].kind == NODE_STRING) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static SlispStatus parse_expression(State *state, NodeRef *result)
 {
     skip_space(state);
+    if (state->source[state->cursor] == '"') {
+        return parse_string(state, result);
+    }
+    if (state->source[state->cursor] == '\'') {
+        return parse_quote(state, result);
+    }
     if (state->source[state->cursor] == '(') {
         return parse_list(state, result);
     }
@@ -729,6 +795,7 @@ static SlispStatus spawn_effect(State *state, NodeRef expression, SlispEffect *e
     NodeRef arguments;
     NodeRef quoted;
     NodeRef command;
+    NodeRef rest;
     SlispStatus status;
     if (state->nodes[expression].kind == NODE_SYMBOL
         && lookup(state, state->global_environment, state->nodes[expression].value.symbol, &command)
@@ -744,7 +811,7 @@ static SlispStatus spawn_effect(State *state, NodeRef expression, SlispEffect *e
     if (status != SLISP_OK || !symbol_is(state, head, "spawn")) {
         return SLISP_ERR_UNBOUND;
     }
-    status = list_exact(state, arguments, 1, &quoted);
+    status = list_take(state, arguments, &quoted, &rest);
     if (status != SLISP_OK || state->nodes[quoted].kind != NODE_PAIR) {
         return SLISP_ERR_TYPE;
     }
@@ -755,6 +822,23 @@ static SlispStatus spawn_effect(State *state, NodeRef expression, SlispEffect *e
     status = list_exact(state, arguments, 1, &command);
     if (status != SLISP_OK || !command_symbol(state, command, effect->command)) {
         return SLISP_ERR_TYPE;
+    }
+    while (rest != 0) {
+        NodeRef argument;
+        size_t length;
+        status = list_take(state, rest, &argument, &rest);
+        if (status != SLISP_OK || state->nodes[argument].kind != NODE_STRING) {
+            return SLISP_ERR_TYPE;
+        }
+        length = state->nodes[argument].value.string.length;
+        if (effect->argument_count == 4 || length > sizeof(effect->arguments) - effect->argument_bytes) {
+            return SLISP_ERR_LIMIT;
+        }
+        effect->argument_lengths[effect->argument_count++] = (uint16_t)length;
+        for (size_t index = 0; index < length; ++index) {
+            effect->arguments[effect->argument_bytes++] = (uint8_t)state->source[
+                state->nodes[argument].value.string.offset + index];
+        }
     }
     effect->kind = SLISP_EFFECT_SPAWN;
     return SLISP_OK;
@@ -820,6 +904,7 @@ static SlispStatus run_in_state(
 {
     NodeRef expression;
     NodeRef value;
+    NodeRef first_node = state->node_count;
     size_t used = 0;
     SlispStatus status;
     if (output_capacity == 0) {
@@ -835,6 +920,9 @@ static SlispStatus run_in_state(
     skip_space(state);
     if (state->source[state->cursor] != '\0') {
         return SLISP_ERR_SYNTAX;
+    }
+    if (parsed_strings(state, first_node)) {
+        return SLISP_ERR_TYPE;
     }
     status = evaluate(state, expression, environment, 0, &value);
     if (status != SLISP_OK) {
@@ -872,6 +960,46 @@ SlispStatus slisp_session_run(const char *source, char *output, size_t output_ca
         output_capacity);
 }
 
+static void clear_effect(SlispEffect *effect)
+{
+    size_t index;
+    effect->kind = SLISP_EFFECT_NONE;
+    for (index = 0; index < sizeof(effect->command); ++index) {
+        effect->command[index] = '\0';
+    }
+    effect->argument_count = 0;
+    effect->argument_bytes = 0;
+    for (index = 0; index < 4; ++index) {
+        effect->argument_lengths[index] = 0;
+    }
+    for (index = 0; index < sizeof(effect->arguments); ++index) {
+        effect->arguments[index] = 0;
+    }
+    effect->channel = 0;
+    effect->pulse_us = 0;
+    effect->period_us = 0;
+}
+
+static void copy_effect(SlispEffect *destination, const SlispEffect *source)
+{
+    size_t index;
+    destination->kind = source->kind;
+    for (index = 0; index < sizeof(destination->command); ++index) {
+        destination->command[index] = source->command[index];
+    }
+    destination->argument_count = source->argument_count;
+    destination->argument_bytes = source->argument_bytes;
+    for (index = 0; index < 4; ++index) {
+        destination->argument_lengths[index] = source->argument_lengths[index];
+    }
+    for (index = 0; index < sizeof(destination->arguments); ++index) {
+        destination->arguments[index] = source->arguments[index];
+    }
+    destination->channel = source->channel;
+    destination->pulse_us = source->pulse_us;
+    destination->period_us = source->period_us;
+}
+
 SlispStatus slisp_session_prepare(
     const char *source,
     SlispEffect *effect,
@@ -880,19 +1008,22 @@ SlispStatus slisp_session_prepare(
 {
     NodeRef expression;
     NodeRef value;
+    NodeRef first_node;
+    SlispEffect prepared;
     size_t used = 0;
     SlispStatus status;
     if (!session_initialized) {
         slisp_session_reset();
     }
-    if (effect == NULL || output_capacity == 0) {
+    if (effect == NULL) {
         return SLISP_ERR_LIMIT;
     }
-    effect->kind = SLISP_EFFECT_NONE;
-    effect->command[0] = '\0';
-    effect->channel = 0;
-    effect->pulse_us = 0;
-    effect->period_us = 0;
+    clear_effect(&prepared);
+    clear_effect(effect);
+    if (output_capacity == 0) {
+        return SLISP_ERR_LIMIT;
+    }
+    first_node = session_state.node_count;
     output[0] = '\0';
     session_state.source = source;
     session_state.cursor = 0;
@@ -904,15 +1035,20 @@ SlispStatus slisp_session_prepare(
     if (session_state.source[session_state.cursor] != '\0') {
         return SLISP_ERR_SYNTAX;
     }
-    status = spawn_effect(&session_state, expression, effect);
+    status = spawn_effect(&session_state, expression, &prepared);
     if (status == SLISP_OK) {
+        copy_effect(effect, &prepared);
         return SLISP_OK;
     }
     if (status != SLISP_ERR_UNBOUND) {
         return status;
     }
-    status = pwm_effect(&session_state, expression, effect);
+    if (parsed_strings(&session_state, first_node)) {
+        return SLISP_ERR_TYPE;
+    }
+    status = pwm_effect(&session_state, expression, &prepared);
     if (status == SLISP_OK) {
+        copy_effect(effect, &prepared);
         return SLISP_OK;
     }
     if (status != SLISP_ERR_UNBOUND) {

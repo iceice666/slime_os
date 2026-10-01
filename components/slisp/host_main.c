@@ -12,6 +12,139 @@ typedef struct {
     const char *output;
 } Vector;
 
+static int string_vectors(void)
+{
+    static const Vector rejected[] = {
+        { "string-value", "\"arg\"", SLISP_ERR_TYPE, "" },
+        { "quoted-string", "'\"arg\"", SLISP_ERR_TYPE, "" },
+        { "nested-string", "'(a (\"arg\"))", SLISP_ERR_TYPE, "" },
+        { "explicit-quoted-string", "(quote (\"arg\"))", SLISP_ERR_TYPE, "" },
+        { "string-define", "(define x '\"arg\")", SLISP_ERR_TYPE, "" },
+        { "string-closure", "(fn () \"arg\")", SLISP_ERR_TYPE, "" },
+        { "string-dead-branch", "(if true 1 \"arg\")", SLISP_ERR_TYPE, "" },
+        { "string-integer-op", "(+ 1 \"arg\")", SLISP_ERR_TYPE, "" },
+        { "string-function", "(\"arg\" 1)", SLISP_ERR_TYPE, "" },
+        { "string-nested-spawn", "(do (spawn 'echo \"arg\"))", SLISP_ERR_TYPE, "" },
+        { "unterminated-string", "\"arg", SLISP_ERR_SYNTAX, "" },
+        { "unterminated-spawn", "(spawn 'echo \"arg)", SLISP_ERR_SYNTAX, "" },
+        { "quote-missing", "'", SLISP_ERR_SYNTAX, "" },
+    };
+    static const Vector spawn_rejected[] = {
+        { "spawn-string-command", "(spawn \"echo\")", SLISP_ERR_TYPE, "" },
+        { "spawn-quoted-string-command", "(spawn '\"echo\")", SLISP_ERR_TYPE, "" },
+        { "spawn-evaluated-string", "(spawn 'echo (quote \"arg\"))", SLISP_ERR_TYPE, "" },
+        { "spawn-nested-string", "(spawn 'echo (\"arg\"))", SLISP_ERR_TYPE, "" },
+        { "spawn-symbol-argument", "(spawn 'echo arg)", SLISP_ERR_TYPE, "" },
+        { "spawn-five-arguments", "(spawn 'echo \"\" \"\" \"\" \"\" \"\")", SLISP_ERR_LIMIT, "" },
+        { "spawn-late-type", "(spawn 'echo \"arg\" 1)", SLISP_ERR_TYPE, "" },
+    };
+    char output[128];
+    SlispEffect effect;
+    for (size_t index = 0; index < sizeof(rejected) / sizeof(rejected[0]); ++index) {
+        slisp_session_reset();
+        memset(&effect, 0xff, sizeof(effect));
+        if (slisp_run(rejected[index].source, output, sizeof(output)) != rejected[index].status
+            || slisp_session_run(rejected[index].source, output, sizeof(output))
+                != rejected[index].status
+            || slisp_session_prepare(rejected[index].source, &effect, output, sizeof(output))
+                != rejected[index].status
+            || effect.kind != SLISP_EFFECT_NONE || effect.argument_count != 0
+            || effect.argument_bytes != 0 || output[0] != '\0') {
+            fprintf(stderr, "%s: string refusal failed\n", rejected[index].name);
+            return 0;
+        }
+    }
+    for (size_t index = 0; index < sizeof(spawn_rejected) / sizeof(spawn_rejected[0]); ++index) {
+        slisp_session_reset();
+        memset(&effect, 0xff, sizeof(effect));
+        if (slisp_session_prepare(spawn_rejected[index].source, &effect, output, sizeof(output))
+                != spawn_rejected[index].status
+            || effect.kind != SLISP_EFFECT_NONE || effect.command[0] != '\0'
+            || effect.argument_count != 0 || effect.argument_bytes != 0 || output[0] != '\0') {
+            fprintf(stderr, "%s: spawn refusal failed\n", spawn_rejected[index].name);
+            return 0;
+        }
+        for (size_t byte = 0; byte < sizeof(effect.arguments); ++byte) {
+            if (effect.arguments[byte] != 0) {
+                fputs("failed spawn retained argument bytes\n", stderr);
+                return 0;
+            }
+        }
+    }
+    slisp_session_reset();
+    if (slisp_run("'(a (b) 3)", output, sizeof(output)) != SLISP_OK
+        || strcmp(output, "(a (b) 3)") != 0
+        || slisp_session_prepare("(spawn 'echo)", &effect, output, sizeof(output)) != SLISP_OK
+        || effect.kind != SLISP_EFFECT_SPAWN || strcmp(effect.command, "echo") != 0
+        || effect.argument_count != 0 || effect.argument_bytes != 0
+        || slisp_session_prepare(
+               "(spawn 'echo \"http://192.0.2.1/path?q=(x)\" \"two words\" \"\" \"\\raw\")",
+               &effect, output, sizeof(output)) != SLISP_OK
+        || effect.kind != SLISP_EFFECT_SPAWN || effect.argument_count != 4
+        || effect.argument_lengths[0] != 27 || effect.argument_lengths[1] != 9
+        || effect.argument_lengths[2] != 0 || effect.argument_lengths[3] != 4
+        || effect.argument_bytes != 40
+        || memcmp(effect.arguments, "http://192.0.2.1/path?q=(x)two words\\raw", 40) != 0) {
+        fputs("literal spawn arguments or quote shorthand failed\n", stderr);
+        return 0;
+    }
+    for (size_t length = 256; length <= 257; ++length) {
+        char source[300];
+        size_t prefix = strlen("(spawn 'echo \"");
+        strcpy(source, "(spawn 'echo \"");
+        memset(source + prefix, 'x', length);
+        strcpy(source + prefix + length, "\")");
+        slisp_session_reset();
+        if (slisp_session_prepare(source, &effect, output, sizeof(output))
+                != (length == 256 ? SLISP_OK : SLISP_ERR_LIMIT)
+            || (length == 256 && (effect.kind != SLISP_EFFECT_SPAWN
+                || effect.argument_count != 1 || effect.argument_bytes != 256
+                || effect.argument_lengths[0] != 256
+                || memcmp(effect.arguments, source + prefix, 256) != 0))
+            || (length == 257 && (effect.kind != SLISP_EFFECT_NONE
+                || effect.argument_count != 0 || effect.argument_bytes != 0))) {
+            fputs("literal byte bound failed\n", stderr);
+            return 0;
+        }
+    }
+    for (size_t extra = 0; extra <= 1; ++extra) {
+        char source[320];
+        size_t used = strlen("(spawn 'echo \"");
+        strcpy(source, "(spawn 'echo \"");
+        memset(source + used, 'a', 128);
+        used += 128;
+        strcpy(source + used, "\" \"");
+        used += 3;
+        memset(source + used, 'b', 128 + extra);
+        used += 128 + extra;
+        strcpy(source + used, "\")");
+        slisp_session_reset();
+        if (slisp_session_prepare(source, &effect, output, sizeof(output))
+                != (extra == 0 ? SLISP_OK : SLISP_ERR_LIMIT)
+            || (extra == 0 && (effect.argument_count != 2 || effect.argument_bytes != 256
+                || effect.argument_lengths[0] != 128 || effect.argument_lengths[1] != 128
+                || effect.arguments[127] != 'a' || effect.arguments[128] != 'b'))
+            || (extra == 1 && effect.kind != SLISP_EFFECT_NONE)) {
+            fputs("aggregate literal byte bound failed\n", stderr);
+            return 0;
+        }
+    }
+    slisp_session_reset();
+    {
+        char source[64] = "(define x '(a (\"arg\")))";
+        if (slisp_session_run(source, output, sizeof(output)) != SLISP_ERR_TYPE) {
+            fputs("string escaped into a binding\n", stderr);
+            return 0;
+        }
+        strcpy(source, "x");
+        if (slisp_session_run(source, output, sizeof(output)) != SLISP_ERR_UNBOUND) {
+            fputs("reused source retained a string binding\n", stderr);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int main(void)
 {
     static const Vector vectors[] = {
@@ -118,5 +251,8 @@ int main(void)
         }
     }
     puts("Slisp effects: pwm selection and the pinned request vector passed");
+    if (!string_vectors()) {
+        return 1;
+    }
     return 0;
 }

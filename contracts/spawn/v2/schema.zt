@@ -1,0 +1,152 @@
+-- Slime OS spawn-service protocol, version 2.
+-- A request declares four argument lengths and their total (at most 256
+-- bytes). Numbered contiguous continuation frames follow on the same endpoint;
+-- the final frame completes the transaction before any child may be spawned.
+-- A request with zero arguments is complete without a continuation. Clients
+-- exchange each request/frame for one reply before sending the next. No frame
+-- carries capabilities; launch authority travels only with the initial request.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 2;
+requestLen :: Int = 64;
+replyLen :: Int = 64;
+frameLen :: Int = 64;
+framePayloadBytes :: Int = 48;
+frameFlagFinal :: Int = 1;
+maxArguments :: Int = 4;
+maxArgumentBytes :: Int = 256;
+maxEnvironment :: Int = 1;
+maxEnvironmentBytes :: Int = 7;
+maxGrants :: Int = 1;
+maxCommandBytes :: Int = 16;
+requestFlagWait :: Int = 1;
+requestFlagShutdown :: Int = 2;
+requestFlagDetached :: Int = 4;
+capabilityRoleWorkingDirectory :: Int = 1;
+capabilityRoleStdin :: Int = 2;
+capabilityRoleStdout :: Int = 4;
+capabilityRoleStderr :: Int = 8;
+capabilityRoleGrant :: Int = 16;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+SpawnRequest :: type {
+  magic : Int;
+  version : Int;
+  flags : Int;
+  command_len : Int;
+  argument_count : Int;
+  environment_count : Int;
+  capability_roles : Int;
+  client_budget : Int;
+  command : Int;
+  argument_len0 : Int;
+  argument_len1 : Int;
+  argument_len2 : Int;
+  argument_len3 : Int;
+  environment : Int;
+  grant_rights : Int;
+  argument_bytes : Int;
+  supervision_handle : Int;
+  reserved : Int;
+};
+
+SpawnFrame :: type {
+  magic : Int; version : Int; sequence : Int; offset : Int;
+  length : Int; flags : Int; payload : Int;
+};
+
+SpawnReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  termination_kind : Int;
+  supervision_slot : Int;
+  detail : Int;
+};
+
+requestSchema ::= schema SpawnRequest;
+replySchema ::= schema SpawnReply;
+frameSchema ::= schema SpawnFrame;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "command_len"; width = 2; signed = false; byteArray = false; };
+  { name = "argument_count"; width = 1; signed = false; byteArray = false; };
+  { name = "environment_count"; width = 1; signed = false; byteArray = false; };
+  { name = "capability_roles"; width = 1; signed = false; byteArray = false; };
+  { name = "client_budget"; width = 1; signed = false; byteArray = false; };
+  { name = "command"; width = 16; signed = false; byteArray = true; };
+  { name = "argument_len0"; width = 2; signed = false; byteArray = false; };
+  { name = "argument_len1"; width = 2; signed = false; byteArray = false; };
+  { name = "argument_len2"; width = 2; signed = false; byteArray = false; };
+  { name = "argument_len3"; width = 2; signed = false; byteArray = false; };
+  { name = "environment"; width = 8; signed = false; byteArray = true; };
+  { name = "grant_rights"; width = 4; signed = false; byteArray = false; };
+  { name = "argument_bytes"; width = 2; signed = false; byteArray = false; };
+  { name = "supervision_handle"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = true; };
+};
+
+frameLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "sequence"; width = 2; signed = false; byteArray = false; };
+  { name = "offset"; width = 2; signed = false; byteArray = false; };
+  { name = "length"; width = 2; signed = false; byteArray = false; };
+  { name = "flags"; width = 2; signed = false; byteArray = false; };
+  { name = "payload"; width = 48; signed = false; byteArray = true; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "termination_kind"; width = 4; signed = false; byteArray = false; };
+  { name = "supervision_slot"; width = 4; signed = false; byteArray = false; };
+  { name = "detail"; width = 8; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  frameLen =; framePayloadBytes =; frameFlagFinal =;
+  maxArguments =;
+  maxArgumentBytes =;
+  maxEnvironment =;
+  maxEnvironmentBytes =;
+  maxGrants =;
+  requestFlagWait =;
+  requestFlagShutdown =;
+  requestFlagDetached =;
+  maxCommandBytes =;
+  capabilityRoleWorkingDirectory =;
+  capabilityRoleStdin =;
+  capabilityRoleStdout =;
+  capabilityRoleStderr =;
+  capabilityRoleGrant =;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  frameFields = frameSchema.fields ?? {;};
+  requestLayout =;
+  replyLayout =; frameLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_SPAWN_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    rustPath := t.join "" { root; "/components/proto/src/spawn.rs"; };
+    cPath := t.join "" { root; "/components/runtime/include/slime/spawn.h"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write cPath bindings.c
+  ];
+
+main

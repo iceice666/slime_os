@@ -36,6 +36,7 @@ pub mod ring;
 pub mod sample_descriptor;
 pub mod serial_device;
 pub mod spawn;
+pub mod spawn_arguments;
 pub mod store;
 pub mod syscall_abi;
 pub mod trace_sink;
@@ -122,38 +123,43 @@ pub fn valid_powerbox_reply(reply: &powerbox::WirePowerboxReply) -> bool {
 }
 
 pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {
-    if request.magic != spawn::SPAWN_MAGIC || request.version != spawn::FORMAT_VERSION {
+    let lengths = spawn_arguments::argument_lengths(request);
+    let count = usize::from(request.argument_count);
+    if request.magic != spawn::SPAWN_MAGIC
+        || request.version != spawn::FORMAT_VERSION
+        || request.reserved.iter().any(|byte| *byte != 0)
+        || count > spawn::MAX_ARGUMENTS
+        || usize::from(request.argument_bytes) > spawn::MAX_ARGUMENT_BYTES
+        || lengths[count..].iter().any(|length| *length != 0)
+        || lengths
+            .iter()
+            .map(|length| usize::from(*length))
+            .sum::<usize>()
+            != usize::from(request.argument_bytes)
+    {
         return false;
     }
-    if request.flags == spawn::REQUEST_FLAG_WAIT {
+    if request.flags == spawn::REQUEST_FLAG_WAIT || request.flags == spawn::REQUEST_FLAG_SHUTDOWN {
         return request.command_len == 0
             && request.argument_count == 0
             && request.environment_count == 0
             && request.capability_roles == 0
             && request.command.iter().all(|byte| *byte == 0)
             && request.environment.iter().all(|byte| *byte == 0)
-            && u64::from_le_bytes(request.arguments) != 0
             && request.grant_rights == 0
-            && request.reserved.iter().all(|byte| *byte == 0);
-    }
-    if request.flags == spawn::REQUEST_FLAG_SHUTDOWN {
-        return request.command_len == 0
-            && request.argument_count == 0
-            && request.environment_count == 0
-            && request.capability_roles == 0
-            && request.command.iter().all(|byte| *byte == 0)
-            && request.arguments.iter().all(|byte| *byte == 0)
-            && request.environment.iter().all(|byte| *byte == 0)
-            && request.grant_rights == 0
-            && request.reserved.iter().all(|byte| *byte == 0);
+            && ((request.flags == spawn::REQUEST_FLAG_WAIT && request.supervision_handle != 0)
+                || (request.flags == spawn::REQUEST_FLAG_SHUTDOWN
+                    && request.supervision_handle == 0));
     }
     (request.flags == 0 || request.flags == spawn::REQUEST_FLAG_DETACHED)
         && request.command_len > 0
-        && request.command_len as usize <= spawn::MAX_COMMAND_BYTES
-        && request.argument_count as usize <= spawn::MAX_ARGUMENTS
+        && usize::from(request.command_len) <= spawn::MAX_COMMAND_BYTES
+        && request.command[usize::from(request.command_len)..]
+            .iter()
+            .all(|byte| *byte == 0)
         && request.environment_count as usize <= spawn::MAX_ENVIRONMENT
-        && packed_fields_valid(&request.arguments, request.argument_count as usize)
         && packed_fields_valid(&request.environment, request.environment_count as usize)
+        && request.supervision_handle == 0
         && (request.flags != spawn::REQUEST_FLAG_DETACHED || request.client_budget == 0)
 }
 

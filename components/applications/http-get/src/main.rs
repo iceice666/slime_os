@@ -10,6 +10,10 @@ use slime_components::network_io::{Connection, NetworkIo, NetworkNotifications, 
 use slime_proto::network_service::{self as net, WireNetworkLaunch};
 use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit};
 
+#[path = "../../../lib/src/launch_context.rs"]
+#[allow(dead_code)]
+mod launch_context;
+
 slime_rt::entry!(main);
 
 const RING_BASE: u64 = 0x1b_0000_0000;
@@ -120,6 +124,26 @@ fn setup_failure(control: u32, rate: u64, error: Error) -> ! {
 }
 
 fn receive_url(out: &mut [u8; http::MAX_URL_BYTES]) -> Result<usize, ()> {
+    // Launch source is selected by the authenticated generation binding. Never
+    // fall back after a declared spawn context fails to decode.
+    match slime_rt::resolve_binding(b"spawn-service-http-get-context") {
+        Ok(slot) => {
+            let context = launch_context::receive_from(slot)?;
+            if context.argument_count != 1
+                || &context.command[..usize::from(context.command_len)] != b"http-get"
+            {
+                return Err(());
+            }
+            let url = context.arguments.argument(0).ok_or(())?;
+            if url.is_empty() || url.len() > out.len() {
+                return Err(());
+            }
+            out[..url.len()].copy_from_slice(url);
+            return Ok(url.len());
+        }
+        Err(slime_rt::ERR_INVALID_ARG) => {}
+        Err(_) => return Err(()),
+    }
     let peer = slime_rt::resolve_binding(b"http-launch-client").map_err(|_| ())?;
     let until = deadline(frequency()?, LAUNCH_SECONDS)?;
     let mut length = 0;
