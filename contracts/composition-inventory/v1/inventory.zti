@@ -241,14 +241,6 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-lifetime-exit.zti";
     };
     {
-      baseline = "";
-      composition = "sel4-net";
-      deferralReason = "";
-      owningGate = "sel4_net_check";
-      state = "specNative";
-      systemSpec = "contracts/system-spec/v1/systems/sel4-net.zti";
-    };
-    {
       baseline = "contracts/system-spec/v1/baselines/sel4-loan.zti";
       composition = "sel4-loan";
       deferralReason = "";
@@ -271,6 +263,14 @@
       owningGate = "sel4_mavlink_graph_check";
       state = "derived";
       systemSpec = "contracts/system-spec/v1/systems/sel4-mavlink.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-net";
+      deferralReason = "";
+      owningGate = "sel4_net_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-net.zti";
     };
     {
       baseline = "contracts/system-spec/v1/baselines/sel4-operation.zti";
