@@ -5,8 +5,10 @@ use slime_proto::{
     capability_transfer::OBJECT_KIND_SUPERVISION,
     spawn::{
         CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY, REQUEST_FLAG_DETACHED,
-        REQUEST_FLAG_SHUTDOWN, REQUEST_FLAG_WAIT, REQUEST_LEN, WireSpawnReply, WireSpawnRequest,
+        REQUEST_FLAG_SHUTDOWN, REQUEST_FLAG_WAIT, REQUEST_LEN, WireSpawnFrame, WireSpawnReply,
+        WireSpawnRequest,
     },
+    spawn_arguments::SpawnArguments,
     valid_spawn_request,
 };
 use slime_rt::{
@@ -80,6 +82,26 @@ struct LiveChild {
     detached: bool,
 }
 
+struct Pending {
+    request: WireSpawnRequest,
+    arguments: SpawnArguments,
+    claimed: Option<u32>,
+    idle_polls: usize,
+}
+
+// A partial request holds authority only across this bounded receive window.
+// No unsolicited timeout reply is sent: the client may have vanished, and a
+// blocking send would prevent the broker from serving its next request.
+const MAX_PENDING_POLLS: usize = 4096;
+
+fn release_claimed(claimed: Option<u32>) {
+    if let Some(slot) = claimed
+        && slime_rt::cap_drop(slot) != 0
+    {
+        slime_rt::exit(1);
+    }
+}
+
 fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[spawn-service] ready\n");
     // The shared-buffer factory slot is resolved by capability *role* rather
@@ -106,16 +128,30 @@ fn main(_startup_arg: u32) {
         slime_rt::exit(1);
     }
     let mut live = [None; MAX_LIVE_CHILDREN];
+    let mut pending: Option<Pending> = None;
     loop {
         reap(&mut live);
         let mut message = [0u8; MAX_MSG];
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
         match slime_rt::recv(rpc_slot, &mut message, &mut received_caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => {
+                if let Some(partial) = pending.as_mut() {
+                    partial.idle_polls += 1;
+                    if partial.idle_polls >= MAX_PENDING_POLLS
+                        && let Some(expired) = pending.take()
+                    {
+                        release_claimed(expired.claimed);
+                    }
+                }
+                slime_rt::yield_now();
+            }
             n if n < 0 => slime_rt::exit(1),
             n => {
                 slime_rt::debug_write(b"[spawn-service] request\n");
                 if shutdown_requested(&message[..n as usize], &received_caps) {
+                    if let Some(partial) = pending.take() {
+                        release_claimed(partial.claimed);
+                    }
                     slime_rt::debug_write(b"[spawn-service] shutdown received\n");
                     while live
                         .iter()
@@ -128,8 +164,13 @@ fn main(_startup_arg: u32) {
                     slime_rt::debug_write(b"[spawn-service] complete\n");
                     slime_rt::exit(0);
                 }
-                let (reply, supervision) =
-                    handle(&message[..n as usize], &received_caps, &mut live, budget);
+                let (reply, supervision) = handle(
+                    &message[..n as usize],
+                    &received_caps,
+                    &mut live,
+                    budget,
+                    &mut pending,
+                );
                 send_reply(rpc_slot, reply, supervision);
             }
         }
@@ -182,38 +223,100 @@ fn handle(
     received_caps: &[u64; MAX_CAPS_PER_MSG],
     live: &mut [Option<LiveChild>; MAX_LIVE_CHILDREN],
     budget: usize,
+    pending: &mut Option<Pending>,
 ) -> (WireSpawnReply, Option<u32>) {
-    // A working-directory capability has no kernel object to travel in the
-    // message, so its export arrives alone and is claimed here rather than read
-    // out of the received-capability array, which since B46 carries only native
-    // Endpoint handles. Claimed before validation so a refused request still
-    // releases the authority its client handed over.
+    // Claim before validation so malformed requests and continuations release
+    // every imported capability instead of leaving an export orphaned.
     let claimed = slime_rt::capability_import().ok();
-    let response = handle_inner(message, claimed, live, budget);
+    let had_caps = received_caps.iter().any(|cap| *cap != 0);
     release_received_caps(received_caps);
-    if response.0.status != STATUS_OK
-        && let Some(slot) = claimed
-        && slime_rt::cap_drop(slot) != 0
-    {
-        slime_rt::exit(1);
+    if message.len() != REQUEST_LEN {
+        release_claimed(claimed);
+        if let Some(partial) = pending.take() {
+            release_claimed(partial.claimed);
+        }
+        return (reply(STATUS_BAD_REQUEST, 0), None);
     }
+    if let Some(frame) = WireSpawnFrame::decode(message)
+        && frame.magic == slime_proto::spawn::FRAME_MAGIC
+    {
+        let Some(mut partial) = pending.take() else {
+            release_claimed(claimed);
+            return (reply(STATUS_BAD_REQUEST, 0), None);
+        };
+        let completed = if claimed.is_none() && !had_caps {
+            partial.arguments.push(&frame).ok()
+        } else {
+            None
+        };
+        release_claimed(claimed);
+        match completed {
+            Some(true) => {
+                let response = launch(
+                    &partial.request,
+                    &partial.arguments,
+                    partial.claimed,
+                    live,
+                    budget,
+                );
+                release_claimed(partial.claimed);
+                return response;
+            }
+            Some(false) => {
+                partial.idle_polls = 0;
+                *pending = Some(partial);
+                return (reply(ERR_WOULDBLOCK as i32, 0), None);
+            }
+            None => {
+                release_claimed(partial.claimed);
+                return (reply(STATUS_BAD_REQUEST, 0), None);
+            }
+        }
+    }
+    // A fresh header cancels an unfinished predecessor before it is examined.
+    if let Some(partial) = pending.take() {
+        release_claimed(partial.claimed);
+    }
+    let Some(request) = WireSpawnRequest::decode(message) else {
+        release_claimed(claimed);
+        return (reply(STATUS_BAD_REQUEST, 0), None);
+    };
+    if !valid_request(&request, claimed, budget) || had_caps {
+        release_claimed(claimed);
+        return (reply(STATUS_BAD_REQUEST, 0), None);
+    }
+    if request.flags == REQUEST_FLAG_WAIT {
+        release_claimed(claimed);
+        return (wait_reply(request.supervision_handle, live), None);
+    }
+    let Some(arguments) = SpawnArguments::new(&request) else {
+        release_claimed(claimed);
+        return (reply(STATUS_BAD_REQUEST, 0), None);
+    };
+    if !arguments.is_complete() {
+        *pending = Some(Pending {
+            request,
+            arguments,
+            claimed,
+            idle_polls: 0,
+        });
+        return (reply(ERR_WOULDBLOCK as i32, 0), None);
+    }
+    let response = launch(&request, &arguments, claimed, live, budget);
+    // Spawn grants are derived copies; the imported original is no longer owed.
+    release_claimed(claimed);
     response
 }
 
-fn handle_inner(
-    message: &[u8],
+fn launch(
+    request: &WireSpawnRequest,
+    arguments: &SpawnArguments,
     claimed: Option<u32>,
     live: &mut [Option<LiveChild>; MAX_LIVE_CHILDREN],
     budget: usize,
 ) -> (WireSpawnReply, Option<u32>) {
-    let Some(request) = WireSpawnRequest::decode(message) else {
+    if !arguments.is_complete() {
         return (reply(STATUS_BAD_REQUEST, 0), None);
-    };
-    if !valid_request(&request, claimed, budget) {
-        return (reply(STATUS_BAD_REQUEST, 0), None);
-    }
-    if request.flags == REQUEST_FLAG_WAIT {
-        return (wait_reply(request_handle(&request), live), None);
     }
     let command = &request.command[..request.command_len as usize];
     // Authorization and dispatch are one question asked of the authenticated
@@ -249,7 +352,7 @@ fn handle_inner(
     };
     match slime_rt::spawn(executable_slot, grants) {
         Ok(spawned) => {
-            if send_context(context_slot, &request).is_err() {
+            if send_context(context_slot, request, arguments).is_err() {
                 while let Ok(None) = slime_rt::supervision_status(spawned.supervision_slot) {
                     slime_rt::yield_now();
                 }
@@ -303,15 +406,28 @@ fn command_binding(command: &[u8], suffix: &[u8]) -> Option<u32> {
     slime_rt::resolve_binding(frame).ok()
 }
 
-fn send_context(slot: u32, request: &WireSpawnRequest) -> Result<(), i64> {
+fn send_context(
+    slot: u32,
+    request: &WireSpawnRequest,
+    arguments: &SpawnArguments,
+) -> Result<(), i64> {
     let context = WireSpawnRequest {
         flags: 0,
         client_budget: 0,
         ..*request
     };
-    let encoded = context.encode();
+    send_context_frame(slot, &context.encode())?;
+    let mut sequence = 0;
+    while let Some(frame) = arguments.frame(sequence) {
+        send_context_frame(slot, &frame.encode())?;
+        sequence += 1;
+    }
+    Ok(())
+}
+
+fn send_context_frame(slot: u32, encoded: &[u8]) -> Result<(), i64> {
     loop {
-        match slime_rt::send(slot, &encoded, &[]) {
+        match slime_rt::send(slot, encoded, &[]) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => return Err(result),
             _ => return Ok(()),
@@ -345,18 +461,6 @@ fn valid_request(request: &WireSpawnRequest, claimed: Option<u32>, budget: usize
         && request.reserved.iter().all(|byte| *byte == 0)
         && request.grant_rights == 0
         && wants_directory == claimed.is_some()
-}
-
-/// The supervision handle a wait request names. The client holds this
-/// capability; the numeric task id it used to send is not authority and is
-/// gone from the protocol (B42).
-fn request_handle(request: &WireSpawnRequest) -> u32 {
-    u32::from_le_bytes([
-        request.arguments[0],
-        request.arguments[1],
-        request.arguments[2],
-        request.arguments[3],
-    ])
 }
 
 fn wait_reply(handle: u32, live: &mut [Option<LiveChild>; MAX_LIVE_CHILDREN]) -> WireSpawnReply {

@@ -7,7 +7,7 @@
 #define INPUT_SLOT 1U
 #define SPAWN_SERVICE_SLOT 2U
 #define PWM_SLOT 3U
-#define LINE_BYTES 128U
+#define LINE_BYTES 384U
 
 static size_t text_len(const char *text)
 {
@@ -28,32 +28,51 @@ static void write_text(const char *text)
     write_bytes((const uint8_t *)text, text_len(text));
 }
 
-static int spawn_command(const char *command)
+static int spawn_exchange(const uint8_t *encoded, SlimeSpawnReply *reply)
+{
+    uint8_t response[SLIME_SPAWN_REPLY_LEN];
+    int64_t received = slime_endpoint_exchange(SPAWN_SERVICE_SLOT, encoded,
+        SLIME_SPAWN_REQUEST_LEN, response, sizeof(response));
+    return received == SLIME_SPAWN_REPLY_LEN
+        && slime_spawn_reply_decode(response, (size_t)received, reply);
+}
+
+static int spawn_command(const SlispEffect *effect)
 {
     uint8_t encoded[SLIME_SPAWN_REQUEST_LEN];
-    uint8_t response[SLIME_SPAWN_REPLY_LEN];
     SlimeSpawnRequest request = { 0 };
     SlimeSpawnReply reply;
-    size_t length = text_len(command);
-    int64_t received;
-    if (length == 0 || length > sizeof(request.command)) {
-        return 0;
-    }
+    size_t length = text_len(effect->command);
+    if (length == 0 || length > sizeof(request.command)
+        || effect->argument_count > SLIME_SPAWN_MAX_ARGUMENTS
+        || effect->argument_bytes > SLIME_SPAWN_MAX_ARGUMENT_BYTES) { return 0; }
     request.flags = SLIME_SPAWN_REQUEST_FLAG_DETACHED;
     request.command_len = (uint16_t)length;
-    for (size_t index = 0; index < length; ++index) {
-        request.command[index] = (uint8_t)command[index];
-    }
+    request.argument_count = effect->argument_count;
+    request.argument_bytes = effect->argument_bytes;
+    request.argument_len0 = effect->argument_lengths[0];
+    request.argument_len1 = effect->argument_lengths[1];
+    request.argument_len2 = effect->argument_lengths[2];
+    request.argument_len3 = effect->argument_lengths[3];
+    for (size_t index = 0; index < length; ++index) { request.command[index] = (uint8_t)effect->command[index]; }
     slime_spawn_request_encode(&request, encoded);
-    received = slime_endpoint_exchange(
-        SPAWN_SERVICE_SLOT,
-        encoded,
-        sizeof(encoded),
-        response,
-        sizeof(response));
-    return received == SLIME_SPAWN_REPLY_LEN
-        && slime_spawn_reply_decode(response, (size_t)received, &reply)
-        && reply.status == 0;
+    if (!spawn_exchange(encoded, &reply)) { return 0; }
+    if (effect->argument_count == 0) { return reply.status == 0; }
+    if (reply.status != SLIME_ERR_WOULDBLOCK) { return 0; }
+    uint16_t offset = 0;
+    uint16_t sequence = 0;
+    do {
+        uint16_t length = (uint16_t)(effect->argument_bytes - offset);
+        if (length > SLIME_SPAWN_FRAME_PAYLOAD_BYTES) { length = SLIME_SPAWN_FRAME_PAYLOAD_BYTES; }
+        uint16_t flags = offset + length == effect->argument_bytes ? SLIME_SPAWN_FRAME_FLAG_FINAL : 0;
+        slime_spawn_frame_encode(sequence, offset, effect->arguments + offset, length, flags, encoded);
+        if (!spawn_exchange(encoded, &reply)) { return 0; }
+        if (flags != 0) { return reply.status == 0; }
+        if (reply.status != SLIME_ERR_WOULDBLOCK) { return 0; }
+        offset += length;
+        ++sequence;
+    } while (offset < effect->argument_bytes);
+    return 0;
 }
 
 static void write_number(uint32_t value)
@@ -121,7 +140,7 @@ static void evaluate_line(char *line)
     SlispEffect effect;
     SlispStatus status = slisp_session_prepare(line, &effect, output, sizeof(output));
     if (status == SLISP_OK && effect.kind == SLISP_EFFECT_SPAWN) {
-        if (spawn_command(effect.command)) {
+        if (spawn_command(&effect)) {
             write_text("=> spawned ");
             write_text(effect.command);
             write_text("\n");

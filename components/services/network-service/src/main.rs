@@ -13,8 +13,9 @@ use slime_components::tick_clock::TickClock;
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_request;
 use slime_rt::{
-    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, monotonic_frequency,
-    monotonic_read, network_destinations_read, network_interface_read, resolve_binding, yield_now,
+    ERR_SUCCESS, ERR_WOULDBLOCK, Lifetime, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit,
+    monotonic_frequency, monotonic_read, network_destinations_read, network_interface_read,
+    resolve_binding, yield_now,
 };
 use smoltcp::iface::{Config, Interface, PollIngressSingleResult, PollResult, SocketStorage};
 use smoltcp::time::Instant;
@@ -153,6 +154,8 @@ struct Observed {
 }
 
 fn main(_: u32) {
+    let resident =
+        slime_rt::lifetime().unwrap_or_else(|_| fail(b"instance lifetime")) == Lifetime::Resident;
     // SAFETY: main runs once and no worker or callback accesses this arena.
     let object = unsafe { &mut *core::ptr::addr_of_mut!(DESTINATION_STORAGE) };
     object[OFF_HEADER_MAGIC..OFF_HEADER_MAGIC + MAGIC.len()].copy_from_slice(&MAGIC);
@@ -302,7 +305,7 @@ fn main(_: u32) {
         .map(|_| monotonic_frequency().unwrap_or_else(|_| fail(b"wait clock rate")));
     let mut coalesced = 0u64;
 
-    while clients.iter().flatten().any(|client| !client.closed) {
+    while resident || clients.iter().flatten().any(|client| !client.closed) {
         let mut progress = false;
         for (index, client) in clients.iter_mut().enumerate() {
             let Some(client) = client else { continue };
@@ -334,7 +337,10 @@ fn main(_: u32) {
                         write_number(b" bytes=", reclaimed.bytes as u64);
                         write_number(b" sessions_released=", u64::from(session_released));
                         debug_write(b"\n");
-                        client.closed = true;
+                        if resident {
+                            release_capabilities(&mut capabilities, client.holder);
+                        }
+                        client.closed = !resident;
                         progress = true;
                         continue;
                     }
@@ -384,10 +390,17 @@ fn main(_: u32) {
             {
                 engine.release_holder(client.holder);
                 local_engine.release_holder(client.holder);
-                if let Some(application) = applications[index].take() {
-                    application.release();
+                if resident {
+                    release_capabilities(&mut capabilities, client.holder);
                 }
-                client.closed = true;
+                if let Some(application) = applications[index].take() {
+                    let released = application.release();
+                    if resident && !released {
+                        fail(b"invalidated application release");
+                    }
+                }
+                client.closed = !resident;
+                progress = true;
                 debug_write(b"[network-service] application session invalidated\n");
                 continue;
             }
@@ -472,9 +485,14 @@ fn main(_: u32) {
                                 && request.op == network_service::OP_CLOSE
                                 && request.capability == SHUTDOWN_CAPABILITY =>
                         {
-                            if let Some(application) = applications[index].take() {
+                            if resident || applications[index].is_some() {
                                 engine.release_holder(client.holder);
                                 local_engine.release_holder(client.holder);
+                            }
+                            if resident {
+                                release_capabilities(&mut capabilities, client.holder);
+                            }
+                            if let Some(application) = applications[index].take() {
                                 write_number(
                                     b"[network-service] application bytes sent=",
                                     application.sent,
@@ -486,7 +504,8 @@ fn main(_: u32) {
                                 }
                                 debug_write(b"[network-service] application buffers released\n");
                             }
-                            client.closed = true;
+                            // Session teardown does not end a resident service's control authority.
+                            client.closed = !resident;
                             (0, network_service::CAPABILITY_NONE, 0)
                         }
                         Some(request)
@@ -497,6 +516,9 @@ fn main(_: u32) {
                             // view survives release, including an abandoned completion.
                             engine.release_holder(client.holder);
                             local_engine.release_holder(client.holder);
+                            if resident {
+                                release_capabilities(&mut capabilities, client.holder);
+                            }
                             let released = if let Some(application) = applications[index].take() {
                                 if !application.release() {
                                     fail(b"application abort release");
@@ -510,7 +532,8 @@ fn main(_: u32) {
                                 released,
                             );
                             debug_write(b"\n");
-                            client.closed = true;
+                            // Session teardown does not end a resident service's control authority.
+                            client.closed = !resident;
                             (0, network_service::CAPABILITY_NONE, 0)
                         }
                         Some(_) if client.provision.is_some() => {
@@ -1311,6 +1334,17 @@ fn dispatch(
         }
         network_service::OP_ACCEPT => (STATUS_UNSUPPORTED, network_service::CAPABILITY_NONE, 0),
         _ => (STATUS_MALFORMED, network_service::CAPABILITY_NONE, 0),
+    }
+}
+
+fn release_capabilities(
+    capabilities: &mut [Option<Capability>; MAX_CAPABILITIES],
+    holder: [u8; 32],
+) {
+    for capability in capabilities {
+        if capability.is_some_and(|cap| cap.holder == holder) {
+            *capability = None;
+        }
     }
 }
 

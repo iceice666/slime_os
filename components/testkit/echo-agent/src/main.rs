@@ -53,7 +53,7 @@ fn main(_startup_arg: u32) {
         b"none\n"
     });
     slime_rt::debug_write(b"echo-agent{tool=echo,value=");
-    if let Some(argument) = launch_context::field(&context.arguments, 0) {
+    if let Some(argument) = context.arguments.argument(0) {
         slime_rt::debug_write(argument);
     }
     slime_rt::debug_write(b",env=");

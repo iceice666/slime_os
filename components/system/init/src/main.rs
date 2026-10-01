@@ -63,26 +63,10 @@ fn declares_minted(name: &[u8]) -> bool {
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 0] = [];
 
-fn spawn_service_caps() -> [SpawnGrant; 3] {
-    // The two executables spawn-service may launch, and the factory it allocates
-    // from. Ascending declared slot is the order the root matches against, so
-    // this list's order is load-bearing while the numbers in it are not (CP2/B70).
-    //
-    // The factory is named rather than role-resolved. `kind:sharedBufferFactory`
-    // was unambiguous while `sel4.zti` was the only generation reaching `main`
-    // and granted init exactly one factory; RP2's demo generation binds init
-    // three — its own at slot 16, the fabric service's at 23, and this one at 8
-    // — so the role query refuses, correctly. Observed on the boot that found
-    // this: `SLIME_GRAPH binding unresolved task=0 ... len=37` followed by
-    // `init exit status=1`, after the data path had already succeeded. (The
-    // instance index in that line moved when the fixture gained the fabric
-    // records, so it is deliberately not quoted here.)
-    //
-    // A name is the right instrument here for the reason `resolve_own_buffer_factory`
-    // documents: which factory *this* service allocates from is a graph fact the
-    // manifest states, not a property of the capability. Both generations
-    // reaching this path — `sel4` and `sel4-demo` — declare this exact grant.
-    [
+fn spawn_service_caps() -> ([SpawnGrant; 4], usize) {
+    // Ascending child binding slot is the root's grant-installation order.
+    // The optional command follows the fixed executable and factory prefix.
+    let mut grants = [
         grant(
             resolve_executable(b"executable:sysinfo"),
             RIGHT_EXEC | RIGHT_SPAWN,
@@ -96,7 +80,14 @@ fn spawn_service_caps() -> [SpawnGrant; 3] {
                 .unwrap_or_else(|_| slime_rt::exit(1)),
             RIGHT_BUFFER_CREATE,
         ),
-    ]
+        grant(0, 0),
+    ];
+    let mut count = 3;
+    if let Ok(slot) = slime_rt::resolve_binding(b"executable:http-get") {
+        grants[count] = grant(slot, RIGHT_EXEC | RIGHT_SPAWN);
+        count += 1;
+    }
+    (grants, count)
 }
 
 // The generated boot-layout slot table was `include!`d here (B10) and is gone
@@ -139,9 +130,11 @@ fn main(startup_arg: u32) {
         .supervision_slot;
     let spawn_service_executable = slime_rt::resolve_binding(b"executable:spawn-service")
         .unwrap_or_else(|_| slime_rt::exit(1));
-    let component_spawn_service = slime_rt::spawn(spawn_service_executable, &spawn_service_caps())
-        .unwrap_or_else(|_| slime_rt::exit(1))
-        .supervision_slot;
+    let (spawn_caps, spawn_cap_count) = spawn_service_caps();
+    let component_spawn_service =
+        slime_rt::spawn(spawn_service_executable, &spawn_caps[..spawn_cap_count])
+            .unwrap_or_else(|_| slime_rt::exit(1))
+            .supervision_slot;
 
     if startup_arg == boot_contracts::generation::BootAction::Product.id() {
         // A product generation may declare resident drivers and producers
@@ -177,10 +170,15 @@ fn main(startup_arg: u32) {
         capability_roles: 0,
         client_budget: 0,
         command: [0; 16],
-        arguments: [0; 8],
+        argument_len0: 0,
+        argument_len1: 0,
+        argument_len2: 0,
+        argument_len3: 0,
+        argument_bytes: 0,
+        supervision_handle: 0,
         environment: [0; 8],
         grant_rights: 0,
-        reserved: [0; 6],
+        reserved: [0; 4],
     };
     if slime_rt::send(resolve_spawn_service_rpc(), &shutdown.encode(), &[]) != slime_rt::ERR_SUCCESS
     {

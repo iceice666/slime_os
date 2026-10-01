@@ -24,6 +24,10 @@ typedef enum {
 typedef struct {
     SlispEffectKind kind;
     char command[17];
+    uint8_t argument_count;
+    uint16_t argument_bytes;
+    uint16_t argument_lengths[4];
+    uint8_t arguments[256];
     uint32_t channel;
     uint32_t pulse_us;
     uint32_t period_us;

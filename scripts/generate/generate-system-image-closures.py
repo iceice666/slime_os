@@ -267,6 +267,7 @@ ROOT_PARAMETERS: dict[str, tuple[str, ...]] = {
     "sel4": ("qemuKeyboard",),
     "sel4-http": ("qemuKeyboard",),
     "sel4-http-public": ("qemuKeyboard",),
+    "sel4-net": ("qemuKeyboard",),
     # IO8: the product graph plus the pwm driver is the same interactive
     # plane, typed at over the same emulated keyboard.
     "sel4-pwm": ("qemuKeyboard",),

@@ -16,7 +16,7 @@ from zutai_cli import STDLIB, binary
 
 from harness import ROOT
 
-GENERATOR = ROOT / "contracts" / "spawn" / "v1" / "schema.zt"
+GENERATOR = ROOT / "contracts" / "spawn" / "v2" / "schema.zt"
 RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "spawn.rs"
 C_OUTPUT = ROOT / "components" / "runtime" / "include" / "slime" / "spawn.h"
 INVALID_SCHEMA = "INVALID_SPAWN_SCHEMA"
