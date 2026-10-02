@@ -109,6 +109,11 @@ VERIFIED = re.compile(
 OWNER_OUTCOME = re.compile(rf"\[{OWNER}\] incarnation=(\d+) outcome=(exit|fault)")
 OWNER_COMPLETE = f"[{OWNER}] complete incarnations={INCARNATIONS} faults=1"
 HEALTHY = re.compile(rf"SLIME_GRAPH HEALTHY generation={LARGE_GENERATION} ")
+WRITE_FAULT = re.compile(
+    r"SLIME_GRAPH component fault task=(?P<task>\d+) "
+    r"kind=VirtualMemory \{ access: Write, status: \d+ \} "
+    r"address=Some\((?P<address>0x[0-9a-fA-F]+|\d+)\)"
+)
 LARGE_FAILURES = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -430,7 +435,7 @@ class ProbeImage:
 
 def probe_image(built) -> ProbeImage:
     object_id = check_large_fixture()
-    generation = Path(built.generation).read_bytes()
+    generation = (Path(built.generation) / "generation.bin").read_bytes()
     payload = object_payload(generation, object_id)
     if payload[:4] != b"\x7fELF":
         payload = payload[boot_contracts.COMPONENT_IMAGE_ELF_HEADER_LEN :]
@@ -546,7 +551,7 @@ def _only(pattern: re.Pattern[str] | str, text: str, what: str, reject: Callable
 
 
 def _fault_address(match: re.Match[str]) -> int:
-    value = match.group(1)
+    value = match.group("address")
     return int(value, 16) if value.startswith("0x") else int(value)
 
 
@@ -587,17 +592,15 @@ def judge_large_image(transcript: str, probe: ProbeImage, reject: Callable[[str]
         if verified.groups() != expected_bytes:
             reject(f"incarnation {incarnation} verified {verified.groups()} bytes; the probe's sections are {expected_bytes}")
         exits = list(re.finditer(rf"SLIME_GRAPH component exit task={task} status=(\d+)", segment))
-        fault_lines = list(
-            re.finditer(
-                rf"SLIME_GRAPH component fault task={task} kind=VirtualMemory address=Some\((0x[0-9a-fA-F]+|\d+)\)",
-                segment,
-            )
-        )
+        fault_lines = list(re.finditer(rf"SLIME_GRAPH component fault task={task} [^\r\n]*", segment))
         if incarnation == FAULT_INCARNATION:
             if exits or len(fault_lines) != 1:
-                reject(f"incarnation {incarnation} did not end in exactly one VirtualMemory fault")
+                reject(f"incarnation {incarnation} did not end in exactly one VirtualMemory write fault")
             ended = fault_lines[0]
-            address = _fault_address(ended)
+            fault = WRITE_FAULT.fullmatch(ended.group(0))
+            if fault is None:
+                reject(f"incarnation {incarnation} expected a VirtualMemory write fault, observed: {ended.group(0)}")
+            address = _fault_address(fault)
             if not rodata_start <= address < rodata_start + rodata_size:
                 reject(f"the deliberate fault at {address:#x} is outside the probe's read-only data")
             outcome = "fault"
@@ -641,7 +644,7 @@ def transcript_controls(transcript: str, probe: ProbeImage) -> int:
     verified = VERIFIED.search(transcript)
     reclaimed = RECLAIMED.search(transcript)
     peers = list(PEER.finditer(transcript))
-    faults = re.search(r"SLIME_GRAPH component fault task=(\d+) kind=VirtualMemory address=Some\(([^)]*)\)", transcript)
+    faults = WRITE_FAULT.search(transcript)
     if len(launches) < 2 or verified is None or reclaimed is None or len(peers) < 2 or faults is None:
         fail("transcript controls need the accepted launch, verification, reclamation, witness and fault evidence")
     first, second = launches[0], launches[1]
@@ -653,7 +656,7 @@ def transcript_controls(transcript: str, probe: ProbeImage) -> int:
         changed = line[:start] + str(int(match.group(group)) + 1) + line[end:]
         return transcript[: match.start()] + changed + transcript[match.end() :]
 
-    fault_task = faults.group(1)
+    fault_task = faults.group("task")
     mutations = (
         ("missing verification", transcript[: verified.start()] + transcript[verified.end() :]),
         ("installed pages differ from declared", bump(first, 3)),
@@ -666,7 +669,7 @@ def transcript_controls(transcript: str, probe: ProbeImage) -> int:
         ),
         (
             "the fault landed outside read-only data",
-            transcript.replace(faults.group(0), f"SLIME_GRAPH component fault task={fault_task} kind=VirtualMemory address=Some(0x8)"),
+            transcript[: faults.start("address")] + "0x8" + transcript[faults.end("address") :],
         ),
         (
             "reclamation reordered before verification",

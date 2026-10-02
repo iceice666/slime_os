@@ -2797,12 +2797,103 @@ def check_private_memory_capacity_controls() -> int:
 
 
 
+def check_large_image_controls() -> int:
+    """Exercise grader plumbing with synthetic evidence, not a large-image boot."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    gate = load_script("large_image_controls", "check/check-sel4-reclamation-plane.py")
+    probe = object.__new__(gate.ProbeImage)
+    probe.pages = 24576
+    probe.regions = {"rodata": (2101248, 4096), "data": (2105344, 8192), "bss": (2113536, 4096)}
+    watermarks = "live_slots=10 live_objects=20 live_bytes=40960 allocation_descriptors_free=30"
+    lines = []
+    for incarnation in range(1, 5):
+        task = 10 + incarnation
+        outcome = "fault" if incarnation == 3 else "exit"
+        lines.extend([
+            f"SLIME_ROOT image launch task={task} instance=large-image-probe pages=24576 declared=24576 {watermarks}",
+            "[large-image-probe] verified text_calls=3 rodata=4096 data=8192 bss=4096",
+            (f"SLIME_GRAPH component fault task={task} kind=VirtualMemory {{ access: Write, status: 2480898127 }} address=Some(2101248)"
+             if outcome == "fault" else f"SLIME_GRAPH component exit task={task} status=0"),
+            f"SLIME_ROOT image reclaimed task={task} instance=large-image-probe {watermarks}",
+            "SLIME_ROOT image peer task=2 instance=large-image-witness slots=3 objects=4 bytes=4096",
+            f"[large-image-owner] incarnation={incarnation} outcome={outcome}",
+        ])
+    lines.extend([
+        "[large-image-owner] complete incarnations=4 faults=1",
+        "SLIME_GRAPH HEALTHY generation=168 required=2 live=1 completed=1 failed=0",
+    ])
+    transcript = "\n".join(lines)
+    expected = {"casesObserved": 4, "bytesObserved": 16384, "resourcesReclaimed": 4, "faultsIsolated": 1}
+    for address in ("2101248", "0x201000", "2105343"):
+        positive = transcript.replace("Some(2101248)", f"Some({address})")
+        if gate.judge_large_image(positive, probe, gate._reject) != expected:
+            fail("large-image positive control reported incorrect observations")
+        if gate.transcript_controls(positive, probe) != 10:
+            fail("large-image transcript control count drifted")
+    fault_line = lines[14]
+    mutations = (
+        ("read fault", transcript.replace("access: Write", "access: Read")),
+        ("execute fault", transcript.replace("access: Write", "access: Execute")),
+        ("unknown access", transcript.replace("access: Write", "access: Unknown")),
+        ("missing details", transcript.replace(" { access: Write, status: 2480898127 }", "")),
+        ("missing status", transcript.replace(", status: 2480898127", "")),
+        ("malformed status", transcript.replace("status: 2480898127", "status: invalid")),
+        ("missing address", transcript.replace("Some(2101248)", "None")),
+        ("lower bound", transcript.replace("Some(2101248)", "Some(2101247)")),
+        ("upper bound", transcript.replace("Some(2101248)", "Some(2105344)")),
+        ("wrong task", transcript.replace("fault task=13 ", "fault task=99 ")),
+        ("missing fault", transcript.replace(fault_line, "")),
+        ("duplicate fault", transcript.replace(fault_line, fault_line + "\n" + fault_line)),
+        ("extra read fault", transcript.replace(fault_line, fault_line + "\n" + fault_line.replace("Write", "Read"))),
+        ("fault on clean exit", transcript.replace("SLIME_GRAPH component exit task=11 status=0",
+            "SLIME_GRAPH component exit task=11 status=0\n" + fault_line.replace("task=13", "task=11").replace("Write", "Read"))),
+    )
+    for label, mutated in mutations:
+        if mutated == transcript:
+            fail(f"large-image control did not mutate: {label}")
+        try:
+            gate.judge_large_image(mutated, probe, gate._reject)
+        except gate.LargeImageRefusal:
+            continue
+        fail(f"large-image control accepted: {label}")
+
+    with tempfile.TemporaryDirectory(prefix="slime-large-image-controls-") as temporary:
+        generation = _Path(temporary) / "generation"
+        generation.mkdir()
+        raw = b"synthetic generation bytes"
+        (generation / "generation.bin").write_bytes(raw)
+        built = SimpleNamespace(generation=generation)
+        elf = b"\x7fELFsynthetic probe"
+        for payload in (elf, bytes(gate.boot_contracts.COMPONENT_IMAGE_ELF_HEADER_LEN) + elf):
+            with (
+                patch.object(gate, "check_large_fixture", return_value="probe-object"),
+                patch.object(gate, "object_payload", return_value=payload) as decode,
+                patch.object(gate, "ProbeImage", return_value=probe) as measure,
+            ):
+                if gate.probe_image(built) is not probe:
+                    fail("large-image generation directory control returned the wrong probe")
+                decode.assert_called_once_with(raw, "probe-object")
+                measure.assert_called_once_with(elf, gate.boot_contracts.TARGET_PROFILES_BY_NAME[gate.LARGE_TARGET].page_bytes)
+        (generation / "generation.bin").unlink()
+        with patch.object(gate, "check_large_fixture", return_value="probe-object"):
+            try:
+                gate.probe_image(built)
+            except FileNotFoundError:
+                pass
+            else:
+                fail("large-image control accepted a missing generation.bin")
+    return 30 + len(mutations) + 1
+
+
 def main() -> None:
     if Path_cwd() != ROOT:
         fail(f"run from repository root: {ROOT}")
     total = 0
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
+    total += check_large_image_controls()
     total += check_root_memory_runtime_control()
     total += check_http_evidence_controls()
     total += check_http_capture_controls()
