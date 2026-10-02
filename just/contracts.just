@@ -95,6 +95,12 @@ system_image_builder_check: system_composition_closure_check
 system_test_run_check:
     python3 scripts/check/check-system-test-run.py
 
+# Run discovery and per-arm extraction controls, then the complete frozen-record gate.
+[group('contracts')]
+system_test_run_inventory_check:
+    python3 scripts/check/check-system-test-run.py --inventory-controls
+    python3 scripts/check/check-system-test-run.py
+
 # One execution identity covers the declaration/closure boundary and its quality gates.
 [group('contracts')]
 system_test_run_baseline_check: system_image_closure_check system_test_run_check

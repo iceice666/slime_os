@@ -32,6 +32,7 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import argparse
 import importlib.util
 import json
 import re
@@ -451,17 +452,262 @@ def check_declaration_controls() -> int:
     return refused
 
 
-vocabulary = contract_vocabulary()
-record_count = check_records_and_planes_correspond()
-resolved, exempt, fault_count = check_records(vocabulary)
-check_records_match_their_checkers()
-control_count = check_controls(vocabulary) + check_declaration_controls()
+def check_inventory_controls() -> int:
+    """Exercise real inventory/extraction with isolated files, without boot claims."""
+    import copy
+    import tempfile
+    from unittest.mock import patch
 
-print(
-    f"system test run check: {record_count} record(s) correspond one-to-one with the plane "
-    f"gates that boot a seL4 image, each decoded through the contract with closed execution "
-    f"and fault vocabularies and a bounded timeout; {resolved} name a closure that resolves to "
-    f"their own plane and {exempt} name none because their image is declared closure-exempt; "
-    f"{fault_count} fault control(s) declared; every record matches the checker it was frozen "
-    f"from; and {control_count} named control(s) refused"
-)
+    import work_items
+
+    generator = GENERATOR_MODULE
+    if not isinstance(getattr(generator, "PLANNED_RUNS", None), dict):
+        fail("inventory controls require the planned-run registry implementation")
+    required = {
+        "sel4-entropy": (
+            "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e",
+            "check-sel4-entropy-plane.py",
+            ("components/services/virtio-rng-driver", "components/services/entropy-service"),
+        ),
+        "sel4-large-image": (
+            "01a0fa78-cfc0-7dc0-976e-3ff092b908a4",
+            "check-sel4-reclamation-plane.py",
+            tuple(f"components/testkit/large-image-{role}" for role in ("owner", "probe", "witness")),
+        ),
+    }
+    registry = {}
+    for run, (item, checker, crates) in required.items():
+        mandatory = {
+            f"contracts/system-spec/v1/systems/{run}.zti",
+            f"contracts/generation-manifest/v1/compositions/{run}.zti",
+            f"contracts/system-image-closure/v2/closures/{run}.zti",
+            f"contracts/system-test-run/v1/runs/{run}.zti",
+            *crates,
+        }
+        registry[run] = (item, checker, run, tuple(sorted(mandatory)))
+        row = generator.PLANNED_RUNS.get(run)
+        if row is None and (CLOSURE_ROOT / f"{run}.zti").is_file():
+            continue
+        if not isinstance(row, tuple) or len(row) != 4 or row[:3] != (item, checker, run):
+            fail(f"inventory control: {run} lacks its canonical planning registration")
+        if not mandatory <= set(row[3]):
+            fail(f"inventory control: {run} omits required implementation artifacts")
+
+    refused = 0
+
+    def refuse(label, operation) -> None:
+        nonlocal refused
+        try:
+            operation()
+        except SystemExit as error:
+            if "system test run generation:" not in str(error):
+                fail(f"inventory control {label}: wrong refusal: {error}")
+            refused += 1
+        else:
+            fail(f"inventory control accepted {label}")
+
+    with tempfile.TemporaryDirectory(prefix="slime-run-inventory-") as directory:
+        root = _Path(directory)
+        checkers = root / "scripts/check"
+        closures = root / "contracts/system-image-closure/v2/closures"
+        runs = root / "contracts/system-test-run/v1/runs"
+        items = root / ".tasks/items"
+        for path in (checkers, closures, runs, items):
+            path.mkdir(parents=True)
+        for item, checker, _crates in required.values():
+            (checkers / checker).write_bytes((ROOT / "scripts/check" / checker).read_bytes())
+            source_item = ROOT / ".tasks/items" / f"{item}.md"
+            if source_item.is_file():
+                item_text = source_item.read_text()
+            else:
+                item_text = json.loads((ROOT / ".tasks/terminal" / f"{item}.json").read_text())["metadata"]
+            (items / f"{item}.md").write_text(
+                re.sub(r"^state: .+$", "state: open", item_text, flags=re.MULTILINE))
+        closure_source = (CLOSURE_ROOT / "sel4-reclamation-unwind.zti").read_text()
+        (closures / "sel4-reclamation-unwind.zti").write_text(closure_source)
+        local_registry = {run: registry[run] for run in required}
+        with (
+            patch.multiple(generator, ROOT=root, CHECK_ROOT=checkers, CLOSURE_ROOT=closures,
+                           RUN_ROOT=runs, PLANNED_RUNS=local_registry),
+            patch.multiple(work_items, ROOT=root, TASKS=root / ".tasks", ITEMS=items,
+                           TERMINAL=root / ".tasks/terminal"),
+        ):
+            work_items.cache_clear()
+            try:
+                reclamation = checkers / "check-sel4-reclamation-plane.py"
+                entropy = checkers / "check-sel4-entropy-plane.py"
+                expected = [("sel4-reclamation", "sel4-reclamation-unwind", "qemu-arm-virt", "")]
+                if generator.run_variants(reclamation) != expected or generator.run_variants(entropy):
+                    fail("inventory control: planning suppression hid a live arm or admitted a planned arm")
+                emitted = generator.outputs()
+                if set(emitted) != {runs / "sel4-reclamation.zti"}:
+                    fail("inventory control: planned declarations leaked into outputs")
+                active_closure = closures / "sel4-reclamation-unwind.zti"
+                active_closure.unlink()
+                refuse("missing active unwind closure", generator.outputs)
+                active_closure.write_text(closure_source)
+                if generator.outputs() != emitted:
+                    fail("inventory control: restoring active closure did not restore inventory")
+                unknown = checkers / "check-sel4-unregistered-plane.py"
+                unknown.write_text('CLOSURE = "sel4-unregistered"\nTIMEOUT = 180\n')
+                refuse("unregistered missing closure", generator.outputs)
+                unknown.unlink()
+
+                row = local_registry["sel4-entropy"]
+                for label, replacement in (
+                    ("display alias", ("IO-ENTROPY", *row[1:])),
+                    ("unknown identity", ("00000000-0000-7000-8000-000000000000", *row[1:])),
+                    ("missing checker", (row[0], "check-sel4-missing-plane.py", *row[2:])),
+                    ("wrong closure", (*row[:2], "sel4-wrong", row[3])),
+                    ("empty artifacts", (*row[:3], ())),
+                    ("absolute artifact", (*row[:3], (*row[3], "/outside"))),
+                    ("escaping artifact", (*row[:3], (*row[3], "../outside"))),
+                    ("omitted closure", (*row[:3], tuple(p for p in row[3] if "system-image-closure" not in p))),
+                    ("omitted run", (*row[:3], tuple(p for p in row[3] if "system-test-run" not in p))),
+                ):
+                    with patch.dict(local_registry, {"sel4-entropy": replacement}):
+                        refuse(label, generator.outputs)
+                    if generator.outputs() != emitted:
+                        fail(f"inventory control {label}: restoring registration did not restore inventory")
+                with patch.dict(local_registry, {"sel4-unknown": row}):
+                    refuse("registration naming no declared run", generator.outputs)
+                with patch.object(generator, "NOT_A_PLANE", generator.NOT_A_PLANE | {row[1]}):
+                    refuse("planning registration conflicts with non-plane classification", generator.outputs)
+                for run, registration in local_registry.items():
+                    for artifact in registration[3]:
+                        path = root / artifact
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text("present\n")
+                        refuse(f"stale {run} registration at {artifact}", generator.outputs)
+                        path.unlink()
+                item_path = items / f"{row[0]}.md"
+                item_text = item_path.read_text()
+                for state in ("active", "blocked", "deferred"):
+                    item_path.write_text(re.sub(r"^state: .+$", f"state: {state}", item_text, flags=re.MULTILINE))
+                    work_items.cache_clear()
+                    if generator.outputs() != emitted:
+                        fail(f"inventory control: explicit planning registration lost in {state} state")
+                for state in ("done", "cancelled", "invalid"):
+                    item_path.write_text(re.sub(r"^state: .+$", f"state: {state}", item_text, flags=re.MULTILINE))
+                    work_items.cache_clear()
+                    refuse(f"{state} planning identity", generator.outputs)
+                item_path.write_text(item_text)
+                work_items.cache_clear()
+
+                source = reclamation.read_text()
+                unwind = generator.extract(reclamation, "sel4-reclamation")
+                large = generator.extract(reclamation, "sel4-large-image")
+                for facts in (unwind, large):
+                    if facts["drives"] != 0 or facts["devices"] or facts["faults"]:
+                        fail("inventory control: host controls contaminated runtime execution facts")
+                if unwind["timeoutSeconds"] != 180 or large["timeoutSeconds"] != 1800:
+                    fail("inventory control: arm timeouts are not independently 180/1800")
+                if unwind["forbiddenOutcomes"] != []:
+                    fail("inventory control: unwind no longer matches its frozen forbidden outcomes")
+                if large["forbiddenOutcomes"] != ["SLIME_GRAPH FAIL", "SLIME_ROOT FATAL"]:
+                    fail("inventory control: large-image forbidden outcomes differ from its own declarations")
+                refuse("unknown extraction arm", lambda: generator.extract(reclamation, "sel4-unknown"))
+                reclamation.write_text(source.replace("TIMEOUT = 180\n", "TIMEOUT = 181\n", 1))
+                if generator.extract(reclamation, "sel4-reclamation") != (unwind | {"timeoutSeconds": 181}):
+                    fail("inventory control: unwind extraction ignored its own timeout change")
+                if generator.extract(reclamation, "sel4-large-image") != large:
+                    fail("inventory control: unwind timeout contaminated large-image")
+                changed = source.replace("LARGE_TIMEOUT = 1800", "LARGE_TIMEOUT = 1900").replace(
+                    'LARGE_FAILURES = (', 'LARGE_FAILURES = (\n    r"SLIME_ROOT PANIC",')
+                if changed == source:
+                    fail("inventory control did not mutate large-arm declarations")
+                reclamation.write_text(changed)
+                if generator.extract(reclamation, "sel4-reclamation") != unwind:
+                    fail("inventory control: large-arm changes altered unwind execution facts")
+                changed_large = copy.deepcopy(large)
+                changed_large["timeoutSeconds"] = 1900
+                changed_large["forbiddenOutcomes"] = sorted(set(large["forbiddenOutcomes"]) | {"SLIME_ROOT PANIC"})
+                if generator.extract(reclamation, "sel4-large-image") != changed_large:
+                    fail("inventory control: large-arm extraction ignored its own changes")
+                reclamation.write_text(source)
+
+                # Landing an implementation retires its planning registration first.
+                large_row = local_registry.pop("sel4-large-image")
+                refuse("implemented arm missing its closure", generator.outputs)
+                for artifact in large_row[3]:
+                    path = root / artifact
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("implemented fixture\n")
+                (closures / "sel4-large-image.zti").write_text(
+                    closure_source.replace('name = "sel4-reclamation-unwind";', 'name = "sel4-large-image";', 1))
+                outputs = generator.outputs()
+                expected_paths = {runs / "sel4-reclamation.zti", runs / "sel4-large-image.zti"}
+                if set(outputs) != expected_paths:
+                    fail("inventory control: implemented large arm did not acquire exactly one record")
+                for path, content in outputs.items():
+                    path.write_text(content)
+                    record = compile_test_run_declaration(path)
+                    if not record.identity:
+                        fail("inventory control: emitted declaration has no identity")
+                if 'timeoutSeconds = 180;' not in outputs[runs / "sel4-reclamation.zti"] or 'timeoutSeconds = 1800;' not in outputs[runs / "sel4-large-image.zti"]:
+                    fail("inventory control: outputs did not pass the run selector to extraction")
+                with patch.dict(globals(), {"RUN_ROOT": runs}):
+                    if check_records_and_planes_correspond() != 2:
+                        fail("inventory control: checker discovery disagrees with generator")
+                    missing = runs / "sel4-large-image.zti"
+                    missing.unlink()
+                    try:
+                        check_records_and_planes_correspond()
+                    except SystemExit as error:
+                        if "no test-run record" not in str(error):
+                            raise
+                        refused += 1
+                    else:
+                        fail("inventory control: checker accepted missing active declaration")
+                    refuse("refresh missing declaration", lambda: generator.refresh_identities(outputs))
+                    missing.write_text(outputs[missing])
+                    orphan = runs / "sel4-orphan.zti"
+                    orphan.write_text(outputs[missing])
+                    try:
+                        check_records_and_planes_correspond()
+                    except SystemExit as error:
+                        if "naming no plane gate" not in str(error):
+                            raise
+                        refused += 1
+                    else:
+                        fail("inventory control: checker accepted orphan declaration")
+                    orphan.unlink()
+                generator.refresh_identities(outputs)
+                generator.refresh_identities(outputs)
+                reclamation.write_text(changed)
+                drifted = generator.outputs()
+                refuse("identity refresh with arm execution drift", lambda: generator.refresh_identities(drifted))
+                if any(path.read_text() != content for path, content in outputs.items()):
+                    fail("inventory control: refused refresh partially wrote a declaration")
+            finally:
+                work_items.cache_clear()
+    return refused
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--inventory-controls", action="store_true",
+                        help="exercise run inventory and arm isolation without a product boot")
+    arguments = parser.parse_args()
+    if arguments.inventory_controls:
+        controls = check_inventory_controls()
+        print(f"system test run inventory controls: {controls} negative cases refused")
+        return
+    vocabulary = contract_vocabulary()
+    record_count = check_records_and_planes_correspond()
+    resolved, exempt, fault_count = check_records(vocabulary)
+    check_records_match_their_checkers()
+    control_count = check_controls(vocabulary) + check_declaration_controls()
+
+    print(
+        f"system test run check: {record_count} record(s) correspond one-to-one with the plane "
+        f"gates that boot a seL4 image, each decoded through the contract with closed execution "
+        f"and fault vocabularies and a bounded timeout; {resolved} name a closure that resolves to "
+        f"their own plane and {exempt} name none because their image is declared closure-exempt; "
+        f"{fault_count} fault control(s) declared; every record matches the checker it was frozen "
+        f"from; and {control_count} named control(s) refused"
+    )
+
+
+if __name__ == "__main__":
+    main()
