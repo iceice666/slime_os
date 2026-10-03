@@ -1,0 +1,64 @@
+{
+  formatVersion = 1;
+  name = "sel4-large-image";
+  generation = 168;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "channel";
+  bootstrapInstance = "large-image-owner";
+  bootAttempts = 3;
+  components = [ "large-image-owner"; "large-image-probe"; "large-image-witness"; ];
+  placements = [];
+  instances = [
+    { name = "large-image-owner"; executable = "large-image-owner"; };
+    { name = "large-image-witness"; executable = "large-image-witness"; };
+    { name = "large-image-probe"; executable = "large-image-probe"; owner = "large-image-owner"; autostart = false; health = "optional"; };
+  ];
+  grants = [
+    { name = "large-image-executable"; capabilityKind = "executable"; source = "large-image-owner"; target = "large-image-probe"; rights = [ "exec"; "spawn"; ]; transferable = false; };
+  ];
+  slotPins = [
+    { holder = "large-image-owner"; grant = "large-image-executable"; slot = 0; reason = "bootLayout"; };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    { name = "large-image-complete"; source = "large-image-owner"; target = "large-image-witness"; };
+  ];
+  notificationBindings = [
+    { grant = "large-image-complete"; holder = "large-image-owner"; role = "signal"; slot = 1; };
+    { grant = "large-image-complete"; holder = "large-image-witness"; role = "wait"; slot = 0; };
+  ];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [];
+  ioResourceBudgetObject = false;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    terminalState = "Error";
+    transitions = [];
+    restarts = [];
+    parameters = [
+      { holder = "large-image-owner"; subject = "large-image-probe"; read = true; write = true; };
+      { holder = "large-image-probe"; subject = "large-image-probe"; read = true; write = true; };
+    ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the composition's owning plane checker observes its declared marker sequence to completion.";
+}

@@ -217,6 +217,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-io-tcp-options.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-large-image";
+      deferralReason = "";
+      owningGate = "sel4_large_image_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-large-image.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-lifecycle-restart.zti";
       composition = "sel4-lifecycle-restart";
       deferralReason = "";

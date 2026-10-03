@@ -37,7 +37,12 @@ pub const LARGE_FRAME_PAGES: usize = LARGE_FRAME_BYTES / GRANULE_SIZE;
 /// Pages one child image footprint may span, including the IPC buffer and
 /// startup transfer-window pages. A larger payload fails closed rather than
 /// silently truncating.
-pub const MAX_CHILD_IMAGE_PAGES: usize = 512;
+pub const MAX_CHILD_IMAGE_PAGES: usize =
+    boot_contracts::component_image::capacity_for(env!("SLIME_TARGET_PROFILE")).0;
+
+/// Image pages every declared instance may demand together.
+pub const MAX_TOTAL_IMAGE_PAGES: usize =
+    boot_contracts::component_image::capacity_for(env!("SLIME_TARGET_PROFILE")).1;
 
 /// Highest child virtual address this root task will map. Both current seL4
 /// profiles admit addresses below this conservative shared ceiling.
@@ -716,6 +721,9 @@ fn footprint(file: &ElfFile64<'_, Endianness>) -> Result<Range<usize>, ImageErro
             usize::try_from(segment.address()).map_err(|_| ImageError::FootprintOutOfRange)?;
         let seg_size =
             usize::try_from(segment.size()).map_err(|_| ImageError::FootprintOutOfRange)?;
+        if seg_size == 0 {
+            continue;
+        }
         let seg_end = seg_start
             .checked_add(seg_size)
             .ok_or(ImageError::FootprintOutOfRange)?;
@@ -931,6 +939,24 @@ mod tests {
     const ODD_WINDOW_PAGES: usize = 257 * 1024 * 1024 / GRANULE_SIZE;
 
     #[test]
+    fn authenticated_elf_can_be_loaded_from_an_unaligned_slice() {
+        let generation = boot_contracts::generation::Generation::decode(include_bytes!(
+            "../fixtures/admission-v5.bin"
+        ))
+        .unwrap();
+        let profile =
+            boot_contracts::target_profile::TargetProfile::by_name("aarch64-sel4-qemu-virt")
+                .unwrap();
+        let executable = generation.executable(0).unwrap();
+        let object = generation.object(executable.object).unwrap();
+        let elf = boot_contracts::component_image::admit_elf(object.bytes, profile).unwrap();
+        let mut unaligned = alloc::vec![0u8; elf.len() + 1];
+        unaligned[1..].copy_from_slice(elf);
+        let image = super::ChildImage::parse(&unaligned[1..]).unwrap();
+        assert_eq!(image.image_pages(), 1);
+    }
+
+    #[test]
     fn coarsening_covers_partial_pages_at_both_ends() {
         assert_eq!(coarsen(&(0x1001..0x2001), 0x1000), 0x1000..0x3000);
         assert_eq!(coarsen(&(0x2000..0x3000), 0x1000), 0x2000..0x3000);
@@ -1111,9 +1137,10 @@ mod tests {
             plan.add_size_bits(12).unwrap();
         }
         let first = plan.required_size_bits().unwrap();
+        let ceiling = ((MAX_CHILD_IMAGE_PAGES + 4) * GRANULE_SIZE).next_power_of_two();
         assert!(
-            first <= 22,
-            "accepted image arena unexpectedly exceeds 4 MiB"
+            (1usize << first) <= ceiling,
+            "accepted image arena exceeds its target-qualified frame envelope"
         );
         assert_eq!(plan.required_size_bits(), Some(first));
     }

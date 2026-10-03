@@ -358,12 +358,23 @@ pub(super) fn construct_child(
     let elf = boot_contracts::component_image::admit_elf(object.bytes, profile)
         .map_err(|_| IpcError::BadCapability)?;
 
-    // SAFETY: the root task is single-threaded and this is the only reference
-    // taken to `ELF_SCRATCH`. It is released before this function returns.
-    let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
-    let elf = aligned.hold(elf).map_err(|_| IpcError::InvalidLength)?;
     let image = ChildImage::parse(elf).map_err(|_| IpcError::BadCapability)?;
     let authority = bound_authority(generation, instance).map_err(|_| IpcError::BadCapability)?;
+    let declared = (0..generation.resource_quota_count())
+        .filter_map(|index| generation.resource_quota(index).ok())
+        .find(|quota| {
+            generation
+                .process(quota.owner_process)
+                .is_ok_and(|process| process.instance == plan.instance)
+        })
+        .ok_or(IpcError::BadCapability)?
+        .frame_count;
+    let image_baseline = (
+        allocator.live_slots(),
+        allocator.live_objects(),
+        allocator.live_bytes(),
+        allocator.allocation_descriptors_free(),
+    );
 
     let id = tasks
         .create(
@@ -472,6 +483,22 @@ pub(super) fn construct_child(
             );
             IpcError::DestinationSlotsExhausted
         })?;
+
+    sel4::debug_println!(
+        "SLIME_ROOT image launch task={} instance={} pages={} declared={} live_slots={} live_objects={} live_bytes={} allocation_descriptors_free={}",
+        id.0,
+        instance.name,
+        tasks
+            .get(id)
+            .expect("constructed task")
+            .vspace
+            .frames_mapped,
+        declared,
+        image_baseline.0,
+        image_baseline.1,
+        image_baseline.2,
+        image_baseline.3,
+    );
 
     // Bound between construction and publication, exactly as the boot path
     // does: a duplicate live incarnation is refused here rather than

@@ -85,6 +85,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-boot": "sel4-boot.zti",
     "sel4-call": "sel4-call.zti",
     "sel4-channel": "sel4-channel.zti",
+    "sel4-large-image": "sel4-large-image.zti",
     "sel4-clock-authority": "sel4-clock-authority.zti",
     "sel4-crossing": "sel4-crossing.zti",
     "sel4-demo": "sel4-demo.zti",

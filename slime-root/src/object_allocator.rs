@@ -153,10 +153,14 @@ const LARGE_DESCRIPTOR_TABLES: bool = KERNEL_ROOT_CNODE_SLOTS >= WIDE_TABLE_CNOD
 /// their backing.
 const MAX_PLANNED_PRIVATE_SPANS: usize =
     MAX_PLANNED_PRIVATE_PAGES.div_ceil(MAX_PRIVATE_EXTENT_PAGES);
-const MAX_PLANNED_STATIC_ALLOCATIONS: usize = 2
-    + 2 * (sel4::vspace_levels::NUM_LEVELS - 1)
-    + (crate::child_vspace::MAX_CHILD_IMAGE_PAGES - 2 + 2 * crate::child_vspace::MAX_CHILD_THREADS)
-    + 2 * crate::child_vspace::MAX_CHILD_THREADS;
+// Frames are charged once against the aggregate image ceiling. Each task adds
+// runtime objects and boundary translation tables; full image-table spans are
+// bounded by the aggregate too, rather than multiplying the per-image ceiling.
+const MAX_PLANNED_STATIC_ALLOCATIONS: usize =
+    2 + 2 * (sel4::vspace_levels::NUM_LEVELS - 1) + 4 * crate::child_vspace::MAX_CHILD_THREADS;
+const MAX_PLANNED_IMAGE_ALLOCATIONS: usize = crate::child_vspace::MAX_TOTAL_IMAGE_PAGES
+    + (sel4::vspace_levels::NUM_LEVELS - 1)
+        * crate::child_vspace::MAX_TOTAL_IMAGE_PAGES.div_ceil(512);
 /// Private allocation descriptors every live region may demand together.
 ///
 /// The aggregate page ceiling bounds the payload frames; each 2 MiB span adds a
@@ -197,6 +201,7 @@ const fn widest_private_allocations() -> usize {
 }
 pub const MAX_TASK_ALLOCATIONS: usize = if LARGE_DESCRIPTOR_TABLES {
     widest_private_allocations()
+        + MAX_PLANNED_IMAGE_ALLOCATIONS
         + MAX_TASK_ARENAS * MAX_PLANNED_STATIC_ALLOCATIONS
         + mapping_tables::RECORDS
 } else {
@@ -2534,7 +2539,13 @@ impl ObjectAllocator {
     /// Begin one task lifetime with an independently reclaimable static extent.
     /// Private quota backing is provisioned separately before construction.
     pub fn begin_task_arena(&mut self, size_bits: usize) -> Result<TaskArenaId, AllocError> {
-        self.ensure_allocation_descriptors(MAX_PLANNED_STATIC_ALLOCATIONS)?;
+        // Preserve the small-image construction reserve independently of the
+        // aggregate descriptor envelope used for large images.
+        self.ensure_allocation_descriptors(
+            MAX_PLANNED_STATIC_ALLOCATIONS
+                + boot_contracts::component_image::wire::DEFAULT_IMAGE_PAGES
+                - 2,
+        )?;
         let index = self.arenas.iter().position(|arena| !arena.active).ok_or(
             AllocError::ArenaTableFull {
                 limit: MAX_TASK_ARENAS,
@@ -2997,11 +3008,43 @@ impl ObjectAllocator {
             .saturating_sub(self.operational_floor(self.operational_resources.slots))
     }
 
+    fn has_allocation_descriptors(&self, free: usize) -> bool {
+        if free == 0 {
+            return true;
+        }
+        let Some(required) = free
+            .checked_add(self.reserved_descriptors())
+            .and_then(|count| {
+                count.checked_add(self.operational_floor(self.operational_resources.descriptors))
+            })
+        else {
+            return false;
+        };
+        if required == 0 {
+            return true;
+        }
+        if required > self.allocations.len() {
+            return false;
+        }
+        let mut available = 0;
+        for index in (self.allocation_search_start..self.allocations.len())
+            .chain(0..self.allocation_search_start)
+        {
+            if self.allocations[index].owner == u16::MAX {
+                available += 1;
+                if available == required {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn ensure_allocation_descriptors(&mut self, free: usize) -> Result<(), AllocError> {
         #[cfg(test)]
         self.allocations
             .provision_host(MAX_TASK_ALLOCATIONS.max(free), AllocationRecord::EMPTY);
-        while self.allocation_descriptors_free() < free {
+        while !self.has_allocation_descriptors(free) {
             if self
                 .allocations
                 .len()
@@ -3193,6 +3236,23 @@ impl ObjectAllocator {
 
     pub fn arena_slot_count(&self, id: TaskArenaId) -> Result<usize, AllocError> {
         Ok(self.arena(id)?.slot_len)
+    }
+
+    /// Live kernel objects and bytes belonging to one incarnation's extents.
+    pub fn arena_usage(&self, id: TaskArenaId) -> Result<(usize, usize, usize), AllocError> {
+        let slots = self.arena(id)?.slot_len;
+        let mut objects = 0;
+        let mut bytes = 0;
+        for extent in self
+            .extents
+            .iter()
+            .flatten()
+            .filter(|extent| extent.belongs_to(id))
+        {
+            objects += extent.objects;
+            bytes += extent.bytes;
+        }
+        Ok((slots, objects, bytes))
     }
 
     /// Register an arena already owning `slots` root CSlots, for host tests.
@@ -4928,10 +4988,14 @@ mod tests {
     fn large_descriptor_tables_cover_the_aggregate_plus_every_task_static_cost() {
         if LARGE_DESCRIPTOR_TABLES {
             assert_eq!(MAX_PLANNED_PRIVATE_SPANS, 128);
-            assert!(MAX_PLANNED_STATIC_ALLOCATIONS >= 520);
+            assert!(MAX_PLANNED_STATIC_ALLOCATIONS >= 16);
+            assert!(
+                super::MAX_PLANNED_IMAGE_ALLOCATIONS >= crate::child_vspace::MAX_TOTAL_IMAGE_PAGES
+            );
             assert_eq!(
                 MAX_TASK_ALLOCATIONS,
                 widest_private_allocations()
+                    + super::MAX_PLANNED_IMAGE_ALLOCATIONS
                     + MAX_TASK_ARENAS * MAX_PLANNED_STATIC_ALLOCATIONS
                     + super::mapping_tables::RECORDS
             );
@@ -6508,6 +6572,64 @@ mod tests {
     /// closes. Both are materialized before they are withheld, so the floor
     /// stands over storage that exists rather than over storage the metadata
     /// window might still fund.
+    #[test]
+    fn allocation_descriptor_threshold_matches_exact_available_count() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                let check = |allocator: &ObjectAllocator| {
+                    let free = allocator.allocation_descriptors_free();
+                    for requested in [0, 1, free.saturating_sub(1), free, free + 1, usize::MAX] {
+                        assert_eq!(
+                            allocator.has_allocation_descriptors(requested),
+                            free >= requested,
+                            "requested={requested}, free={free}"
+                        );
+                    }
+                };
+                check(&allocator);
+                for remaining in [0, 1, 7, 31] {
+                    allocator.reserve_stress_descriptors(remaining);
+                    // Begin inside the occupied prefix so finding the empty
+                    // suffix and wrapping the cursor both exercise the predicate.
+                    for cursor in [
+                        0,
+                        allocator.allocations.len() / 2,
+                        allocator.allocations.len() - 1,
+                    ] {
+                        allocator.allocation_search_start = cursor;
+                        check(&allocator);
+                    }
+                    allocator.release_stress_descriptors();
+                }
+                let reservation = allocator.open_reservation().unwrap();
+                allocator
+                    .reserve_guarantee_resources(reservation, 11, 0)
+                    .unwrap();
+                allocator
+                    .reserve_operational_resources(
+                        boot_contracts::private_memory_policy::ledger::Resources {
+                            descriptors: 13,
+                            ..boot_contracts::private_memory_policy::ledger::Resources::ZERO
+                        },
+                    )
+                    .unwrap();
+                check(&allocator);
+                allocator.reserve_stress_descriptors(3);
+                check(&allocator);
+                allocator.operational_lent = true;
+                check(&allocator);
+                allocator.operational_lent = false;
+                allocator.release_stress_descriptors();
+                assert_eq!(allocator.close_reservation(reservation), Ok(0));
+                check(&allocator);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     #[test]
     fn reserved_descriptors_and_slots_are_withheld_from_ordinary_consumers() {
         std::thread::Builder::new()

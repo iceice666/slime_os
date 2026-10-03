@@ -46,7 +46,7 @@ sel4-root-task = { path = "../deps/rust-sel4/crates/sel4-root-task" }
 [dependencies.object]
 version = "0.38.1"
 default-features = false
-features = ["read_core", "elf"]
+features = ["read_core", "elf", "unaligned"]
 
 [lints]
 workspace = true

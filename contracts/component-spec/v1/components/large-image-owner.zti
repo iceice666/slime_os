@@ -1,0 +1,59 @@
+{
+  formatVersion = 1;
+  name = "large-image-owner";
+  componentType = "init";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Relaunches the large image four times and checks termination.";
+  implementation = {
+    provider = "workspace";
+    binary = "large-image-owner";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 1;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_large_image_check gate boots this component";
+    expectedResult = "four large-image incarnations verify and reclaim with unchanged witness accounting";
+    passFailCriteria = "seL4 large-image check: a component image past every former bound was admitted, verified ";
+    requiredTestEnvironment = "sel4_large_image_check";
+  };
+}

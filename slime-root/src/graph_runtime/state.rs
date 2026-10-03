@@ -7,31 +7,6 @@ use super::*;
 /// so the buffer plane's own checks stay the single place rights are decided.
 pub(super) const RIGHT_BUFFER_ALL: u64 = u64::MAX;
 
-/// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
-/// against the five components this profile declares (the largest is ~44 KiB)
-/// while keeping the buffer a bounded, statically sized object like every other
-/// table in this crate.
-pub(super) const MAX_COMPONENT_ELF_BYTES: usize = 512 * 1024;
-
-/// An 8-byte-aligned staging buffer for one component ELF at a time.
-#[repr(align(8))]
-pub(super) struct ElfScratch {
-    bytes: [u8; MAX_COMPONENT_ELF_BYTES],
-}
-
-/// The staging buffer, `const`-initialized in `.bss`.
-///
-/// A static rather than a local: at 512 KiB it would overflow the root task's
-/// 256 KiB stack, which is exactly the failure B3 recorded — a 10 KiB stack
-/// temporary silently corrupting adjacent memory instead of faulting. The same
-/// reasoning that made `SHARED_BUFFER_TABLE` a plain `const`-initialized static
-/// applies here, and more so.
-pub(super) static mut ELF_SCRATCH: ElfScratch = ElfScratch {
-    bytes: [0; MAX_COMPONENT_ELF_BYTES],
-};
-
-const _: () = assert!(MAX_COMPONENT_ELF_BYTES >= 64 * 1024);
-
 /// Generation-global native object catalogues. Objects live for the generation;
 /// child-local derived capabilities are charged to and reclaimed with each task.
 pub(super) static mut PEER_ENDPOINTS: peer_endpoint::PeerEndpointTable =
@@ -48,24 +23,8 @@ pub(super) static mut LIFECYCLE_SERVICE: lifecycle::LifecycleService =
 /// The launch phase's task and transfer-window tables, and its record of which
 /// declared instances were launched.
 ///
-/// Statics rather than `launch_instance_graph` locals, for exactly the reason
-/// stated above [`ELF_SCRATCH`] and recorded at length above `main`'s
-/// `#[root_task]` attribute — and this is the fourth time that hazard has been
-/// paid for. Together these three are ~488 KiB, which `launch_instance_graph`
-/// took as a single stack frame: the disassembled prologue subtracted `0x7a000`
-/// from `sp` in one step, past the guard page a 1 MiB stack leaves.
-///
-/// It faulted only by luck of layout. The overflow lands on `FREE_PAGE`, the
-/// page [`crate::child_vspace::ScratchPage`] deliberately leaves unmapped, only
-/// when preceding `.bss` places the stack low enough; with a larger `.bss`
-/// above it the same overflow wrote into mapped slack and corrupted whatever
-/// was there, silently and invisibly to every gate. Shrinking the allocator's
-/// physical-provenance table from 2 MB to 16 KiB is what moved the stack down
-/// far enough to turn that silent corruption into an honest VM fault at
-/// `0x3e2ab0`.
-///
-/// The generation's own tables are generation-lived, like the catalogues above,
-/// so nothing is lost by giving them a fixed home: one launch phase runs, once.
+/// These generation-lived tables stay off the bounded root stack. They are
+/// initialized once before launch and retained for the graph lifetime.
 ///
 /// `MaybeUninit` rather than `TaskTable::new()` directly, for the same reason
 /// and by the same pattern as `main`'s `OBJECT_ALLOCATOR`. `Option<Task>`'s
@@ -160,17 +119,6 @@ impl CapabilityExports {
     }
 }
 pub(super) static mut CAPABILITY_EXPORTS: CapabilityExports = CapabilityExports::new();
-impl ElfScratch {
-    /// Copy `elf` into the buffer and return it at a guaranteed 8-byte
-    /// alignment. Returns the payload's length when it does not fit, so the
-    /// caller reports the bound rather than truncating to it.
-    pub(super) fn hold(&mut self, elf: &[u8]) -> Result<&[u8], usize> {
-        let destination = self.bytes.get_mut(..elf.len()).ok_or(elf.len())?;
-        destination.copy_from_slice(elf);
-        Ok(destination)
-    }
-}
-
 /// Decode the generation's shared-buffer budget resource, if it carries one.
 ///
 /// Located by magic among the `KIND_RESOURCE` objects, exactly as

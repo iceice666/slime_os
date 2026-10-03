@@ -1,0 +1,163 @@
+{
+  bootAction = "channel";
+  bootstrapInstance = "large-image-owner";
+  executables = [
+    {
+      commandProfile = [];
+      name = "large-image-owner";
+      object = "sha256:large-image-owner";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "large-image-probe";
+      object = "sha256:large-image-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "large-image-witness";
+      object = "sha256:large-image-witness";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 168;
+  grants = [
+    {
+      name = "large-image-executable";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "large-image-owner";
+      target = "large-image-probe";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "large-image-owner";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "large-image-executable";
+          slot = 0;
+          slotReason = "bootLayout";
+        };
+      ];
+      dependencies = [];
+      executable = "large-image-owner";
+      health = "required";
+      lifetime = "bounded";
+      name = "large-image-owner";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [];
+      dependencies = [
+        "large-image-owner";
+      ];
+      executable = "large-image-probe";
+      health = "optional";
+      lifetime = "bounded";
+      name = "large-image-probe";
+      owner = "large-image-owner";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "large-image-witness";
+      health = "optional";
+      lifetime = "bounded";
+      name = "large-image-witness";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "lifecycle-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:large-image-owner";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:large-image-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:large-image-witness";
+      kind = "component";
+      size = 65536;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  notificationGrants = [
+    {
+      name = "large-image-complete";
+      source = "large-image-owner";
+      target = "large-image-witness";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "large-image-complete";
+      holder = "large-image-owner";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "large-image-complete";
+      holder = "large-image-witness";
+      role = "wait";
+      slot = 0;
+    };
+  ];
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "large-image-owner";
+        read = true;
+        subject = "large-image-probe";
+        write = true;
+      };
+      {
+        holder = "large-image-probe";
+        read = true;
+        subject = "large-image-probe";
+        write = true;
+      };
+    ];
+    restarts = [];
+    terminalState = "Error";
+    transitions = [];
+  };
+}

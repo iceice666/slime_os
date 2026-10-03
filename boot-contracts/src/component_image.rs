@@ -21,6 +21,27 @@ pub use wire::{
     MAX_STACK_BYTES, SEGMENT_FLAG_EXEC, SEGMENT_FLAG_WRITE, SEGMENT_LEN, WireSegmentRecord,
 };
 
+/// Exact-target image footprint and aggregate live-image ceilings, in pages.
+/// Unqualified targets retain the conservative envelope.
+pub const fn capacity_for(target: &str) -> (usize, usize) {
+    let mut index = 0;
+    while index < wire::IMAGE_CAPACITY_PROFILES.len() {
+        let (name, image_pages, total_pages) = wire::IMAGE_CAPACITY_PROFILES[index];
+        let (left, right) = (name.as_bytes(), target.as_bytes());
+        if left.len() == right.len() {
+            let mut byte = 0;
+            while byte < left.len() && left[byte] == right[byte] {
+                byte += 1;
+            }
+            if byte == left.len() {
+                return (image_pages, total_pages);
+            }
+        }
+        index += 1;
+    }
+    (wire::DEFAULT_IMAGE_PAGES, wire::DEFAULT_TOTAL_IMAGE_PAGES)
+}
+
 /// Why a component image's target could not be established.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentTargetError {
@@ -138,6 +159,65 @@ pub fn admit_elf<'a>(
         .ok_or(ComponentTargetError::Truncated)?;
     validate_elf(elf, profile)?;
     Ok(elf)
+}
+
+/// Admit the wrapper and measure the loaded span plus the main thread's two
+/// runtime pages. Holes and shared segment pages are counted exactly as the
+/// root loader maps them, rather than summing each segment's rounded size.
+pub fn elf_footprint_pages(
+    blob: &[u8],
+    profile: &TargetProfile,
+) -> Result<usize, ComponentTargetError> {
+    let elf = admit_elf(blob, profile)?;
+    let phoff = usize::try_from(u64_at(elf, 32)?).map_err(|_| ComponentTargetError::BadElfShape)?;
+    let phnum = usize::from(u16_at(elf, 56)?);
+    let mut first = u64::MAX;
+    let mut last = 0u64;
+    for index in 0..phnum {
+        let offset = phoff
+            .checked_add(
+                index
+                    .checked_mul(56)
+                    .ok_or(ComponentTargetError::BadElfShape)?,
+            )
+            .ok_or(ComponentTargetError::BadElfShape)?;
+        let program = elf
+            .get(offset..)
+            .and_then(|bytes| bytes.get(..56))
+            .ok_or(ComponentTargetError::BadElfShape)?;
+        if u32_at(program, 0)? != 1 {
+            continue;
+        }
+        let address = u64_at(program, 16)?;
+        let size = u64_at(program, 40)?;
+        if size == 0 {
+            continue;
+        }
+        first = first.min(address);
+        last = last.max(
+            address
+                .checked_add(size)
+                .ok_or(ComponentTargetError::BadElfShape)?,
+        );
+    }
+    if first == u64::MAX || profile.page_bytes == 0 {
+        return Err(ComponentTargetError::BadElfShape);
+    }
+    let first_page = first / profile.page_bytes;
+    let end_page = last.div_ceil(profile.page_bytes);
+    let end = end_page
+        .checked_mul(profile.page_bytes)
+        .and_then(|end| end.checked_add(2 * profile.page_bytes))
+        .ok_or(ComponentTargetError::BadElfShape)?;
+    if first_page == 0 || end > 1 << 40 {
+        return Err(ComponentTargetError::BadElfShape);
+    }
+    let pages = usize::try_from(end_page - first_page + 2)
+        .map_err(|_| ComponentTargetError::ImageTooLarge)?;
+    if pages > capacity_for(profile.name).0 {
+        return Err(ComponentTargetError::ImageTooLarge);
+    }
+    Ok(pages)
 }
 
 /// Admit an image for `profile`, including the canonical fields shared by every
@@ -389,6 +469,20 @@ mod tests {
         FEATURE_AARCH64_GENERIC_TIMER, FEATURE_AARCH64_GICV3, PAGE_PROFILE_AARCH64_4K,
     };
 
+    #[test]
+    fn image_capacity_is_qualified_by_exact_target_name() {
+        assert_eq!(capacity_for("aarch64-sel4-qemu-virt"), (32768, 65536));
+        for target in [
+            "riscv64-sel4-qemu-virt",
+            "x86_64-sel4-qemu-pc99",
+            "aarch64-sel4-rpi5",
+            "aarch64-sel4-qemu-virt-extra",
+            "",
+        ] {
+            assert_eq!(capacity_for(target), (512, 24576));
+        }
+    }
+
     fn v2_header(profile: &TargetProfile) -> [u8; HEADER_LEN] {
         let mut bytes = [0u8; HEADER_LEN];
         bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&IMAGE_MAGIC.to_le_bytes());
@@ -437,6 +531,46 @@ mod tests {
         bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&ELF_IMAGE_MAGIC.to_le_bytes());
         bytes[ELF_HEADER_LEN..].copy_from_slice(body);
         bytes
+    }
+
+    #[test]
+    fn elf_footprint_counts_span_runtime_pages_and_exact_target_ceiling() {
+        for name in ["aarch64-sel4-qemu-virt", "riscv64-sel4-qemu-virt"] {
+            let profile = TargetProfile::by_name(name).unwrap();
+            let ceiling = capacity_for(name).0;
+            let mut body = elf_body(profile, (ceiling as u64 - 2) * profile.page_bytes);
+            body[80..88].copy_from_slice(&0x10000u64.to_le_bytes());
+            assert_eq!(
+                elf_footprint_pages(&elf_image(profile, &body), profile).unwrap(),
+                ceiling
+            );
+            body[104..112]
+                .copy_from_slice(&((ceiling as u64 - 1) * profile.page_bytes).to_le_bytes());
+            assert!(matches!(
+                elf_footprint_pages(&elf_image(profile, &body), profile),
+                Err(ComponentTargetError::ImageTooLarge)
+            ));
+        }
+    }
+
+    #[test]
+    fn elf_footprint_counts_holes_and_refuses_address_overflow() {
+        let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").unwrap();
+        let mut body = elf_body(profile, profile.page_bytes);
+        body[80..88].copy_from_slice(&0x10000u64.to_le_bytes());
+        let second = body[64..120].to_vec();
+        body.extend_from_slice(&second);
+        body[56..58].copy_from_slice(&2u16.to_le_bytes());
+        body[136..144].copy_from_slice(&0x20000u64.to_le_bytes());
+        assert_eq!(
+            elf_footprint_pages(&elf_image(profile, &body), profile).unwrap(),
+            19
+        );
+        body[136..144].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            elf_footprint_pages(&elf_image(profile, &body), profile),
+            Err(ComponentTargetError::BadElfShape)
+        ));
     }
 
     fn v1_header() -> [u8; LEGACY_HEADER_LEN] {

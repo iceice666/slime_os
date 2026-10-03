@@ -53,7 +53,6 @@ pub(super) fn launch_instance_graph(
     // `0x7a000` from `sp` in one prologue step, overrunning the 1 MiB stack.
     let (tasks, windows, launched_instances) = init_launch_tables();
     let peers = unsafe { &mut *ptr::addr_of_mut!(PEER_ENDPOINTS) };
-    let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
     let mut launched = 0;
     // C10.2's declared private-memory budget, resolved once. `Admission::admit`
     // has already refused a malformed or over-committed one, so anything
@@ -156,6 +155,78 @@ pub(super) fn launch_instance_graph(
     };
     let mut io_service = services::IoResourceService::new();
 
+    // Static extent anchors survive task reclamation. Provision the declared
+    // large-image population before launch, so first use cannot change the
+    // generation's retained backing while a child is being reclaimed.
+    if adaptive.is_none() {
+        use sel4::{CapTypeForObjectOfFixedSize, CapTypeForObjectOfVariableSize};
+        let mut backing = [None; MAX_TASKS];
+        for (index, slot) in backing
+            .iter_mut()
+            .enumerate()
+            .take(generation.instance_count())
+        {
+            let instance = generation
+                .instance(index)
+                .unwrap_or_else(|error| fatal!("image instance rejected: {error:?}"));
+            if instance.is_root_autostart() {
+                continue;
+            }
+            let executable = generation
+                .executable(instance.executable)
+                .unwrap_or_else(|error| fatal!("image executable rejected: {error:?}"));
+            let object = generation
+                .object(executable.object)
+                .unwrap_or_else(|error| fatal!("image object rejected: {error:?}"));
+            let profile = boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE)
+                .unwrap_or_else(|error| fatal!("image target rejected: {error:?}"));
+            let Ok(elf) = boot_contracts::component_image::admit_elf(object.bytes, profile) else {
+                continue;
+            };
+            let image = ChildImage::parse(elf)
+                .unwrap_or_else(|error| fatal!("image preflight rejected: {error:?}"));
+            if image.image_pages() + 2 <= 512 {
+                continue;
+            }
+            let threads = generation
+                .instance_threads(index)
+                .unwrap_or_else(|error| fatal!("image threads rejected: {error:?}"))
+                .unwrap_or(1);
+            let cspace = generation
+                .instance_cspace_size_bits(index)
+                .unwrap_or_else(|error| fatal!("image CSpace rejected: {error:?}"))
+                .unwrap_or(task::CHILD_CNODE_SIZE_BITS as u32) as usize;
+            let private = declared_private_memory_pages(private_budget.as_ref(), instance.name);
+            let reservation = if private == 0 {
+                0
+            } else {
+                private_memory::MAX_REGION_PAGES
+            };
+            let mut plan = image
+                .vspace_arena_plan(threads, reservation)
+                .unwrap_or_else(|error| fatal!("image arena rejected: {error:?}"));
+            plan.add(sel4::cap_type::CNode::object_blueprint(cspace))
+                .unwrap_or_else(|| fatal!("image arena overflow"));
+            for _ in 0..threads {
+                plan.add(sel4::cap_type::Tcb::object_blueprint())
+                    .unwrap_or_else(|| fatal!("image arena overflow"));
+            }
+            let bits = plan
+                .required_size_bits()
+                .unwrap_or_else(|| fatal!("image arena overflow"));
+            *slot = Some(
+                allocator
+                    .begin_task_arena(bits)
+                    .unwrap_or_else(|error| fatal!("image backing rejected: {error:?}")),
+            );
+        }
+        for arena in backing.into_iter().flatten() {
+            allocator
+                .release_task_arena(arena)
+                .unwrap_or_else(|error| fatal!("image backing release rejected: {error:?}"));
+        }
+    }
+
     for instance_index in 0..generation.instance_count() {
         let instance = match generation.instance(instance_index) {
             Ok(instance) => instance,
@@ -193,13 +264,6 @@ pub(super) fn launch_instance_graph(
             Ok(elf) => elf,
             Err(error) => fatal!(
                 "SLIME_GRAPH FAIL executable {} refused: {error:?}",
-                executable.name
-            ),
-        };
-        let elf = match aligned.hold(elf) {
-            Ok(elf) => elf,
-            Err(len) => fatal!(
-                "SLIME_GRAPH FAIL executable {} is {len} bytes, over the load bound",
                 executable.name
             ),
         };

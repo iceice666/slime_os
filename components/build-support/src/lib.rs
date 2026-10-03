@@ -40,6 +40,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod large_image;
+
 /// Cargo names JSON target specifications by their file stems, so these are
 /// what `TARGET` reads as for the native seL4 component profiles.
 pub const AARCH64_SEL4_TARGET: &str = "aarch64-sel4-minimal";
@@ -76,6 +78,9 @@ const COMPILE_TIME_KNOBS: &[&str] = &[
 /// `boot_contracts::target_profile` reads the profile through `option_env!` and
 /// a component built without it would qualify against the wrong target.
 pub fn configure() {
+    if std::env::var("CARGO_PKG_NAME").as_deref() == Ok("slime-component-large-image-probe") {
+        large_image::generate();
+    }
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let target = std::env::var("TARGET").expect("TARGET");
     // The seL4 target deliberately has no Slime linker script. A component
