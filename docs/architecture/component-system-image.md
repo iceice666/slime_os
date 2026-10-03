@@ -116,6 +116,22 @@ all such placeholders. A populated digest is a declaration of expected content,
 not proof that a fixture exists or matches it; the executing checker owns that
 verification. No declaration alone proves that a test ran.
 
+Run inventory distinguishes explicitly planned invocations from runnable ones.
+`PLANNED_RUNS` in `scripts/generate/generate-system-test-runs.py` binds each
+planning-only run to a nonterminal canonical work-item UUID, its checker and
+closure, and implementation artifact paths. This is a per-run exception, not a
+missing-file fallback: an active arm in the same checker remains inventoried.
+A missing active closure still fails. Once any registered artifact exists, remove
+the planning registration and land the complete closure and run declaration;
+leaving the exception in place is refused. Item state alone never skips a run.
+
+Reclamation execution facts are extracted per invocation: unwind retains its
+180-second timeout, while large-image uses its own 1800-second timeout and failure
+markers. Changing one arm must not silently alter the other's frozen declaration.
+`just system_test_run_inventory_check` exercises planning transitions and arm
+isolation before running the complete declaration gate. These are host checks,
+not evidence that a planned image has booted.
+
 After an intended image-closure change, update only its test-run references with
 `python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.
 This checks the entire batch before writing and refuses any execution-field
