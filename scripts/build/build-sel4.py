@@ -993,7 +993,11 @@ def build_sel4_generation(
     # profile, so a board image cannot embed QEMU-qualified components.
     environment["SLIME_TARGET_PROFILE"] = platform.target_profile
     environment["SLIME_SEL4_MANIFEST"] = manifest
-    command = [sys.executable, str(ROOT / "scripts" / "build" / "build-generation.py")]
+    command = [
+        sys.executable,
+        str(ROOT / "scripts" / "build" / "build-generation.py"),
+        "--generation-only",
+    ]
     if component_spec_root is not None:
         command += ["--component-spec-root", str(component_spec_root)]
     for mapping in external_components or []:

@@ -197,7 +197,7 @@ def check_component_elf(elf: bytes, profile, name: str) -> None:
         f"BadComponentElfFootprint:{name}",
     )
     require(
-        (span_end - span_start) // profile.page_bytes + 2 <= 512,
+        (span_end - span_start) // profile.page_bytes + 2 <= component_image_capacity_for(profile.name)[0],
         f"ComponentElfFootprintTooLarge:{name}",
     )
     for start, end, flags in loadable:

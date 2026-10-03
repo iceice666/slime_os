@@ -33,7 +33,7 @@ resourceQuotaLen :: Int = 64;
 mintedBindingLen :: Int = 32;
 notificationGrantLen :: Int = 24;
 notificationBindingLen :: Int = 24;
-maxGenerationBytes :: Int = 16777216;
+maxGenerationBytes :: Int = 268435456;
 maxObjects :: Int = 64;
 maxExecutables :: Int = 48;
 maxInstances :: Int = 48;
@@ -57,7 +57,7 @@ maxNotificationGrants :: Int = 256;
 maxNotificationBindings :: Int = 512;
 maxStringBytes :: Int = 255;
 maxStringTableBytes :: Int = 65536;
-maxObjectPayloadBytes :: Int = 8388608;
+maxObjectPayloadBytes :: Int = 134217728;
 
 -- The capability-rights vocabulary. Every valid right is named here exactly
 -- once, and `RIGHT_ALL` is rendered as the union of these bits rather than as a

@@ -31,7 +31,15 @@ kernelAbiVersion :: Int = 1;
 headerLen :: Int = 56;
 segmentLen :: Int = 20;
 maxSegments :: Int = 16;
-maxImageBytes :: Int = 16777216;
+maxImageBytes :: Int = 134217728;
+-- Footprints include the IPC-buffer and transfer-window pages. Only the exact
+-- qualified target may use the enlarged per-image and aggregate envelope.
+imagePages :: Int = 512;
+totalImagePages :: Int = 24576;
+CapacityProfile :: type { target : Text; imagePages : Int; totalPages : Int; };
+capacityProfiles :: List CapacityProfile = {
+  { target = "aarch64-sel4-qemu-virt"; imagePages = 32768; totalPages = 65536; };
+};
 maxStackBytes :: Int = 1048576;
 defaultStackBytes :: Int = 16384;
 segmentFlagWrite :: Int = 1;
@@ -154,6 +162,9 @@ imageFormat ::= {
   segmentLen =;
   maxSegments =;
   maxImageBytes =;
+  imagePages =;
+  totalImagePages =;
+  capacityProfiles =;
   maxStackBytes =;
   defaultStackBytes =;
   segmentFlagWrite =;

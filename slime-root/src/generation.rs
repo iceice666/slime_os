@@ -51,6 +51,18 @@ pub enum GenerationError {
         required: usize,
         available: usize,
     },
+    ImageQuotaTooSmall {
+        instance: usize,
+        declared: usize,
+        required: usize,
+    },
+    MalformedImage {
+        executable: usize,
+    },
+    ImagePlanExceedsCeiling {
+        declared: usize,
+        limit: usize,
+    },
     QuotaExceedsCeiling {
         instance: usize,
         kind: &'static str,
@@ -1918,8 +1930,43 @@ impl Admission {
         // Per class, not as a total: a plan that needs one CSlot too many is a
         // different defect from one that needs an extra TCB, and a single
         // "too big" would say neither.
+        let (image_limit, aggregate_limit) = component_image::capacity_for(profile.name);
+        let mut image_pages = 0usize;
         for index in 0..generation.resource_quota_count() {
-            admit_resource_quota(&generation.resource_quota(index)?)?;
+            let quota = generation.resource_quota(index)?;
+            admit_resource_quota(&quota, image_limit)?;
+            let process = generation.process(quota.owner_process)?;
+            let instance = generation.instance(process.instance)?;
+            let executable = generation.executable(instance.executable)?;
+            let object = generation.object(executable.object)?;
+            if PayloadFormat::classify(object.bytes, profile) == PayloadFormat::QualifiedElf {
+                let pages =
+                    component_image::elf_footprint_pages(object.bytes, profile).map_err(|_| {
+                        GenerationError::MalformedImage {
+                            executable: instance.executable,
+                        }
+                    })?;
+                let required = pages + 2 * quota.tcb_count.saturating_sub(1) as usize;
+                if (quota.frame_count as usize) < required {
+                    return Err(GenerationError::ImageQuotaTooSmall {
+                        instance: process.instance,
+                        declared: quota.frame_count as usize,
+                        required,
+                    });
+                }
+            }
+            // Worker IPC/window pairs have separate per-task capacity; the image
+            // envelope includes the main thread's pair exactly once per instance.
+            image_pages += quota
+                .frame_count
+                .saturating_sub(2 * quota.tcb_count.saturating_sub(1))
+                as usize;
+        }
+        if image_pages > aggregate_limit {
+            return Err(GenerationError::ImagePlanExceedsCeiling {
+                declared: image_pages,
+                limit: aggregate_limit,
+            });
         }
         let fabric = fabric_graph_admission(generation)?;
         // C10.2: every declared private-memory quota is one this root can
@@ -2160,7 +2207,10 @@ pub fn admit_total_slots(
 /// neither. Checked at admission rather than during construction, which is the
 /// difference between a graph refused whole and one that half-activates and
 /// then cannot place a capability, with children already running.
-fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError> {
+fn admit_resource_quota(
+    quota: &ResourceQuota<'_>,
+    image_limit: usize,
+) -> Result<(), GenerationError> {
     for (kind, declared, limit) in [
         (
             "cslot",
@@ -2180,8 +2230,11 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
             // pages, which the loader maps from root CSlots (B49).
             "frame",
             quota.frame_count,
-            (crate::child_vspace::MAX_CHILD_THREADS + crate::child_vspace::MAX_CHILD_IMAGE_PAGES)
-                as u32,
+            image_limit as u32
+                + 2 * quota
+                    .tcb_count
+                    .min(crate::child_vspace::MAX_CHILD_THREADS as u32)
+                    .saturating_sub(1),
         ),
         ("cnode", quota.cnode_count, 1),
         // The child's VSpace root. One per process by definition -- a
@@ -2266,6 +2319,9 @@ pub fn declared_crossing_grants(
 }
 
 #[cfg(test)]
+mod large_image_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         Authority, FabricGraph, GenerationError, PayloadFormat, PrivateMemoryBudget, RIGHT_RECV,
@@ -2276,7 +2332,6 @@ mod tests {
     use boot_contracts::generation::{RIGHT_TRANSFER, ResourceQuota};
 
     use super::admit_resource_quota;
-    use crate::child_vspace::{MAX_CHILD_IMAGE_PAGES, MAX_CHILD_THREADS};
 
     /// One declared grant, for the crossing-grant rule below.
     fn declared_grant(
@@ -2404,7 +2459,7 @@ mod tests {
 
     #[test]
     fn the_quota_a_single_threaded_process_declares_is_admitted() {
-        admit_resource_quota(&single_threaded_quota())
+        admit_resource_quota(&single_threaded_quota(), 512)
             .expect("the plan the builder emits must be placeable");
     }
 
@@ -2416,7 +2471,7 @@ mod tests {
         let mut quota = single_threaded_quota();
         quota.tcb_count = 2;
         quota.frame_count = 2;
-        admit_resource_quota(&quota).expect("two threads declare two of each");
+        admit_resource_quota(&quota, 512).expect("two threads declare two of each");
     }
 
     #[test]
@@ -2429,19 +2484,14 @@ mod tests {
             ("cnode", |q| q.cnode_count = 2, 2, 1),
             ("tcb", |q| q.tcb_count = 3, 3, 2),
             ("endpoint", |q| q.endpoint_count = 34, 34, 33),
-            (
-                "frame",
-                |q| q.frame_count = (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES + 1) as u32,
-                (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES + 1) as u32,
-                (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES) as u32,
-            ),
+            ("frame", |q| q.frame_count = 513, 513, 512),
             ("vspace", |q| q.page_table_count = 2, 2, 1),
             ("cslot", |q| q.cslot_count = 129, 129, 128),
         ];
         for (class, mutate, declared, limit) in cases {
             let mut quota = single_threaded_quota();
             mutate(&mut quota);
-            match admit_resource_quota(&quota) {
+            match admit_resource_quota(&quota, 512) {
                 Err(GenerationError::QuotaExceedsCeiling {
                     instance,
                     kind,

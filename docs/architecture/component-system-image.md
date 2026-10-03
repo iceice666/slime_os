@@ -48,6 +48,23 @@ Retained old executable revisions remain classified so old artifacts are not
 misread. Superseded generation wire formats are rollback-safe by refusal, not by
 runtime migration.
 
+### Embedded image capacity
+
+The component contract bounds an ELF at 128 MiB; generation v5 bounds an object
+payload (including its component wrapper) at 128 MiB and the complete generation
+at 256 MiB. These are independent checks. Only `aarch64-sel4-qemu-virt` admits
+32,768 pages per image and 65,536 aggregate declared image pages. Every other
+profile retains 512 pages per image. Footprints include gaps between LOAD
+segments and the main thread's two runtime pages; additional threads add their
+own IPC/window pairs to the instance frame quota.
+
+The root reads authenticated ELF bytes without whole-image staging and allocates
+child-owned frames through its scratch-page mapping. Descriptor provisioning is
+aggregate-bounded rather than per-image maximum times task count. The
+[decision record](../decisions/large-image-bounds.md) explains the unchanged wire
+versions and qualification limits. This does not widen the boot selector's
+separate 4 MiB boot-store limit or establish application-runtime compatibility.
+
 ### Delivery ELF metadata
 
 The generation builder validates each native ELF before making a stripped delivery

@@ -64,6 +64,21 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-large-image-owner]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-large-image-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-large-image-witness]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-clock-authority-probe]
 opt-level = "s"
 codegen-units = 1

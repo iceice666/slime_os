@@ -133,20 +133,6 @@ PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
             "components/services/entropy-service",
         ),
     ),
-    "sel4-large-image": (
-        "01a0fa78-cfc0-7dc0-976e-3ff092b908a4",
-        "check-sel4-reclamation-plane.py",
-        "sel4-large-image",
-        (
-            "contracts/system-spec/v1/systems/sel4-large-image.zti",
-            "contracts/generation-manifest/v1/compositions/sel4-large-image.zti",
-            "contracts/system-image-closure/v2/closures/sel4-large-image.zti",
-            "contracts/system-test-run/v1/runs/sel4-large-image.zti",
-            "components/testkit/large-image-owner",
-            "components/testkit/large-image-probe",
-            "components/testkit/large-image-witness",
-        ),
-    ),
 }
 
 # Checkers that boot no seL4 QEMU plane of their own, so they own no test run:

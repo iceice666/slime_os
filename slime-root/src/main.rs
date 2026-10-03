@@ -1307,7 +1307,38 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // prices the plan and the pool is grown to it; the decision then compares
     // the price against what this platform could actually fund.
     if let Ok(required) = generation::admit_total_slots(&generation, usize::MAX) {
-        allocator.fund_root_slots(required);
+        let mut image_pages = 0usize;
+        let mut has_large_image = false;
+        for index in 0..generation.resource_quota_count() {
+            let quota = generation
+                .resource_quota(index)
+                .unwrap_or_else(|error| fatal!("generation quota rejected: {error:?}"));
+            image_pages += quota.frame_count as usize;
+            has_large_image |= quota.frame_count > 512;
+        }
+        if has_large_image {
+            // Metadata remains generation-owned after child teardown. Fund the
+            // admitted graph before launch so a large child's reclamation returns
+            // to its baseline rather than retaining first-use table growth.
+            let tables = image_pages.div_ceil(512) * sel4::vspace_levels::NUM_LEVELS;
+            let descriptors = image_pages + tables + generation.instance_count() * 32;
+            allocator
+                .ensure_allocation_descriptors(descriptors)
+                .unwrap_or_else(|error| fatal!("image metadata funding rejected: {error:?}"));
+            allocator
+                .ensure_extent_descriptors(generation.instance_count())
+                .unwrap_or_else(|error| fatal!("image extent funding rejected: {error:?}"));
+            let slots = required + tables + generation.instance_count() * 32;
+            allocator.fund_root_slots(slots);
+            if allocator.free_slots() < slots {
+                let _: () = fatal!(
+                    "image CSpace funding rejected: required={slots} available={}",
+                    allocator.free_slots()
+                );
+            }
+        } else {
+            allocator.fund_root_slots(required);
+        }
     }
     let planned_slots = match generation::admit_total_slots(&generation, allocator.free_slots()) {
         Ok(required) => required,

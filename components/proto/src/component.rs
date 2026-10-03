@@ -6,7 +6,11 @@ pub const KERNEL_ABI_VERSION: u32 = 1;
 pub const HEADER_LEN: usize = 56;
 pub const SEGMENT_LEN: usize = 20;
 pub const MAX_SEGMENTS: u16 = 16;
-pub const MAX_IMAGE_BYTES: u64 = 16777216;
+pub const MAX_IMAGE_BYTES: u64 = 134217728;
+pub const DEFAULT_IMAGE_PAGES: usize = 512;
+pub const DEFAULT_TOTAL_IMAGE_PAGES: usize = 24576;
+pub const IMAGE_CAPACITY_PROFILES: &[(&str, usize, usize)] =
+    &[("aarch64-sel4-qemu-virt", 32768, 65536)];
 pub const MAX_STACK_BYTES: u32 = 1048576;
 pub const DEFAULT_STACK_BYTES: u32 = 16384;
 pub const SEGMENT_FLAG_WRITE: u16 = 1;

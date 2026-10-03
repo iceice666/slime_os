@@ -270,6 +270,7 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
             toolchain=value["target"]["toolchain"],
             prefix=prefix,
             build_profile="closure",
+            generation_only=True,
             # The composition this closure resolves, not the closure identity:
             # CP3 established that the Cargo target directory name reaches the
             # shipped ELF's symbols, so keying it by identity would move every

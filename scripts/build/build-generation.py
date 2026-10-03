@@ -55,6 +55,7 @@ from boot_contracts import (
     COMPONENT_SEGMENT_FLAG_EXEC,
     COMPONENT_SEGMENT_FLAG_WRITE,
     MAX_COMPONENT_IMAGE_BYTES,
+    component_image_capacity_for,
     GENERATION_BINDING,
     GENERATION_DEPENDENCY,
     GENERATION_EXECUTABLE,
@@ -337,6 +338,7 @@ SEL4_MANIFESTS = {
     # product component graph and runs the bounded data path.
     "sel4-demo": GENERATION_COMPOSITIONS / "sel4-demo.zti",
     "sel4-channel": GENERATION_COMPOSITIONS / "sel4-channel.zti",
+    "sel4-large-image": GENERATION_COMPOSITIONS / "sel4-large-image.zti",
     "sel4-loan": GENERATION_COMPOSITIONS / "sel4-loan.zti",
     "sel4-io-queue": GENERATION_COMPOSITIONS / "sel4-io-queue.zti",
     "sel4-io-driver-authority": GENERATION_COMPOSITIONS / "sel4-io-driver-authority.zti",
@@ -1413,8 +1415,9 @@ def _validate_sel4_elf(name: str, data: bytes, profile: TargetProfile) -> None:
     pages = (footprint_end - footprint_start) // profile.page_bytes + 2
     if footprint_start == 0 or footprint_end + 2 * profile.page_bytes > 1 << 40:
         fail(f"{name}: component image footprint is out of range")
-    if pages > 512:
-        fail(f"{name}: component image footprint exceeds 512 pages")
+    image_ceiling, _ = component_image_capacity_for(profile.name)
+    if pages > image_ceiling:
+        fail(f"{name}: component image footprint exceeds {image_ceiling} pages")
     for vaddr, _offset, _filesz, memsz, elf_flags in segments:
         segment_end = vaddr + memsz
         first_page = vaddr // profile.page_bytes
@@ -1928,9 +1931,8 @@ def build_sel4_plan(
         # One CNode, one VSpace, and two endpoints — the fault endpoint and the
         # console endpoint — plus one TCB and one IPC-buffer frame *per thread*,
         # which is what the loop below declares for the extra threads (B47).
-        # The image's own frames and page tables are not here: they are mapped
-        # by the root from its own untyped when it loads the ELF, so they
-        # belong to the root's accounting rather than the child's declared plan.
+        # The frame quota includes the mapped image span and each thread's
+        # IPC-buffer/window pair, including pages allocated by the root.
         thread_total = 1 + instance.get("extraThreads", 0)
         # The image's own frames, from the payload the loader will map. The
         # root allocates one frame capability per page out of its own CSlots,
@@ -1947,7 +1949,7 @@ def build_sel4_plan(
             "vspace": 1,
             "tcb": thread_total,
             # One IPC-buffer/window pair per thread, plus the image itself.
-            "frame": thread_total + image_frame_count,
+            "frame": 2 * thread_total + image_frame_count,
             "endpoint": 2
             + sum(
                 1
@@ -2376,7 +2378,8 @@ def build_generation(
             continue
         phoff = struct.unpack_from("<Q", elf, 0x20)[0]
         phentsize, phnum = struct.unpack_from("<HH", elf, 0x36)
-        pages = 0
+        first: int | None = None
+        last = 0
         for index in range(phnum):
             at = phoff + index * phentsize
             if at + 56 > len(elf):
@@ -2384,9 +2387,14 @@ def build_generation(
             p_type = struct.unpack_from("<I", elf, at)[0]
             if p_type != 1:
                 continue
+            vaddr = struct.unpack_from("<Q", elf, at + 0x10)[0]
             memsz = struct.unpack_from("<Q", elf, at + 0x28)[0]
-            pages += -(-memsz // profile.page_bytes)
-        image_pages[object_id] = pages
+            if memsz:
+                first = vaddr if first is None else min(first, vaddr)
+                last = max(last, vaddr + memsz)
+        if first is None:
+            fail(f"object {object_id}: no loadable segment")
+        image_pages[object_id] = -(-last // profile.page_bytes) - first // profile.page_bytes
     instances = unique_sorted(manifest["instances"], "name", "instance names")
     grants = sorted(
         manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"])
@@ -2987,6 +2995,7 @@ def build_sel4_generation(
     prefix: Path | None = None,
     build_profile: str = "default",
     closure_target_name: str | None = None,
+    generation_only: bool = False,
 ) -> None:
     """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
 
@@ -3286,12 +3295,18 @@ def build_sel4_generation(
     generation_one = build_generation(
         manifest, payloads, None, manifest["generation"], target_profile
     )
-    bootstore = build_bootstore([generation])
+    embedded_only = generation_only or len(generation) > SELECTOR_GENERATION_BYTES
+    if embedded_only and (output / "boot-store.bin").exists():
+        fail("embedded-only output directory contains boot-store.bin; use a fresh output directory")
+    bootstore = None if embedded_only else build_bootstore([generation])
     (output / "generation.bin").write_bytes(generation)
     (output / "generation-1.bin").write_bytes(generation_one)
-    (output / "boot-store.bin").write_bytes(bootstore)
+    if bootstore is not None:
+        (output / "boot-store.bin").write_bytes(bootstore)
+        print(f"Built boot-store.bin ({len(bootstore)} bytes)")
+    else:
+        print("Embedded generation only: no selector boot-store.bin emitted")
     print(f"Built seL4 generation {generation[24:56].hex()} target={target_profile.name}")
-    print(f"Built boot-store.bin ({len(bootstore)} bytes)")
 
 
 def main() -> None:
@@ -3307,6 +3322,11 @@ def main() -> None:
         "--component-spec-root",
         type=Path,
         help="load component specifications from this directory",
+    )
+    parser.add_argument(
+        "--generation-only",
+        action="store_true",
+        help="omit the selector boot store (also omitted above the selector size ceiling)",
     )
     parser.add_argument("output_dir")
     arguments = parser.parse_args()
@@ -3407,6 +3427,7 @@ def main() -> None:
         target_profile,
         external_components,
         component_spec_root,
+        generation_only=arguments.generation_only,
     )
 
 

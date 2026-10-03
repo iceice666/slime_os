@@ -823,6 +823,33 @@ pub(super) fn reclaim_task_objects(
         }
     }
     launched.release_by_task(id);
+    sel4::debug_println!(
+        "SLIME_ROOT image reclaimed task={} instance={} live_slots={} live_objects={} live_bytes={} allocation_descriptors_free={}",
+        id.0,
+        instance,
+        allocator.live_slots(),
+        allocator.live_objects(),
+        allocator.live_bytes(),
+        allocator.allocation_descriptors_free(),
+    );
+    for peer in tasks.tasks() {
+        let Some(peer_instance) = peer
+            .instance
+            .and_then(|index| generation.instance(index).ok())
+        else {
+            continue;
+        };
+        if let Ok((slots, objects, bytes)) = allocator.arena_usage(peer.cleanup.arena) {
+            sel4::debug_println!(
+                "SLIME_ROOT image peer task={} instance={} slots={} objects={} bytes={}",
+                peer.id.0,
+                peer_instance.name,
+                slots,
+                objects,
+                bytes,
+            );
+        }
+    }
     report_memory_census(allocator, tasks, id.0);
     // C10.4: the allocator's own free capacity, printed at the one point in the
     // boot where a task has just returned everything it held.

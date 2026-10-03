@@ -1198,6 +1198,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-large-image-owner"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-large-image-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-large-image-witness"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-lifecycle-restart-probe"
 version = "0.1.0"
 dependencies = [

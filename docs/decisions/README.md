@@ -18,6 +18,10 @@ readable and link to the decision that replaced them.
 
 ## Records
 
+- [Large component image bounds](large-image-bounds.md) — accepted; retain
+  component v2 and generation v5 layouts while widening bounded embedded images
+  on the exact aarch64 QEMU target.
+
 - [Development record ownership](development-record-ownership.md) — accepted;
   separates current knowledge, work state, change evidence, durable rationale,
   and retained history during the repository split.
