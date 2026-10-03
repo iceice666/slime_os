@@ -236,6 +236,7 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-io-tcp-impairment",
     "sel4-io-tcp-listener",
     "sel4-io-tcp-options",
+    "sel4-large-image",
     "sel4-lifetime",
     "sel4-lifetime-exit",
     "sel4-net",
