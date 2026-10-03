@@ -30,6 +30,8 @@ import argparse
 import ast
 import re
 
+import work_items
+
 from harness import ROOT
 from system_image_closure import compile_closure
 
@@ -87,6 +89,7 @@ EXTRA_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 # execution profile)`; the image resolves through the closure, so there is no
 # literal path to name.
 EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "sel4-reclamation": (("sel4-large-image", "sel4-large-image", "qemu-arm-virt"),),
     # IO8 and IO9: the product-graph checker's other arms boot the product
     # graph plus the pwm driver (`just sel4_pwm_graph_check`) and plus the
     # serial driver and heartbeat producer (`just sel4_mavlink_graph_check`).
@@ -113,6 +116,39 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
     ),
 }
 
+# A planning exclusion belongs to one invocation, never to its whole checker.
+# Any implementation artifact appearing requires removing the exclusion first.
+# Rows are (canonical item UUID, checker filename, closure name, artifact paths).
+PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    "sel4-entropy": (
+        "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e",
+        "check-sel4-entropy-plane.py",
+        "sel4-entropy",
+        (
+            "contracts/system-spec/v1/systems/sel4-entropy.zti",
+            "contracts/generation-manifest/v1/compositions/sel4-entropy.zti",
+            "contracts/system-image-closure/v2/closures/sel4-entropy.zti",
+            "contracts/system-test-run/v1/runs/sel4-entropy.zti",
+            "components/services/virtio-rng-driver",
+            "components/services/entropy-service",
+        ),
+    ),
+    "sel4-large-image": (
+        "01a0fa78-cfc0-7dc0-976e-3ff092b908a4",
+        "check-sel4-reclamation-plane.py",
+        "sel4-large-image",
+        (
+            "contracts/system-spec/v1/systems/sel4-large-image.zti",
+            "contracts/generation-manifest/v1/compositions/sel4-large-image.zti",
+            "contracts/system-image-closure/v2/closures/sel4-large-image.zti",
+            "contracts/system-test-run/v1/runs/sel4-large-image.zti",
+            "components/testkit/large-image-owner",
+            "components/testkit/large-image-probe",
+            "components/testkit/large-image-witness",
+        ),
+    ),
+}
+
 # Checkers that boot no seL4 QEMU plane of their own, so they own no test run:
 # board gates, host-only contract gates, aggregate composers that delegate to
 # the planes they compose, and the bless/derivation helpers.
@@ -135,6 +171,7 @@ def fail(message: str) -> None:
 
 
 def plane_checkers() -> list[_Path]:
+    validate_planned_runs()
     return [
         path
         for path in sorted(CHECK_ROOT.glob("check-sel4-*.py"))
@@ -149,19 +186,96 @@ def run_name(path: _Path) -> str:
         stem = stem[: -len("-plane")]
     return stem
 
-def run_variants(path: _Path) -> list[tuple[str, str, str, str]]:
-    """Every independently invoked target for one plane checker."""
+def declared_variants(path: _Path) -> list[tuple[str, str, str, str]]:
+    """Invocation names before planning exclusions or artifact resolution."""
     name = run_name(path)
-    closure = closure_name_for(path, name)
-    # Closure-backed runs resolve their image through the closure identity.
-    # A default arm with no closure must retain the literal artifact extracted
-    # from its checker so the aggregate exemption remains independently checked.
-    closure_exists = (CLOSURE_ROOT / f"{closure}.zti").is_file()
-    variants = [(name, closure, "qemu-arm-virt", "" if closure_exists else booted_image(path))]
+    variants = [(name, closure_name_for(path, name), "qemu-arm-virt", "")]
     for run, profile, image in EXTRA_RUNS.get(name, ()):
         variants.append((run, "", profile, image))
-    for run, extra_closure, profile in EXTRA_CLOSURE_RUNS.get(name, ()):
-        variants.append((run, extra_closure, profile, ""))
+    for run, closure, profile in EXTRA_CLOSURE_RUNS.get(name, ()):
+        variants.append((run, closure, profile, ""))
+    return variants
+
+
+def validate_planned_runs() -> None:
+    """Refuse stale or ambiguous exclusions, including rows no checker visits."""
+    for run, row in PLANNED_RUNS.items():
+        if not isinstance(row, tuple) or len(row) != 4:
+            fail(f"{run}: malformed planning registration")
+        identity, checker, closure, artifacts = row
+        if not isinstance(identity, str) or not work_items.UUID.fullmatch(identity):
+            fail(f"{run}: planning identity is not a canonical UUID")
+        # The shared reader is deliberately shallow. An exclusion additionally
+        # needs identity and state in the item's envelope, never its body.
+        try:
+            item_text = (work_items.ITEMS / f"{identity}.md").read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            fail(f"{run}: cannot read planning item envelope: {error}")
+        opening, separator, remainder = item_text.partition("---\n")
+        frontmatter, closing, _body = remainder.partition("\n---\n")
+        if opening or not separator or not closing:
+            fail(f"{run}: planning item lacks a delimited frontmatter envelope")
+        fields = {
+            key: re.findall(rf"^{key}:[ \t]*(.*)$", frontmatter, re.MULTILINE)
+            for key in ("schema", "id", "state")
+        }
+        if (any(len(values) != 1 for values in fields.values())
+                or fields["schema"][0] not in {"work-item/v1", "work-item/v2"}
+                or fields["id"][0] != identity
+                or fields["state"][0] not in {"open", "active", "blocked", "deferred"}):
+            fail(f"{run}: planning item envelope has invalid identity, schema or state")
+        matches = [item for item in work_items.items() if item["id"] == identity]
+        if (identity not in work_items.identities() or len(matches) != 1
+                or matches[0]["state"] not in {"open", "active", "blocked", "deferred"}
+                or matches[0]["retired"]):
+            fail(f"{run}: planning identity must name one nonterminal work item")
+        if (not isinstance(checker, str) or _Path(checker).name != checker
+                or checker in NOT_A_PLANE
+                or not checker.startswith("check-sel4-") or not checker.endswith(".py")
+                or not (CHECK_ROOT / checker).is_file()):
+            fail(f"{run}: planning checker is absent or conflicts with inventory")
+        variants = declared_variants(CHECK_ROOT / checker)
+        if sum(name == run and expected == closure for name, expected, _, _ in variants) != 1:
+            fail(f"{run}: planning registration names no matching invocation/closure")
+        if not isinstance(artifacts, tuple) or not artifacts:
+            fail(f"{run}: planning registration requires implementation artifacts")
+        for artifact in artifacts:
+            if (not isinstance(artifact, str) or not artifact
+                    or _Path(artifact).is_absolute() or ".." in _Path(artifact).parts
+                    or not (ROOT / artifact).resolve().is_relative_to(ROOT.resolve())):
+                fail(f"{run}: artifact must be a nonescaping root-relative path")
+            if (ROOT / artifact).exists() or (ROOT / artifact).is_symlink():
+                fail(f"{run}: stale planning registration: artifact {artifact} is present")
+        mandatory = {
+            str((CLOSURE_ROOT / f"{closure}.zti").relative_to(ROOT)),
+            str((RUN_ROOT / f"{run}.zti").relative_to(ROOT)),
+        }
+        if not mandatory <= set(artifacts):
+            fail(f"{run}: planning artifacts must include closure and run declaration")
+
+
+def run_variants(path: _Path) -> list[tuple[str, str, str, str]]:
+    """Every active invocation; absent closures need an independent exemption."""
+    validate_planned_runs()
+    variants = []
+    for name, closure, profile, image in declared_variants(path):
+        if name in PLANNED_RUNS:
+            if PLANNED_RUNS[name][1] != path.name:
+                fail(f"{name}: planning registration conflicts with another checker")
+            continue
+        if closure and not (CLOSURE_ROOT / f"{closure}.zti").is_file():
+            # Only legacy default arms may resolve to a literal image. The
+            # aggregate owns the exemption, not a missing closure or item state.
+            if name != run_name(path):
+                fail(f"{name}: missing active closure {closure}")
+            image = booted_image(path)
+            aggregate = CHECK_ROOT / "check-system-image-aggregate.py"
+            text = aggregate.read_text(encoding="utf-8") if aggregate.is_file() else ""
+            block = re.search(r"IMAGES_WITHOUT_CLOSURE = \{(.*?)\n\}", text, re.DOTALL)
+            exempt = set(re.findall(r'"(slime-[a-z0-9.-]+\.elf)":', block.group(1))) if block else set()
+            if image not in exempt:
+                fail(f"{name}: missing active closure {closure} without a literal-image exemption")
+        variants.append((name, closure, profile, image))
     return variants
 
 
@@ -219,9 +333,35 @@ def closure_identity_for(name: str) -> str:
     return compile_closure(candidate).identity.hex()
 
 
-def extract(path: _Path) -> dict:
-    """Read one checker's execution-only inputs from its own constants."""
+def extract(path: _Path, run: str | None = None) -> dict:
+    """Read one invocation's execution-only inputs from its checker constants."""
+    run = run_name(path) if run is None else run
+    if run not in {name for name, _, _, _ in declared_variants(path)}:
+        fail(f"{path.name}: unsupported extraction invocation {run}")
     text = path.read_text(encoding="utf-8")
+    if path.name == "check-sel4-reclamation-plane.py":
+        # Both arms share boot transport, but not timeout or transcript policy.
+        # Host fixture/refusal controls are not QEMU execution declarations.
+        selected = ({"TIMEOUT", "boot", "run_unwind_arm"}
+                    if run == "sel4-reclamation" else
+                    {"LARGE_TIMEOUT", "LARGE_FAILURES", "boot", "judge_large_image"})
+        segments = {}
+        for node in ast.parse(text).body:
+            if isinstance(node, ast.FunctionDef):
+                names = {node.name}
+            else:
+                targets = ([node.target] if isinstance(node, ast.AnnAssign)
+                           else node.targets if isinstance(node, ast.Assign) else [])
+                names = {target.id for target in targets if isinstance(target, ast.Name)}
+            for name in names & selected:
+                if name in segments:
+                    fail(f"{path.name}: duplicate execution declaration {name}")
+                segments[name] = ast.get_source_segment(text, node)
+        if set(segments) != selected:
+            fail(f"{path.name}: missing execution declarations for {run}")
+        text = "\n".join(segments.values())
+        if run == "sel4-large-image":
+            text = text.replace("LARGE_TIMEOUT =", "TIMEOUT =")
     if path.name == "check-sel4-private-memory-plane.py":
         # The frozen variants above are fixed-capacity arms. This transport
         # belongs only to the separately selected adaptive/matrix arms.
@@ -388,7 +528,7 @@ def outputs() -> dict[_Path, str]:
                 name,
                 closure_identity_for(closure_name) if closure_name else "",
                 profile,
-                extract(path),
+                extract(path, name),
             )
     return emitted
 
