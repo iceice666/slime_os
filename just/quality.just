@@ -108,6 +108,15 @@ docs_check:
 smoltcp_matrix_check:
     python3 scripts/check/check-docs.py --smoltcp-matrix
 
+# The pull-request scope classes and their refusals on synthetic diffs, without
+# Git; CI judges a real base..head with the same classes. The sweep of every
+# contracts/**/schema.zt is the other half: a schema a planning PR lands must
+# compile before anything refers to it.
+[group('quality')]
+pr_scope_check:
+    python3 scripts/check/check-pr-scope.py --controls
+    python3 scripts/check/check-contracts.py
+
 # MyQue validates the live store; this target also enforces backlog-first policy.
 # docs_check needs only the checkout, never MyQue or the history repository.
 [group('quality')]
