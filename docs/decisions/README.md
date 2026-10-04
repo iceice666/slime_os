@@ -31,6 +31,10 @@ readable and link to the decision that replaced them.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
+- [Planning PRs may fix the Zutai schema a grader binds to](planning-pr-schema-contracts.md)
+  — proposed; a new `contracts/<name>/v<N>/schema.zt` is an interface a
+  planning pull request may land with its exam, while generators, bindings,
+  system specs, and modified schemas stay product.
 - [Adaptive memory guarantee reservation](adaptive-memory-guarantee-reservation.md)
   — accepted; physical reservation ownership, guaranteed mapping, and safe
   admission before adaptive task publication. The record lists the required

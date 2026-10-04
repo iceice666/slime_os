@@ -52,7 +52,7 @@ def report(verdict: pr_scope.Verdict) -> None:
 
 def controls() -> None:
     """Synthetic diffs the rule must refuse or accept, without Git."""
-    code = ("slime-root", "components", "contracts", "scripts/check/check-docs.py", "Justfile")
+    code = ("slime-root", "components", "contracts", "boot-contracts", "scripts/check/check-docs.py", "Justfile")
     item = ".tasks/items/01a0ec61-d599-73ec-9e42-1ee6966420fd.md"
     cases = [
         ([("A", item), ("M", "slime-root/src/main.rs")], True, "item plus product"),
@@ -69,11 +69,26 @@ def controls() -> None:
             "item plus grader plus regenerated closures",
         ),
         ([("A", item), ("M", "contracts/system-image-closure/v2/check.zt")], True, "item plus closure contract source"),
+        ([("A", item), ("A", "contracts/entropy/v1/schema.zt")], False, "item plus new schema"),
+        ([("A", item), ("A", "contracts/bootstate/trace/v2/schema.zt")], False, "item plus nested new schema version"),
+        ([("A", item), ("A", "contracts/entropy/README.md")], False, "item plus contract readme"),
+        ([("A", item), ("M", "contracts/spawn/v2/schema.zt")], True, "item plus modified schema"),
+        ([("A", item), ("R100", "contracts/entropy/v1/schema.zt")], True, "item plus renamed schema"),
+        ([("A", item), ("A", "contracts/entropy/v1/schema.zt"), ("A", "contracts/entropy/v1/gen_rust.zt")], True, "item plus schema plus generator"),
+        ([("A", item), ("A", "contracts/entropy/v1/schema.zt"), ("M", "boot-contracts/src/generated/entropy.rs")], True, "item plus schema plus bindings"),
+        ([("A", item), ("A", "contracts/entropy/v1/schema.zt"), ("M", "contracts/system-spec/v1/systems/sel4-entropy.zti")], True, "item plus schema plus system spec"),
+        ([("A", item), ("A", "contracts/entropy/schema.zt")], True, "item plus unversioned schema"),
     ]
     for changes, refused, description in cases:
         verdict = pr_scope.judge(changes, code)
         if bool(verdict.findings) != refused:
             raise SystemExit(f"pr-scope control failed: {description}")
+    if not pr_scope.judge([("A", "contracts/entropy/v1/schema.zt")], code).needs_landed_item:
+        raise SystemExit("pr-scope control failed: a new schema alone escaped the landed-item rule")
+    if pr_scope.classify("contracts/entropy/v1/schema.zt", code, "A") != pr_scope.INTERFACE:
+        raise SystemExit("pr-scope control failed: added schema is interface")
+    if pr_scope.classify("contracts/entropy/v1/schema.zt", code, "M") != pr_scope.PRODUCT:
+        raise SystemExit("pr-scope control failed: modified schema is product")
     hatch = pr_scope.judge([("M", ".github/workflows/ci.yml"), ("M", "docs/x.md")], code)
     if hatch.needs_landed_item:
         raise SystemExit("pr-scope control failed: process-only diff demanded an item")
@@ -86,7 +101,7 @@ def controls() -> None:
         raise SystemExit("pr-scope control failed: scripts/ is grader regardless of codePaths")
     if pr_scope.judge([("M", "contracts/system-image-closure/v2/closures/sel4.zti")], code).needs_landed_item:
         raise SystemExit("pr-scope control failed: regenerated closures alone demanded an item")
-    print("pr-scope controls passed: 10 diffs judged, 4 refused")
+    print("pr-scope controls passed: 20 diffs judged, 11 refused")
 
 
 def main() -> int:

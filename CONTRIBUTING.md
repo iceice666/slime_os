@@ -242,12 +242,17 @@ table, and CI runs it on every pull request:
 |---|---|---|
 | **grader** | `scripts/`, `just/`, `Justfile`, `.devloop/` — the closure `devloop-approval.py` pins to `origin/main` | needs a landed work item; may land with the item as its exam |
 | **product** | every other `codePaths` entry in `.devloop/policy.json`: `slime-root/`, `components/`, `contracts/`, `boot-contracts/`, `sel4/`, build inputs, pins, toolchain configuration | needs a landed work item; **never** in a PR that adds one |
+| **interface** | an **added** `contracts/<name>/v<N>/schema.zt`, or a contract's `README.md` — the boundary a grader binds to | needs a landed work item; may land with the item as part of its exam. `gen_rust.zt`, generated bindings, system specs, and a modified or renamed schema are product |
 | **derived** | regenerated closure records under `contracts/system-image-closure/v2/{closures,negative}/` and `contracts/system-test-run/v1/runs/` | mirrors whatever else changed; never decides |
 | **other** | `.github/`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
 
 Two rules follow. A pull request that **adds** a `.tasks/items/*.md` file may
-change grader, derived and other paths — the exam lands with the item — but
-not product paths; CI fails and names both. A pull request confined to
+change grader, interface, derived and other paths — the exam and the schema it
+reads land with the item — but not product paths; CI fails and names both.
+Every `contracts/**/schema.zt` is compiled by `just contracts_check` whether
+or not a generator or checker names it yet, so a schema landed ahead of its
+implementation is still checked. See
+[docs/decisions/planning-pr-schema-contracts.md](docs/decisions/planning-pr-schema-contracts.md). A pull request confined to
 derived and other paths is a **process change**: it needs no landed item,
 still runs every applicable check, and its description states what it
 changes. Product and grader changes keep the landed-item requirement below.
