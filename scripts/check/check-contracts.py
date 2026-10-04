@@ -451,6 +451,17 @@ for contract in (GENERATION_V2_CONTRACT, GENERATION_V3_CONTRACT):
         raise SystemExit("generation wire-layout mismatch was not rejected")
 SLOT_PIN_REASON_CHECK.main()
 
+# Every contract version's schema must compile, named above or not. A planning
+# pull request may land a schema before any generator, binding, or checker
+# refers to it (`scripts/lib/pr_scope.py` INTERFACE), and this is the only
+# gate that would otherwise never see it.
+schemas = sorted((ROOT / "contracts").rglob("schema.zt"))
+if not schemas:
+    raise SystemExit("no contracts/**/schema.zt found")
+for schema in schemas:
+    run("check", str(schema))
+print(f"{len(schemas)} contract schemas compiled")
+
 subprocess.run(
     [sys.executable, str(BOOT_BINDING_GENERATOR), "--check"],
     cwd=ROOT,
