@@ -118,6 +118,15 @@ sel4_pwm_graph_check: sel4_pin_check
 sel4_mavlink_graph_check: sel4_pin_check
     python3 scripts/check/check-sel4-component-graph.py --composition sel4-mavlink
 
+# The product graph plus a driver granted QEMU virt's second serial port and a
+# testkit probe: the gate is the host end of that port, reading the bytes the
+# probe writes and sending a burst the probe reads back whole, while a second
+# driver bound to no port and malformed requests are refused as the serial
+# protocol names, and the console still answers the shell.
+[group('product')]
+sel4_serial_graph_check: sel4_pin_check
+    python3 scripts/check/check-sel4-component-graph.py --composition sel4-serial
+
 # Use fresh QEMU boots for rollback and wrong-target negative controls.
 [group('product')]
 sel4_demo_check: sel4_pin_check

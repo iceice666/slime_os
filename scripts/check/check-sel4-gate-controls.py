@@ -31,7 +31,9 @@ from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
     ("sel4_io_network_plane", "check/check-sel4-io-network-plane.py", 218),
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 109),
+    # 109 for the product, pwm and mavlink arms, plus the serial arm's 40-marker
+    # chain, its probe's 11-line chain and its 2 markers no other arm declares.
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 162),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_io_queue_plane", "check/check-sel4-io-queue-plane.py", 15),
@@ -425,6 +427,49 @@ def check_http_evidence_controls() -> int:
         fail("HTTP abort evidence accepted absent/failed abort acknowledgment")
     count = len(mutations) + 3
     print(f"seL4 gate control check: HTTP body/status/cleanup rejected {count} mutations")
+    return count
+
+
+def check_serial_evidence_controls() -> int:
+    """Both ends of the second serial port are judged on bytes, not on markers."""
+    gate = load_script("sel4_serial_evidence_controls", "check/check-sel4-component-graph.py")
+    host = gate.SERIAL_HOST_BYTES
+    if gate.check_serial_peer_bytes(host) != len(host):
+        fail("serial peer validator rejected the probe's own bytes")
+    peer_mutations = (
+        ("a changed byte", host[:-1] + bytes((host[-1] ^ 0x01,))),
+        ("a missing byte", host[:-1]),
+        ("an extra byte", host + b"\x00"),
+        ("the two writes swapped", host[12:] + host[:12]),
+        ("nothing at all", b""),
+    )
+    for description, received in peer_mutations:
+        try:
+            gate.check_serial_peer_bytes(received)
+        except SystemExit:
+            continue
+        fail(f"serial peer evidence accepted {description}")
+    burst = gate.SERIAL_GUEST_BYTES
+    read = f"[serial-probe] read bytes={len(burst)} reads=2 data={burst.hex()}\n"
+    if gate.check_serial_read(read) != len(burst):
+        fail("serial read validator rejected the burst it sends")
+    read_mutations = (
+        ("a single read", read.replace("reads=2", "reads=1")),
+        ("a changed byte", read.replace("data=0102", "data=0103")),
+        ("a short burst", read.replace("bytes=24", "bytes=23").replace("1718\n", "17\n")),
+        ("a reordered burst", read.replace("data=0102", "data=0201")),
+        ("an odd hex digit", read.replace("1718\n", "171\n")),
+        ("a missing report", ""),
+        ("a repeated report", read + read),
+    )
+    for description, transcript in read_mutations:
+        try:
+            gate.check_serial_read(transcript)
+        except SystemExit:
+            continue
+        fail(f"serial read evidence accepted {description}")
+    count = 2 + len(peer_mutations) + len(read_mutations)
+    print(f"seL4 gate control check: serial port bytes rejected {count - 2} mutations")
     return count
 
 
@@ -2896,6 +2941,7 @@ def main() -> None:
     total += check_large_image_controls()
     total += check_root_memory_runtime_control()
     total += check_http_evidence_controls()
+    total += check_serial_evidence_controls()
     total += check_http_capture_controls()
     total += check_layout_gate()
     total += check_private_memory_capacity_controls()

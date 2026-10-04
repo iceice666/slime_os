@@ -51,6 +51,7 @@ For how the planes work and how to add one, read
 | `just sel4_pwm_graph_check` | IO8: the product graph plus the pwm driver, on QEMU where no PWM block exists: the driver binds nothing, stays resident, and answers Slisp's `(pwm 0 1600)` with no-device while the graph stays healthy. |
 | `just sel4_qemu_image_check` | Build the pinned seL4 kernel, root, child fixture, and loader image, writing `build/slime-sel4.identity.json`. |
 | `just sel4_root_boot_check` | Root admission, allocator, timer proof, fault isolation, cleanup, and ready markers on the root-fixture image. |
+| `just sel4_serial_graph_check` | The product graph plus a driver granted QEMU virt's second serial port and a testkit probe: the gate is the host end of that port, reading the probe's bytes and sending a burst it reads back whole, while a driver bound to no port and malformed requests are refused as the serial protocol names and the console still answers the shell. |
 | `just sel4_stress_check` | Boot the stress composition and require the graph to return to zero live tasks under repeated spawn/exit churn. |
 | `just x86_64_qemu_check` | P6.4 replays the architecture-neutral corpus on the pinned x86-64 reference, in the same shape as `riscv64_qemu_check`. |
 | `just x86_64_sel4_image_check` | P6.1 builds the admitted x86-64 seL4 kernel, root task, child fixture, and generation for the pinned QEMU pc99 profile, and P6.2 assembles the GRUB Multiboot2 EFI tree that supplies the two ELFs as modules. |
