@@ -1,0 +1,70 @@
+{
+  formatVersion = 1;
+  name = "virtio-rng-driver";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Supervised userspace virtio-rng driver answering entropy-source fills with exactly the bytes the device wrote, and with unavailable when the device is absent.";
+  implementation = {
+    provider = "workspace";
+    binary = "virtio-rng-driver";
+    contentHash = "";
+  };
+  provides = [
+    "device";
+    "dmaAccount";
+    "interruptSource";
+    "mmioRegion";
+  ];
+  requires = [
+    "device";
+    "dmaAccount";
+    "endpoint";
+    "interruptSource";
+    "mmioRegion";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_entropy_check gate boots the sel4-entropy composition twice with a QEMU virtio-rng device and once without";
+    expectedResult = "the driver negotiates virtio-rng when the device is present, reports its absence otherwise, and never supplies bytes the device did not write";
+    passFailCriteria = "[virtio-rng-driver] device ready";
+    requiredTestEnvironment = "sel4_entropy_check";
+  };
+}

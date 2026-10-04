@@ -41,10 +41,12 @@ from system_spec import (
     computed_system_outputs,
     render_computed_system,
     validate_source_mapping,
+    _validate_authority_sections as validate_authority_sections,
     SystemSpecError,
     compile_system,
     derive_manifest,
     derived_manifest_path,
+    instance_names,
     prefetch_systems,
     resolved_instances,
     system_paths,
@@ -227,6 +229,7 @@ def _decode(path: Path, label: str) -> dict:
 # These compositions were authored as system specs, not migrated from a
 # hand-authored manifest. Their contracts and derived-byte drift remain checked.
 SPEC_NATIVE_SYSTEMS = frozenset({
+    "sel4-entropy",
     "sel4-http",
     "sel4-http-public",
     "sel4-io-local",
@@ -309,6 +312,7 @@ def normalized(manifest: dict) -> dict:
         "ioResourceBudget",
         "networkDestinations",
         "networkInterfaces",
+        "entropyAuthority",
         "blockRingAuthority",
         "waitSet",
         "recording",
@@ -1831,6 +1835,140 @@ def instance_lifetime_controls(source: dict) -> int:
 
 
 refusals += instance_lifetime_controls(derive_manifest(systems["sel4-lifetime"]))
+
+
+def entropy_authority_controls(system) -> int:
+    """The entropy encoder emits exactly the declared rows and refuses every malformed table or grant."""
+    import boot_contracts as wire
+
+    manifest = derive_manifest(system)
+    encoded = BUILDER.build_entropy_authority(manifest)
+    rows = manifest["entropyAuthority"]
+    expected_length = wire.ENTROPY_AUTHORITY_HEADER_BYTES + len(rows) * wire.ENTROPY_AUTHORITY_ENTRY_BYTES
+    if not rows or len(encoded) != expected_length or wire.ENTROPY_AUTHORITY_HEADER.unpack_from(encoded) != (
+        wire.ENTROPY_AUTHORITY_MAGIC, wire.ENTROPY_AUTHORITY_VERSION, wire.ENTROPY_AUTHORITY_HEADER_BYTES, 0,
+        len(rows), expected_length,
+    ):
+        fail("entropy authority encoder changed the generated header or entry bounds")
+    decoded = [
+        wire.ENTROPY_AUTHORITY_ENTRY.unpack_from(
+            encoded, wire.ENTROPY_AUTHORITY_HEADER_BYTES + index * wire.ENTROPY_AUTHORITY_ENTRY_BYTES
+        )
+        for index in range(len(rows))
+    ]
+    if [entry[0] for entry in decoded] != sorted({entry[0] for entry in decoded}):
+        fail("entropy authority encoder did not emit strictly ordered holders")
+    by_name = {entry[1][: entry[2]].decode("ascii"): entry for entry in decoded}
+    for row in rows:
+        identity, _, _, source, reserved, budget, seed = by_name[row["holder"]]
+        if (
+            identity != BUILDER.entropy_authority_holder_identity(row["holder"])
+            or source != BUILDER.ENTROPY_SOURCES[row["source"]]
+            or reserved != bytes(2)
+            or budget != row["byteBudget"]
+            or seed != bytes.fromhex(row.get("seed", "00" * wire.ENTROPY_AUTHORITY_SEED_BYTES))
+        ):
+            fail(f"entropy authority encoder misplaced {row['holder']}'s declared row")
+    reverse = copy.deepcopy(manifest)
+    reverse["entropyAuthority"].reverse()
+    reverse["grants"].reverse()
+    if BUILDER.build_entropy_authority(reverse) != encoded:
+        fail("entropy authority encoding depends on authoring order")
+
+    def row(altered: dict, holder: str) -> dict:
+        return next(entry for entry in altered["entropyAuthority"] if entry["holder"] == holder)
+
+    def grant(altered: dict, name: str) -> dict:
+        return next(entry for entry in altered["grants"] if entry["name"] == name)
+
+    def endpoint(name: str, source: str, **fields) -> dict:
+        return dict({"name": name, "capabilityKind": "endpoint", "source": source, "target": "entropy-service",
+                     "rights": ["send", "recv"], "transferable": False}, **fields)
+
+    seed = row(manifest, "entropy-seeded")["seed"]
+    refused = 0
+    for label, mutate, reason in (
+        ("an unknown source", lambda value: row(value, "entropy-hw-a").update(source="device"), "unknown source"),
+        ("a zero budget", lambda value: row(value, "entropy-hw-a").update(byteBudget=0), "byteBudget outside"),
+        ("a budget above the bound", lambda value: row(value, "entropy-seeded").update(
+            byteBudget=wire.ENTROPY_AUTHORITY_MAX_BYTE_BUDGET + 1), "byteBudget outside"),
+        ("a boolean budget", lambda value: row(value, "entropy-hw-a").update(byteBudget=True), "byteBudget outside"),
+        ("a seed on a hardware row", lambda value: row(value, "entropy-hw-a").update(seed=seed), "declares a seed"),
+        ("an empty seed on a hardware row", lambda value: row(value, "entropy-hw-b").update(seed=""), "declares a seed"),
+        ("a seeded row without a seed", lambda value: row(value, "entropy-seeded").pop("seed"), "64 lowercase hex"),
+        ("an uppercase seed", lambda value: row(value, "entropy-seeded").update(seed=seed.upper()), "64 lowercase hex"),
+        ("a short seed", lambda value: row(value, "entropy-seeded").update(seed=seed[:-2]), "64 lowercase hex"),
+        ("a non-hex seed", lambda value: row(value, "entropy-seeded").update(seed="g" + seed[1:]), "64 lowercase hex"),
+        ("a duplicate holder", lambda value: value["entropyAuthority"].append(
+            copy.deepcopy(row(value, "entropy-hw-a"))), "duplicate holder"),
+        ("an undeclared holder", lambda value: value["entropyAuthority"].append(
+            {"holder": "entropy-ghost", "source": "hardware", "byteBudget": 96}), "not a declared instance"),
+        ("the service as holder", lambda value: (
+            value["entropyAuthority"].append({"holder": "entropy-service", "source": "hardware", "byteBudget": 96}),
+            value["grants"].append(endpoint("entropy-service-entropy", "entropy-service"))), "may not hold"),
+        ("the driver as holder", lambda value: (
+            value["entropyAuthority"].append({"holder": "virtio-rng-driver", "source": "hardware", "byteBudget": 96}),
+            value["grants"].append(endpoint("virtio-rng-driver-entropy", "virtio-rng-driver"))), "may not hold"),
+        ("a missing service instance", lambda value: value.update(
+            instances=[entry for entry in value["instances"] if entry["name"] != "entropy-service"]), "no entropy-service"),
+        ("a transferable holder endpoint", lambda value: grant(value, "entropy-hw-a-entropy").update(
+            transferable=True), "is transferable"),
+        ("a misnamed holder endpoint", lambda value: grant(value, "entropy-hw-a-entropy").update(
+            name="entropy-hw-a-draw"), "is not named"),
+        ("a send-only holder endpoint", lambda value: grant(value, "entropy-hw-b-entropy").update(
+            rights=["send"]), "exactly send and recv"),
+        ("a widened holder endpoint", lambda value: grant(value, "entropy-hw-b-entropy").update(
+            rights=["send", "recv", "grant"]), "exactly send and recv"),
+        ("an endpoint from a holder with no row", lambda value: value["grants"].append(
+            endpoint("entropy-intruder-entropy", "entropy-intruder")), "with no row"),
+        ("a row without its endpoint", lambda value: value.update(
+            grants=[entry for entry in value["grants"] if entry["name"] != "entropy-seeded-entropy"]), "not exactly one"),
+        ("a row with two endpoints", lambda value: value["grants"].append(
+            endpoint("entropy-seeded-entropy", "entropy-seeded")), "not exactly one"),
+        ("a holder name above the entry field", lambda value: (
+            value["instances"].append(dict(next(entry for entry in value["instances"] if entry["name"] == "entropy-hw-a"),
+                                           name="h" * (wire.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES + 1))),
+            value["entropyAuthority"].append({"holder": "h" * (wire.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES + 1),
+                                              "source": "hardware", "byteBudget": 96})), "printable ASCII"),
+        ("rows above the holder bound", lambda value: value["entropyAuthority"].extend(
+            {"holder": f"entropy-extra-{index}", "source": "hardware", "byteBudget": 96}
+            for index in range(wire.MAX_ENTROPY_AUTHORITY_HOLDERS)), "holder bound"),
+    ):
+        altered = copy.deepcopy(manifest)
+        mutate(altered)
+        try:
+            BUILDER.build_entropy_authority(altered)
+        except SystemExit as error:
+            if reason not in str(error):
+                fail(f"entropy authority {label} refused at wrong boundary: {error}")
+        else:
+            fail(f"entropy authority encoder accepted {label}")
+        refused += 1
+    # The spec-admission half: a populated table needs its object, and a row
+    # must name an admitted instance before anything is encoded.
+    for label, mutate, reason in (
+        ("a table without its resource object", lambda spec: spec.update(entropyAuthorityObject=False),
+         "requires its resource object"),
+        ("an unadmitted holder", lambda spec: spec["entropyAuthority"].append(
+            {"holder": "entropy-ghost", "source": "hardware", "byteBudget": 96}), "is not admitted"),
+        ("an encoder refusal at admission", lambda spec: spec["entropyAuthority"][0].update(source="device"),
+         "unknown source"),
+    ):
+        altered_system = copy.deepcopy(system)
+        mutate(altered_system.spec)
+        try:
+            validate_authority_sections(altered_system.spec, set(instance_names(altered_system.spec)))
+            derive_manifest(altered_system)
+        except SystemSpecError as error:
+            if reason not in str(error):
+                fail(f"entropy authority spec {label} refused at wrong boundary: {error}")
+        else:
+            fail(f"system spec admitted entropy authority with {label}")
+        refused += 1
+    return refused
+
+
+refusals += entropy_authority_controls(systems["sel4-entropy"])
 
 parameter_instance = {"name": "network-service", "bindings": []}
 parameter_executable = {"role": "service", "spawnBudget": 0}

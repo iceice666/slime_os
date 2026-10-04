@@ -109,6 +109,7 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | capability_table_labels::NETWORK_DESTINATIONS_READ
         | capability_table_labels::NETWORK_INTERFACE_READ
         | capability_table_labels::NETWORK_APPLICATION_READ
+        | capability_table_labels::ENTROPY_AUTHORITY_READ
         | capability_table_labels::BLOCK_RING_AUTHORITY_READ
         | capability_table_labels::GRAPH_ROUTE_INDEX
         | capability_table_labels::GRAPH_QUERY
@@ -1290,6 +1291,53 @@ pub fn read_network_interface(
     Some(written / NETWORK_INTERFACE_ROW_BYTES)
 }
 
+pub const ENTROPY_AUTHORITY_ROW_BYTES: usize = boot_contracts::entropy_authority::ENTRY_BYTES;
+pub const ENTROPY_AUTHORITY_ROWS_PER_CALL: usize =
+    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / ENTROPY_AUTHORITY_ROW_BYTES;
+/// The one instance the entropy table is served to.
+pub const ENTROPY_SERVICE_INSTANCE: &str = "entropy-service";
+
+/// Copy authenticated entropy-authority rows only to the instance named
+/// `entropy-service`, on `read_network_interface`'s exact shape. The root
+/// draws no entropy and charges no budget.
+pub fn read_entropy_authority(
+    generation: &boot_contracts::generation::Generation<'_>,
+    instance: usize,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    let Some(Ok(authority)) = crate::generation::entropy_authority_object(generation) else {
+        return None;
+    };
+    let caller = generation.instance(instance).ok()?;
+    copy_entropy_authority_rows(&authority, caller.name, cursor, out)
+}
+
+/// The caller gate and paging of `read_entropy_authority`, separated from the
+/// generation lookup so both can be exercised against a decoded table.
+pub fn copy_entropy_authority_rows(
+    authority: &boot_contracts::entropy_authority::EntropyAuthority<'_>,
+    caller: &str,
+    cursor: usize,
+    out: &mut [u8],
+) -> Option<usize> {
+    if caller != ENTROPY_SERVICE_INSTANCE {
+        return None;
+    }
+    let mut written = 0;
+    for index in cursor..authority.holder_count() {
+        let end = written + ENTROPY_AUTHORITY_ROW_BYTES;
+        if end > out.len()
+            || written / ENTROPY_AUTHORITY_ROW_BYTES >= ENTROPY_AUTHORITY_ROWS_PER_CALL
+        {
+            break;
+        }
+        out[written..end].copy_from_slice(authority.entry_bytes(index)?);
+        written = end;
+    }
+    Some(written / ENTROPY_AUTHORITY_ROW_BYTES)
+}
+
 pub const NETWORK_APPLICATION_ROW_BYTES: usize = boot_contracts::network_application::ENTRY_BYTES;
 pub const NETWORK_APPLICATION_ROWS_PER_CALL: usize =
     crate::transfer_window::MAX_STAGED_ARRAY_BYTES / NETWORK_APPLICATION_ROW_BYTES;
@@ -1789,6 +1837,10 @@ mod tests {
                 SERVICE_CAPABILITY_TRANSFER,
             ),
             (
+                capability_table_labels::ENTROPY_AUTHORITY_READ,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
                 capability_table_labels::BLOCK_RING_AUTHORITY_READ,
                 SERVICE_CAPABILITY_TRANSFER,
             ),
@@ -2248,5 +2300,110 @@ mod tests {
         assert!(!"fabric-intruder-supervision".starts_with("owned-minted:"));
         assert!(!"owned-minted:x".starts_with("kind:"));
         assert!(!"owned-minted:x".starts_with("notification:"));
+    }
+
+    /// A table of `count` hardware holders named `holder-<n>`, in canonical
+    /// identity order, written into `bytes`; returns its length.
+    fn entropy_table(count: usize, bytes: &mut [u8]) -> usize {
+        use boot_contracts::entropy_authority as ea;
+        const NAMES: [&str; 10] = [
+            "holder-0", "holder-1", "holder-2", "holder-3", "holder-4", "holder-5", "holder-6",
+            "holder-7", "holder-8", "holder-9",
+        ];
+        let mut entries = [[0u8; ea::ENTRY_BYTES]; 10];
+        for (entry, name) in entries.iter_mut().zip(NAMES).take(count) {
+            entry[ea::OFF_ENTRY_HOLDER_IDENTITY..ea::OFF_ENTRY_HOLDER_IDENTITY_END]
+                .copy_from_slice(&ea::holder_identity(name));
+            entry[ea::OFF_ENTRY_HOLDER_NAME..ea::OFF_ENTRY_HOLDER_NAME + name.len()]
+                .copy_from_slice(name.as_bytes());
+            entry[ea::OFF_ENTRY_HOLDER_NAME_LEN] = name.len() as u8;
+            entry[ea::OFF_ENTRY_SOURCE] = ea::SOURCE_HARDWARE;
+            entry[ea::OFF_ENTRY_BYTE_BUDGET..ea::OFF_ENTRY_BYTE_BUDGET_END]
+                .copy_from_slice(&96u32.to_le_bytes());
+        }
+        entries[..count].sort_unstable();
+        bytes[..ea::HEADER_BYTES].copy_from_slice(&ea::header(count).unwrap());
+        for (index, entry) in entries[..count].iter().enumerate() {
+            let at = ea::HEADER_BYTES + index * ea::ENTRY_BYTES;
+            bytes[at..at + ea::ENTRY_BYTES].copy_from_slice(entry);
+        }
+        ea::HEADER_BYTES + count * ea::ENTRY_BYTES
+    }
+
+    #[test]
+    fn entropy_authority_rows_are_served_only_to_the_entropy_service() {
+        use boot_contracts::entropy_authority::EntropyAuthority;
+        let mut bytes = [0u8; boot_contracts::entropy_authority::MAX_BYTES];
+        let len = entropy_table(3, &mut bytes);
+        let table = EntropyAuthority::decode(&bytes[..len]).unwrap();
+        let mut out = [0u8; ENTROPY_AUTHORITY_ROWS_PER_CALL * ENTROPY_AUTHORITY_ROW_BYTES];
+        for caller in [
+            "entropy-probe",
+            "entropy-hw-a",
+            "virtio-rng-driver",
+            "entropy-service2",
+            "",
+        ] {
+            assert_eq!(
+                copy_entropy_authority_rows(&table, caller, 0, &mut out),
+                None,
+                "{caller}"
+            );
+        }
+        assert!(
+            out.iter().all(|byte| *byte == 0),
+            "a refused caller receives no byte"
+        );
+        assert_eq!(
+            copy_entropy_authority_rows(&table, "entropy-service", 0, &mut out),
+            Some(3)
+        );
+        for index in 0..3 {
+            let at = index * ENTROPY_AUTHORITY_ROW_BYTES;
+            assert_eq!(
+                &out[at..at + ENTROPY_AUTHORITY_ROW_BYTES],
+                table.entry_bytes(index).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn entropy_authority_pages_by_entry_cursor_within_the_staged_bound() {
+        use boot_contracts::entropy_authority::EntropyAuthority;
+        assert_eq!(ENTROPY_AUTHORITY_ROWS_PER_CALL, 9);
+        let mut bytes = [0u8; boot_contracts::entropy_authority::MAX_BYTES];
+        let len = entropy_table(10, &mut bytes);
+        let table = EntropyAuthority::decode(&bytes[..len]).unwrap();
+        let mut out = [0u8; 2 * ENTROPY_AUTHORITY_ROWS_PER_CALL * ENTROPY_AUTHORITY_ROW_BYTES];
+        let service = ENTROPY_SERVICE_INSTANCE;
+        assert_eq!(
+            copy_entropy_authority_rows(&table, service, 0, &mut out),
+            Some(9)
+        );
+        assert_eq!(
+            copy_entropy_authority_rows(&table, service, 9, &mut out),
+            Some(1)
+        );
+        assert_eq!(
+            &out[..ENTROPY_AUTHORITY_ROW_BYTES],
+            table.entry_bytes(9).unwrap()
+        );
+        assert_eq!(
+            copy_entropy_authority_rows(&table, service, 10, &mut out),
+            Some(0)
+        );
+        assert_eq!(
+            copy_entropy_authority_rows(&table, service, usize::MAX, &mut out),
+            Some(0)
+        );
+        let mut short = [0u8; 2 * ENTROPY_AUTHORITY_ROW_BYTES + ENTROPY_AUTHORITY_ROW_BYTES / 2];
+        assert_eq!(
+            copy_entropy_authority_rows(&table, service, 0, &mut short),
+            Some(2)
+        );
+        assert_eq!(
+            copy_entropy_authority_rows(&table, service, 0, &mut []),
+            Some(0)
+        );
     }
 }

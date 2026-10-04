@@ -5,6 +5,8 @@ pub mod block;
 pub mod block_v2;
 pub mod capability_transfer;
 pub mod component;
+pub mod entropy_service;
+pub mod entropy_source;
 pub mod fabric_call;
 pub mod fabric_operation;
 pub mod fabric_qos;
@@ -206,6 +208,85 @@ pub fn valid_pwm_servo_reply(reply: &pwm_servo::WirePwmServoReply) -> bool {
                 | pwm_servo::STATUS_DEVICE_ERROR
                 | pwm_servo::STATUS_MALFORMED
         )
+}
+
+/// A canonical entropy-source request: the protocol identity, a known
+/// operation, a fill length the reply can carry, and no length on a release.
+pub fn valid_entropy_source_request(request: &entropy_source::WireEntropySourceRequest) -> bool {
+    request.magic == entropy_source::ENTROPY_SOURCE_MAGIC
+        && request.version == entropy_source::FORMAT_VERSION
+        && match request.op {
+            entropy_source::OP_FILL => {
+                (1..=entropy_source::MAX_FILL as u32).contains(&request.length)
+            }
+            entropy_source::OP_RELEASE => request.length == 0,
+            _ => false,
+        }
+}
+
+/// An entropy-source reply carries the protocol identity and one of its
+/// statuses; only an `ok` reply carries bytes, and none past its length.
+pub fn valid_entropy_source_reply(reply: &entropy_source::WireEntropySourceReply) -> bool {
+    reply.magic == entropy_source::ENTROPY_SOURCE_MAGIC
+        && reply.version == entropy_source::FORMAT_VERSION
+        && matches!(
+            reply.status,
+            entropy_source::STATUS_OK
+                | entropy_source::STATUS_UNAVAILABLE
+                | entropy_source::STATUS_MALFORMED
+                | entropy_source::STATUS_DEVICE_ERROR
+        )
+        && carries_only(
+            &reply.bytes,
+            reply.length,
+            reply.status == entropy_source::STATUS_OK,
+        )
+}
+
+/// A canonical entropy-service request: the protocol identity, a known
+/// operation, a draw length within one reply, and no length on a close.
+pub fn valid_entropy_service_request(request: &entropy_service::WireEntropyServiceRequest) -> bool {
+    request.magic == entropy_service::ENTROPY_SERVICE_MAGIC
+        && request.version == entropy_service::FORMAT_VERSION
+        && match request.op {
+            entropy_service::OP_DRAW => {
+                (1..=entropy_service::MAX_DRAW as u32).contains(&request.length)
+            }
+            entropy_service::OP_CLOSE => request.length == 0,
+            _ => false,
+        }
+}
+
+/// An entropy-service reply carries the protocol identity and one of its
+/// statuses; only an `ok` reply carries bytes, and none past its length.
+pub fn valid_entropy_service_reply(reply: &entropy_service::WireEntropyServiceReply) -> bool {
+    reply.magic == entropy_service::ENTROPY_SERVICE_MAGIC
+        && reply.version == entropy_service::FORMAT_VERSION
+        && matches!(
+            reply.status,
+            entropy_service::STATUS_OK
+                | entropy_service::STATUS_DENIED
+                | entropy_service::STATUS_MALFORMED
+                | entropy_service::STATUS_EXHAUSTED
+                | entropy_service::STATUS_UNAVAILABLE
+        )
+        && carries_only(
+            &reply.bytes,
+            reply.length,
+            reply.status == entropy_service::STATUS_OK,
+        )
+}
+
+/// A successful reply names a length within its byte field and zeroes the rest;
+/// a close or release acknowledgement is a successful reply of length zero. A
+/// refusal names no length and carries no byte.
+fn carries_only(bytes: &[u8], length: u32, ok: bool) -> bool {
+    let length = length as usize;
+    if ok {
+        length <= bytes.len() && bytes[length..].iter().all(|byte| *byte == 0)
+    } else {
+        length == 0 && bytes.iter().all(|byte| *byte == 0)
+    }
 }
 
 /// Structural validity of a serial-device request: the protocol identity, the

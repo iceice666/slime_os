@@ -126,6 +126,11 @@ GENERATORS = (
         "instance_lifetime.py",
         "instance_lifetime.rs",
     ),
+    (
+        ROOT / "contracts" / "entropy-authority" / "v1" / "schema.zt",
+        "entropy_authority.py",
+        "entropy_authority.rs",
+    ),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.

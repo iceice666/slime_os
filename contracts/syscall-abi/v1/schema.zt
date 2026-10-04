@@ -383,6 +383,11 @@ operations :: List Operation = {
   -- Authenticated application rows use the same reader identity and paging.
   -- The root copies bytes; binding names and protocol policy remain userspace.
   operation "capabilityTable" "NETWORK_APPLICATION_READ" 72;
+  -- The authenticated `entropy-authority/v1` table, on
+  -- `NETWORK_INTERFACE_READ`'s exact shape: the request names only a cursor,
+  -- and the root copies rows only to the instance named `entropy-service`.
+  -- The root draws no entropy and enforces no budget; both are the service's.
+  operation "capabilityTable" "ENTROPY_AUTHORITY_READ" 74;
   -- IO1's root-brokered hardware-resource mechanism. Every object operand is a
   -- logical capability slot from the authenticated caller's own authority
   -- table; no task, driver, device, physical address, or interrupt number is

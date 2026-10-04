@@ -89,6 +89,7 @@ DERIVED_GENERATION_FIXTURES = {
     "sel4-clock-authority": "sel4-clock-authority.zti",
     "sel4-crossing": "sel4-crossing.zti",
     "sel4-demo": "sel4-demo.zti",
+    "sel4-entropy": "sel4-entropy.zti",
     "sel4-directory": "sel4-directory.zti",
     "sel4-filesystem": "sel4-filesystem.zti",
     "sel4-generation": "sel4-generation.zti",
@@ -219,6 +220,8 @@ _SPEC_FIELDS = {
     "networkInterfacesObject",
     "networkApplications",
     "networkApplicationsObject",
+    "entropyAuthority",
+    "entropyAuthorityObject",
     "blockRingAuthority",
     "blockRingAuthorityObject",
     "waitSet",
@@ -283,7 +286,8 @@ def _load(path: Path, contract: ModuleType) -> dict:
     # The IO11 interface table postdates every earlier spec; an absent field is
     # the same declaration as an empty one without an object.
     _DEFAULTED_FIELDS = {"networkInterfaces": [], "networkInterfacesObject": False,
-                         "networkApplications": [], "networkApplicationsObject": False}
+                         "networkApplications": [], "networkApplicationsObject": False,
+                         "entropyAuthority": [], "entropyAuthorityObject": False}
     unexpected = set(value) - _SPEC_FIELDS
     missing = _SPEC_FIELDS - set(value) - _OPTIONAL_FIELDS - set(_DEFAULTED_FIELDS)
     if unexpected or missing:
@@ -659,6 +663,7 @@ def _validate_bounds(spec: dict, contract: ModuleType) -> None:
         ("networkDestinations", contract.MAX_NETWORK_DESTINATIONS),
         ("networkInterfaces", contract.MAX_NETWORK_INTERFACES),
         ("networkApplications", contract.MAX_NETWORK_APPLICATIONS),
+        ("entropyAuthority", contract.MAX_ENTROPY_AUTHORITY),
         ("blockRingAuthority", contract.MAX_BLOCK_RING_AUTHORITY),
         ("waitSet", contract.MAX_WAIT_SET_SOURCES),
         ("recording", contract.MAX_RECORDING_ENTRIES),
@@ -927,6 +932,9 @@ def _validate_authority_sections(spec: dict, admitted: set[str]) -> None:
     for entry in spec["blockRingAuthority"]:
         if entry["holder"] not in admitted:
             _fail(f"blockRingAuthority: holder {entry['holder']!r} is not admitted")
+    for entry in spec["entropyAuthority"]:
+        if entry["holder"] not in admitted:
+            _fail(f"entropyAuthority: holder {entry['holder']!r} is not admitted")
     for entry in spec["waitSet"]:
         if entry["waiter"] not in admitted:
             _fail(f"waitSet: waiter {entry['waiter']!r} is not admitted")
@@ -1244,6 +1252,7 @@ def derive_manifest(system: CompiledSystem) -> dict:
         ("networkDestinationsObject", "network-destinations"),
         ("networkInterfacesObject", "network-interface"),
         ("networkApplicationsObject", "network-application"),
+        ("entropyAuthorityObject", "entropy-authority"),
         ("blockRingAuthorityObject", "block-ring-authority"),
         ("waitSetObject", "wait-set"),
         ("recordingObject", "recording-policy"),
@@ -1333,6 +1342,17 @@ def derive_manifest(system: CompiledSystem) -> dict:
         manifest["networkApplications"] = spec["networkApplications"]
     elif spec["networkApplications"]:
         _fail("networkApplications: populated authority requires its resource object")
+    if spec["entropyAuthorityObject"]:
+        manifest["entropyAuthority"] = spec["entropyAuthority"]
+        # The encoder judges the rows together with the grants they draw
+        # through; running it here refuses a bad table at spec admission rather
+        # than only when an image is built.
+        try:
+            _builder.build_entropy_authority(manifest)
+        except SystemExit as error:
+            _fail(f"entropyAuthority: {error}")
+    elif spec["entropyAuthority"]:
+        _fail("entropyAuthority: populated authority requires its resource object")
     if spec["blockRingAuthorityObject"]:
         manifest["blockRingAuthority"] = spec["blockRingAuthority"]
     if spec["waitSetObject"]:

@@ -1,0 +1,60 @@
+{
+  formatVersion = 1;
+  name = "entropy-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Draws through its one declared entropy endpoint as a hardware, malformed-size, or seeded holder, or reports that it holds no entropy grant.";
+  implementation = {
+    provider = "workspace";
+    binary = "entropy-probe";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_entropy_check gate boots the sel4-entropy composition twice with a QEMU virtio-rng device and once without";
+    expectedResult = "each holder draws within its budget and is refused past it, out-of-range sizes are refused, and the ungranted instance has no binding";
+    passFailCriteria = "[entropy-probe] holder=entropy-hw-b malformed_refused=2";
+    requiredTestEnvironment = "sel4_entropy_check";
+  };
+}

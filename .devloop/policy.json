@@ -139,6 +139,7 @@
     "scripts/generate/generate-component-spec-bindings.py",
     "scripts/generate/generate-composition-inventory-bindings.py",
     "scripts/generate/generate-cpu-boot-observation-bindings.py",
+    "scripts/generate/generate-entropy-bindings.py",
     "scripts/generate/generate-fabric-call-bindings.py",
     "scripts/generate/generate-fabric-operation-bindings.py",
     "scripts/generate/generate-fabric-qos-bindings.py",

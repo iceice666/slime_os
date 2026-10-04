@@ -607,3 +607,18 @@ debug = false
 opt-level = "s"
 codegen-units = 1
 debug = false
+
+[profile.release.package.slime-component-virtio-rng-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-entropy-service]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-entropy-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
