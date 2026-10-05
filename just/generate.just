@@ -31,6 +31,10 @@ pwm_servo_gen:
     python3 scripts/generate/generate-pwm-servo-bindings.py
 
 [group('generate')]
+entropy_gen:
+    python3 scripts/generate/generate-entropy-bindings.py
+
+[group('generate')]
 serial_device_gen:
     python3 scripts/generate/generate-serial-device-bindings.py
 

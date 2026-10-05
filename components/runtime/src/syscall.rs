@@ -716,6 +716,19 @@ pub fn network_interface_read(cursor: usize, out: &mut [u8]) -> Result<usize, i6
     }
 }
 
+/// Read the authenticated `entropy-authority/v1` entries served to this
+/// generation's entropy service, returning how many entries were copied. The
+/// request is self-scoped and names no holder; budgets and streams are the
+/// service's to enforce.
+pub fn entropy_authority_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {
+    let result = transport::entropy_authority_read(cursor, out);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
 /// Read authenticated application rows for this generation's network service.
 /// The root derives the reader from its badge; application policy stays userspace.
 pub fn network_application_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {

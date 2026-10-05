@@ -1,6 +1,6 @@
 # Entropy authority
 
-**Status:** Proposed
+**Status:** Accepted
 **Related work items:** `01a0ec3a-a91f-7349-a28a-26a60d8d7f4e`,
 `01a0724c-5400-76b9-a691-989205b9a2a4` (D3)
 
@@ -29,7 +29,7 @@ Platform facts:
 - pc99 QEMU (`virtio_mmio_count = 0`) and the Framework 13 have `RDRAND`, but no
   device path is qualified there.
 
-## Proposed decision
+## Decision
 
 Entropy is a userspace service with generation-declared authority, split like
 the network path into a driver and a service.
@@ -59,6 +59,20 @@ the network path into a driver and a service.
 `slime-root` gains only the table query. The driver/service split keeps device
 semantics out of the root, and a later `RDRAND` or physical source replaces the
 driver without changing the service or its holders.
+
+The binding rule is fixed by the generation builder: a holder's endpoint is the
+grant `<holder>-entropy` from the holder to `entropy-service`, with exactly
+`send` and `recv`, not transferable, and every row has exactly one. An endpoint
+to `entropy-service` from an instance without a row, or under another name, is
+refused at admission, so a component with no row cannot resolve an entropy
+binding. The root serves the table through `CAPABILITY ENTROPY AUTHORITY READ`
+(label 74) only to the instance named `entropy-service`.
+
+Residency is a placement fact ([instance lifetime](instance-lifetime.md)), not
+part of this decision. The `sel4-entropy` qualification composition declares
+every instance bounded: the service exits once every holder has closed and then
+releases the driver, so the graph reaches `live=0`. A product composition that
+needs a standing service declares it `resident`.
 
 ## Alternatives and trade-offs
 
@@ -106,6 +120,14 @@ consumer.
 
 ## References
 
+- `contracts/entropy-authority/v1/`, `contracts/entropy-source/v1/`,
+  `contracts/entropy-service/v1/`, `boot-contracts/src/entropy_authority.rs`
+- `components/services/virtio-rng-driver/`,
+  `components/services/entropy-service/`, `components/lib/src/hmac_drbg.rs`,
+  `components/testkit/entropy-probe/`
+- `scripts/build/generation_resources.py` (`build_entropy_authority`),
+  `contracts/system-spec/v1/systems/sel4-entropy.zti`,
+  `scripts/check/check-sel4-entropy-plane.py`
 - `components/lib/src/virtio_mmio.rs`,
   `components/services/virtio-net-driver/`,
   `components/services/network-service/src/resolver.rs`

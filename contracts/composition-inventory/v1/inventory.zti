@@ -73,6 +73,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-directory.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-entropy";
+      deferralReason = "";
+      owningGate = "sel4_entropy_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-entropy.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-filesystem.zti";
       composition = "sel4-filesystem";
       deferralReason = "";

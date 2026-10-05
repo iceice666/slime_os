@@ -16,6 +16,7 @@ pub mod clock_authority;
 pub mod component_image;
 pub mod component_runtime_abi;
 pub mod crc32;
+pub mod entropy_authority;
 pub mod fabric_graph;
 pub mod generation;
 #[cfg(feature = "gpt")]

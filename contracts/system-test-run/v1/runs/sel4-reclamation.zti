@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-reclamation";
-  imageClosureIdentity = "414159a04047cd4ec2bf5296b64d3a7a2629bf2bb070c24f2ccedec489cf8884";
+  imageClosureIdentity = "3d8a01adface085b4390288b66859204acea94d83c2e8dfc15cf79ca9faa0cc5";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
