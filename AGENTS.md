@@ -63,6 +63,9 @@ Use the Justfile targets from the repository root:
 - `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
 - `just sel4_fabric_aggregate_check` — both aggregate schedules booted twice over one composition; compares per-participant semantic fields while exempting arrival ordinals and designated poll-sampled high-water counters, not byte-identical serial traces.
 - `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
+- `just zenoh_encoder_check` / `zenoh_session_check` / `zenoh_cdr_check` / `zenoh_transport_check` — the host slices of the Zenoh Profile 0 transport, each judged from bytes this repository did not write; they run in about a second once built.
+- `just zenoh_composition_check` — the derived `sel4-zenoh` composition grants the two demo nodes exactly the declared authority, judged against 15 mutations.
+- `just rpi5_ros2_zenoh_check` — R0's exchange under AArch64 QEMU: the composition and host recipes, then two node components exchange the declared topic over Zenoh Profile 0, each reported batch judged byte for byte against the host wire reference. Explicit, not part of `all`; see [`docs/architecture/zenoh-transport.md`](docs/architecture/zenoh-transport.md).
 - `just docs_check` — validate maintained local links/fragments, canonical UUID references, and current command references without network or an archive checkout.
 - `just tasks_check` — real `myque check` plus backlog-first policy, the spec-driven mandate for post-cutoff identities, terminal-record readability, devloop validation of every spec-driven body, and negative controls; offline, with no historical index dependency.
 - `just tasks_list` / `just tasks_next` / `just tasks_graph` — the work-item store's generated views. Never authoritative; `.tasks/` is.
