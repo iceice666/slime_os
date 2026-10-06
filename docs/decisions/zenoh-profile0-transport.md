@@ -7,7 +7,7 @@
 `01a0f5fa-ff13-7667-8c59-6f4c6d312535`; transport runtime
 `01a0f5fb-0344-7bb5-9d5b-2b79bc0339a8`; nodes and composition
 `01a0f5fb-0780-754f-b2f4-e7513c86b63c`; QEMU gate
-`01a0f5fb-0bb3-7612-9f87-30a7e8dae710`. R0 is
+`01a0fc73-3bcd-75c7-9ec5-0e9f84c7505b`. R0 is
 `01a00b4d-2400-7987-93d6-19201c397dff`.
 
 ## Context
@@ -52,7 +52,14 @@ a Rust encoder that merely agrees with the Rust decoder fails.
 honest synthetic transcript, then on mutations of it, and the gate fails if any
 mutation is accepted. The mutation pass found a real hole while this was written: the
 first transcript judge let success precede the publisher's close. The exchange arm
-runs 22 transcript and 15 composition mutations (37) before it reads the guest.
+runs 28 transcript and 15 composition mutations (43) before it reads the guest.
+
+**Concurrent nodes are judged by causal order only.** The two nodes share one CPU and one
+console, so which prints first is scheduling. The chains are per node, plus one crossing chain
+for what a message makes true: the declaration before the match, a sample sent before it is
+received, the subscriber's close before the publisher's. Each node reports its denied requests
+during setup, before it opens its own session. A first version of the exam ordered the two
+nodes against each other and refused the real guest; booting it is what showed that.
 
 **One composition, exact authority.** `sel4-zenoh` (generation 168) contains
 `init`, `network-service` and the two nodes over the loopback backend. The
@@ -63,8 +70,8 @@ a UDP destination and an external backend are each a refused mutation.
 
 **The QEMU arm lives in the network plane checker.** It is the owner of the
 network planes, and the shared mechanism in `scripts/lib/sel4_plane.py` and
-`scripts/lib/sel4_gate_markers.py` is reused. The arm's 25 markers join the plane's
-gate-control pin (193 to 218), so the existing missing, reordered and
+`scripts/lib/sel4_gate_markers.py` is reused. The arm's 36 markers join the plane's
+gate-control pin (193 to 229), so the existing missing, reordered and
 failure-marker mutations cover it.
 
 ## Alternatives

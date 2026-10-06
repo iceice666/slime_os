@@ -506,41 +506,56 @@ NET_COUNTS: tuple[tuple[str, str, int], ...] = (
 )
 
 
+# The two nodes run concurrently, so no chain orders one node's lines against the other's except
+# where a message crosses the session: the subscriber's declaration precedes the publisher's match,
+# its sent samples precede the subscriber's receipt, and the subscriber's close precedes the
+# publisher's. Everything else is a per-node chain, and a per-node chain is a causal story only.
 ZENOH_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("zenoh admission", (rf"SLIME_ROOT generation admitted number={zenoh_exchange.GENERATION} executables=\d+ instances=4 grants=\d+ ",)),
     ("zenoh service", (
         r"\[network-service\] loopback interface=127\.0\.0\.1 external_nic=none",
         r"\[network-service\] loopback frames=[1-9]\d* rejected=0 handles=0 external_frames=0 resets=0 syns=2 fins=2",
     )),
-    ("zenoh sessions", (
-        r"\[ros2-demo-subscriber\] session open role=listener initial_sn=0 lease_ms=2000",
-        r"\[ros2-demo-publisher\] session open role=connector initial_sn=0 lease_ms=2000",
-        r"\[ros2-demo-subscriber\] declared subscriber id=1 key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
-        r"\[ros2-demo-publisher\] declaration matched key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
-    )),
-    ("zenoh samples", (
-        r"\[ros2-demo-publisher\] wire sent sample=0 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=0 value=10",
-        r"\[ros2-demo-publisher\] wire sent sample=1 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=1 value=20",
-        r"\[ros2-demo-publisher\] wire sent sample=2 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=2 value=30",
-        r"\[ros2-demo-publisher\] wire sent sample=3 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=3 value=40",
-        r"\[rpi5-ros2-demo\] received count=4 sequences=0,1,2,3 values=10,20,30,40",
-    )),
-    ("zenoh teardown", (
-        r"\[ros2-demo-subscriber\] undeclared subscriber id=1",
-        r"\[ros2-demo-subscriber\] session closing samples=4",
-        r"\[ros2-demo-publisher\] session closed samples=4",
-    )),
-    ("zenoh denials", (
+    ("zenoh publisher", (
         r"\[ros2-demo-publisher\] denial class=undeclared-endpoint refused=1",
         r"\[ros2-demo-publisher\] denial class=listen refused=1",
         r"\[ros2-demo-publisher\] denial class=scouting refused=1",
+        r"\[ros2-demo-publisher\] session open role=connector initial_sn=0 lease_ms=2000",
+        r"\[ros2-demo-publisher\] declaration matched key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-publisher\] wire sent sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] wire sent sample=1 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] wire sent sample=2 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] wire sent sample=3 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] session closed samples=4",
+    )),
+    ("zenoh subscriber", (
         r"\[ros2-demo-subscriber\] denial class=connect refused=1",
+        r"\[ros2-demo-subscriber\] session open role=listener initial_sn=0 lease_ms=2000",
+        r"\[ros2-demo-subscriber\] declared subscriber id=1 key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-subscriber\] wire received sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=0 value=10",
+        r"\[ros2-demo-subscriber\] wire received sample=1 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=1 value=20",
+        r"\[ros2-demo-subscriber\] wire received sample=2 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=2 value=30",
+        r"\[ros2-demo-subscriber\] wire received sample=3 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=3 value=40",
+        r"\[rpi5-ros2-demo\] received count=4 sequences=0,1,2,3 values=10,20,30,40",
+        r"\[ros2-demo-subscriber\] undeclared subscriber id=1",
+        r"\[ros2-demo-subscriber\] session closing samples=4",
+    )),
+    # The one cross-node chain: a declaration is matched before the publisher sends, a sample is sent
+    # before it is received, and the subscriber closes before the publisher sees the close.
+    ("zenoh crossing", (
+        r"\[ros2-demo-subscriber\] declared subscriber id=1 key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-publisher\] declaration matched key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-publisher\] wire sent sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] wire received sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] session closing samples=4",
+        r"\[ros2-demo-publisher\] session closed samples=4",
     )),
     ("zenoh success", (
+        r"\[ros2-demo-publisher\] session closed samples=4",
         r"\[rpi5-ros2-demo\] success profile=rpi5-ros2-demo-v2 samples=4",
         rf"SLIME_GRAPH HEALTHY generation={zenoh_exchange.GENERATION} required=4 live=0 completed=4 failed=0",
     )),
