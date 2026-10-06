@@ -127,6 +127,9 @@ concurrently and a line built from several writes can be interleaved.
 - The exchange crosses the loopback backend, so the arm's evidence is the nodes'
   own reports at the service boundary. Under QEMU the corrected exam accepts the
   booted guest; see the plan for what was observed and on which image.
+- A Zenoh ID ending in `0x00`, or all zero, is refused: upstream holds it as a
+  little-endian integer, drops trailing zero bytes and refuses zero, so the bytes
+  would not round-trip.
 - No `rmw_zenoh` interoperability, liveliness, queryables, router, scouting or
   transport security, and no Raspberry Pi 5 claim. The ROSIDL importer and RIHS01
   generator are not here: the demo contract's checker derives those values.

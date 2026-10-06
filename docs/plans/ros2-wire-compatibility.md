@@ -43,6 +43,12 @@ landed with this plan ordered the two concurrent nodes against each other and
 refused that guest; the corrected exam (a chain per node plus one crossing chain)
 accepts it. See [Boundaries](#boundaries) for what is and is not observed.
 
+An earlier boot of the same sources stopped at `attach`: a non-blocking receive
+that found nothing was returned as a zero-byte message, and the attach handshake
+rejected it as malformed. That was a defect in the runtime's receive path, not in
+the Zenoh code, and it is fixed separately; the existing `--arm local` network
+plane check, which carries no Zenoh code, failed the same way until then.
+
 ### What was built
 
 | Slice | Implementation | Recipe |
