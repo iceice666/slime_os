@@ -102,7 +102,7 @@ fn main(_: u32) {
             notifications,
         )
     }
-    .unwrap_or_else(|_| fail(b"attach"));
+    .unwrap_or_else(|error| fail(attach_reason(error)));
     let mut host = Component { clock: &clock };
 
     denials(&mut io, &mut host);
@@ -205,6 +205,16 @@ fn fail_node(error: NodeError) -> ! {
         NodeError::PeerClosedEarly => fail(b"peer closed early"),
         NodeError::LineClipped => fail(b"line clipped"),
         NodeError::Sample(reason) | NodeError::Operation(reason) => fail(reason),
+    }
+}
+
+/// Names the attach failure so a boot that stops here says why, not only where.
+fn attach_reason(error: NetworkError) -> &'static [u8] {
+    match error {
+        NetworkError::Setup => b"attach: setup",
+        NetworkError::BadRequest => b"attach: bad request",
+        NetworkError::Malformed => b"attach: malformed",
+        NetworkError::Lost => b"attach: lost",
     }
 }
 

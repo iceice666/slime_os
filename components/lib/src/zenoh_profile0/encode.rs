@@ -33,6 +33,10 @@ pub enum EncodeError {
     BatchTooLarge,
     /// A ZID is empty or over 16 bytes.
     ZidLength,
+    /// A ZID whose last byte is zero, which includes the all-zero ID. Upstream holds a ZID as a
+    /// little-endian integer, so it drops trailing zero bytes and refuses zero: such an ID has no
+    /// wire form it would reproduce.
+    ZidNotCanonical,
     /// An INIT batch size of zero.
     BatchSizeZero,
     CookieEmpty,
@@ -117,6 +121,9 @@ impl<'a> Writer<'a> {
 fn check_zid(zid: &[u8]) -> Result<u8, EncodeError> {
     if zid.is_empty() || zid.len() > p::MAX_ZID_BYTES {
         return Err(EncodeError::ZidLength);
+    }
+    if zid.last() == Some(&0) {
+        return Err(EncodeError::ZidNotCanonical);
     }
     u8::try_from(zid.len().saturating_sub(1)).map_err(|_| EncodeError::ZidLength)
 }

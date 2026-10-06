@@ -7,7 +7,7 @@
 //! component runtime: its bindings, the service connection and the console.
 
 use slime_components::network_io::{
-    Connection as ServiceConnection, NetworkIo, NetworkNotifications, NetworkReply,
+    Connection as ServiceConnection, NetworkError, NetworkIo, NetworkNotifications, NetworkReply,
 };
 use slime_components::tick_clock::TickClock;
 use slime_components::zenoh_link::{Link, LinkError};
@@ -101,7 +101,7 @@ fn main(_: u32) {
             notifications,
         )
     }
-    .unwrap_or_else(|_| fail(b"attach"));
+    .unwrap_or_else(|error| fail(attach_reason(error)));
     let mut host = Component { clock: &clock };
 
     denials(&mut io, &mut host);
@@ -212,6 +212,16 @@ fn connect(io: &mut NetworkIo<'_>, host: &mut Component<'_>) -> ServiceConnectio
 
 fn binding(name: &[u8]) -> u32 {
     resolve_binding(name).unwrap_or_else(|_| fail(b"binding"))
+}
+
+/// Names the attach failure so a boot that stops here says why, not only where.
+fn attach_reason(error: NetworkError) -> &'static [u8] {
+    match error {
+        NetworkError::Setup => b"attach: setup",
+        NetworkError::BadRequest => b"attach: bad request",
+        NetworkError::Malformed => b"attach: malformed",
+        NetworkError::Lost => b"attach: lost",
+    }
 }
 
 fn fail_node(error: NodeError) -> ! {

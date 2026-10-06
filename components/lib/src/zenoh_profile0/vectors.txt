@@ -29,6 +29,12 @@
 # <flags:u8><scope:z16> and then the raw suffix bytes to the end of the ZBuf,
 # with no <u8;z16> length prefix of its own.
 #
+#
+# ZID canonical form. Upstream holds a ZID as a little-endian integer: it refuses the zero ID and
+# drops trailing zero bytes, so a ZID ending in 0x00 has a shorter wire form than the bytes given.
+# Found by a cross-check against zenoh-codec =1.0.0 (random ZIDs, 6000 cases). Profile 0 refuses
+# such a ZID in both directions; the init_zid_* vectors are hand-derived, the rule is upstream's.
+#
 # The bounds are the frozen demo contract's (contracts/rpi5-ros2-demo/v2):
 # 512-byte batch, 129-byte key expression, 33-byte attachment, 12-byte payload.
 # The 64-byte cookie bound is contracts/zenoh-profile/v1's own choice.
@@ -58,6 +64,10 @@ batch init_truncated_zid refused truncated 01097101020304
 batch init_version_8 refused unsupported-version 0108710102030405060708
 batch init_whatami_router refused unsupported-whatami 0109700102030405060708
 batch init_whatami_client refused unsupported-whatami 0109720102030405060708
+batch init_zid_trailing_zero refused malformed-message 0109710102030405060700
+batch init_zid_all_zero refused malformed-message 0109710000000000000000
+batch init_zid_one_byte_zero refused malformed-message 01090100
+batch init_ack_zid_trailing_zero refused malformed-message 210971010203040506070001c0
 batch init_resolution_64bit refused unsupported-resolution 410931a1a2a3a40b0002
 batch init_extension_present refused unsupported-extension 810971010203040506070801
 batch init_trailing_byte refused trailing-bytes 0109710102030405060708ff

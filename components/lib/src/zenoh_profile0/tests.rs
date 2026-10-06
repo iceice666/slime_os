@@ -203,7 +203,7 @@ fn run(vector: &Vector<'_>) -> String {
 #[test]
 fn corpus_agrees() {
     let all = vectors();
-    assert_eq!(all.len(), 129, "the corpus changed size");
+    assert_eq!(all.len(), 133, "the corpus changed size");
     let mut wrong = Vec::new();
     for vector in &all {
         let got = run(vector);

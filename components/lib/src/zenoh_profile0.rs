@@ -312,6 +312,11 @@ fn init<'a>(mut reader: Reader<'a>, header: u8) -> Result<Message<'a>, Refusal> 
         _ => return Err(Refusal::UnsupportedWhatami),
     }
     let zid = reader.take(1 + usize::from(packed >> 4))?;
+    // Upstream normalises a trailing zero byte away and refuses the zero ID; a ZID that is not in
+    // that canonical form is refused here rather than left with two readings of its length.
+    if zid.last() == Some(&0) {
+        return Err(Refusal::MalformedMessage);
+    }
     let mut batch_size = u16::MAX;
     if header & FLAG_BIT6 != 0 {
         let resolution = reader.u8()?;

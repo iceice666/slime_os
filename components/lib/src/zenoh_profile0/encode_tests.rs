@@ -327,6 +327,21 @@ fn encoder_refuses_what_the_profile_forbids() {
         init_ack(&mut out, &[], 512, &[1]),
         Err(EncodeError::ZidLength)
     );
+    // Upstream drops a trailing zero byte and refuses the zero ID, so neither has a faithful wire
+    // form; every other zero position survives upstream's integer form unchanged.
+    for zid in [&[0u8][..], &[0; 8], &[1, 2, 3, 4, 5, 6, 7, 0], &[1, 0, 0]] {
+        assert_eq!(
+            init_syn(&mut out, zid, 512),
+            Err(EncodeError::ZidNotCanonical)
+        );
+        assert_eq!(
+            init_ack(&mut out, zid, 512, &[1]),
+            Err(EncodeError::ZidNotCanonical)
+        );
+    }
+    for zid in [&[0u8, 1][..], &[1, 0, 2], &[0, 0, 0, 0, 0, 0, 0, 9]] {
+        assert!(init_syn(&mut out, zid, 512).is_ok());
+    }
 
     for key in ["0/a/*", "0/**", "0/a/b$*c", "0/a$*/b"] {
         let mut frame = FrameEncoder::new(&mut out, 0).expect("frame");
