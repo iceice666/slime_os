@@ -169,7 +169,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "0f9d5dc679014c1176cc1d474555e7a9085fbce8da73b386baa1f990cf86ec55";
+        identity = "327766c623d635ba4dd4304480d9186903f64dac8c5ec29d9f0f7b43913665a7";
       };
     };
     {

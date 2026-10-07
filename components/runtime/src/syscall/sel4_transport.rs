@@ -387,37 +387,33 @@ fn nb_recv_registers(endpoint: Word) -> (Word, Word, [Word; 4]) {
     (info, badge, [mr0, mr1, mr2, mr3])
 }
 
+// The x86-64 syscall needs fixed registers, which `asm!` can only name. The
+// architecture-neutral trees keep register names out of their Rust, so the call
+// lives in `runtime/asm/nb_recv_x86_64.S`, whose header gives the register
+// contract, and is reached through the C ABI.
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(include_str!("../../asm/nb_recv_x86_64.S"));
+
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" {
+    fn slime_nb_recv_x86_64(endpoint: Word, out: *mut Word, syscall_id: Word);
+}
+
 /// See the aarch64 definition.
 #[cfg(target_arch = "x86_64")]
 #[sel4::sel4_cfg(not(KERNEL_MCS))]
 fn nb_recv_registers(endpoint: Word) -> (Word, Word, [Word; 4]) {
-    let mut badge = endpoint;
-    let mut info: Word = 0;
-    let (mr0, mr1, mr2, mr3): (Word, Word, Word, Word);
-    // SAFETY: syscall number in rdx, endpoint in rdi, an unused reply argument
-    // in r12 and message info in rsi. The kernel returns the badge in rdi, the
-    // message info in rsi and the first four message registers in r10, r8, r9
-    // and r15. `syscall` overwrites rcx and r11, and the stack pointer is
-    // parked in r14 across it because the kernel entry does not preserve it.
+    let mut out = [0 as Word; 6];
+    // SAFETY: `out` has the six words the routine writes, and it preserves
+    // every register the C ABI requires of a callee.
     unsafe {
-        core::arch::asm!(
-            "mov r14, rsp",
-            "syscall",
-            "mov rsp, r14",
-            in("rdx") sel4::sys::syscall_id::NBRecv as Word,
-            inout("rdi") badge,
-            inout("rsi") info,
-            out("r10") mr0,
-            out("r8") mr1,
-            out("r9") mr2,
-            out("r15") mr3,
-            in("r12") 0 as Word,
-            lateout("rcx") _,
-            lateout("r11") _,
-            lateout("r14") _,
+        slime_nb_recv_x86_64(
+            endpoint,
+            out.as_mut_ptr(),
+            sel4::sys::syscall_id::NBRecv as Word,
         );
     }
-    (info, badge, [mr0, mr1, mr2, mr3])
+    (out[0], out[1], [out[2], out[3], out[4], out[5]])
 }
 
 fn with_thread_buffer(f: impl FnOnce(&mut sel4::IpcBuffer) -> Result<i64, i64>) -> i64 {
