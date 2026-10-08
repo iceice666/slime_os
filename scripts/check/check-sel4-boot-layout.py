@@ -144,6 +144,10 @@ PLANES: tuple[tuple[str, str], ...] = (
     # init holds two more executables and signals the producer's tick; the
     # driver holds its endpoint, device, and region, the producer the endpoint.
     ("sel4-mavlink", "slime-sel4-mavlink.elf"),
+    # The Zenoh Profile 0 demo. Init holds nothing: both nodes and the network service are
+    # root-autostart and every grant is between them, so the block states that init's own table is
+    # empty rather than listing authority the nodes hold.
+    ("sel4-zenoh", "slime-sel4-zenoh.elf"),
 )
 
 # The subset P6.4 replays on x86-64: the resident product graph plus the two

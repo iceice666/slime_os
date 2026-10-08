@@ -32,6 +32,9 @@ store for scope, state, relationships, and observed exit conditions.
 - [Network service](network-service.md) — destination authority, external and
   loopback smoltcp backends, bounded TCP streams, lifetime and reset behavior,
   and the bounded HTTP/DNS client.
+- [Zenoh Profile 0 transport](zenoh-transport.md) — the bounded Zenoh wire
+  codec, session machine, byte-stream runtime and the two demo nodes on
+  `sel4-zenoh`, with what is and is not observed.
 - [Generation management](generation-management.md) — BootState, the
   pre-admission boot selector, the userspace manager protocol, rollback,
   recovery, and transfer planes, and what is not yet rollbackable.
