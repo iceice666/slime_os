@@ -102,6 +102,8 @@ For how the planes work and how to add one, read
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
 | `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
+| `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |
+| `just devloop_diagnostics_controls` | The diagnostics judge's corrupted-result and actual-CLI transport controls; passing controls do not qualify the repair. |
 | `just tasks_graph` | `myque graph`. |
 | `just tasks_list` | `myque list` — generated view, never authoritative. |
 | `just tasks_next` | `myque next` — actionable items. |
