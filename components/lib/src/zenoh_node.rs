@@ -365,11 +365,11 @@ impl Publisher {
     ) -> Result<Step, NodeError> {
         use crate::zenoh_link::Notice;
         let handle = link.handle();
+        let now = host.now_ms();
         if !self.started {
-            link.open(handle, 0)?;
+            link.open(handle, now)?;
             self.started = true;
         }
-        let now = host.now_ms();
         link.pump(handle, now)?;
         while let Some(notice) = link.next_notice() {
             match notice {
@@ -479,6 +479,7 @@ impl Subscriber {
                     self.received += 1;
                 }
                 Notice::SubscriberUndeclared { .. } => self.undeclared = true,
+                Notice::Closed { .. } if self.closing => {}
                 Notice::Closed { .. } => {
                     return if self.received == SAMPLES.len() {
                         Ok(Step::Done(self.received))

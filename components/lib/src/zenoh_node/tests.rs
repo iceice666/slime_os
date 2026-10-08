@@ -60,9 +60,13 @@ struct Recorder {
 
 impl Recorder {
     fn new() -> Self {
+        Self::at(0)
+    }
+
+    fn at(now: u64) -> Self {
         Self {
             lines: Vec::new(),
-            now: 0,
+            now,
         }
     }
 }
@@ -120,8 +124,13 @@ fn connect(send_cap: Option<usize>) -> (Link<End>, Link<End>) {
 
 /// Alternates the two nodes' steps, as two components sharing a CPU do when each yields.
 fn exchange(send_cap: Option<usize>) -> Outcome {
+    exchange_from(send_cap, 0)
+}
+
+/// [`exchange`] with both clocks starting at `start_ms`, as when setup took that long.
+fn exchange_from(send_cap: Option<usize>, start_ms: u64) -> Outcome {
     let (mut pub_link, mut sub_link) = connect(send_cap);
-    let (mut pub_host, mut sub_host) = (Recorder::new(), Recorder::new());
+    let (mut pub_host, mut sub_host) = (Recorder::at(start_ms), Recorder::at(start_ms));
     let (mut publisher, mut subscriber) = (Publisher::new(), Subscriber::new());
     let (mut published, mut received) = (None, None);
     for _ in 0..4000 {
@@ -515,4 +524,60 @@ fn denial_and_open_lines_match_the_markers_the_plane_arm_reads() {
     );
     assert_eq!(KEY.len(), 129);
     let _ = String::new().to_string();
+}
+
+#[test]
+fn the_handshake_deadline_starts_at_the_clock_not_at_zero() {
+    let outcome = exchange_from(None, 10_000);
+    assert_eq!((outcome.published, outcome.received), (4, 4));
+}
+
+#[test]
+fn the_subscriber_is_not_done_until_its_close_has_been_sent() {
+    let (mut pub_link, mut sub_link) = connect(None);
+    let (mut pub_host, mut sub_host) = (Recorder::new(), Recorder::new());
+    let (mut publisher, mut subscriber) = (Publisher::new(), Subscriber::new());
+    for _ in 0..4000 {
+        publisher
+            .step(&mut pub_link, &mut pub_host)
+            .expect("publisher");
+        pub_host.idle();
+        let step = subscriber
+            .step(&mut sub_link, &mut sub_host)
+            .expect("subscriber");
+        sub_host.idle();
+        assert_eq!(step, Step::Continue, "closing is not complete yet");
+        if sub_host
+            .lines
+            .iter()
+            .any(|l| l.contains("session closing samples=4"))
+        {
+            break;
+        }
+    }
+    assert!(sub_link.send_pending(), "the CLOSE is queued, not yet sent");
+    sub_link.io_mut().send_cap = Some(0);
+    assert_eq!(
+        subscriber.step(&mut sub_link, &mut sub_host),
+        Ok(Step::Continue),
+        "a CLOSE that has not left is not a finished subscriber"
+    );
+    assert!(sub_link.send_pending());
+    sub_link.io_mut().send_cap = None;
+    assert_eq!(
+        subscriber.step(&mut sub_link, &mut sub_host),
+        Ok(Step::Done(4))
+    );
+    assert!(!sub_link.send_pending());
+    let mut finished = None;
+    for _ in 0..40 {
+        match publisher.step(&mut pub_link, &mut pub_host) {
+            Ok(Step::Done(count)) => {
+                finished = Some(count);
+                break;
+            }
+            other => assert_eq!(other, Ok(Step::Continue)),
+        }
+    }
+    assert_eq!(finished, Some(4), "the publisher received the CLOSE");
 }

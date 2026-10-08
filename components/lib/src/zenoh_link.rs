@@ -327,16 +327,17 @@ impl<L: ByteLink> Link<L> {
         self.queue(batch)
     }
 
-    /// Sends CLOSE and ends the link.
+    /// Queues CLOSE and ends the link. Refused with [`Error::SendBusy`], changing nothing, while a
+    /// batch is still waiting to be sent: a CLOSE that is never queued would leave the peer open.
     pub fn close(&mut self, handle: LinkHandle, reason: u8) -> Result<(), Error> {
         self.check(handle)?;
+        if self.send_len != 0 {
+            return Err(Error::SendBusy);
+        }
         let mut body = [0u8; MAX_BATCH_BYTES];
         let outcome = self.session.close(reason, &mut body)?;
         self.absorb(&outcome);
-        let batch = outcome.batch(&body);
-        if self.send_len == 0 {
-            self.queue(batch)?;
-        }
+        self.queue(outcome.batch(&body))?;
         self.closed = true;
         Ok(())
     }
@@ -464,6 +465,11 @@ impl<L: ByteLink> Link<L> {
                 Err(error) => return Err(self.fail(Error::Link(error))),
             };
             if read == 0 {
+                // Bytes the peer sent before it closed are processed first; the end of the stream
+                // is reported once nothing more can arrive.
+                if self.io.eof() && self.framer.pending() == 0 {
+                    return Err(self.fail(Error::Link(LinkError::Closed)));
+                }
                 return Ok(());
             }
             let held = window.get(..read).unwrap_or(&[]);
@@ -502,6 +508,9 @@ impl<L: ByteLink> Link<L> {
             };
             let observed = !outcome.events.is_empty();
             self.absorb(&outcome);
+            if self.session.state() == State::Closed {
+                self.closed = true;
+            }
             self.framer.consume_batch();
             report.batches += 1;
             let sent = outcome.batch(&reply);

@@ -528,3 +528,79 @@ fn the_received_tap_names_the_batch_behind_each_notice() {
         );
     }
 }
+
+#[test]
+fn close_with_a_frame_pending_is_refused_and_leaves_the_link_open() {
+    let mut pair = pair(1);
+    pair.open();
+    pair.b_knobs.borrow_mut().send_cap = Some(0);
+    pair.b.declare_subscriber(pair.hb, 1, KEY).expect("declare");
+    assert!(
+        pair.b.send_pending(),
+        "the declaration is waiting to be sent"
+    );
+    assert_eq!(pair.b.close(pair.hb, 0), Err(Error::SendBusy));
+    assert!(!pair.b.is_closed(), "a refused close changes nothing");
+    assert!(pair.b.is_open(), "the session is still open");
+    pair.b_knobs.borrow_mut().send_cap = None;
+    pair.run(1);
+    pair.b
+        .close(pair.hb, 0)
+        .expect("close once the frame is sent");
+    pair.run(2);
+    assert!(
+        notices(&mut pair.a)
+            .iter()
+            .any(|n| matches!(n, Notice::Closed { .. })),
+        "the peer saw the CLOSE"
+    );
+}
+
+#[test]
+fn receiving_close_closes_the_link_and_stops_reading() {
+    let mut pair = pair(1);
+    pair.open();
+    pair.a.close(pair.ha, 0).expect("close");
+    pair.a.pump(pair.ha, 5).expect("flush the close");
+    pair.b.pump(pair.hb, 5).expect("b reads the close");
+    assert!(
+        notices(&mut pair.b)
+            .iter()
+            .any(|n| matches!(n, Notice::Closed { .. }))
+    );
+    assert!(pair.b.is_closed(), "the link follows its session");
+    assert!(!pair.b.is_open());
+    inject(&pair, &[1, 2, 3, 4, 5]);
+    let report = pair.b.pump(pair.hb, 6).expect("a closed link only flushes");
+    assert_eq!(report.received_bytes, 0, "nothing is read after CLOSE");
+    assert_eq!(pair.a_to_b.borrow().bytes.len(), 5);
+}
+
+#[test]
+fn end_of_stream_before_the_handshake_ends_the_link() {
+    let mut pair = pair(1);
+    pair.a_to_b.borrow_mut().closed = true;
+    assert_eq!(
+        pair.b.pump(pair.hb, 1).map(|_| ()),
+        Err(Error::Link(LinkError::Closed))
+    );
+    assert!(pair.b.is_closed());
+}
+
+#[test]
+fn end_of_stream_does_not_discard_a_batch_already_received() {
+    let mut pair = pair(1);
+    pair.a.open(pair.ha, 0).expect("open");
+    pair.a.pump(pair.ha, 0).expect("flush INIT_SYN");
+    pair.a_to_b.borrow_mut().closed = true;
+    pair.b
+        .pump(pair.hb, 1)
+        .expect("the received INIT_SYN is processed");
+    assert_eq!(pair.b.session().state(), State::AwaitOpenSyn);
+    assert!(!pair.b.is_closed());
+    assert_eq!(
+        pair.b.pump(pair.hb, 2).map(|_| ()),
+        Err(Error::Link(LinkError::Closed)),
+        "nothing more will arrive"
+    );
+}
