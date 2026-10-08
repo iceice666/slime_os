@@ -41,6 +41,15 @@ zenoh_transport_check:
 zenoh_composition_check:
     python3 scripts/check/check-zenoh-profile0.py --slice composition
 
+# The codec and session against the real eclipse-zenoh 1.0.0 crates: the corpus as
+# upstream's encoder produces it, a 6000-case sweep in both directions, one full
+# session and the Zenoh ID edge cases, each counted and judged here. Needs the
+# crates from a registry, so it is explicit and not in CI. Fails until the harness
+# lands.
+[group('hardware')]
+zenoh_xcheck_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice xcheck
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.
