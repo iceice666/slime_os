@@ -33,6 +33,7 @@ class Mutation:
     unnamed: bool = False
     executable: tuple[str, ...] = ()
     phase: str = "setup"
+    extent: int = 0
 
 
 @dataclass
@@ -79,8 +80,8 @@ class AuditRun:
             if limit is None:
                 raise AuditError(f"unpermitted mutation: {mutation}")
             totals[mutation.path] += mutation.attempted_bytes
-            if totals[mutation.path] > limit:
-                raise AuditError(f"attempted output exceeds {limit}: {mutation.path}")
+            if totals[mutation.path] > limit or mutation.extent > limit:
+                raise AuditError(f"attempted output/extent exceeds {limit}: {mutation.path}")
 
     def require_memory(
         self, maximum_delta: int = 32 * 1024 * 1024, *,
@@ -167,6 +168,33 @@ def _regular(value: str | None) -> bool:
     return value is None or (value.startswith("/") and value != "/dev/null")
 
 
+def _script(argv: tuple[str, ...]) -> str | None:
+    """Identify the executed file, never a script-looking ordinary argument."""
+    if not argv:
+        return None
+    if not re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(argv[0]).name):
+        return argv[0]
+    index = 1
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--":
+            return argv[index + 1] if index + 1 < len(argv) else None
+        if argument in ("-c", "-m") or argument.startswith(("-c", "-m")):
+            return None
+        if argument in ("-W", "-X"):
+            index += 2
+        elif argument.startswith("-"):
+            index += 1
+        else:
+            return argument
+    return None
+
+
+def _matches_script(argv: tuple[str, ...], token: str) -> bool:
+    script = _script(argv)
+    return script is not None and (script == token or script.endswith('/' + token))
+
+
 class _Trace:
     def __init__(self, cwd: Path, adapter_token: str, recipe_token: str):
         self.cwd = cwd
@@ -202,20 +230,22 @@ class _Trace:
         # disappeared, and symlink metadata itself is still a mutation attempt.
         return Path(os.path.normpath(name))
 
-    def mutation(self, pid: int, op: str, path: Path | None, size: int = 0, unnamed=False):
+    def mutation(self, pid: int, op: str, path: Path | None, size: int = 0,
+                 unnamed=False, extent: int = 0):
         self.events.append(Mutation(
             pid, op, path, size, unnamed, self.executions.get(pid, ()),
             "output" if self.output_active() else "post-output" if self.phase_seen else "setup",
+            extent,
         ))
 
-    def fd_mutation(self, pid: int, op: str, descriptor: str, size: int = 0):
+    def fd_mutation(self, pid: int, op: str, descriptor: str, size: int = 0, extent: int = 0):
         fd = _number(descriptor)
         path = _annotation(descriptor) or self.fds[pid].get(fd)
         if path is None and fd in (0, 1, 2):
             # CLI adapter standard streams are inherited pipes, never artifacts.
             return
         if _regular(path):
-            self.mutation(pid, op, Path(path) if path else None, size)
+            self.mutation(pid, op, Path(path) if path else None, size, extent=extent)
 
     def feed(self, line: str):
         match = LINE.match(line)
@@ -247,18 +277,16 @@ class _Trace:
             args = _arguments(arguments)
             success = not result.startswith("-1")
             if op in ("execve", "execveat"):
-                names = _strings(arguments)
                 if success:
                     self.alive.add(pid)
                     argv_index = 1 if op == "execve" else 2
-                    self.executions[pid] = tuple(_strings(args[argv_index]))
-                if success and any(name == self.adapter_token or name.endswith('/' + self.adapter_token)
-                                   for name in names if not any(c.isspace() for c in name)):
-                    self.adapters.add(pid)
-                if success and any(name == self.recipe_token or name.endswith('/' + self.recipe_token)
-                                   for name in names if not any(c.isspace() for c in name)):
-                    self.recipes.add(pid)
-                    self.phase_seen = True
+                    argv = tuple(_strings(args[argv_index]))
+                    self.executions[pid] = argv
+                    if _matches_script(argv, self.adapter_token):
+                        self.adapters.add(pid)
+                    if _matches_script(argv, self.recipe_token):
+                        self.recipes.add(pid)
+                        self.phase_seen = True
             elif op in ("clone", "clone3", "fork", "vfork"):
                 if success and result[0].isdigit():
                     child = _number(result.split()[0])
@@ -314,9 +342,8 @@ class _Trace:
                 if "writev" in op and _regular(destination) and fd not in (0, 1, 2):
                     self.errors.append((pid, f"unmeasurable vectored write: {op}"))
                 size = _number(args[2])
-                if op == "pwrite64":
-                    size += _number(args[3])
-                self.fd_mutation(pid, op, args[0], size)
+                extent = size + _number(args[3]) if op == "pwrite64" else 0
+                self.fd_mutation(pid, op, args[0], size, extent)
             elif op == "mmap":
                 if "MAP_ANONYMOUS" not in arguments and "MAP_SHARED" in arguments:
                     path = _annotation(args[4]) or self.fds[pid].get(_number(args[4]))
@@ -335,10 +362,10 @@ class _Trace:
                 if success:
                     self.maps[pid].pop(_number(args[0]), None)
             elif op in ("ftruncate", "fallocate", "fchmod", "fchown"):
-                size = _number(args[1]) if op == "ftruncate" else 0
+                extent = _number(args[1]) if op == "ftruncate" else 0
                 if op == "fallocate":
-                    size = _number(args[2]) + _number(args[3])
-                self.fd_mutation(pid, op, args[0], size)
+                    extent = _number(args[2]) + _number(args[3])
+                self.fd_mutation(pid, op, args[0], extent=extent)
             elif op == "sendfile":
                 self.fd_mutation(pid, op, args[0], _number(args[3]))
             elif op in ("copy_file_range", "splice"):
@@ -348,7 +375,8 @@ class _Trace:
                 if success:
                     self.fds[pid][_number(result)] = None
             elif op in ("fsetxattr", "fremovexattr"):
-                self.fd_mutation(pid, op, args[0])
+                size = _number(args[3]) if op == "fsetxattr" else 0
+                self.fd_mutation(pid, op, args[0], size)
             elif op.startswith("io_uring"):
                 self.errors.append((pid, "io_uring mutations cannot be observed by this monitor"))
             else:
@@ -373,9 +401,10 @@ class _Trace:
                 if op not in positions:
                     raise ValueError(f"unknown monitored syscall {op}")
                 for index, directory in positions[op]:
-                    size = _number(args[1]) if op == "truncate" else 0
+                    size = _number(args[3]) if op in ("setxattr", "lsetxattr") else 0
+                    extent = _number(args[1]) if op == "truncate" else 0
                     self.mutation(pid, op, self.path(pid, args[index], args[directory]
-                                  if directory is not None else None), size)
+                                  if directory is not None else None), size, extent=extent)
         except (ValueError, SyntaxError, IndexError, TypeError) as error:
             self.errors.append((pid, f"{op}: {error}"))
 
@@ -556,6 +585,32 @@ def check_controls() -> int:
             refused += 1
         else:
             raise AuditError("malformed syscall trace was accepted")
+        fixture.write_text(
+            "import os\nfd=os.open('bounded',os.O_CREAT|os.O_RDWR,0o600)\n"
+            "os.pwrite(fd,b'x'*4096,0)\nos.pwrite(fd,b'y'*4096,4096)\nos.close(fd)\n"
+        )
+        result = run(["python3", str(fixture)], cwd=root, adapter_token=str(fixture),
+                     recipe_token=str(fixture))
+        result.assert_no_spool({permitted: 8192})
+        if result.completed.returncode:
+            raise AuditError("bounded positioned writes did not execute")
+        for source in (
+            "fd=os.open('bounded',os.O_RDWR); os.pwrite(fd,b'x',8192); os.close(fd)",
+            "os.setxattr('bounded','user.capacity',b'x'*256)",
+            "os.setxattr('bounded','user.capacity',b'x'*256,follow_symlinks=False)",
+            "fd=os.open('bounded',os.O_RDWR); os.setxattr(fd,'user.capacity',b'x'*256); os.close(fd)",
+        ):
+            fixture.write_text("import os\n" + source + "\n")
+            result = run(["python3", str(fixture)], cwd=root, adapter_token=str(fixture),
+                         recipe_token=str(fixture))
+            if result.errors or result.completed.returncode:
+                raise AuditError(f"positioned/xattr control did not execute: {result.completed.stderr}")
+            try:
+                result.assert_no_spool({permitted: 8192 if "pwrite" in source else 0})
+            except AuditError:
+                refused += 1
+            else:
+                raise AuditError(f"positioned/xattr output escaped byte bound: {source}")
         print(f"capacity audit: {refused} filesystem/trace controls refused")
         for stream in ("stdout", "stderr", "mixed"):
             for retained in (False, True):
@@ -600,7 +655,7 @@ def check_controls() -> int:
             helper.write_text(adapter.read_text())
             adapter.write_text(
                 "import subprocess,time\ntime.sleep(.05)\n"
-                f"subprocess.run(['python3',{str(helper)!r}],check=True)\n"
+                f"subprocess.run(['python3',{str(helper)!r},{str(fixture)!r}],check=True)\n"
             )
             result = run(["python3", str(adapter)], cwd=root, adapter_token=str(adapter),
                          recipe_token=str(fixture))
@@ -609,6 +664,8 @@ def check_controls() -> int:
                 raise AuditError("helper collector control did not execute its process tree")
             if set(result.collector_pids) & set(result.recipe_pids):
                 raise AuditError("recipe process was included in collector memory")
+            if len(result.recipe_pids) != 1:
+                raise AuditError("ordinary fixture-path argv was misidentified as executed recipe")
             print(f"capacity helper memory control: stream={stream} "
                   f"collectors={result.collector_pids} recipes={result.recipe_pids} "
                   f"baseline={result.baseline_rss} peak={result.adapter_peak_rss} "

@@ -117,6 +117,26 @@ def validate_refusal(
         )
 
 
+def validate_observations(values: dict, expected_digest: str) -> None:
+    require(
+        set(values) == {"passed", "transcriptDigest", "casesObserved"},
+        "checker observation set changed",
+    )
+    require(
+        values["passed"]["kind"] == "bool" and values["passed"]["boolValue"] is True,
+        "passing recipe observation lost",
+    )
+    require(
+        values["casesObserved"]["kind"] == "int" and values["casesObserved"]["intValue"] == 1,
+        "checker count lost or changed",
+    )
+    require(
+        values["transcriptDigest"]["kind"] == "text"
+        and values["transcriptDigest"]["textValue"] == expected_digest,
+        "complete digest changed",
+    )
+
+
 def controls() -> None:
     identity = {field: field for field in FIELDS}
     base = {
@@ -194,6 +214,25 @@ def controls() -> None:
         gate="just-observations",
     )
     print("capacity diagnostic control: honest observation-gate key accepted")
+    honest = {
+        "passed": {"kind": "bool", "boolValue": True},
+        "transcriptDigest": {"kind": "text", "textValue": "digest"},
+        "casesObserved": {"kind": "int", "intValue": 1},
+    }
+    validate_observations(honest, "digest")
+    for mutation in ("missing", "wrong"):
+        changed = copy.deepcopy(honest)
+        if mutation == "missing":
+            changed.pop("casesObserved")
+        else:
+            changed["casesObserved"]["intValue"] = 999
+        try:
+            validate_observations(changed, "digest")
+        except ExamError:
+            pass
+        else:
+            raise ExamError("observation control accepted " + mutation)
+    print("capacity observation controls: missing/wrong checker counts refused")
     audit.check_controls()
 
 
@@ -701,11 +740,7 @@ def qualification() -> None:
                 result.returncode == 0 and evidence is not None, "under-bound observation refused"
             )
             values = {v["id"]: v["value"] for v in evidence["observations"]}
-            require(
-                values["passed"]["boolValue"] is True
-                and values["transcriptDigest"]["textValue"] == digest_for(0, b"E" * count),
-                "under-bound digest changed",
-            )
+            validate_observations(values, digest_for(0, b"E" * count))
         # The strict UTF-8 baseline may refuse here before capacity replay;
         # this is reported as the actual first failed obligation.
         split_settings = {"stderr": 0, "split": True}
@@ -715,10 +750,8 @@ def qualification() -> None:
             + normalize(b"X\r\n" + "é".encode() + b"\xfe\r")
         ).hexdigest()
         values = {v["id"]: v["value"] for v in evidence["observations"]}
-        require(
-            result.returncode == 0 and values["transcriptDigest"]["textValue"] == expected,
-            f"split byte/newline digest oracle differs: exit={result.returncode}; stdout={result.stdout}; stderr={result.stderr}",
-        )
+        require(result.returncode == 0, f"split byte/newline baseline refused: {result.stderr}")
+        validate_observations(values, expected)
         settings = {"stderr": LIMIT + 1}
         result, evidence = fixture.invoke("overflow", settings)
         receipt, original, record = fixture.overflow(result, evidence, LIMIT + 1)
@@ -773,8 +806,14 @@ def qualification() -> None:
             (fixture.root / "counter").read_bytes() != counter,
             "cross-gate request reused observation refusal",
         )
-        result, _ = fixture.invoke(
+        result, target_evidence = fixture.invoke(
             "reverse-gate", {"stderr": LIMIT + 1}, acceptance="target-passes"
+        )
+        require(
+            result.returncode == 0
+            and target_evidence is not None
+            and target_evidence["observations"][0]["value"]["boolValue"] is True,
+            "reverse-order just-target failed before overflow",
         )
         counter = (fixture.root / "counter").read_bytes()
         result, evidence = fixture.invoke("reverse-gate", {"stderr": LIMIT + 1})
@@ -874,10 +913,7 @@ def qualification() -> None:
             else:
                 require(result.returncode == 0, "streaming stdout failed")
                 values = {v["id"]: v["value"] for v in evidence["observations"]}
-                require(
-                    values["transcriptDigest"]["textValue"] == digest_for(settings["stdout"], b""),
-                    "streaming stdout digest mismatch",
-                )
+                validate_observations(values, digest_for(settings["stdout"], b""))
         print(
             "observation capacity exam: boundaries, drain, raw accounting, memory, replay and filesystem audit qualified"
         )
