@@ -151,6 +151,36 @@ def controls() -> None:
         else:
             raise ExamError(f"capacity judge accepted {name}")
     print(f"observation capacity receipt controls: {len(changes)} corrupt results refused")
+    output = b"O\nE\n"
+    diagnostic_identity = {field: field for field in FIELDS}
+    run_key = hashlib.sha256(
+        json.dumps(
+            diagnostic_identity | {"gate": "just-observations", "justTarget": "fixture_capacity"},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    diagnostic_record = {
+        "formatVersion": 1,
+        "kind": "slime-devloop-diagnostics",
+        "runKey": run_key,
+        "identity": diagnostic_identity,
+        "justTarget": "fixture_capacity",
+        "recipeExitCode": 0,
+        "outputPath": "output.log",
+        "sha256": hashlib.sha256(output).hexdigest(),
+        "capturedBytes": len(output),
+        "limitBytes": LIMIT,
+        "truncated": False,
+    }
+    validate_diagnostic(
+        Capture(diagnostic_record, output, Path("r"), Path("o")),
+        diagnostic_identity,
+        "fixture_capacity",
+        (),
+        expected_exit=0,
+        gate="just-observations",
+    )
+    print("capacity diagnostic control: honest observation-gate key accepted")
     audit.check_controls()
 
 
@@ -374,8 +404,7 @@ sys.exit(s.get("exit",0))
             not any(p.parent.name.startswith("diagnostic-read-") for p in paths),
             "adapter decoder temp files can conceal a spool",
         )
-        if identity is None:
-            return
+        require(identity is not None, "audit cannot attribute artifacts without execution identity")
         recipes = ("tasks_check", "docs_check") if legacy_store else ("fixture_capacity",)
         keys = {
             hashlib.sha256(
@@ -391,25 +420,79 @@ sys.exit(s.get("exit",0))
             for name in recipes
         }
         text = observed.completed.stdout + "\n" + observed.completed.stderr
-        announced = {self.root / Path(name) for name, _ in DIAGNOSTIC.findall(text)}
+        diagnostic_lines = DIAGNOSTIC.findall(text)
+        announced = {self.root / Path(name) for name, _ in diagnostic_lines}
+        require(
+            all(key in keys for _, key in diagnostic_lines), "discovery key not expected execution"
+        )
         output_pairs = set()
         for receipt in announced:
             require(
                 any(receipt.parent.name.startswith(key + "-") for key in keys),
                 "diagnostic path not bound to expected run",
             )
-            if receipt.is_file():
-                record = self.decode(receipt, diagnostic=True)
-                output_pairs |= {receipt, self.root / record["outputPath"]}
+            receipt = safe_path(self.root, receipt.relative_to(self.root).as_posix())
+            record = self.decode(receipt, diagnostic=True)
+            line_keys = {key for name, key in diagnostic_lines if self.root / Path(name) == receipt}
+            require(
+                line_keys == {record["runKey"]} and record["runKey"] in keys,
+                "diagnostic key differs from discovery",
+            )
+            output = safe_path(self.root, record["outputPath"])
+            require(
+                output == receipt.parent / "output.log", "diagnostic output is not exact sibling"
+            )
+            output_pairs |= {receipt, output}
         rawfiles = {
             p
             for p in paths
             if "devloop-diagnostics" in p.parts and p.name in ("receipt.zti", "output.log")
         }
         require(rawfiles <= output_pairs, "unannounced bounded fragments can hide spool")
+        expected_cache_paths = {
+            self.root / "build/devloop-gate-runs" / (key + suffix)
+            for key in keys
+            for suffix in (".json", ".json.partial")
+        }
+        capacity_lines = DISCOVERY.findall(text)
+        expected_capacity_paths = {
+            self.root / Path(name) for name, key in capacity_lines if key in keys
+        }
+        for path in paths:
+            if "devloop-gate-runs" in path.parts and path.name != "devloop-gate-runs":
+                require(path in expected_cache_paths, "cache fragment not bound to current run")
+            if (
+                "devloop-observation-capacity" in path.parts
+                and path.name != "devloop-observation-capacity"
+            ):
+                require(
+                    path in expected_capacity_paths,
+                    "capacity fragment not bound to current discovery",
+                )
+        require(
+            len(expected_capacity_paths) <= 1 and len(capacity_lines) <= 1,
+            "extra capacity receipt fragments",
+        )
         require(
             len(announced) <= (2 if legacy_store else 1), "too many captures for one invocation"
         )
+        if legacy_store:
+            discoveries = DIAGNOSTIC.findall(text)
+            require(
+                len(discoveries) == 2
+                and len(announced) == 2
+                and {key for _, key in discoveries} == keys,
+                "legacy receipts are not distinct per recipe",
+            )
+            seen_recipes = set()
+            for name, key in discoveries:
+                record = self.decode(self.root / Path(name), diagnostic=True)
+                require(
+                    record["identity"] == identity and record["runKey"] == key,
+                    "legacy receipt attribution mismatch",
+                )
+                seen_recipes.add(record["justTarget"])
+            require(seen_recipes == set(recipes), "legacy recipe receipt omitted or duplicated")
 
     def decode(self, path: Path, *, diagnostic: bool = False) -> dict:
         decoder = self.root / "decode-capacity.zt"
@@ -475,7 +558,13 @@ sys.exit(s.get("exit",0))
         output = safe_path(self.root, diagnostic_record["outputPath"])
         capture = Capture(diagnostic_record, output.read_bytes(), diagnostic, output)
         validate_diagnostic(
-            capture, identity, "fixture_capacity", (), truncated=True, expected_exit=expected_exit
+            capture,
+            identity,
+            "fixture_capacity",
+            (),
+            truncated=True,
+            expected_exit=expected_exit,
+            gate="just-observations",
         )
         require(
             capture.output == expected_output, "retained diagnostic prefix differs from raw oracle"
@@ -754,9 +843,7 @@ def qualification() -> None:
             count = settings["stderr"]
             if settings.get("exit"):
                 saved_counter = (fixture.root / "counter").read_bytes()
-                reference = fixture.run(
-                    "just", FIXTURE_RECIPE, check=False, output_limit=32 << 20
-                )
+                reference = fixture.run("just", FIXTURE_RECIPE, check=False, output_limit=32 << 20)
                 (fixture.root / "counter").write_bytes(saved_counter)
                 count = len(reference.stderr.encode())
             fixture.overflow(result, evidence, count)

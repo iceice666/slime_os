@@ -63,6 +63,7 @@ def validate(
     truncated: bool = False,
     expected_output: bytes | None = None,
     expected_exit: int = 23,
+    gate: str = "just-target",
 ) -> None:
     r = capture.receipt
     require(
@@ -90,7 +91,7 @@ def validate(
         r["identity"] == identity and set(identity) == set(FIELDS),
         "misattributed execution identity",
     )
-    bound = identity | {"gate": "just-target", "justTarget": target}
+    bound = identity | {"gate": gate, "justTarget": target}
     key = hashlib.sha256(json.dumps(bound, sort_keys=True).encode()).hexdigest()
     require(r["runKey"] == key and r["justTarget"] == target, "misattributed recipe/run")
     require(

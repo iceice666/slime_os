@@ -45,6 +45,8 @@ class AuditRun:
     errors: tuple[str, ...]
     phase_seen: bool
     executions: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    collector_pids: tuple[int, ...] = ()
+    recipe_pids: tuple[int, ...] = ()
 
     @property
     def executables(self) -> dict[int, tuple[str, ...]]:
@@ -141,8 +143,11 @@ def _arguments(value: str) -> list[str]:
 
 
 def _annotation(value: str) -> str | None:
-    match = re.search(r"<([^>]*)>", value)
-    return match.group(1).removesuffix(" (deleted)") if match else None
+    match = re.search(r"<(.+)>", value)
+    if match is None:
+        return None
+    name = match.group(1).removesuffix(" (deleted)")
+    return re.sub(r"<(?:char|block) \d+:\d+>$", "", name)
 
 
 def _regular(value: str | None) -> bool:
@@ -157,6 +162,9 @@ class _Trace:
         self.adapters: set[int] = set()
         self.parents: dict[int, int] = {}
         self.executions: dict[int, tuple[str, ...]] = {}
+        self.recipes: set[int] = set()
+        self.alive: set[int] = set()
+        self.threads: set[int] = set()
         self.phase_seen = False
         self.fds: dict[int, dict[int, str | None]] = defaultdict(dict)
         self.dirs: dict[int, Path] = {}
@@ -184,7 +192,7 @@ class _Trace:
     def mutation(self, pid: int, op: str, path: Path | None, size: int = 0, unnamed=False):
         self.events.append(Mutation(
             pid, op, path, size, unnamed, self.executions.get(pid, ()),
-            "output" if self.phase_seen else "setup",
+            "output" if self.output_active() else "post-output" if self.phase_seen else "setup",
         ))
 
     def fd_mutation(self, pid: int, op: str, descriptor: str, size: int = 0):
@@ -212,7 +220,10 @@ class _Trace:
                 self.errors.append((pid, "unmatched resumed syscall"))
                 return
             body = self.pending.pop(pid) + resumed.group(1)
-        if body.startswith(("+++", "---")):
+        if body.startswith("+++"):
+            self.alive.discard(pid)
+            return
+        if body.startswith("---"):
             return
         match = CALL.match(body)
         if not match:
@@ -225,6 +236,7 @@ class _Trace:
             if op in ("execve", "execveat"):
                 names = _strings(arguments)
                 if success:
+                    self.alive.add(pid)
                     argv_index = 1 if op == "execve" else 2
                     self.executions[pid] = tuple(_strings(args[argv_index]))
                 if success and any(name == self.adapter_token or name.endswith('/' + self.adapter_token)
@@ -232,11 +244,15 @@ class _Trace:
                     self.adapters.add(pid)
                 if success and any(name == self.recipe_token or name.endswith('/' + self.recipe_token)
                                    for name in names if not any(c.isspace() for c in name)):
+                    self.recipes.add(pid)
                     self.phase_seen = True
             elif op in ("clone", "clone3", "fork", "vfork"):
                 if success and result[0].isdigit():
                     child = _number(result.split()[0])
                     self.parents[child] = pid
+                    self.alive.add(child)
+                    if "CLONE_THREAD" in arguments:
+                        self.threads.add(child)
                     self.executions[child] = self.executions.get(pid, ())
                     self.fds[child] = (
                         self.fds[pid] if "CLONE_FILES" in arguments else self.fds[pid].copy()
@@ -350,14 +366,24 @@ class _Trace:
         except (ValueError, SyntaxError, IndexError, TypeError) as error:
             self.errors.append((pid, f"{op}: {error}"))
 
-    def selected(self, pid: int) -> bool:
+    def descendant(self, pid: int, roots: set[int]) -> bool:
         visited = set()
         while pid not in visited:
-            if pid in self.adapters:
+            if pid in roots:
                 return True
             visited.add(pid)
             pid = self.parents.get(pid, 0)
         return False
+
+    def selected(self, pid: int) -> bool:
+        return self.descendant(pid, self.adapters)
+
+    def collector(self, pid: int) -> bool:
+        return (self.selected(pid) and pid not in self.threads
+                and not self.descendant(pid, self.recipes))
+
+    def output_active(self) -> bool:
+        return any(self.descendant(pid, self.recipes) for pid in self.alive)
 
 
 def _rss(pid: int) -> int:
@@ -376,11 +402,15 @@ def run(
     timeout: float = 180, adapter_token: str = "scripts/check/devloop-gate.py",
     recipe_token: str = "fixture.py", trace_limit: int = 16 * 1024 * 1024,
 ) -> AuditRun:
-    """Trace the installed CLI and sample adapter RSS every five milliseconds.
+    """Trace the CLI and sample aggregate collector RSS every five milliseconds.
 
     Native processes outside the adapter lineage are not mutation subjects.
-    Output-phase RSS begins at the fixture exec; the latest adapter sample
-    preceding it supplies the setup/native-validation baseline.
+    Collector memory includes the adapter and its non-recipe descendants, not
+    threads (whose process RSS would double-count). The fixture subtree is
+    excluded. Sampling begins at fixture exec and ends when that subtree exits,
+    so later receipt decoding is outside this memory phase. The latest setup
+    collector sample supplies the baseline. Historical adapter_peak_rss naming
+    is retained for the aggregate collector metric.
     """
     cwd = Path(cwd).absolute()
     trace = _Trace(cwd, adapter_token, recipe_token)
@@ -395,7 +425,7 @@ def run(
         stdout_path, stderr_path = Path(temporary) / "stdout", Path(temporary) / "stderr"
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = subprocess.Popen(
-                ["strace", "-f", "-qq", "-yy", "-s", "4096", "-o", str(trace_path),
+                ["strace", "-f", "-q", "-yy", "-s", "4096", "-o", str(trace_path),
                  "-e", f"trace={SYSCALLS}", "-e", f"raw={WRITES}", *command],
                 cwd=cwd, env=env, stdout=stdout, stderr=stderr, start_new_session=True,
             )
@@ -413,13 +443,13 @@ def run(
                     partial = lines.pop()
                     for line in lines:
                         trace.feed(line.decode("utf-8", "surrogateescape"))
-                rss = sum(_rss(pid) for pid in trace.adapters)
-                if trace.phase_seen:
+                rss = sum(_rss(pid) for pid in trace.alive if trace.collector(pid))
+                if trace.output_active():
                     if not baseline:
                         baseline = last_rss or rss
                     if rss:
                         samples.append(rss)
-                elif rss:
+                elif not trace.phase_seen and rss:
                     last_rss = rss
                 if stdout_path.stat().st_size + stderr_path.stat().st_size > 2 * 1024 * 1024:
                     fatal.append("CLI output exceeded bounded exam capture")
@@ -452,6 +482,8 @@ def run(
         completed, tuple(event for event in trace.events if trace.selected(event.pid)),
         max(samples, default=0), baseline, tuple(samples), tuple(errors), trace.phase_seen,
         {pid: argv for pid, argv in trace.executions.items() if trace.selected(pid)},
+        tuple(sorted(pid for pid in trace.executions if trace.collector(pid))),
+        tuple(sorted(trace.recipes)),
     )
 
 
@@ -549,5 +581,47 @@ def check_controls() -> int:
                 else:
                     if retained:
                         raise AuditError(f"unbounded {stream} collector escaped retained-memory monitor")
+            # The adapter itself does not collect. Its exec'd helper owns both
+            # pipes, so adapter-only RSS would falsely accept this control.
+            helper = root / "collector.py"
+            helper.write_text(adapter.read_text())
+            adapter.write_text(
+                "import subprocess,time\ntime.sleep(.05)\n"
+                f"subprocess.run(['python3',{str(helper)!r}],check=True)\n"
+            )
+            result = run(["python3", str(adapter)], cwd=root, adapter_token=str(adapter),
+                         recipe_token=str(fixture))
+            result.assert_no_spool({})
+            if result.completed.returncode or len(result.collector_pids) < 2:
+                raise AuditError("helper collector control did not execute its process tree")
+            if set(result.collector_pids) & set(result.recipe_pids):
+                raise AuditError("recipe process was included in collector memory")
+            print(f"capacity helper memory control: stream={stream} "
+                  f"collectors={result.collector_pids} recipes={result.recipe_pids} "
+                  f"baseline={result.baseline_rss} peak={result.adapter_peak_rss} "
+                  f"growth={result.peak_memory_delta} samples={len(result.rss_samples)}")
+            try:
+                result.require_memory()
+            except AuditError:
+                refused += 1
+            else:
+                raise AuditError(f"unbounded {stream} helper escaped retained-memory monitor")
+        fixture.write_text(
+            "import subprocess,time\nrecipe_memory=bytearray(128*1024*1024)\n"
+            "subprocess.run(['python3','-c','import time; data=bytearray(64*1024*1024); time.sleep(.1)'],check=True)\n"
+            "time.sleep(.05)\n"
+        )
+        adapter.write_text(
+            "import subprocess,time\ntime.sleep(.05)\n"
+            f"subprocess.run(['python3',{str(fixture)!r}],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)\n"
+            "after=bytearray(128*1024*1024)\ntime.sleep(.05)\n"
+        )
+        result = run(["python3", str(adapter)], cwd=root, adapter_token=str(adapter),
+                     recipe_token=str(fixture))
+        result.assert_no_spool({Path('/dev/null'): 0})
+        result.require_memory()
+        if result.completed.returncode:
+            raise AuditError("post-recipe decoder memory control failed to execute")
+        print("capacity audit: recipe subtree and post-recipe memory excluded; helper processes included")
     print(f"capacity audit: {refused} total controls refused; bounded streaming passed all streams")
     return refused
