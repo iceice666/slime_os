@@ -464,11 +464,13 @@ def _rss(pid: int) -> int:
 def run(
     command: list[str], *, cwd: Path, env: dict[str, str] | None = None,
     timeout: float = 180, adapter_token: str = "scripts/check/devloop-gate.py",
-    recipe_token: str = "fixture.py", trace_limit: int = 16 * 1024 * 1024,
+    recipe_token: str = "fixture.py", trace_limit: int = 64 * 1024 * 1024,
 ) -> AuditRun:
     """Trace the CLI and sample aggregate collector RSS every five milliseconds.
 
     Native processes outside the adapter lineage are not mutation subjects.
+    Their bounded trace still occupies this observer's total 64 MiB budget:
+    pinned CLI validation alone exceeds 16 MiB for an otherwise small fixture.
     Collector memory includes the adapter and its non-recipe descendants, not
     threads (whose process RSS would double-count). The fixture subtree is
     excluded. Sampling begins at fixture exec and ends when that subtree exits,
