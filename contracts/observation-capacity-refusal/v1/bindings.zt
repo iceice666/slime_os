@@ -1,0 +1,14 @@
+s ::= import "schema.zt";
+r ::= import stdlib.reflect;
+{
+  formatVersion = s.formatVersion;
+  kind = s.kind;
+  outcome = s.outcome;
+  gate = s.gate;
+  stderrLimitBytes = s.stderrLimitBytes;
+  maxReceiptBytes = s.maxReceiptBytes;
+  maxPathBytes = s.maxPathBytes;
+  reuseSeconds = s.reuseSeconds;
+  receiptFields = r.schemaFields s.CapacityRefusal;
+  identityFields = r.schemaFields s.ExecutionIdentity;
+}

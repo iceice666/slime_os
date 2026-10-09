@@ -49,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from harness import ROOT  # noqa: E402
 import devloop_diagnostics  # noqa: E402
 import devloop_observations  # noqa: E402
+import observation_capacity  # noqa: E402
 import work_items  # noqa: E402
 
 # A terminal record that cannot be read as a finished item. The gate proves the
@@ -207,6 +208,18 @@ def run_once(
     for a gate that collects one; `just-target` leaves it absent.
     """
     key = run_key(request, gate, target)
+    if gate == "just-observations":
+        try:
+            observation_capacity.replay(key, request, target)
+        except observation_capacity.Refused as error:
+            raise CannotRun(str(error)) from error
+        except (OSError, ValueError) as error:
+            message = f"diagnostic capacity retention error for run {key}: {error}"
+            try:
+                devloop_diagnostics.notify(message)
+            except (OSError, ValueError):
+                pass
+            raise CannotRun(message) from error
     previous = reusable(key, time.time())
     if previous is not None:
         sys.stderr.write(
@@ -232,7 +245,11 @@ def run_once(
         if isinstance(result, devloop_diagnostics.Capture):
             receipt = devloop_diagnostics.retain(key, request, target, result)
             record["diagnosticReceipt"] = receipt
+            if gate == "just-observations" and result.transcript_digest is None:
+                observation_capacity.retain(key, request, target, result, receipt)
             devloop_diagnostics.announce(receipt, key, request, target)
+    except observation_capacity.Refused as error:
+        raise CannotRun(str(error)) from error
     except (OSError, ValueError) as error:
         message = f"diagnostic capture error for run {key}: {error}"
         try:
@@ -241,6 +258,10 @@ def run_once(
             pass
         raise CannotRun(message) from error
     if environment is not None:
+        if isinstance(result, devloop_diagnostics.Capture) and result.transcript_digest is None:
+            message = f"diagnostic transcript error for run {key}: stderr exceeds bounded digest buffer; raw capture retained"
+            devloop_diagnostics.notify(message)
+            raise CannotRun(message)
         record["report"] = observations_report(target, passed)
         record["transcriptDigest"] = (
             result.transcript_digest

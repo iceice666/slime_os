@@ -37,14 +37,17 @@ MyQue fixture store. `just devloop_diagnostics_controls` tests the judge's
 negative controls and never qualifies the repair. The recipe runs the canonical
 store check first. The qualification covers the adapter's receipts and the operator's discovery path.
 
-The retained output limit is per capture, not an aggregate storage quota. Full
-stdout/stderr are temporarily spooled to disk to preserve the existing
-`just-observations` full-text digest (including universal-newline normalization)
-without unbounded transcript memory. Valid UTF-8 keeps the prior digest; invalid
-UTF-8 is round-tripped with surrogate escapes so opaque diagnostic bytes are not
-lost before retention. Temporary disk use is not bounded by the
-retained limit. The legacy `work-item-store` count parser still keeps complete
-checker text in memory while retaining bounded logs for both recipes.
+The retained output limit is per capture, not an aggregate storage quota.
+General capture uses no disk spool: stdout is normalized and hashed incrementally,
+while stderr is buffered up to the retained-output bound. The established
+`just-observations` digest remains complete stdout followed by complete stderr,
+including universal-newline normalization. If stderr exceeds that bound, the raw
+bounded log is retained, but the observation gate explicitly refuses instead of
+claiming a truncated digest. `just-target` still reports the recipe's exit.
+Valid UTF-8 keeps the prior digest; invalid UTF-8 is round-tripped with surrogate
+escapes so opaque diagnostic bytes are not lost before retention. The legacy
+`work-item-store` count parser still keeps complete checker text in memory while
+retaining bounded logs for both recipes.
 Existing run-cache reuse is sequential; concurrent same-identity
 invocations are not guaranteed single execution. Each retained capture uses its
 own directory and never replaces a predecessor's files.

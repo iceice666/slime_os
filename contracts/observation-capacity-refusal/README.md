@@ -32,6 +32,16 @@ stdout followed by all normalized stderr. Retained raw logs are byte-exact and
 use no newline normalization. Invalid UTF-8 support is new; it does not claim a
 digest from the formerly strict decoder.
 
-The scope is `01a11ff0-9c8d-714f-a374-fb8e641eb873`. Its executable exam must land
-before implementing this replay format. Generated codecs belong in the later
-implementation, not this planning contract.
+The scope is `01a11ff0-9c8d-714f-a374-fb8e641eb873`. The landed
+`devloop_observation_capacity_check` grades this replay format through the real
+CLI, syscall observation and measured collector memory. The codec is generated
+from `bindings.zt`; static `check.zt` decodes receipts without creating adapter
+scratch files.
+
+The first receipt filename is the full run key. An expired run creates a new
+immutable 64-hex generation filename containing the first 32 run-key hex digits
+and a diagnostic-path-derived suffix. Lookup decodes only that prefix's candidates,
+validates every matching receipt before expiry checks, and selects newest finish
+time with filename as a deterministic tie-breaker. Old disclosed paths and bytes
+are never removed or replaced. Aggregate lookup/retention is not a total storage
+quota, and concurrent same-identity execution is not qualified.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import io
 import json
@@ -33,7 +34,7 @@ def notify(message: str) -> None:
 class Capture(tuple):
     """Keep recipe's pair interface for existing gate controls."""
 
-    def __new__(cls, exit_code: int, output: bytes, truncated: bool, transcript_digest: str):
+    def __new__(cls, exit_code: int, output: bytes, truncated: bool, transcript_digest: str | None):
         value = super().__new__(cls, (exit_code == 0, output.decode("utf-8", errors="replace")))
         value.exit_code = exit_code
         value.output = output
@@ -45,32 +46,35 @@ class Capture(tuple):
 def capture(
     target: str, environment: dict[str, str] | None, *, complete_text: bool = False
 ) -> Capture:
-    spools = {}
-    try:
-        for name in ("stdout", "stderr"):
-            spools[name] = tempfile.TemporaryFile()
-    except OSError:
-        for spool in spools.values():
-            spool.close()
-        raise
     recipe_environment = dict(os.environ if environment is None else environment)
     recipe_environment.pop(RELAY_ENV, None)
-    try:
-        process = subprocess.Popen(
-            ["just", target],
-            cwd=ROOT,
-            env=recipe_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError:
-        for spool in spools.values():
-            spool.close()
-        raise
+    process = subprocess.Popen(
+        ["just", target],
+        cwd=ROOT,
+        env=recipe_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     chunks = {"stdout": bytearray(), "stderr": bytearray()}
     sizes = {"stdout": 0, "stderr": 0}
-    # Retained logs are bounded. Temporary spools preserve the established
-    # full stdout-then-stderr text digest without retaining that text in RAM.
+    decoders = {
+        name: io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder("utf-8")("surrogateescape"), translate=True
+        )
+        for name in chunks
+    }
+    digest = hashlib.sha256()
+    complete = {name: [] for name in chunks}
+
+    def decode(name: str, data: bytes, *, final: bool = False) -> None:
+        text = decoders[name].decode(data, final=final)
+        if name == "stdout":
+            digest.update(text.encode("utf-8", errors="surrogateescape"))
+        if complete_text:
+            complete[name].append(text)
+
+    # stdout can be hashed immediately; stderr follows it in the established
+    # digest ordering. Only the legacy store parser requests unbounded text.
     try:
         with selectors.DefaultSelector() as selector:
             for name in chunks:
@@ -80,32 +84,28 @@ def capture(
             while selector.get_map():
                 for key, _ in selector.select():
                     data = os.read(key.fd, 8192)
+                    name = key.data
                     if not data:
+                        decode(name, b"", final=True)
                         selector.unregister(key.fileobj)
                         key.fileobj.close()
                         continue
-                    name = key.data
                     sizes[name] += len(data)
-                    spools[name].write(data)
                     remaining = contract.MAX_OUTPUT_BYTES - len(chunks[name])
                     chunks[name].extend(data[:remaining])
+                    if name == "stdout" or complete_text:
+                        decode(name, data)
         code = process.wait()
-        digest = hashlib.sha256()
-        complete = []
-        for name in ("stdout", "stderr"):
-            spools[name].seek(0)
-            # Valid UTF-8 retains the former universal-newline digest. For
-            # opaque invalid bytes, surrogateescape round-trips every byte.
-            text = io.TextIOWrapper(
-                spools[name], encoding="utf-8", errors="surrogateescape", newline=None
-            )
-            try:
-                while part := text.read(8192):
-                    digest.update(part.encode("utf-8", errors="surrogateescape"))
-                    if complete_text:
-                        complete.append(part)
-            finally:
-                text.detach()
+        if complete_text:
+            stderr = "".join(complete["stderr"])
+        elif sizes["stderr"] <= contract.MAX_OUTPUT_BYTES:
+            stderr = io.IncrementalNewlineDecoder(
+                codecs.getincrementaldecoder("utf-8")("surrogateescape"), translate=True
+            ).decode(bytes(chunks["stderr"]), final=True)
+        else:
+            stderr = None
+        if stderr is not None:
+            digest.update(stderr.encode("utf-8", errors="surrogateescape"))
     finally:
         if process.poll() is None:
             process.terminate()
@@ -116,20 +116,32 @@ def capture(
                 process.wait()
         for name in chunks:
             getattr(process, name).close()
-            spools[name].close()
     output = bytes(chunks["stdout"] + chunks["stderr"])[: contract.MAX_OUTPUT_BYTES]
     result = Capture(
-        code, output, sum(sizes.values()) > contract.MAX_OUTPUT_BYTES, digest.hexdigest()
+        code,
+        output,
+        sum(sizes.values()) > contract.MAX_OUTPUT_BYTES,
+        digest.hexdigest() if stderr is not None else None,
     )
-    result.complete_text = "".join(complete) if complete_text else None
+    result.stderr_bytes = sizes["stderr"]
+    result.complete_text = (
+        "".join(complete["stdout"] + complete["stderr"]) if complete_text else None
+    )
     return result
 
 
 def retain(key: str, request: dict, target: str, result: Capture) -> str:
     directory = ROOT / "build/devloop-diagnostics"
-    directory.mkdir(parents=True, exist_ok=True)
+    # Reject all existing symlink ancestors before the first mutation. Build
+    # each checkout-relative directory separately and never follow a link.
     if any(path.is_symlink() for path in (directory, *directory.parents)):
         raise ValueError("symlink diagnostic directory")
+    for path in (ROOT / "build", directory):
+        if path.is_symlink():
+            raise ValueError("symlink diagnostic directory")
+        path.mkdir(exist_ok=True)
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("unsafe diagnostic directory")
     run = Path(tempfile.mkdtemp(prefix=key + "-", dir=directory))
     output = run / "output.log"
     receipt = run / "receipt.zti"
@@ -166,39 +178,27 @@ def announce(path: str, key: str, request: dict | None = None, target: str | Non
         raise ValueError("diagnostic receipt unavailable")
     if receipt.stat().st_size > contract.MAX_RECEIPT_BYTES:
         raise ValueError("diagnostic receipt exceeds schema bound")
-    with tempfile.TemporaryDirectory(prefix="diagnostic-read-") as temporary:
-        root = Path(temporary)
-        shutil_source = ROOT / "contracts/devloop-diagnostics/v1/schema.zt"
-        (root / "schema.zt").write_bytes(shutil_source.read_bytes())
-        source = root / "decode.zt"
-        source.write_text(
-            's ::= import "schema.zt"; main :: Load -> Validation DecodeIssue s.DiagnosticReceipt ! { load.zti : Path -> Data; } = load => s.decodeReceipt (loadZti '
-            + json.dumps(str(receipt))
-            + "); main"
+    environment = dict(os.environ, SLIME_DIAGNOSTIC_RECEIPT=str(receipt))
+    decoder = shutil.which("zutai-cli", path=environment.get("PATH"))
+    if decoder is None or not environment.get("ZUTAI_STDLIB_ROOT"):
+        raise ValueError("diagnostic receipt decoder environment unavailable")
+    try:
+        decoded = subprocess.run(
+            [decoder, "json", str(ROOT / "contracts/devloop-diagnostics/v1/check.zt")],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
-        # The operator selected installed or submodule toolchain before the
-        # adapter ran. Never build a second compiler here or override stdlib.
-        environment = dict(os.environ)
-        decoder = shutil.which("zutai-cli", path=environment.get("PATH"))
-        if decoder is None or not environment.get("ZUTAI_STDLIB_ROOT"):
-            raise ValueError("diagnostic receipt decoder environment unavailable")
-        try:
-            decoded = subprocess.run(
-                [decoder, "json", str(source)],
-                cwd=root,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.SubprocessError as error:
-            raise ValueError(f"diagnostic receipt decoder unavailable: {error}") from error
-        if decoded.returncode:
-            raise ValueError("diagnostic receipt cannot be decoded")
-        value = json.loads(decoded.stdout)
-        if value.get("tag") != "valid":
-            raise ValueError("invalid diagnostic receipt")
-        record = value["payload"]["value"]
+    except subprocess.SubprocessError as error:
+        raise ValueError(f"diagnostic receipt decoder unavailable: {error}") from error
+    if decoded.returncode:
+        raise ValueError("diagnostic receipt cannot be decoded")
+    value = json.loads(decoded.stdout)
+    if value.get("tag") != "valid":
+        raise ValueError("invalid diagnostic receipt")
+    record = value["payload"]["value"]
     if (
         record["runKey"] != key
         or record["formatVersion"] != contract.FORMAT_VERSION
