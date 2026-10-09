@@ -8,6 +8,7 @@ It is an observer, not a filesystem sandbox or an atomic memory measurement.
 from __future__ import annotations
 
 import ast
+import json
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -34,6 +35,8 @@ class Mutation:
     executable: tuple[str, ...] = ()
     phase: str = "setup"
     extent: int = 0
+    payload: bytes | None = None
+    written_bytes: int | None = None
 
 
 @dataclass
@@ -107,9 +110,11 @@ class AuditRun:
             )
 
 
-# Write buffers are printed as addresses, not stream contents. File paths retain
-# normal strace escaping; -yy provides resolved directory and descriptor paths.
+# Ordinary writes retain at most 256 escaped bytes for bounded artifact content
+# evidence. Other write buffers remain addresses, not stream contents. -yy
+# supplies resolved directory and descriptor paths.
 WRITES = "write,writev,pwrite64,pwritev,pwritev2"
+RAW_WRITES = "writev,pwrite64,pwritev,pwritev2"
 SYSCALLS = (
     "execve,execveat,clone,clone3,fork,vfork,open,openat,openat2,creat,close,"
     "dup,dup2,dup3,fcntl,pipe,pipe2,chdir,fchdir,mmap,mprotect,munmap,"
@@ -231,21 +236,25 @@ class _Trace:
         return Path(os.path.normpath(name))
 
     def mutation(self, pid: int, op: str, path: Path | None, size: int = 0,
-                 unnamed=False, extent: int = 0):
+                 unnamed=False, extent: int = 0, payload: bytes | None = None,
+                 written_bytes: int | None = None):
         self.events.append(Mutation(
             pid, op, path, size, unnamed, self.executions.get(pid, ()),
             "output" if self.output_active() else "post-output" if self.phase_seen else "setup",
-            extent,
+            extent, payload, written_bytes,
         ))
 
-    def fd_mutation(self, pid: int, op: str, descriptor: str, size: int = 0, extent: int = 0):
+    def fd_mutation(self, pid: int, op: str, descriptor: str, size: int = 0,
+                    extent: int = 0, payload: bytes | None = None,
+                    written_bytes: int | None = None):
         fd = _number(descriptor)
         path = _annotation(descriptor) or self.fds[pid].get(fd)
         if path is None and fd in (0, 1, 2):
             # CLI adapter standard streams are inherited pipes, never artifacts.
             return
         if _regular(path):
-            self.mutation(pid, op, Path(path) if path else None, size, extent=extent)
+            self.mutation(pid, op, Path(path) if path else None, size,
+                          extent=extent, payload=payload, written_bytes=written_bytes)
 
     def feed(self, line: str):
         match = LINE.match(line)
@@ -340,15 +349,23 @@ class _Trace:
                 fd = _number(args[0])
                 destination = _annotation(args[0]) or self.fds[pid].get(fd)
                 inherited_stream = destination is None and fd in (0, 1, 2)
+                written = _number(result.split()[0]) if success else 0
                 if "writev" in op:
                     if _regular(destination) and not inherited_stream:
                         self.errors.append((pid, f"unmeasurable vectored write: {op}"))
                     # args[2] is an iovec count, not a payload byte count.
-                    self.fd_mutation(pid, op, args[0])
+                    self.fd_mutation(pid, op, args[0], written_bytes=written)
                 else:
                     size = _number(args[2])
                     extent = size + _number(args[3]) if op == "pwrite64" else 0
-                    self.fd_mutation(pid, op, args[0], size, extent)
+                    payload = None
+                    if op == "write" and QUOTED.fullmatch(args[1]):
+                        # strace octal/hex escapes describe bytes, not a Unicode
+                        # decode; latin1 preserves the escaped values exactly.
+                        candidate = ast.literal_eval(args[1]).encode("latin1")
+                        if len(candidate) == size and written == size:
+                            payload = candidate
+                    self.fd_mutation(pid, op, args[0], size, extent, payload, written)
             elif op == "mmap":
                 if "MAP_ANONYMOUS" not in arguments and "MAP_SHARED" in arguments:
                     path = _annotation(args[4]) or self.fds[pid].get(_number(args[4]))
@@ -472,8 +489,8 @@ def run(
         stdout_path, stderr_path = Path(temporary) / "stdout", Path(temporary) / "stderr"
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             process = subprocess.Popen(
-                ["strace", "-f", "-q", "-yy", "-s", "4096", "-o", str(trace_path),
-                 "-e", f"trace={SYSCALLS}", "-e", f"raw={WRITES}", *command],
+                ["strace", "-f", "-q", "-yy", "-s", "256", "-o", str(trace_path),
+                 "-e", f"trace={SYSCALLS}", "-e", f"raw={RAW_WRITES}", *command],
                 cwd=cwd, env=env, stdout=stdout, stderr=stderr, start_new_session=True,
             )
             deadline, offset, partial = time.monotonic() + timeout, 0, b""
@@ -547,6 +564,31 @@ def check_controls() -> int:
         good.assert_no_spool({permitted: 2})
         if good.completed.returncode:
             raise AuditError("positive audit control did not execute")
+        content = json.dumps({"fixture": "x" * 182}).encode()
+        if len(content) != 197:
+            raise AuditError("content control no longer matches bounded fixture length")
+        for payload in (content, b'x' * 197, bytes(range(256))):
+            fixture.write_text(
+                "import os\n"
+                f"open('bounded','wb').write({payload!r})\nos.unlink('bounded')\n"
+            )
+            result = run(["python3", str(fixture)], cwd=root, adapter_token=str(fixture),
+                         recipe_token=str(fixture))
+            result.assert_no_spool({permitted: len(payload)})
+            writes = [mutation for mutation in result.mutations
+                      if mutation.path == permitted and mutation.operation == 'write']
+            if (len(writes) != 1 or writes[0].payload != payload
+                    or writes[0].written_bytes != len(payload) or result.completed.returncode):
+                raise AuditError("bounded deleted-file write content was not byte-exact")
+        partial_trace = _Trace(root, str(fixture), str(fixture))
+        partial_trace.fds[101][3] = str(permitted)
+        partial_trace.feed('101 write(3, "payload", 7) = 3')
+        partial_trace.feed('101 write(3, "payload", 7) = -1 EBADF (Bad file descriptor)')
+        if (partial_trace.errors or len(partial_trace.events) != 2
+                or [event.written_bytes for event in partial_trace.events] != [3, 0]
+                or any(event.payload is not None for event in partial_trace.events)):
+            raise AuditError("partial/failed write was treated as complete content evidence")
+        print("capacity audit: deleted JSON/spool bytes exact; partial/failed writes incomplete")
         controls = [
             "open('hidden', 'wb').write(b'spool')",
             "open('hidden', 'ab').write(b'spool')",
