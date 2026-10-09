@@ -3,7 +3,7 @@
 `v1/schema.zt` owns the local receipt an executed recipe's diagnostic capture
 produces. It is not acceptance evidence and cannot authorize closure.
 
-The planned adapter keeps bounded opaque output beside a Zutai immediate receipt.
+The adapter keeps bounded opaque output beside a Zutai immediate receipt.
 Output is the prefix of the recipe's stdout followed by its stderr, limited to
 `limitBytes`; `truncated` explicitly says whether that limit dropped bytes.
 `recipeExitCode` is the observed exit of `just <target>`. The receipt binds the
@@ -24,7 +24,10 @@ SLIME_DEVLOOP_DIAGNOSTIC receipt=<repository-relative-path> run=<run-key>
 ```
 
 Both paths must remain inside the checkout, contain no symlink, and satisfy the
-schema bounds. A capture/retention error is a gate refusal with an attributable
+schema bounds. The repository operator entrypoint relays only discovery and
+capture-error messages around the pinned CLI's stderr capture; typed observation
+stdout remains untouched. Recipe subprocesses do not inherit that relay channel.
+A capture/retention error is a gate refusal with an attributable
 `diagnostic ... error/refused/unavailable` message, not recipe success. Local raw
 logs are not uploaded or published by the gate.
 
@@ -32,6 +35,12 @@ The owner is backlog `01a11bda-a60d-7234-a3b9-34f11911cf37`.
 `just devloop_diagnostics_check` grades the actual pinned CLI in an isolated
 MyQue fixture store. `just devloop_diagnostics_controls` tests the judge's
 negative controls and never qualifies the repair. The recipe runs the canonical
-store check first. The current adapter/CLI does not produce these receipts; its
-qualification is expected to fail until a separately landed repair implements
-this contract.
+store check first. The qualification covers the adapter's receipts and the operator's discovery path.
+
+The retained output limit is per capture, not an aggregate storage quota. Full
+stdout/stderr are temporarily spooled to disk to preserve the existing
+`just-observations` full-text digest (including universal-newline normalization)
+without unbounded transcript memory. Temporary disk use is not bounded by the
+retained limit. Existing run-cache reuse is sequential; concurrent same-identity
+invocations are not guaranteed single execution. Each retained capture uses its
+own directory and never replaces a predecessor's files.
