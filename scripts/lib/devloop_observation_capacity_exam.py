@@ -117,6 +117,35 @@ def validate_refusal(
         )
 
 
+def validate_capacity_discovery(returncode: int, lines: list, paths: set) -> None:
+    if returncode == 0:
+        require(not lines and not paths, "successful gate exposed capacity refusal")
+    else:
+        require(len(paths) <= 1 and len(lines) <= 1, "extra capacity receipt fragments")
+
+
+def validate_legacy_observations(values: dict, tasks_failed: bool, docs_failed: bool) -> None:
+    expected = {
+        "tasksCheckPassed",
+        "docsCheckPassed",
+        "retiredIdentitiesResolved",
+        "corruptTerminalRecordRefused",
+        "specDrivenItemsValidated",
+    }
+    require(set(values) == expected, "legacy store observation set changed")
+    require(
+        values["tasksCheckPassed"]["boolValue"] is not tasks_failed
+        and values["docsCheckPassed"]["boolValue"] is not docs_failed,
+        "legacy exit semantics changed",
+    )
+    require(
+        values["retiredIdentitiesResolved"]["boolValue"] is True
+        and values["corruptTerminalRecordRefused"]["boolValue"] is True,
+        "legacy safety observation lost",
+    )
+    require(values["specDrivenItemsValidated"]["intValue"] == 7, "legacy parser clipped count")
+
+
 def validate_observations(values: dict, expected_digest: str) -> None:
     require(
         set(values) == {"passed", "transcriptDigest", "casesObserved"},
@@ -233,6 +262,32 @@ def controls() -> None:
         else:
             raise ExamError("observation control accepted " + mutation)
     print("capacity observation controls: missing/wrong checker counts refused")
+    try:
+        validate_capacity_discovery(0, [("receipt", "key")], {Path("receipt")})
+    except ExamError:
+        pass
+    else:
+        raise ExamError("successful capacity refusal discovery accepted")
+    legacy = {
+        "tasksCheckPassed": {"boolValue": True},
+        "docsCheckPassed": {"boolValue": False},
+        "retiredIdentitiesResolved": {"boolValue": True},
+        "corruptTerminalRecordRefused": {"boolValue": True},
+        "specDrivenItemsValidated": {"intValue": 7},
+    }
+    validate_legacy_observations(legacy, False, True)
+    for field in ("retiredIdentitiesResolved", "corruptTerminalRecordRefused"):
+        changed = copy.deepcopy(legacy)
+        changed[field]["boolValue"] = False
+        try:
+            validate_legacy_observations(changed, False, True)
+        except ExamError:
+            pass
+        else:
+            raise ExamError("legacy safety control accepted " + field)
+    print(
+        "capacity legacy/discovery controls: successful refusal and lost safety observations rejected"
+    )
     audit.check_controls()
 
 
@@ -521,9 +576,8 @@ sys.exit(s.get("exit",0))
                     path in expected_capacity_paths,
                     "capacity fragment not bound to current discovery",
                 )
-        require(
-            len(expected_capacity_paths) <= 1 and len(capacity_lines) <= 1,
-            "extra capacity receipt fragments",
+        validate_capacity_discovery(
+            observed.completed.returncode, capacity_lines, expected_capacity_paths
         )
         require(
             len(announced) <= (2 if legacy_store else 1), "too many captures for one invocation"
@@ -684,11 +738,20 @@ def legacy_store_qualification() -> None:
                 )
             )
         (fixture.root / "fixture.py").write_text(
-            'import os,pathlib,sys; failed=pathlib.Path("fail").exists(); os.write(1,b"Z"*131072); print("work-item check passed: 3 items, 7 validated through devloop"); print("LEGACY-FAIL" if failed else "LEGACY-PASS"); sys.exit(1 if failed else 0)'
+            'import os,pathlib,sys; failed=pathlib.Path("fail-"+sys.argv[1]).exists(); os.write(1,b"Z"*131072); print("work-item check passed: 3 items, 7 validated through devloop"); print("LEGACY-FAIL" if failed else "LEGACY-PASS"); sys.exit(1 if failed else 0)'
         )
-        for failed in (False, True):
-            if failed:
-                (fixture.root / "fail").touch()
+        for tasks_failed, docs_failed in (
+            (False, False),
+            (True, True),
+            (True, False),
+            (False, True),
+        ):
+            for name, failed in (("tasks", tasks_failed), ("docs", docs_failed)):
+                flag = fixture.root / ("fail-" + name)
+                if failed:
+                    flag.touch()
+                else:
+                    flag.unlink(missing_ok=True)
             command = [
                 "just",
                 "devloop",
@@ -702,26 +765,18 @@ def legacy_store_qualification() -> None:
                 "--target",
                 "legacy-store",
                 "--image",
-                str(failed),
+                str(tasks_failed) + "-" + str(docs_failed),
             ]
             observed = audit.run(command, cwd=fixture.root, env=fixture.environment, timeout=240)
             observed.assert_no_spool(fixture.allowed)
             evidence = fixture.evidence()[-1]
             fixture.validate_artifacts(observed, evidence["identity"], legacy_store=True)
             require(
-                (observed.completed.returncode != 0) is failed,
+                (observed.completed.returncode != 0) is tasks_failed,
                 "legacy CLI acceptance differs from checker exits",
             )
             values = {v["id"]: v["value"] for v in evidence["observations"]}
-            require(
-                values["tasksCheckPassed"]["boolValue"] is not failed
-                and values["docsCheckPassed"]["boolValue"] is not failed,
-                "legacy exit semantics changed",
-            )
-            require(
-                values["specDrivenItemsValidated"]["intValue"] == 7,
-                "legacy parser clipped complete text",
-            )
+            validate_legacy_observations(values, tasks_failed, docs_failed)
             require(
                 len(DIAGNOSTIC.findall(observed.completed.stdout + observed.completed.stderr)) == 2,
                 "legacy recipes did not each expose receipt",

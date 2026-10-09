@@ -338,12 +338,17 @@ class _Trace:
                 # pwritev/iovec lengths cannot be recovered from raw pointer
                 # arguments; refusing them is preferable to claiming byte caps.
                 fd = _number(args[0])
-                destination = self.fds[pid].get(fd)
-                if "writev" in op and _regular(destination) and fd not in (0, 1, 2):
-                    self.errors.append((pid, f"unmeasurable vectored write: {op}"))
-                size = _number(args[2])
-                extent = size + _number(args[3]) if op == "pwrite64" else 0
-                self.fd_mutation(pid, op, args[0], size, extent)
+                destination = _annotation(args[0]) or self.fds[pid].get(fd)
+                inherited_stream = destination is None and fd in (0, 1, 2)
+                if "writev" in op:
+                    if _regular(destination) and not inherited_stream:
+                        self.errors.append((pid, f"unmeasurable vectored write: {op}"))
+                    # args[2] is an iovec count, not a payload byte count.
+                    self.fd_mutation(pid, op, args[0])
+                else:
+                    size = _number(args[2])
+                    extent = size + _number(args[3]) if op == "pwrite64" else 0
+                    self.fd_mutation(pid, op, args[0], size, extent)
             elif op == "mmap":
                 if "MAP_ANONYMOUS" not in arguments and "MAP_SHARED" in arguments:
                     path = _annotation(args[4]) or self.fds[pid].get(_number(args[4]))
@@ -611,6 +616,39 @@ def check_controls() -> int:
                 refused += 1
             else:
                 raise AuditError(f"positioned/xattr output escaped byte bound: {source}")
+        fixture.write_text(
+            "import os\nread,write=os.pipe()\nos.dup2(write,1)\n"
+            "os.writev(1,[b'ok',b'pipe'])\nassert os.read(read,6)==b'okpipe'\n"
+        )
+        result = run(["python3", str(fixture)], cwd=root, adapter_token=str(fixture),
+                     recipe_token=str(fixture))
+        result.assert_no_spool({})
+        if result.completed.returncode:
+            raise AuditError("genuine pipe vectored write did not execute")
+        for descriptor in (1, 2):
+            for operation in ("writev", "pwritev", "pwritev2"):
+                calls = {
+                    "writev": f"os.writev({descriptor},[b'x'*131072])",
+                    "pwritev": f"os.pwritev({descriptor},[b'x'*131072],0)",
+                    "pwritev2": f"os.pwritev({descriptor},[b'x'*131072],0,os.RWF_DSYNC)",
+                }
+                call = calls[operation]
+                fixture.write_text(
+                    "import os\nfd=os.open('bounded',os.O_CREAT|os.O_RDWR|os.O_TRUNC,0o600)\n"
+                    f"os.dup2(fd,{descriptor})\n{call}\nos.ftruncate(fd,0)\n"
+                )
+                result = run(["python3", str(fixture)], cwd=root, adapter_token=str(fixture),
+                             recipe_token=str(fixture))
+                if result.completed.returncode:
+                    raise AuditError("redirected standard-fd vectored control did not execute")
+                if not any("unmeasurable vectored write" in error for error in result.errors):
+                    raise AuditError("redirected vectored write was not identified")
+                try:
+                    result.assert_no_spool({permitted: 8192})
+                except AuditError:
+                    refused += 1
+                else:
+                    raise AuditError("redirected standard-fd vectored output escaped byte bound")
         print(f"capacity audit: {refused} filesystem/trace controls refused")
         for stream in ("stdout", "stderr", "mixed"):
             for retained in (False, True):
