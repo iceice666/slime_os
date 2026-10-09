@@ -31,6 +31,11 @@ DIAGNOSTIC = re.compile(r"^SLIME_DEVLOOP_DIAGNOSTIC receipt=(\S+) run=(\S+)$", r
 SCHEMA = ROOT / "contracts/observation-capacity-refusal/v1/schema.zt"
 FIXTURE_RECIPE = "fixture_capacity"
 FIELDS = ("requirements", "helper", "code", "policy", "inputs", "target", "image", "epoch")
+LEGACY_CONTROL = {
+    "schema": "terminal-item/v1",
+    "metadata": "---\nschema: work-item/v2\nid: 00000000-0000-7000-8000-00000000000b\nkind: task\nstate: open\ncreated: 2026-09-15T10:00:00Z\n---\n\n# Corrupt control\n",
+}
+LEGACY_CONTROL_BYTES = json.dumps(LEGACY_CONTROL).encode()
 
 
 def normalize(data: bytes) -> bytes:
@@ -530,6 +535,40 @@ sys.exit(s.get("exit",0))
         )
         writable = [m for m in terminal_events if m.operation in ("open", "openat", "creat")]
         require(len(writable) <= 1, "repeated terminal control can hide transcript fragments")
+        if terminal_events:
+            writes = [
+                m
+                for m in terminal_events
+                if m.operation in ("write", "pwrite64", "writev", "pwritev", "pwritev2")
+            ]
+            require(
+                len(writes) == 1
+                and writes[0].operation == "write"
+                and writes[0].payload is not None,
+                "terminal fixture requires one fully observed ordinary write",
+            )
+            require(
+                writes[0].payload == LEGACY_CONTROL_BYTES,
+                "terminal fixture contains recipe output instead of fixed control",
+            )
+            require(
+                all(
+                    m.operation
+                    not in (
+                        "ftruncate",
+                        "truncate",
+                        "rename",
+                        "renameat",
+                        "renameat2",
+                        "link",
+                        "linkat",
+                        "mmap",
+                        "mprotect",
+                    )
+                    for m in terminal_events
+                ),
+                "terminal fixture altered through unauthenticated mutation",
+            )
         require(
             not any(p.parent.name.startswith("diagnostic-read-") for p in paths),
             "adapter decoder temp files can conceal a spool",
