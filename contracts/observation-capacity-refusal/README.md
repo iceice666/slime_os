@@ -43,5 +43,12 @@ immutable 64-hex generation filename containing the first 32 run-key hex digits
 and a diagnostic-path-derived suffix. Lookup decodes only that prefix's candidates,
 validates every matching receipt before expiry checks, and selects newest finish
 time with filename as a deterministic tie-breaker. Old disclosed paths and bytes
-are never removed or replaced. Aggregate lookup/retention is not a total storage
+are never removed or replaced. Publication encodes before writing, fsyncs an
+opaque staging artifact in the existing run-cache staging namespace, then links
+complete bytes into the replay namespace without overwrite. The `.json.partial`
+staging suffix does not make its typed Zutai bytes a JSON cache record. Ordinary
+write/link exceptions clean up staging owned by that invocation. Crash-left
+staging is refused before recipe execution and requires operator inspection;
+existing staging is never automatically deleted. This is not power-loss durable
+or concurrent crash recovery. Aggregate lookup/retention is not a total storage
 quota, and concurrent same-identity execution is not qualified.

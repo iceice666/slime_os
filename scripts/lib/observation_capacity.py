@@ -94,6 +94,9 @@ def validate(record: dict, key: str, request: dict, target: str) -> None:
         raise ValueError("unsafe capacity diagnostic binding")
     if hashlib.sha256(diagnostic.read_bytes()).hexdigest() != record["diagnosticReceiptSha256"]:
         raise ValueError("capacity diagnostic receipt changed")
+    captured = devloop_diagnostics.validated(record["diagnosticReceiptPath"], key, request, target)
+    if captured["recipeExitCode"] != record["recipeExitCode"]:
+        raise ValueError("capacity recipe exit differs from diagnostic receipt")
 
 
 def refuse(record: dict, path: Path, key: str, request: dict, target: str) -> None:
@@ -111,6 +114,11 @@ def replay(key: str, request: dict, target: str) -> bool:
     base = ROOT / "build/devloop-observation-capacity"
     if base.is_symlink() or any(p.is_symlink() for p in base.parents):
         raise ValueError("symlink capacity replay directory")
+    staging = ROOT / "build/devloop-gate-runs" / (key + ".json.partial")
+    if staging.exists() or staging.is_symlink():
+        raise ValueError(
+            "capacity publication staging already exists; inspect/clean it before recipe execution"
+        )
     if not base.exists():
         return False
     selected = []
@@ -167,6 +175,23 @@ def retain(key: str, request: dict, target: str, result, diagnostic_path: str) -
     if path.exists():
         generation = key[:32] + hashlib.sha256(diagnostic_path.encode()).hexdigest()[:32]
         path = base / (generation + ".zti")
-    with path.open("xb") as handle:
-        handle.write(contract.encode(record))
+    encoded = contract.encode(record)
+    # Reuse the admitted run-cache staging namespace; publish only complete
+    # fsynced bytes into the typed replay namespace, without overwriting.
+    staging = ROOT / "build/devloop-gate-runs"
+    if any(p.is_symlink() for p in (staging, *staging.parents)):
+        raise ValueError("symlink capacity staging directory")
+    staging.mkdir(exist_ok=True)
+    temporary = staging / (key + ".json.partial")
+    created = False
+    try:
+        with temporary.open("xb") as handle:
+            created = True
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)
+    finally:
+        if created:
+            temporary.unlink(missing_ok=True)
     refuse(record, path, key, request, target)

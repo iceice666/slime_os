@@ -169,7 +169,7 @@ def retain(key: str, request: dict, target: str, result: Capture) -> str:
     return relative_receipt
 
 
-def announce(path: str, key: str, request: dict | None = None, target: str | None = None) -> None:
+def validated(path: str, key: str, request: dict | None = None, target: str | None = None) -> dict:
     relative = Path(path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("unsafe cached receipt path")
@@ -225,4 +225,11 @@ def announce(path: str, key: str, request: dict | None = None, target: str | Non
     raw = output.read_bytes()
     if len(raw) != record["capturedBytes"] or hashlib.sha256(raw).hexdigest() != record["sha256"]:
         raise ValueError("diagnostic output length/digest mismatch")
+    if record["truncated"] and record["capturedBytes"] != record["limitBytes"]:
+        raise ValueError("diagnostic truncation claim impossible")
+    return record
+
+
+def announce(path: str, key: str, request: dict | None = None, target: str | None = None) -> None:
+    validated(path, key, request, target)
     notify(f"SLIME_DEVLOOP_DIAGNOSTIC receipt={path} run={key}")

@@ -246,6 +246,11 @@ def run_once(
             receipt = devloop_diagnostics.retain(key, request, target, result)
             record["diagnosticReceipt"] = receipt
             if gate == "just-observations" and result.transcript_digest is None:
+                if code_fingerprint() != before:
+                    devloop_diagnostics.announce(receipt, key, request, target)
+                    raise CannotRun(
+                        f"diagnostic capacity refusal for run {key}: code closure changed; replay not retained"
+                    )
                 observation_capacity.retain(key, request, target, result, receipt)
             devloop_diagnostics.announce(receipt, key, request, target)
     except observation_capacity.Refused as error:
