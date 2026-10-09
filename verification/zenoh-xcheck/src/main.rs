@@ -262,6 +262,142 @@ fn up_frame(sn: u32, messages: Vec<NetworkMessage>) -> TransportMessage {
     }
 }
 
+// ---------- what our decoder returned, against what upstream was asked to encode ----------
+
+fn zid_bytes(id: &ZenohIdProto) -> Vec<u8> {
+    id.to_le_bytes()[..id.size()].to_vec()
+}
+
+fn same_network(ours: &Network<'_>, theirs: &NetworkMessage) -> Result<(), String> {
+    match (ours, &theirs.body) {
+        (
+            Network::DeclareSubscriber { id, mapping, key },
+            NetworkBody::Declare(Declare {
+                body: DeclareBody::DeclareSubscriber(d),
+                ..
+            }),
+        ) => {
+            if *id != d.id
+                || mapping_up(*mapping) != d.wire_expr.mapping
+                || *key != d.wire_expr.suffix.as_ref()
+            {
+                return Err("declare differs".into());
+            }
+        }
+        (
+            Network::UndeclareSubscriber { id, mapping, key },
+            NetworkBody::Declare(Declare {
+                body: DeclareBody::UndeclareSubscriber(u),
+                ..
+            }),
+        ) => {
+            let wire = &u.ext_wire_expr.wire_expr;
+            if *id != u.id || mapping_up(*mapping) != wire.mapping || *key != wire.suffix.as_ref() {
+                return Err("undeclare differs".into());
+            }
+        }
+        (
+            Network::PushPut {
+                mapping,
+                key,
+                attachment,
+                payload,
+            },
+            NetworkBody::Push(p),
+        ) => {
+            let PushBody::Put(put) = &p.payload else {
+                return Err("push is not a put".into());
+            };
+            let theirs_attachment = put
+                .ext_attachment
+                .as_ref()
+                .map(|a| zbuf_bytes(&a.buffer))
+                .unwrap_or_default();
+            if mapping_up(*mapping) != p.wire_expr.mapping
+                || *key != p.wire_expr.suffix.as_ref()
+                || attachment.raw != &theirs_attachment[..]
+                || *payload != &zbuf_bytes(&put.payload)[..]
+            {
+                return Err("push differs".into());
+            }
+        }
+        _ => return Err("message kind differs".into()),
+    }
+    Ok(())
+}
+
+/// Every field our decoder returned must equal the one upstream was asked to encode. A decode
+/// that merely succeeds can still return a truncated ID, a shifted cookie or a wrong key.
+fn same(ours: &Message<'_>, theirs: &TransportMessage) -> Result<(), String> {
+    match (ours, &theirs.body) {
+        (Message::InitSyn { zid, batch_size }, TransportBody::InitSyn(u)) => {
+            if *zid != &zid_bytes(&u.zid)[..] || *batch_size != u.batch_size {
+                return Err("init syn differs".into());
+            }
+        }
+        (
+            Message::InitAck {
+                zid,
+                batch_size,
+                cookie,
+            },
+            TransportBody::InitAck(u),
+        ) => {
+            if *zid != &zid_bytes(&u.zid)[..]
+                || *batch_size != u.batch_size
+                || *cookie != u.cookie.as_slice()
+            {
+                return Err("init ack differs".into());
+            }
+        }
+        (
+            Message::OpenSyn {
+                lease_ms,
+                initial_sn,
+                cookie,
+            },
+            TransportBody::OpenSyn(u),
+        ) => {
+            if u128::from(*lease_ms) != u.lease.as_millis()
+                || *initial_sn != u.initial_sn
+                || *cookie != u.cookie.as_slice()
+            {
+                return Err("open syn differs".into());
+            }
+        }
+        (
+            Message::OpenAck {
+                lease_ms,
+                initial_sn,
+            },
+            TransportBody::OpenAck(u),
+        ) => {
+            if u128::from(*lease_ms) != u.lease.as_millis() || *initial_sn != u.initial_sn {
+                return Err("open ack differs".into());
+            }
+        }
+        (Message::Close { reason, session }, TransportBody::Close(u)) => {
+            if *reason != u.reason || *session != u.session {
+                return Err("close differs".into());
+            }
+        }
+        (Message::Frame(frame), TransportBody::Frame(u)) => {
+            if frame.sn != u.sn {
+                return Err("frame sequence number differs".into());
+            }
+            let ours: Vec<_> = frame.messages().collect();
+            if ours.len() != u.payload.len() {
+                return Err("frame message count differs".into());
+            }
+            for (o, t) in ours.iter().zip(u.payload.iter()) {
+                same_network(o, t)?;
+            }
+        }
+        _ => return Err("message kind differs".into()),
+    }
+    Ok(())
+}
+
 // ---------- our encode ----------
 
 fn our_batch(
@@ -618,7 +754,12 @@ fn sweep(
         }
         // Our decoder reads upstream's bytes.
         match decode_batch(&theirs) {
-            Ok(_) => tally_dec.ok(),
+            Ok(read) => match same(&read, &up) {
+                Ok(()) => tally_dec.ok(),
+                Err(what) => tally_dec.bad(format!(
+                    "#{case} {label}: our decoder read upstream's bytes wrongly: {what}"
+                )),
+            },
             Err(r) => tally_dec.bad(format!(
                 "#{case} {label}: our decoder refuses upstream bytes: {r:?}"
             )),
@@ -902,10 +1043,12 @@ fn part_e() {
         } else {
             "refuses"
         };
-        let our_reads = if decode_batch(&wire).is_ok() {
-            "accepts"
-        } else {
-            "refuses"
+        let our_reads = match decode_batch(&wire) {
+            Ok(Message::InitSyn { zid, batch_size }) if zid == &z[..] && batch_size == 512 => {
+                "accepts"
+            }
+            Ok(_) => "misreads",
+            Err(_) => "refuses",
         };
         println!(
             "[zenoh-xcheck] zid {} upstream={} encode={} wire-upstream={} wire-ours={}",
@@ -1035,4 +1178,53 @@ fn main() {
         && upr.failed.is_empty()
         && c.failed.is_empty());
     std::process::exit(if any { 1 } else { 0 });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_decoded_message_must_carry_the_fields_upstream_was_asked_to_encode() {
+        let z = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let theirs = up_init_syn(&z, 512);
+        let honest = Message::InitSyn {
+            zid: &z,
+            batch_size: 512,
+        };
+        assert_eq!(same(&honest, &theirs), Ok(()));
+        let truncated = Message::InitSyn {
+            zid: &z[..7],
+            batch_size: 512,
+        };
+        assert!(same(&truncated, &theirs).is_err(), "a truncated Zenoh ID");
+        let reordered = Message::InitSyn {
+            zid: &[8, 7, 6, 5, 4, 3, 2, 1],
+            batch_size: 512,
+        };
+        assert!(same(&reordered, &theirs).is_err(), "a reordered Zenoh ID");
+        let resized = Message::InitSyn {
+            zid: &z,
+            batch_size: 511,
+        };
+        assert!(same(&resized, &theirs).is_err(), "a different batch size");
+    }
+
+    #[test]
+    fn a_decoded_frame_must_carry_the_same_messages() {
+        let key = "a/b";
+        let theirs = up_frame(7, vec![up_declare(3, key, Mapping::Sender)]);
+        let mut batch = [0u8; 512];
+        let len = {
+            let mut f = ours::FrameEncoder::new(&mut batch, 7).unwrap();
+            f.declare_subscriber(3, OurMapping::Sender, key).unwrap();
+            f.finish().unwrap()
+        };
+        let read = decode_batch(&batch[..len]).unwrap();
+        assert_eq!(same(&read, &theirs), Ok(()));
+        let other = up_frame(7, vec![up_declare(4, key, Mapping::Sender)]);
+        assert!(same(&read, &other).is_err(), "a different declaration id");
+        let moved = up_frame(8, vec![up_declare(3, key, Mapping::Sender)]);
+        assert!(same(&read, &moved).is_err(), "a different sequence number");
+    }
 }
