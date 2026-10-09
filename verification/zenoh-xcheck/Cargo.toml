@@ -1,0 +1,21 @@
+# Cross-check of the Zenoh Profile 0 codec and session against the real eclipse-zenoh
+# 1.0.0 crates, judged by `scripts/check/check-zenoh-profile0.py --slice xcheck`
+# (`just zenoh_xcheck_check`).
+#
+# Deliberately outside the root workspace (hence the empty `[workspace]`), like
+# `verification/io-proofs`: the upstream crates and their dependencies must not enter the
+# product's `Cargo.lock`, `just deny`, the closures or any component build. The recipe is
+# explicit and in no aggregate or CI job because it fetches those crates from a registry.
+[package]
+name = "zenoh-xcheck"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+zenoh-buffers = "=1.0.0"
+zenoh-codec = "=1.0.0"
+zenoh-protocol = "=1.0.0"
+slime-components = { path = "../../components/lib", default-features = false }

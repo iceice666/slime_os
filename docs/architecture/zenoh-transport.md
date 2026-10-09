@@ -143,4 +143,14 @@ concurrently and a line built from several writes can be interleaved.
 - `just zenoh_cdr_check` — the demo fixture's 4 samples and 7 malformed inputs;
 - `just zenoh_transport_check` — 6 scenarios and 7 refusals over a scripted link;
 - `just zenoh_composition_check` — 15 authority facts on the derived manifest;
+- `just zenoh_xcheck_check` — the codec and session against the real eclipse-zenoh 1.0.0
+  crates: the 17 corpus batches as upstream's encoder produces them, a 6000-case sweep
+  (5993 compared, 7 refused as a non-canonical Zenoh ID, none differing), our decoder
+  reading what upstream encodes, upstream reading and re-encoding ours, one 11-batch
+  session, and eight Zenoh ID probes; 17 mutations of an honest transcript refused first.
+  The harness is `verification/zenoh-xcheck`, a standalone crate outside the root
+  workspace, so the upstream crates stay out of `Cargo.lock`, `just deny` and the
+  closures. It fetches them from a registry, so the recipe is explicit and not in CI;
+  `cargo deny` run on that crate reports `paste` as unmaintained (RUSTSEC-2024-0436) and
+  Zlib-licensed transitive crates, which the root `deny.toml` does not allow;
 - `just rpi5_ros2_zenoh_check` — the QEMU exchange; explicit, not part of `all`.
