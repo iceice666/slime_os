@@ -838,7 +838,7 @@ def qualification() -> None:
             + json.dumps(receipt.relative_to(fixture.root).as_posix())
             + "; d with { finishedAt = d.finishedAt - 7200; reuseUntil = d.reuseUntil - 7200; }"
         )
-        aged = fixture.run(str(zutai_cli.binary()), "run", str(transform)).stdout
+        aged = fixture.run("devloop-zutai", "admit", str(transform)).stdout
         receipt.write_text(aged + "\n")
         fixture.snapshots[receipt] = receipt.read_bytes()
         counter = (fixture.root / "counter").read_bytes()
