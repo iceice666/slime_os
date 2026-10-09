@@ -199,7 +199,8 @@ maintenance with no behavioural or project-state consequence?
    │  └─ yes → EXISTING: skip ② ③; `just devloop start` (or `myque start`
    │            for a pre-cutoff item), then ④ ⑤ ⑥ under that UUID.
    ├─ Is it a defect?
-   │  └─ yes → BUG: ② with `--kind bug --tag backlog`, then ③ ④ ⑤ ⑥.
+   │  └─ yes → BUG: ② with `--kind bug`, then `myque tag <UUID> backlog`,
+   │            then ③ ④ ⑤ ⑥.
    │            It joins the backlog, so it blocks new milestone work until
    │            resolved, deferred, or blocked — which is the point.
    └─ otherwise → FEATURE / REFACTOR / DOCS: the full ① – ⑥.

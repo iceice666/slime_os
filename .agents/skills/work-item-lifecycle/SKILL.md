@@ -104,8 +104,10 @@ repository — both satisfy the rule; `open` and `active` do not.
 actionable.
 
 A new defect is spec-driven like any other new work: admit it with
-`just devloop admit <spec>.zti --title "<title>" --kind bug --tag backlog`,
-then close it with `just devloop complete`. A pre-cutoff defect was created
+`just devloop admit <spec>.zti --title "<title>" --admission <token>
+--policy .devloop/policy.json --kind bug` and tag it afterwards with
+`myque tag <UUID> backlog`; it closes through `just devloop complete`. A
+pre-cutoff defect was created
 with `myque new` and still closes with `myque close`, which records the
 closure date. Either way, record the exit condition that was *observed* in
 the item's body — a milestone closes on observed evidence, never on
