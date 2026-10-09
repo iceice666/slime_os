@@ -800,6 +800,24 @@ fn sweep(
 
 // ---------- C: a real session through our state machine ----------
 
+/// One endpoint takes a batch it was sent. Receiving must succeed and must emit nothing: a batch
+/// written here would never be logged, so upstream would never decode it. Returns whether the
+/// endpoint reported the session closed.
+fn receive(session: &mut Session, label: &str, batch: &[u8], now_ms: u64) -> bool {
+    let mut reply = [0u8; 512];
+    let outcome = session
+        .on_batch(batch, now_ms, &mut reply)
+        .unwrap_or_else(|e| panic!("{label}: the receiving endpoint refused it: {e:?}"));
+    assert_eq!(
+        outcome.sent, 0,
+        "{label}: receiving it emitted a batch that is not logged"
+    );
+    outcome
+        .events
+        .iter()
+        .any(|event| matches!(event, Event::Closed { .. }))
+}
+
 fn part_c(tally: &mut Tally) {
     let cookie: Vec<u8> = (0..32).map(|i| 0xc0 + i as u8).collect();
     let zc = [0xa1u8; 8];
@@ -849,19 +867,13 @@ fn part_c(tally: &mut Tally) {
         let mut o2 = [0u8; 512];
         emit!("OPEN_ACK", b.on_batch(&open_syn, 3, &mut o2), o2)
     };
-    {
-        let mut o2 = [0u8; 512];
-        let _ = a.on_batch(&open_ack, 4, &mut o2).expect("open ack");
-    }
+    receive(&mut a, "OPEN_ACK received", &open_ack, 4);
 
     let declare = {
         let mut o2 = [0u8; 512];
         emit!("DECLARE", b.send_declare_subscriber(1, KEY, &mut o2), o2)
     };
-    {
-        let mut o2 = [0u8; 512];
-        a.on_batch(&declare, 5, &mut o2).expect("declare accepted");
-    }
+    receive(&mut a, "DECLARE received", &declare, 5);
 
     let gid: Vec<u8> = (0..16).map(|i| 0xe0 + i as u8).collect();
     for (n, payload) in [
@@ -880,9 +892,7 @@ fn part_c(tally: &mut Tally) {
             a.send_put(KEY, &att, payload, &mut o2),
             o2
         );
-        let mut o3 = [0u8; 512];
-        b.on_batch(&put, 6 + n as u64, &mut o3)
-            .expect("put accepted");
+        receive(&mut b, "PUSH_PUT received", &put, 6 + n as u64);
     }
     let undeclare = {
         let mut o2 = [0u8; 512];
@@ -892,27 +902,16 @@ fn part_c(tally: &mut Tally) {
             o2
         )
     };
-    {
-        let mut o2 = [0u8; 512];
-        a.on_batch(&undeclare, 20, &mut o2)
-            .expect("undeclare accepted");
-    }
+    receive(&mut a, "UNDECLARE received", &undeclare, 20);
     let close = {
         let mut o2 = [0u8; 512];
         emit!("CLOSE", b.close(0, &mut o2), o2)
     };
-    {
-        let mut o2 = [0u8; 512];
-        let outcome = a.on_batch(&close, 21, &mut o2).expect("close accepted");
-        assert!(
-            outcome
-                .events
-                .iter()
-                .any(|event| matches!(event, Event::Closed { .. })),
-            "the connector reports the CLOSE it received"
-        );
-        assert_eq!(a.state(), State::Closed, "the connector is closed");
-    }
+    assert!(
+        receive(&mut a, "CLOSE received", &close, 21),
+        "the connector reports the CLOSE it received"
+    );
+    assert_eq!(a.state(), State::Closed, "the connector is closed");
 
     for (label, bytes) in &log {
         match up_decode(bytes) {
@@ -947,40 +946,29 @@ fn part_c(tally: &mut Tally) {
                             tally.ok();
                         }
                         for (o, u) in ours_msgs.iter().zip(f.payload.iter()) {
-                            if let (
-                                Network::PushPut {
-                                    key,
-                                    payload,
-                                    attachment,
-                                    ..
-                                },
-                                NetworkBody::Push(p),
-                            ) = (o, &u.body)
-                            {
-                                let ukey = p.wire_expr.suffix.to_string();
-                                let upay = match &p.payload {
-                                    PushBody::Put(put) => zbuf_bytes(&put.payload),
-                                    _ => vec![],
-                                };
-                                let uatt = match &p.payload {
-                                    PushBody::Put(put) => put
-                                        .ext_attachment
-                                        .as_ref()
-                                        .map(|a| zbuf_bytes(&a.buffer))
-                                        .unwrap_or_default(),
-                                    _ => vec![],
-                                };
-                                if *key == ukey
-                                    && *payload == &upay[..]
-                                    && attachment.raw == &uatt[..]
-                                {
-                                    tally.ok();
-                                } else {
-                                    tally.bad(format!("{label}: push fields differ"));
+                            if let (Network::PushPut { .. }, NetworkBody::Push(_)) = (o, &u.body) {
+                                match same_network(o, u) {
+                                    Ok(()) => tally.ok(),
+                                    Err(what) => {
+                                        tally.bad(format!("{label}: push fields differ: {what}"))
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                // Every message kind, not only a PUSH: the pairing above skips a message whose
+                // kind differs, so the whole batch is compared once more. Agreement adds no case
+                // to the count; a difference is reported.
+                match decode_batch(bytes) {
+                    Ok(read) => {
+                        if let Err(what) = same(&read, &m) {
+                            tally.bad(format!("{label}: our decoder read it wrongly: {what}"));
+                        }
+                    }
+                    Err(refusal) => tally.bad(format!(
+                        "{label}: our decoder refuses our own batch: {refusal:?}"
+                    )),
                 }
             }
         }
@@ -1277,6 +1265,35 @@ mod tests {
             ..honest
         };
         assert!(same_network(&push(wrong_gid), &theirs_network).is_err());
+    }
+
+    fn listener() -> Session {
+        Session::new(
+            Role::Listener,
+            &Config {
+                zid: &[0xb2; 8],
+                lease_ms: 2000,
+                initial_sn: 7000,
+                cookie: b"cookie",
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    #[should_panic(expected = "emitted a batch that is not logged")]
+    fn receiving_a_batch_that_makes_the_endpoint_reply_is_a_failure() {
+        let mut init_syn = [0u8; 512];
+        let len = ours::init_syn(&mut init_syn, &[0xa1; 8], 512).unwrap();
+        receive(&mut listener(), "INIT_SYN received", &init_syn[..len], 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "the receiving endpoint refused it")]
+    fn receiving_a_batch_the_endpoint_refuses_is_a_failure() {
+        let mut close = [0u8; 512];
+        let len = ours::close(&mut close, 0, true).unwrap();
+        receive(&mut listener(), "CLOSE received", &close[..len], 1);
     }
 
     #[test]
