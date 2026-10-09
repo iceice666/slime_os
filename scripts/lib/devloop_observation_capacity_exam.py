@@ -61,6 +61,7 @@ def validate_refusal(
     diagnostic_path: str,
     diagnostic_digest: str,
     expected_exit: int = 0,
+    observed_bounds: tuple[int, int] | None = None,
 ) -> None:
     expected = {
         "formatVersion",
@@ -109,6 +110,11 @@ def validate_refusal(
         type(record["finishedAt"]) is int and record["reuseUntil"] == record["finishedAt"] + 3600,
         "capacity lifetime differs from existing window",
     )
+    if observed_bounds is not None:
+        require(
+            observed_bounds[0] <= record["finishedAt"] <= observed_bounds[1],
+            "refusal finish time outside invocation",
+        )
 
 
 def controls() -> None:
@@ -129,7 +135,7 @@ def controls() -> None:
         "finishedAt": 100,
         "reuseUntil": 3700,
     }
-    validate_refusal(base, identity, "k", LIMIT + 1, "d", "h")
+    validate_refusal(base, identity, "k", LIMIT + 1, "d", "h", observed_bounds=(99, 101))
     changes = {
         "classification": ("outcome", "recipe-failure"),
         "gate": ("gate", "just-target"),
@@ -139,7 +145,6 @@ def controls() -> None:
         "binding": ("diagnosticReceiptSha256", "other"),
         "key": ("runKey", "other"),
         "fabricated-exit": ("recipeExitCode", 999),
-        "future-time": ("finishedAt", 999999999999),
     }
     for name, (field, value) in changes.items():
         record = copy.deepcopy(base)
@@ -150,7 +155,15 @@ def controls() -> None:
             pass
         else:
             raise ExamError(f"capacity judge accepted {name}")
-    print(f"observation capacity receipt controls: {len(changes)} corrupt results refused")
+    future = copy.deepcopy(base)
+    future.update(finishedAt=base["finishedAt"] + 100000, reuseUntil=base["reuseUntil"] + 100000)
+    try:
+        validate_refusal(future, identity, "k", LIMIT + 1, "d", "h", observed_bounds=(99, 101))
+    except ExamError:
+        pass
+    else:
+        raise ExamError("coherent future lifetime accepted")
+    print(f"observation capacity receipt controls: {len(changes) + 1} corrupt results refused")
     output = b"O\nE\n"
     diagnostic_identity = {field: field for field in FIELDS}
     run_key = hashlib.sha256(
@@ -551,9 +564,8 @@ sys.exit(s.get("exit",0))
             diag_name,
             hashlib.sha256(diagnostic.read_bytes()).hexdigest(),
             expected_exit,
+            observed_bounds=self.invocation_bounds[identity["image"]],
         )
-        bounds = self.invocation_bounds[identity["image"]]
-        require(bounds[0] <= record["finishedAt"] <= bounds[1], "refusal finish time fabricated")
         diagnostic_record = self.decode(diagnostic, diagnostic=True)
         output = safe_path(self.root, diagnostic_record["outputPath"])
         capture = Capture(diagnostic_record, output.read_bytes(), diagnostic, output)

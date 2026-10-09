@@ -82,11 +82,24 @@ class AuditRun:
             if totals[mutation.path] > limit:
                 raise AuditError(f"attempted output exceeds {limit}: {mutation.path}")
 
-    def require_memory(self, maximum_delta: int = 32 * 1024 * 1024) -> None:
+    def require_memory(
+        self, maximum_delta: int = 32 * 1024 * 1024, *,
+        maximum_retained: int = 64 * 1024 * 1024,
+    ) -> None:
+        """Bound both absolute collector RSS and growth during recipe output.
+
+        The absolute ceiling includes the setup baseline, so page-committed
+        preallocation before fixture exec cannot disappear into that baseline.
+        """
         if self.errors:
             raise AuditError("; ".join(self.errors))
         if not self.phase_seen or not self.baseline_rss or len(self.rss_samples) < 2:
             raise AuditError("missing adapter output-phase memory observations")
+        retained = max(self.baseline_rss, self.adapter_peak_rss)
+        if retained > maximum_retained:
+            raise AuditError(
+                f"collector retained memory {retained} exceeds {maximum_retained}"
+            )
         if self.peak_memory_delta > maximum_delta:
             raise AuditError(
                 f"adapter retained-memory growth {self.peak_memory_delta} exceeds {maximum_delta}"
@@ -606,6 +619,48 @@ def check_controls() -> int:
                 refused += 1
             else:
                 raise AuditError(f"unbounded {stream} helper escaped retained-memory monitor")
+        fixture.write_text(
+            "import os,time\nfor _ in range(2048):\n"
+            " os.write(1,b'x'*65536)\n time.sleep(.0005)\n"
+        )
+        preallocated = (
+            "import subprocess,time\n"
+            "buffer=bytearray(128*1024*1024)\n"
+            "for page in range(0,len(buffer),4096): buffer[page]=1\n"
+            "time.sleep(.05)\n"
+            f"p=subprocess.Popen(['python3',{str(fixture)!r}],stdout=subprocess.PIPE,bufsize=0)\n"
+            "view=memoryview(buffer)\noffset=0\n"
+            "while offset<len(buffer):\n"
+            " count=p.stdout.readinto(view[offset:])\n"
+            " if not count: break\n"
+            " offset+=count\n"
+            "p.wait()\ntime.sleep(.03)\n"
+        )
+        for delegated in (False, True):
+            if delegated:
+                helper.write_text(preallocated)
+                adapter.write_text(
+                    "import subprocess,time\ntime.sleep(.05)\n"
+                    f"subprocess.run(['python3',{str(helper)!r}],check=True)\n"
+                )
+            else:
+                adapter.write_text(preallocated)
+            result = run(["python3", str(adapter)], cwd=root, adapter_token=str(adapter),
+                         recipe_token=str(fixture))
+            result.assert_no_spool({})
+            if result.completed.returncode or result.baseline_rss <= 64 * 1024 * 1024:
+                raise AuditError("preallocation control did not commit memory before recipe exec")
+            if result.peak_memory_delta > 32 * 1024 * 1024:
+                raise AuditError("preallocation control grew rather than reusing its buffer")
+            print(f"capacity preallocation control: delegated={delegated} "
+                  f"collectors={result.collector_pids} baseline={result.baseline_rss} "
+                  f"peak={result.adapter_peak_rss} growth={result.peak_memory_delta}")
+            try:
+                result.require_memory()
+            except AuditError:
+                refused += 1
+            else:
+                raise AuditError("preallocated collector escaped absolute retained-memory ceiling")
         fixture.write_text(
             "import subprocess,time\nrecipe_memory=bytearray(128*1024*1024)\n"
             "subprocess.run(['python3','-c','import time; data=bytearray(64*1024*1024); time.sleep(.1)'],check=True)\n"
