@@ -104,6 +104,8 @@ For how the planes work and how to add one, read
 | `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
 | `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |
 | `just devloop_diagnostics_controls` | The diagnostics judge's corrupted-result and actual-CLI transport controls; passing controls do not qualify the repair. |
+| `just devloop_observation_capacity_check` | Explicit Linux real-CLI raw stderr capacity, replay, filesystem mutation and measured-memory qualification, using strace from locked nixpkgs; runs `tasks_check` first. |
+| `just devloop_observation_capacity_controls` | Receipt, filesystem monitor and bounded/unbounded collector controls; never qualifies the implementation. |
 | `just tasks_graph` | `myque graph`. |
 | `just tasks_list` | `myque list` — generated view, never authoritative. |
 | `just tasks_next` | `myque next` — actionable items. |
