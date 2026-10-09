@@ -134,6 +134,16 @@ devloop_diagnostics_check: tasks_check
 devloop_diagnostics_controls:
     python3 scripts/check/check-work-items.py --diagnostic-controls
 
+# Linux real-CLI observation capacity, filesystem mutation and memory exam.
+# strace comes from the repository's locked nixpkgs, never an ambient fallback.
+[group('quality')]
+devloop_observation_capacity_check: tasks_check
+    nix shell --inputs-from . nixpkgs#strace --command python3 scripts/check/check-work-items.py --observation-capacity
+
+[group('quality')]
+devloop_observation_capacity_controls:
+    nix shell --inputs-from . nixpkgs#strace --command python3 scripts/check/check-work-items.py --capacity-controls
+
 # The tree the closeout script runs devloop in must contain every policy
 # codePaths entry: a real checkout of canonical main through the script's own
 # prepare function, and a bare checkout the check must refuse. Needs network;

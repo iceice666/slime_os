@@ -1027,7 +1027,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--devloop-diagnostics", action="store_true")
     parser.add_argument("--diagnostic-controls", action="store_true")
+    parser.add_argument("--observation-capacity", action="store_true")
+    parser.add_argument("--capacity-controls", action="store_true")
     arguments = parser.parse_args()
+    if arguments.observation_capacity or arguments.capacity_controls:
+        from devloop_observation_capacity_exam import main as capacity_main
+        from devloop_diagnostics_exam import ExamError
+
+        try:
+            return capacity_main(controls_only=arguments.capacity_controls)
+        except ExamError as error:
+            raise SystemExit(f"observation capacity exam failed: {error}") from error
     if arguments.devloop_diagnostics or arguments.diagnostic_controls:
         from devloop_diagnostics_exam import ExamError, main as diagnostics_main
 
