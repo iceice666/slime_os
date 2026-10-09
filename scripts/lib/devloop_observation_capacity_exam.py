@@ -398,6 +398,12 @@ sys.exit(s.get("exit",0))
             return 32
         if text == "build/zutai-cache":
             return 0
+        # The existing legacy store gate writes one fixed corrupt-terminal
+        # negative control, then removes it; it is not transcript storage.
+        if text == "build/devloop-gate-terminal":
+            return 0
+        if text == "build/devloop-gate-terminal/00000000-0000-7000-8000-00000000000b.json":
+            return 197
         if text.startswith("build/devloop-diagnostics/"):
             parts = relative.parts
             if len(parts) == 3 and re.fullmatch(r"[0-9a-f]{64}-[A-Za-z0-9_-]+", parts[2]):
@@ -507,6 +513,23 @@ sys.exit(s.get("exit",0))
             sum(m.operation in ("open", "openat", "creat") for m in relay_events) <= 3,
             "repeated relay opens conceal fragments",
         )
+        terminal_events = [
+            m
+            for m in observed.mutations
+            if m.path is not None and "devloop-gate-terminal" in m.path.parts
+        ]
+        require(
+            not terminal_events or legacy_store, "terminal control mutation outside legacy gate"
+        )
+        require(
+            all(
+                m.executable == ("python3", "scripts/check/devloop-gate.py", "work-item-store")
+                for m in terminal_events
+            ),
+            "terminal control written outside legacy adapter",
+        )
+        writable = [m for m in terminal_events if m.operation in ("open", "openat", "creat")]
+        require(len(writable) <= 1, "repeated terminal control can hide transcript fragments")
         require(
             not any(p.parent.name.startswith("diagnostic-read-") for p in paths),
             "adapter decoder temp files can conceal a spool",
