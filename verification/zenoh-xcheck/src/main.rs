@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use slime_components::zenoh_profile0::encode as ours;
-use slime_components::zenoh_profile0::session::{Config, Role, Session};
+use slime_components::zenoh_profile0::session::{Config, Event, Role, Session, State};
 use slime_components::zenoh_profile0::{Mapping as OurMapping, Message, Network, decode_batch};
 
 use zenoh_buffers::{ZBuf, ZSlice, reader::HasReader, writer::HasWriter};
@@ -319,6 +319,23 @@ fn same_network(ours: &Network<'_>, theirs: &NetworkMessage) -> Result<(), Strin
                 || *payload != &zbuf_bytes(&put.payload)[..]
             {
                 return Err("push differs".into());
+            }
+            // The decoded metadata is read back from upstream's bytes here, not from our
+            // encoder: eight little-endian bytes each, a length byte, then the 16-byte GID.
+            let theirs_sequence = theirs_attachment
+                .get(..8)
+                .and_then(|b| <[u8; 8]>::try_from(b).ok())
+                .map(i64::from_le_bytes);
+            let theirs_timestamp = theirs_attachment
+                .get(8..16)
+                .and_then(|b| <[u8; 8]>::try_from(b).ok())
+                .map(i64::from_le_bytes);
+            let theirs_gid = theirs_attachment.get(17..33);
+            if Some(attachment.sequence) != theirs_sequence
+                || Some(attachment.timestamp) != theirs_timestamp
+                || Some(attachment.gid) != theirs_gid
+            {
+                return Err("attachment sequence, timestamp or gid differs".into());
             }
         }
         _ => return Err("message kind differs".into()),
@@ -886,7 +903,15 @@ fn part_c(tally: &mut Tally) {
     };
     {
         let mut o2 = [0u8; 512];
-        let _ = a.on_batch(&close, 21, &mut o2);
+        let outcome = a.on_batch(&close, 21, &mut o2).expect("close accepted");
+        assert!(
+            outcome
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Closed { .. })),
+            "the connector reports the CLOSE it received"
+        );
+        assert_eq!(a.state(), State::Closed, "the connector is closed");
     }
 
     for (label, bytes) in &log {
@@ -1183,6 +1208,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slime_components::zenoh_profile0::Attachment;
 
     #[test]
     fn a_decoded_message_must_carry_the_fields_upstream_was_asked_to_encode() {
@@ -1208,6 +1234,49 @@ mod tests {
             batch_size: 511,
         };
         assert!(same(&resized, &theirs).is_err(), "a different batch size");
+    }
+
+    fn push<'a>(attachment: Attachment<'a>) -> Network<'a> {
+        Network::PushPut {
+            mapping: OurMapping::Sender,
+            key: "a/b",
+            attachment,
+            payload: &[1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn a_decoded_push_must_carry_the_attachment_metadata_upstream_encoded() {
+        let gid = [0xe0u8; 16];
+        let raw = ours::attachment(5, 1005, &gid).unwrap();
+        let theirs = up_frame(1, vec![up_push("a/b", Mapping::Sender, &raw, &[1, 2, 3])]);
+        let honest = Attachment {
+            raw: &raw,
+            sequence: 5,
+            timestamp: 1005,
+            gid: &gid,
+        };
+        let theirs_network = match &theirs.body {
+            TransportBody::Frame(f) => f.payload[0].clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(same_network(&push(honest), &theirs_network), Ok(()));
+        let wrong_sequence = Attachment {
+            sequence: 6,
+            ..honest
+        };
+        assert!(same_network(&push(wrong_sequence), &theirs_network).is_err());
+        let wrong_timestamp = Attachment {
+            timestamp: 0,
+            ..honest
+        };
+        assert!(same_network(&push(wrong_timestamp), &theirs_network).is_err());
+        let other_gid = [0u8; 16];
+        let wrong_gid = Attachment {
+            gid: &other_gid,
+            ..honest
+        };
+        assert!(same_network(&push(wrong_gid), &theirs_network).is_err());
     }
 
     #[test]
