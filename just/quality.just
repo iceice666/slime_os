@@ -123,6 +123,17 @@ pr_scope_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# End-to-end diagnostics from a failing gate through the pinned CLI, including
+# retained output, cached failure, bounds and refusals. Explicit qualification.
+[group('quality')]
+devloop_diagnostics_check: tasks_check
+    python3 scripts/check/check-work-items.py --devloop-diagnostics
+
+# Mutation controls for the diagnostics exam; never qualifies the repair.
+[group('quality')]
+devloop_diagnostics_controls:
+    python3 scripts/check/check-work-items.py --diagnostic-controls
+
 # The tree the closeout script runs devloop in must contain every policy
 # codePaths entry: a real checkout of canonical main through the script's own
 # prepare function, and a bare checkout the check must refuse. Needs network;

@@ -29,6 +29,7 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import argparse
 import contextlib
 import datetime
 import hashlib
@@ -1023,6 +1024,17 @@ def check_terminal_controls() -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--devloop-diagnostics", action="store_true")
+    parser.add_argument("--diagnostic-controls", action="store_true")
+    arguments = parser.parse_args()
+    if arguments.devloop_diagnostics or arguments.diagnostic_controls:
+        from devloop_diagnostics_exam import ExamError, main as diagnostics_main
+
+        try:
+            return diagnostics_main(controls_only=arguments.diagnostic_controls)
+        except ExamError as error:
+            raise SystemExit(f"devloop diagnostics exam failed: {error}") from error
     if not ITEMS.is_dir():
         raise SystemExit(
             f"{ITEMS.relative_to(ROOT)} does not exist: it is the repository's only "
