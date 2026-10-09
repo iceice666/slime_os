@@ -32,7 +32,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -344,24 +343,8 @@ print(json.dumps(["\\n".join(lines) + "\\n", {"devloop": core.raw_record(retaine
     return evidence, retained
 
 
-def main(arguments: list[str]) -> int:
-    """Forward a devloop invocation into this repository's environment.
-
-    `just devloop …` is how an operator admits, starts, gates, or completes an
-    item here: the compiler, its standard library, and its runtime archive come
-    from the same `deps/zutai` build every contract check uses, and the pin is
-    asserted before anything runs.
-    """
-    findings = check_toolchain()
-    if findings:
-        for finding in findings:
-            print(f"devloop: {finding}")
-        return 1
-    finished = subprocess.run(
-        [executable(), *(arguments or ["--help"])], cwd=ROOT, env=_environment()
-    )
-    return finished.returncode
-
-
+# The operator entrypoint is devloop_cli.py. This module is also imported by
+# graders for toolchain and consumer helpers; it must not import the program
+# under test back into their immutable verification closure.
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit("use `just devloop ...` or scripts/lib/devloop_cli.py; this module is helpers only")

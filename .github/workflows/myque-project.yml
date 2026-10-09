@@ -93,5 +93,5 @@ jobs:
           --source-branch main
           --project 'state = open or state = active or state = blocked or state = deferred'
           --body-renderer python3
-          --body-renderer-arg scripts/lib/devloop.py
+          --body-renderer-arg scripts/lib/devloop_cli.py
           --body-renderer-arg render

@@ -160,7 +160,7 @@ tasks_graph:
 [group('quality')]
 [positional-arguments]
 devloop *ARGS:
-    python3 scripts/lib/devloop.py "$@"
+    python3 scripts/lib/devloop_cli.py "$@"
 
 [group('quality')]
 x86_portability_check:

@@ -279,7 +279,7 @@ class Fixture:
         (self.root / ".devloop/policy.json").write_text(json.dumps(policy))
         (self.root / "approval.py").write_text("print('{\"approved\": true}')\n")
         (self.root / "Justfile").write_text(
-            '[positional-arguments]\ndevloop *ARGS:\n    python3 scripts/lib/devloop.py "$@"\n\nfixture_failure:\n    python3 fixture.py fail\n\nfixture_oversize:\n    python3 fixture.py large\n'
+            '[positional-arguments]\ndevloop *ARGS:\n    python3 scripts/lib/devloop_cli.py "$@"\n\nfixture_failure:\n    python3 fixture.py fail\n\nfixture_oversize:\n    python3 fixture.py large\n'
         )
         (self.root / "fixture.py").write_text("""import pathlib, sys
 p = pathlib.Path("counter")

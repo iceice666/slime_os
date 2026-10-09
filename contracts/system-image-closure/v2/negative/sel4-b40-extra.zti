@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-b40-extra";
-  baseClosureIdentity = "f2dcc2eef7faf729afbbc779c3dd3962ce3a8e9f395044adcfa5e3df4c186893";
+  baseClosureIdentity = "7fd72b576257b4280d8b0f080d45e181d5dc425391077daf3c3c45d6312ef2ae";
   mutation = "extra";
   expectedRefusal = "CSpaceMismatch";
 }
