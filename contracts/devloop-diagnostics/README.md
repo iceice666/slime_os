@@ -10,6 +10,12 @@ Output is the prefix of the recipe's stdout followed by its stderr, limited to
 complete execution identity, the recipe, run key and output digest. Neither the
 receipt nor its output may be overwritten by another execution.
 
+The operator entrypoint is `scripts/lib/devloop_cli.py`; the exam imports
+`scripts/lib/devloop.py` only for pinned toolchain and consumer helpers. It copies
+the entrypoint as the program under test, without importing it into the checker's
+immutable verification closure. Both files remain under the evidence code closure;
+there is no approval exemption.
+
 The real operator-facing `just devloop gate` command must expose this line on its
 stdout or stderr, including on reuse of a failed run:
 

@@ -185,6 +185,7 @@
     "scripts/lib/cpu_boot_observation.py",
     "scripts/lib/cpu_boot_observation_contract.py",
     "scripts/lib/devloop.py",
+    "scripts/lib/devloop_cli.py",
     "scripts/lib/devloop_diagnostics_exam.py",
     "scripts/lib/devloop_observations.py",
     "scripts/lib/elf_delivery.py",
