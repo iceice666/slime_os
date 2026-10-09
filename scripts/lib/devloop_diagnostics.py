@@ -7,6 +7,7 @@ import io
 import json
 import os
 import selectors
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,6 @@ from pathlib import Path
 
 import devloop_diagnostics_contract as contract
 from harness import ROOT
-import zutai_cli
 
 RELAY_ENV = "SLIME_DEVLOOP_DIAGNOSTIC_RELAY"
 
@@ -42,7 +42,9 @@ class Capture(tuple):
         return value
 
 
-def capture(target: str, environment: dict[str, str] | None) -> Capture:
+def capture(
+    target: str, environment: dict[str, str] | None, *, complete_text: bool = False
+) -> Capture:
     spools = {}
     try:
         for name in ("stdout", "stderr"):
@@ -89,13 +91,19 @@ def capture(target: str, environment: dict[str, str] | None) -> Capture:
                     chunks[name].extend(data[:remaining])
         code = process.wait()
         digest = hashlib.sha256()
+        complete = []
         for name in ("stdout", "stderr"):
             spools[name].seek(0)
-            # subprocess text=True formerly applied universal newlines.
-            text = io.TextIOWrapper(spools[name], encoding="utf-8", newline=None)
+            # Valid UTF-8 retains the former universal-newline digest. For
+            # opaque invalid bytes, surrogateescape round-trips every byte.
+            text = io.TextIOWrapper(
+                spools[name], encoding="utf-8", errors="surrogateescape", newline=None
+            )
             try:
                 while part := text.read(8192):
-                    digest.update(part.encode())
+                    digest.update(part.encode("utf-8", errors="surrogateescape"))
+                    if complete_text:
+                        complete.append(part)
             finally:
                 text.detach()
     finally:
@@ -110,9 +118,11 @@ def capture(target: str, environment: dict[str, str] | None) -> Capture:
             getattr(process, name).close()
             spools[name].close()
     output = bytes(chunks["stdout"] + chunks["stderr"])[: contract.MAX_OUTPUT_BYTES]
-    return Capture(
+    result = Capture(
         code, output, sum(sizes.values()) > contract.MAX_OUTPUT_BYTES, digest.hexdigest()
     )
+    result.complete_text = "".join(complete) if complete_text else None
+    return result
 
 
 def retain(key: str, request: dict, target: str, result: Capture) -> str:
@@ -166,10 +176,15 @@ def announce(path: str, key: str, request: dict | None = None, target: str | Non
             + json.dumps(str(receipt))
             + "); main"
         )
-        environment = dict(os.environ, ZUTAI_STDLIB_ROOT=str(zutai_cli.STDLIB))
+        # The operator selected installed or submodule toolchain before the
+        # adapter ran. Never build a second compiler here or override stdlib.
+        environment = dict(os.environ)
+        decoder = shutil.which("zutai-cli", path=environment.get("PATH"))
+        if decoder is None or not environment.get("ZUTAI_STDLIB_ROOT"):
+            raise ValueError("diagnostic receipt decoder environment unavailable")
         try:
             decoded = subprocess.run(
-                [str(zutai_cli.binary()), "json", str(source)],
+                [decoder, "json", str(source)],
                 cwd=root,
                 env=environment,
                 capture_output=True,

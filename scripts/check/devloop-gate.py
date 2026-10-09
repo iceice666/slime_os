@@ -388,10 +388,21 @@ def just_observations(request: dict) -> list[dict]:
 
 
 def work_item_store(request: dict) -> list[dict]:
-    # This older gate parses the complete checker text, not a retained log.
+    # Counts need the complete text, independently of the bounded raw log.
     def complete_recipe(target: str) -> tuple[bool, str]:
-        finished = subprocess.run(["just", target], cwd=ROOT, capture_output=True, text=True)
-        return finished.returncode == 0, finished.stdout + finished.stderr
+        key = run_key(request, "work-item-store", target)
+        try:
+            result = devloop_diagnostics.capture(target, None, complete_text=True)
+            receipt = devloop_diagnostics.retain(key, request, target, result)
+            devloop_diagnostics.announce(receipt, key, request, target)
+            return result[0], result.complete_text
+        except (OSError, ValueError) as error:
+            message = f"diagnostic capture error for run {key}: {error}"
+            try:
+                devloop_diagnostics.notify(message)
+            except (OSError, ValueError):
+                pass
+            raise CannotRun(message) from error
 
     tasks_passed, tasks_output = complete_recipe("tasks_check")
     docs_passed, _ = complete_recipe("docs_check")
