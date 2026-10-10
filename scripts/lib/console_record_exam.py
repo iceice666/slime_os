@@ -204,6 +204,7 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
         "positive",
         "unserialized",
         "busywait",
+        "yielding-tas",
         "invalid-bytes",
         "overflow-prefix",
         "missing-window-prefix",
@@ -223,6 +224,22 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
             )
         elif name == "busywait":
             module = module.replace("crate::r#yield();", "std::hint::spin_loop();")
+        elif name == "yielding-tas":
+            module = module.replace(
+                "use std::sync::atomic::{AtomicUsize, Ordering};",
+                "use std::sync::atomic::{AtomicBool, Ordering};",
+            ).replace(
+                "static NEXT: AtomicUsize = AtomicUsize::new(0);\n"
+                "    static SERVING: AtomicUsize = AtomicUsize::new(0);",
+                "static LOCKED: AtomicBool = AtomicBool::new(false);",
+            ).replace(
+                "let ticket = NEXT.fetch_add(1, Ordering::Relaxed);\n"
+                "        while SERVING.load(Ordering::Acquire) != ticket { crate::r#yield(); }",
+                "while LOCKED.swap(true, Ordering::Acquire) { crate::r#yield(); }",
+            ).replace(
+                "SERVING.store(ticket.wrapping_add(1), Ordering::Release);",
+                "LOCKED.store(false, Ordering::Release);",
+            )
         elif name == "invalid-bytes":
             module = module.replace(" || std::str::from_utf8(bytes).is_err()", "")
         elif name == "overflow-prefix":
@@ -293,6 +310,9 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
                     raise AssertionError("unserialized subject not refused for splicing")
             elif name == "busywait":
                 raise AssertionError("busywait subject did not exhaust timeout")
+            elif name == "yielding-tas":
+                if result.returncode == 0 or "fair handoff violated queued waiter priority" not in result.stderr:
+                    raise AssertionError(f"yielding TAS not refused for fair handoff: {result.stderr}")
             elif name in ("invalid-badge-routing", "cross-holder-routing", "wrong-thread-routing"):
                 reason = (
                     "invalid badge leaked accepted bytes"
@@ -313,7 +333,7 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
                 }[name]
                 if result.returncode == 0 or reason not in result.stderr:
                     raise AssertionError(f"{name} mutation not refused for {reason}: {result.stderr}")
-    return 13
+    return 14
 
 
 # The frozen grader closure contains the full host adapter, not a mutable resource.
@@ -367,19 +387,45 @@ mod transfer_window {
         INPUT.with(|v| v.borrow().clone().and_then(|bytes| if bytes.len() <= 1024 { Ok(bytes) } else { Err(()) }).map(Frame).map_err(|_| StagingError))
     }
 }
-#[derive(Default)] struct State { bytes: Vec<u8>, paused: bool, release: bool, contender: bool, yields: usize }
+#[derive(Default)] struct FairState {
+    owner_paused: bool, release_owner: bool, waiter_parked: bool, release_waiter: bool,
+    owner_second: bool, owner_attempt: bool, owner_reacquired: bool,
+}
+#[derive(Default)] struct State { bytes: Vec<u8>, paused: bool, release: bool, contender: bool, yields: usize, fair: Option<FairState> }
 static STATE: OnceLock<(Mutex<State>, Condvar)> = OnceLock::new();
 fn state() -> &'static (Mutex<State>, Condvar) { STATE.get_or_init(|| (Mutex::new(State::default()), Condvar::new())) }
 pub fn debug_put_char(byte: u8) {
     let producer = PRODUCER.with(|v| *v.borrow());
     let (lock, cv) = state(); let mut s = lock.lock().unwrap();
     s.bytes.push(byte); assert!(s.bytes.len() <= 32768, "byte budget exceeded");
+    if s.fair.is_some() {
+        if producer == 1 {
+            if s.fair.as_ref().unwrap().owner_second {
+                s.fair.as_mut().unwrap().owner_reacquired = true; cv.notify_all();
+            } else if !s.fair.as_ref().unwrap().owner_paused {
+                s.fair.as_mut().unwrap().owner_paused = true; cv.notify_all();
+                while !s.fair.as_ref().unwrap().release_owner { s = cv.wait(s).unwrap(); }
+            }
+        }
+        return;
+    }
     if producer == 1 && !s.paused { s.paused = true; cv.notify_all(); while !s.release { s = cv.wait(s).unwrap(); } }
     if producer == 2 { s.contender = true; cv.notify_all(); }
 }
 pub fn r#yield() {
     let (lock, cv) = state(); let mut s = lock.lock().unwrap();
     s.yields += 1; assert!(s.yields <= 100000, "yield budget exceeded");
+    if s.fair.is_some() {
+        let producer = PRODUCER.with(|v| *v.borrow());
+        if producer == 2 {
+            s.fair.as_mut().unwrap().waiter_parked = true; cv.notify_all();
+            while !s.fair.as_ref().unwrap().release_waiter { s = cv.wait(s).unwrap(); }
+        } else if producer == 1 && s.fair.as_ref().unwrap().owner_second {
+            s.fair.as_mut().unwrap().owner_attempt = true; cv.notify_all();
+            while !s.fair.as_ref().unwrap().release_waiter { s = cv.wait(s).unwrap(); }
+        }
+        drop(s); std::thread::yield_now(); return;
+    }
     if PRODUCER.with(|v| *v.borrow()) == 2 {
         s.contender = true; cv.notify_all();
         while !s.release { s = cv.wait(s).unwrap(); }
@@ -417,6 +463,56 @@ fn contention_console(case: usize) {
         4 => console_record(&vec![b'X'; 1025], true, &[0, 0]),
         _ => unreachable!(),
     }
+}
+fn wait_for_fair(predicate: fn(&FairState) -> bool, reason: &str) {
+    let (lock, cv) = state(); let mut s = lock.lock().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while !predicate(s.fair.as_ref().unwrap()) {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let (next, result) = cv.wait_timeout(s, remaining).unwrap(); s = next;
+        assert!(!result.timed_out() || predicate(s.fair.as_ref().unwrap()), "fair handoff progress timeout: {reason}");
+    }
+}
+fn fair_owner_record(console_first: bool, second: bool) {
+    if console_first {
+        let bytes = if second { b"CONSOLE_FAIR second\n".as_slice() } else { b"CONSOLE_FAIR first\n".as_slice() };
+        console_record(bytes, true, &[0, 0]);
+    } else { root_record(if second { "fairness-second" } else { "fairness-first" }); }
+}
+fn fair_handoff(console_first: bool, round: usize) {
+    { let mut s = state().0.lock().unwrap(); *s = State { fair: Some(FairState::default()), ..State::default() }; }
+    let (done, completion) = std::sync::mpsc::channel();
+    let owner_done = done.clone();
+    let a = std::thread::spawn(move || {
+        PRODUCER.with(|v| *v.borrow_mut() = 1);
+        fair_owner_record(console_first, false);
+        state().0.lock().unwrap().fair.as_mut().unwrap().owner_second = true;
+        fair_owner_record(console_first, true);
+        owner_done.send(()).unwrap();
+    });
+    wait_for_fair(|f| f.owner_paused, "owner first byte");
+    let b = std::thread::spawn(move || {
+        PRODUCER.with(|v| *v.borrow_mut() = 2);
+        if console_first { root_record("fairness-waiter"); }
+        else { console_record(b"CONSOLE_FAIR waiter\n", true, &[0, 0]); }
+        done.send(()).unwrap();
+    });
+    // B is observed in the actual lock's kernel yield before A1 can finish.
+    wait_for_fair(|f| f.waiter_parked, "queued waiter kernel yield");
+    { let (lock, cv) = state(); let mut s = lock.lock().unwrap(); s.fair.as_mut().unwrap().release_owner = true; cv.notify_all(); }
+    // The shim only schedules callbacks: it neither grants nor blocks lock acquisition.
+    // FIFO makes A2 yield; a yielding TAS reacquires and emits A2 before B resumes.
+    wait_for_fair(|f| f.owner_attempt || f.owner_reacquired, "owner repeat acquisition");
+    { let (lock, cv) = state(); let mut s = lock.lock().unwrap(); s.fair.as_mut().unwrap().release_waiter = true; cv.notify_all(); }
+    for _ in 0..2 { completion.recv_timeout(std::time::Duration::from_secs(1)).expect("fair handoff bounded completion"); }
+    a.join().unwrap(); b.join().unwrap();
+    let expected = if console_first {
+        "CONSOLE_FAIR first\nSLIME_BACKING snapshot phase=fairness-waiter begin\nCONSOLE_FAIR second\n"
+    } else {
+        "SLIME_BACKING snapshot phase=fairness-first begin\nCONSOLE_FAIR waiter\nSLIME_BACKING snapshot phase=fairness-second begin\n"
+    };
+    let s = state().0.lock().unwrap();
+    assert_eq!(s.bytes, expected.as_bytes(), "fair handoff violated queued waiter priority console_first={console_first} round={round}: {:?}", String::from_utf8_lossy(&s.bytes));
 }
 fn main() {
     // Authorization checks run through the actual serve prefix and Write arm.
@@ -498,6 +594,10 @@ fn main() {
     }
     }
     }
+    for console_first in [false, true] {
+        for round in 0..8 { fair_handoff(console_first, round); }
+    }
+    { let mut s = state().0.lock().unwrap(); *s = State::default(); }
     // Oversize rejection must occur in actual production code, not the staging shim.
     let lock = &state().0;
     let before = lock.lock().unwrap().bytes.len();
@@ -508,6 +608,6 @@ fn main() {
     assert_eq!(&after[before..], b"SLIME_ROOT console staging refused: StagingError\n", "oversize staging leaked payload");
     let before = after.len(); root_record(&"Z".repeat(1025));
     assert_eq!(lock.lock().unwrap().bytes.len(), before, "oversize formatting emitted a partial record");
-    println!("console actual-source deterministic contention passed: 80 forced pairs (5 routes x 2 owner orders x 8 rounds), exact-1024 direct/console/root acceptance, 1025 refusals");
+    println!("console actual-source deterministic contention passed: 80 forced pairs (5 routes x 2 owner orders x 8 rounds), 16 FIFO repeated-owner handoffs (2 owner orders x 8 rounds), exact-1024 direct/console/root acceptance, 1025 refusals");
 }
 """

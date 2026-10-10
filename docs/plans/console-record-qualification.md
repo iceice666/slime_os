@@ -32,6 +32,14 @@ staging diagnostics compete in both ownership orders, not just isolated checks. 
 refused by synthetic sensitivity controls. Their positive subject is an exam
 control, never evidence about repaired product code.
 
+Repeated acquisition is also forced deterministically: a queued contender remains
+parked while the current owner completes and immediately submits another record.
+The second submission must yield behind that earlier contender; byte-exact order
+is owner-first, contender, owner-second. Both ownership directions are exercised.
+A yielding but unfair test-and-set control must fail this handoff even if it passes
+all single-record exclusion cases. Fixture observation hooks control scheduling,
+not product lock ownership.
+
 Whole invalid UTF-8, oversized, unavailable staging, missing-window and short
 message refusals must emit only their independently expected refusal diagnostic
 or no output, never an accepted payload prefix. Formatting must complete
