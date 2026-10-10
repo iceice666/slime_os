@@ -879,7 +879,7 @@ impl ObjectAllocator {
     /// the same amount.
     pub fn report_elastic_census(&self, phase: &str) {
         let inventory = self.elastic_inventory();
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM elastic census phase={} ordinary={} retained={} reusable={} live_bytes={} extents_active={} extents_anchored={} slots_free={} descriptors_free={} extent_records_free={} metadata={}",
             phase,
             self.untyped_bytes_remaining(),
