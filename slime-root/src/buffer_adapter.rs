@@ -561,7 +561,7 @@ impl<'a> BufferAdapter<'a> {
             }
         }
         if alias.is_some() {
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH frame aliased frame={} vaddr={vaddr:#x} live={}",
                 frame.0,
                 live_frame_aliases(),

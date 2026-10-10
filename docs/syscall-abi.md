@@ -188,7 +188,7 @@ unrelated operations.
 
 | Label | Operation | Operands | Result convention |
 | --- | --- | --- | --- |
-| 0 | `WRITE` | `MR0`=transfer descriptor (or inline registers) over the bytes | Bytes written. One line is emitted as one uninterruptible unit (B18), bounded by `MAX_STAGED_ARRAY_BYTES` (1024) rather than by `MAX_MSG`. |
+| 0 | `WRITE` | `MR0`=transfer descriptor (or inline registers) over the bytes | Bytes submitted; send completion does not acknowledge emission. Each call is one record, never joined with another call's bytes, bounded by `MAX_STAGED_ARRAY_BYTES` (1024) rather than by `MAX_MSG`. An accepted UTF-8 record is printed contiguously through the root's shared serializer (`slime-root/src/diagnostic.rs`); a non-UTF-8 or oversized one is refused whole. |
 | 1 | `INPUT READ` | `MR0=input_slot` | Primary `0` with the encoded event in the auxiliary word, `-3` when no event is ready. Requires `RIGHT_INPUT_READ`. |
 | 2 | `DIRECTORY INSPECT` | `MR0=slot_pair(directory_slot, required_rights)`, `MR1=reserved window descriptor` | Nonnegative scope byte length; the immutable root and scope return through the window. |
 | 3 | `DIRECTORY COMMIT` | `MR0=directory_slot`, `MR1=transfer descriptor` over expected‖new root | `0` on commit, `-3` when the expected root is stale. |

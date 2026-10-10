@@ -409,7 +409,7 @@ fn admit<'a>(
     // The inventory a policy was admitted against is part of its evidence: the
     // same policy on a machine with different resources is a different
     // decision, and a refusal here must name which resource was missing.
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic available bytes={} slots={} descriptors={} extents={} tables={} subjects={}",
         available.bytes,
         available.slots,
@@ -457,7 +457,7 @@ fn admit<'a>(
 /// for and from what the pool still has.
 fn report_holder(name: &str, region: &Region, ledger: &Ledger<'_>, allocator: &ObjectAllocator) {
     let free = ledger.available();
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic holder subject={} committed={} maximum={} reserved_window={} pool_bytes={} pool_slots={} ordinary={} reusable={}",
         name,
         region.pages(),
@@ -489,7 +489,7 @@ pub fn exercise_idle_and_guarantee(
     allocator.report_elastic_census("admitted");
 
     let pool = ledger.available();
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic admitted pool_bytes={} guarantee_pages={} holders={}",
         pool.bytes,
         GUARANTEE_PAGES,
@@ -510,7 +510,7 @@ pub fn exercise_idle_and_guarantee(
     if after.bytes != before.bytes {
         return Err(QualificationError::Unmet("an idle maximum took pool bytes"));
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic idle subject={} maximum={} reserved_bytes={} pool_before={} pool_after={}",
         idle.name,
         idle.region.quota(),
@@ -544,14 +544,14 @@ pub fn exercise_idle_and_guarantee(
         }
     }
     let refusal = refusal.expect("loop exits only on a refusal");
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic grow subject={} committed={} bytes={} pool_after={}",
         bulk.name,
         bulk.region.pages(),
         bulk.region.pages() * GRANULE_SIZE,
         ledger.available().bytes,
     );
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic refused subject={} pages={} cause={} committed={} peer_committed={}",
         bulk.name,
         LARGE_FRAME_PAGES,
@@ -569,7 +569,7 @@ pub fn exercise_idle_and_guarantee(
         .grow(&mut table, allocator, &mut ledger, GUARANTEE_PAGES as usize)
         .map_err(QualificationError::Growth)?;
     guaranteed.write_pattern(0, guaranteed.region.pages());
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic guarantee subject={} committed={} promised={} served=1",
         guaranteed.name,
         guaranteed.region.pages(),
@@ -580,7 +580,7 @@ pub fn exercise_idle_and_guarantee(
     if idle_served {
         idle.write_pattern(0, idle.region.pages());
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic idle_request subject={} served={} committed={}",
         idle.name,
         u8::from(idle_served),
@@ -591,7 +591,7 @@ pub fn exercise_idle_and_guarantee(
     let intact = bulk.pattern_holds(0, bulk.region.pages())
         && guaranteed.pattern_holds(0, guaranteed.region.pages())
         && (!idle_served || idle.pattern_holds(0, idle.region.pages()));
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic intact bulk={} guaranteed={} idle={} pages={}",
         u8::from(bulk.pattern_holds(0, bulk.region.pages())),
         u8::from(guaranteed.pattern_holds(0, guaranteed.region.pages())),
@@ -614,7 +614,7 @@ pub fn exercise_idle_and_guarantee(
         holder.retire(&mut table, allocator, &mut ledger)?;
     }
     allocator.report_elastic_census("retired");
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic complete case=idle-and-guarantee holders={} granted={} reclaimed={}",
         subjects.len(),
         table.grown_pages(),
@@ -640,7 +640,7 @@ pub fn exercise_mixed_fragmentation(
     let mut ledger = admit(allocator, &mut buffer, &subjects, &mut instances)?;
     let mut table = Table::new();
     allocator.report_elastic_census("admitted");
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic inventory pool_bytes={} largest_aligned={} retained={} reusable={}",
         ledger.available().bytes,
         allocator.largest_aligned_ordinary_block(),
@@ -663,7 +663,7 @@ pub fn exercise_mixed_fragmentation(
         .map_err(QualificationError::Growth)?;
     small.write_pattern(0, 1);
     let single_cost = before - ledger.available().bytes;
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic request kind=single pages=1 committed={} charged={} large=0 base=1 tables=1",
         small.region.pages(),
         single_cost,
@@ -686,7 +686,7 @@ pub fn exercise_mixed_fragmentation(
         .grow(&mut table, allocator, &mut ledger, LARGE_FRAME_PAGES + 3)
         .map_err(QualificationError::Growth)?;
     mixed.write_pattern(0, mixed.region.pages());
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic request kind=mixed pages={} committed={} charged={} large={} base={} tables={}",
         LARGE_FRAME_PAGES + 3,
         mixed.region.pages(),
@@ -705,7 +705,7 @@ pub fn exercise_mixed_fragmentation(
     if fragmented.is_ok() {
         small.write_pattern(fragmented_from, small.region.pages());
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic fragmented ordinary_aligned={} served={} committed={} retained={} reusable={}",
         aligned,
         u8::from(fragmented.is_ok()),
@@ -718,7 +718,7 @@ pub fn exercise_mixed_fragmentation(
     // resource rather than as an authorization answer.
     let spanned = mixed.grow(&mut table, allocator, &mut ledger, LARGE_FRAME_PAGES);
     let span_cause = spanned.err().map_or("none", |error| error.cause());
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic fragmented_span served={} cause={} committed={}",
         u8::from(span_cause == "none"),
         span_cause,
@@ -758,19 +758,19 @@ pub fn exercise_mixed_fragmentation(
     if bulk.region.pages() == 0 {
         return Err(QualificationError::Unmet("no bulk capacity was served"));
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic request kind=bulk pages={} committed={} charged={} large={} base=0 tables=0",
         bulk.region.pages(),
         bulk.region.pages(),
         bulk_charged,
         bulk.region.pages() / LARGE_FRAME_PAGES,
     );
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic cost small_bytes_per_page={} bulk_bytes_per_page={}",
         single_cost,
         bulk_charged / bulk.region.pages() as u64,
     );
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic refusal kind=bulk resource={} pool_bytes={} ordinary={} retained={} reusable={}",
         refusal.cause(),
         ledger.available().bytes,
@@ -785,7 +785,7 @@ pub fn exercise_mixed_fragmentation(
     if fitting {
         small.write_pattern(1, small.region.pages());
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic next kind=fitting served={} committed={} pool_bytes={}",
         u8::from(fitting),
         small.region.pages(),
@@ -802,7 +802,7 @@ pub fn exercise_mixed_fragmentation(
     let returned = bulk.retire(&mut table, allocator, &mut ledger)?;
     let reused_before = allocator.extents_reused();
     let after_reuse = small.grow(&mut table, allocator, &mut ledger, LARGE_FRAME_PAGES);
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic reuse returned_pages={} reused_extents={} served={} committed={}",
         returned,
         allocator.extents_reused() - reused_before,
@@ -819,7 +819,7 @@ pub fn exercise_mixed_fragmentation(
         holder.retire(&mut table, allocator, &mut ledger)?;
     }
     allocator.report_elastic_census("retired");
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic complete case=mixed-fragmentation granted={} reclaimed={}",
         table.grown_pages(),
         table.reclaimed_pages(),
@@ -1004,7 +1004,7 @@ pub fn exercise_failure_rollback(
         before - ledger.available().bytes
     };
     let committed = holder.region.pages();
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic baseline committed={} charged={} pool_bytes={} peer={}",
         committed,
         clean_charge,
@@ -1079,7 +1079,7 @@ pub fn exercise_failure_rollback(
         }
         let intact =
             holder.pattern_holds(0, committed) && peer.pattern_holds(0, peer.region.pages());
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM elastic injected stage={} cause={} committed={} pool_before={} pool_after={} ordinary_before={} ordinary_after={} retained_tables={} sentinels={} quarantined={}",
             stage,
             error.cause(),
@@ -1108,7 +1108,7 @@ pub fn exercise_failure_rollback(
         .map_err(QualificationError::Growth)?;
     holder.write_pattern(committed, holder.region.pages());
     let retry_charge = before - ledger.available().bytes;
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic retry stage=all committed={} charged={} clean={} doubled={}",
         holder.region.pages(),
         retry_charge,
@@ -1131,7 +1131,7 @@ pub fn exercise_failure_rollback(
     let refused = holder.grow(&mut table, allocator, &mut ledger, 1).is_err();
     let pool_held = ledger.available().bytes;
     let released = allocator.retry_elastic_quarantine(holder.arena);
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic quarantine stage=cleanup cause={} owned={} refused={} released={} remaining={} pool_held={} pool_after={}",
         quarantine.cause(),
         u8::from(owned),
@@ -1261,7 +1261,7 @@ pub fn exercise_failure_rollback(
                 "retirement refunded twice or damaged peer",
             ));
         }
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM elastic acquisition_quarantine stage={} committed=4 peer=8 sentinels=1 retained={} charged={} retry_refund=0 pre_acquire_refused=1 refund={} pool_held={} pool_after={} root_before={} root_after={} retired_once=1",
             stage,
             retained.bytes,
@@ -1275,7 +1275,7 @@ pub fn exercise_failure_rollback(
     }
     peer.retire(&mut table, allocator, &mut ledger)?;
     allocator.report_elastic_census("retired");
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic complete case=failure-rollback stages={} granted={} reclaimed={}",
         stages + 1,
         table.grown_pages(),
@@ -1334,7 +1334,7 @@ pub fn exercise_cross_holder_conservation(
         .grow(&mut table, allocator, &mut ledger, workload)
         .map_err(QualificationError::Growth)?;
     first.write_pattern(0, first.region.pages());
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic holder subject={} committed={} pattern={} pool_bytes={}",
         first.name,
         first.region.pages(),
@@ -1344,7 +1344,7 @@ pub fn exercise_cross_holder_conservation(
 
     let held = ledger.available().bytes;
     let returned = first.retire(&mut table, allocator, &mut ledger)?;
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic retire subject={} revoked=1 returned_pages={} pool_before={} pool_after={} reusable={}",
         first.name,
         returned,
@@ -1371,7 +1371,7 @@ pub fn exercise_cross_holder_conservation(
         .map_err(QualificationError::Growth)?;
     let zeroed = second.zeroed(0, second.region.pages());
     second.write_pattern(0, second.region.pages());
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic reuse subject={} committed={} reused_extents={} zeroed={} peer_pattern={}",
         second.name,
         second.region.pages(),
@@ -1401,7 +1401,7 @@ pub fn exercise_cross_holder_conservation(
     let failed = stuck.retire(&mut table, allocator, &mut ledger);
     let held_after_failure = ledger.available().bytes;
     let retried = stuck.retire(&mut table, allocator, &mut ledger);
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic revoke_failure subject={} first_attempt={} retained={} retry={} pool_before={} pool_held={} pool_after={}",
         stuck.name,
         u8::from(failed.is_ok()),
@@ -1424,7 +1424,7 @@ pub fn exercise_cross_holder_conservation(
     }
     let final_owned = unallocated_bytes(allocator);
     allocator.report_elastic_census("retired");
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic baseline phase=final owned_before={} owned_after={} slots_before={} slots_after={} pool_before={} pool_after={} granted={} reclaimed={}",
         baseline_owned,
         final_owned,
@@ -1438,7 +1438,7 @@ pub fn exercise_cross_holder_conservation(
     if final_owned < baseline_owned {
         return Err(QualificationError::Unmet("owned capacity drifted downward"));
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM elastic complete case=cross-holder-conservation holders={} granted={} reclaimed={}",
         subjects.len(),
         table.grown_pages(),

@@ -233,7 +233,7 @@ impl super::ObjectAllocator {
             .saturating_sub(inventory)
             .saturating_sub(snapshot.reserve.saturating_sub(snapshot.inventory));
         let system = self.system_backing_bytes().saturating_sub(snapshot.system);
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM construction funding success={} before={} after={} consumed={} system={} root={} reserve={} reserve_spent={}",
             success as u8,
             snapshot.inventory,
@@ -249,7 +249,7 @@ impl super::ObjectAllocator {
     pub(crate) fn report_construction_cleanup(&self, before: u64, system_before: u64) {
         if let Some(reserve) = self.adaptive_reserve {
             let after = self.elastic_inventory().bytes;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_MEM construction cleanup before={} after={} returned={} system_returned={} reserve={}",
                 before,
                 after,

@@ -102,7 +102,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "d959e2d443d96b14c2ab881aec8510e172f60a06e85a59871ff1612cb43054fe";
+      identity = "94c0da9491a726c75fcb039236beb7269689ef2edb373afd18a54bb031593188";
     };
     parameters = [
       "qemuKeyboard";
@@ -155,7 +155,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "c85024ca45979a513263b2348550e21b4df72a1431a44e7c556fa0dcd0102f76";
+        identity = "e7c6bbac65e2317c83740035e2d6f5098ee4822b07700fe2f946d53742b492f9";
       };
     };
     {
@@ -171,7 +171,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "327766c623d635ba4dd4304480d9186903f64dac8c5ec29d9f0f7b43913665a7";
+        identity = "2127a4e891697a1f86f7437dfc86ecbb3cb2c5aa64989dc89b605eafc7d73e5d";
       };
     };
     {

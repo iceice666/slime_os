@@ -1679,23 +1679,18 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
     }
 }
 
-/// Write one diagnostic line through the root service.
+/// Write one diagnostic record through the console dispatcher.
 ///
-/// **Not `seL4_DebugPutChar`, even where the kernel offers it.** That was the
-/// implementation under `PRINTING`, and it emitted one syscall per byte — so
-/// the root's own `debug_println!`, or another component's line, could land
-/// mid-string and destroy a marker. A transcript would show ` QoS matched`
-/// where `[fabric] QoS matched` was written, and whichever gate required that
-/// marker failed on a boot that was otherwise correct (B18).
+/// Each call submits one bounded payload to the console dispatcher. Callers must
+/// assemble a complete record before submission; fragments are not joined. The
+/// root and console dispatcher share record serialization on the qualified
+/// single-core non-MCS path. An accepted record is therefore printed
+/// contiguously, and an invalid or oversized one is refused whole. Send
+/// completion does not acknowledge emission.
 ///
-/// The root's graph loop is single-threaded and answers one request at a time,
-/// so a line printed inside its `DebugWrite` arm cannot interleave with
-/// anything. That makes atomicity structural rather than a matter of timing.
-///
-/// The cost is that this now needs a bound transfer window, where the direct
-/// path needed nothing. Every launched component binds one before it runs, and
-/// a task that has not is not yet in a state where its output would be
-/// attributable.
+/// The payload travels through this thread's bound transfer window. Every
+/// launched component binds one before it runs, and a task that has not is not
+/// yet in a state where its output would be attributable.
 pub fn debug_write(bytes: &[u8]) -> i64 {
     let transfer = match stage(bytes, &[]) {
         Ok(transfer) => transfer,

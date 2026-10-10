@@ -3,6 +3,8 @@
 #[cfg(feature = "component-runtime")]
 pub mod block_io;
 #[cfg(feature = "component-runtime")]
+pub mod console_line;
+#[cfg(feature = "component-runtime")]
 pub mod fabric_boot;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_matrix;

@@ -22,7 +22,7 @@ impl ObjectAllocator {
     /// teardown that returns live records to their baseline while the pool
     /// keeps its charged capacity is the reconciliation this reports.
     pub fn report_metadata_census(&self, phase: &str) {
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT metadata census phase={} pages={} bytes={} allocations_live={} allocations_free={} extents_live={} extents_free={} preserved_live={} preserved_free={} slot_words={} slots_free={} nodes={} quarantined={} pending={}",
             phase,
             self.metadata_pages(),
@@ -95,7 +95,7 @@ impl ObjectAllocator {
     /// rather than about spare capacity inside it.
     pub fn pressure_initial_namespace(&mut self) {
         let retired = self.slots.retire_below(super::KERNEL_ROOT_CNODE_SLOTS);
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT cspace pressure initial_limit={} retired={} free={}",
             super::KERNEL_ROOT_CNODE_SLOTS,
             retired,
@@ -234,7 +234,7 @@ impl ObjectAllocator {
         revoked += 1;
         self.release_slot(notification.index());
 
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT cspace exercised created={} invoked={} copied={} retyped={} deleted={} revoked={} min_address={} initial_limit={}",
             created,
             invoked,
@@ -245,7 +245,7 @@ impl ObjectAllocator {
             lowest,
             limit,
         );
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT cspace live root={} second={} leaves={}",
             u8::from(root_live),
             u8::from(second),
@@ -322,7 +322,7 @@ impl ObjectAllocator {
             let request = if round == 0 { free + per_page } else { free };
             self.ensure_allocation_descriptors(request)?;
             let grew = self.metadata_pages() - pages;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_ROOT metadata round={} grew={} reused={}",
                 round,
                 grew,
@@ -338,7 +338,7 @@ impl ObjectAllocator {
             Err(AllocError::NoKernelUntyped) => {}
             other => return other.and(Err(AllocError::NoKernelUntyped)),
         }
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT metadata injected kind=construction retained={} reassigned=0",
             self.infrastructure.quarantined_bytes(),
         );
@@ -351,7 +351,7 @@ impl ObjectAllocator {
             Err(AllocError::ArenaCleanup { .. }) => {}
             other => return other.and(Err(AllocError::NoKernelUntyped)),
         }
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT metadata injected kind=revoke retained={} reassigned=0",
             self.infrastructure.quarantined_bytes(),
         );
@@ -361,9 +361,11 @@ impl ObjectAllocator {
         self.report_metadata_census("grown");
 
         self.ensure_allocation_descriptors(free + per_page)?;
-        sel4::debug_println!("SLIME_ROOT metadata retry kind=construction released=1 reassigned=0");
+        crate::diagnostic_println!(
+            "SLIME_ROOT metadata retry kind=construction released=1 reassigned=0"
+        );
         self.ensure_infrastructure_slots(crate::root_cspace::LEAF_SLOTS)?;
-        sel4::debug_println!("SLIME_ROOT metadata retry kind=revoke released=1 reassigned=0");
+        crate::diagnostic_println!("SLIME_ROOT metadata retry kind=revoke released=1 reassigned=0");
         self.report_metadata_census("released");
         Ok(())
     }
@@ -379,7 +381,7 @@ impl ObjectAllocator {
     /// segment must say so while no task exists to be affected.
     pub fn exercise_bootstrap_boundaries(&mut self) -> Result<(), AllocError> {
         let reserve_slots = super::infrastructure::Infrastructure::reserve_slots();
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT bootstrap reserve objects={} alignment={} remaining={} slots={} transaction={} recursion=0 fit=1",
             self.infrastructure.object_bytes(),
             self.infrastructure.alignment_bytes(),
@@ -406,7 +408,7 @@ impl ObjectAllocator {
         self.report_exhaustion("metadata")?;
         self.metadata_next = next;
 
-        sel4::debug_println!("SLIME_ROOT bootstrap boundaries complete cases=3 published=1");
+        crate::diagnostic_println!("SLIME_ROOT bootstrap boundaries complete cases=3 published=1");
         Ok(())
     }
 
@@ -417,7 +419,7 @@ impl ObjectAllocator {
         if self.ensure_allocation_descriptors(free + 1).is_ok() {
             return Err(AllocError::NoKernelUntyped);
         }
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT bootstrap exhausted cause={} published=0 refused=1 ram_free={} slots_free={} metadata_free={}",
             cause,
             self.untyped_bytes_remaining() + self.infrastructure.remaining_bytes(),
