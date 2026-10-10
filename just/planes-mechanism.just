@@ -59,6 +59,17 @@ io_tcp_host_check:
 io_local_check: sel4_pin_check io_tcp_host_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm local
 
+# Actual root/console record contention, then twenty local QEMU boots with raw captures.
+[group('planes / mechanism')]
+console_record_check: sel4_pin_check io_tcp_host_check
+    python3 scripts/check/check-sel4-gate-controls.py --console-record
+    python3 scripts/check/check-sel4-io-network-plane.py --arm local --local-runs 20 --raw-directory "build/console-record-$(date -u +%Y%m%dT%H%M%S)-$$"
+
+# Console exam sensitivity only; not product qualification or work-item evidence.
+[group('planes / mechanism')]
+console_record_controls:
+    python3 scripts/check/check-sel4-gate-controls.py --console-record-controls
+
 [group('planes / mechanism')]
 io_network_lifetime_check: sel4_pin_check io_tcp_host_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm lifetime

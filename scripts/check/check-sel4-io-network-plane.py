@@ -47,6 +47,7 @@ from typing import NamedTuple, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+from console_record_controls import validate_local  # noqa: E402
 from harness import sha256_file  # noqa: E402
 
 import link_peer  # noqa: E402
@@ -1324,7 +1325,19 @@ def main() -> None:
         type=Path,
         help="write the tcp arm's serial transcript and peer summary to this file",
     )
+    parser.add_argument("--local-runs", type=int, help="local arm only: run the same image 1..20 times, stopping at the first failure")
+    parser.add_argument("--raw-directory", type=Path, help="local arm only: exclusively create a directory for original serial byte prefixes, including failed runs")
     arguments = parser.parse_args()
+    if arguments.arm != "local" and (arguments.local_runs is not None or arguments.raw_directory is not None):
+        fail("--local-runs and --raw-directory require --arm local")
+    if arguments.local_runs is None:
+        arguments.local_runs = 1
+    if not 1 <= arguments.local_runs <= 20:
+        fail("--local-runs must be an integer in 1..20")
+    if arguments.local_runs > 1 and arguments.raw_directory is None:
+        fail("repeated local runs require --raw-directory to retain every attempted run")
+    if arguments.local_runs > 1 and arguments.transcript is not None:
+        fail("--transcript supports only a single local run; use --raw-directory for repeats")
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     if arguments.arm == "http-public" and not arguments.allow_public:
@@ -1407,17 +1420,37 @@ def main() -> None:
             raise
         print("seL4 I/O lifetime plane check: actual client fault, interrupted receive reset, buffer reclamation and fresh-incarnation traffic proved")
     if arguments.arm in ("local", "all"):
+        if arguments.raw_directory is not None:
+            try:
+                arguments.raw_directory.mkdir(mode=0o700)
+            except OSError as error:
+                fail(f"cannot exclusively create raw directory {arguments.raw_directory}: {error}")
         image = build_image("sel4-io-local")
+        image_digest = sha256_file(image, fail) if arguments.raw_directory is not None else None
+        if image_digest is not None:
+            print(f"[local-observation] target=aarch64-sel4-qemu-virt closure=sel4-io-local image-sha256={image_digest} runs={arguments.local_runs}", flush=True)
         terminal = re.compile(LOCAL_CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
-        transcript = run_plane(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS)
-        if arguments.transcript is not None:
-            arguments.transcript.write_text(transcript, encoding="utf-8")
-        try:
-            match_marker_contract(transcript, LOCAL_CHAINS, FAILURE_MARKERS, fail)
-        except SystemExit:
-            print(transcript)
-            raise
-        print("seL4 I/O local plane check: real TCP listen/connect/accept, independent bidirectional bytes, EOF and normal teardown without a NIC proved")
+        for ordinal in range(1, arguments.local_runs + 1):
+            raw_path = None
+            if arguments.raw_directory is not None:
+                if sha256_file(image, fail) != image_digest:
+                    fail("local image changed between runs; refusing to boot a different image")
+                raw_path = arguments.raw_directory / f"run-{ordinal:02d}.serial"
+                print(f"[local-observation] run={ordinal}/{arguments.local_runs} raw-transcript={raw_path}", flush=True)
+            transcript = run_plane(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS, raw_transcript=raw_path)
+            if arguments.transcript is not None:
+                arguments.transcript.write_text(transcript, encoding="utf-8")
+            try:
+                match_marker_contract(transcript, LOCAL_CHAINS, FAILURE_MARKERS, fail)
+                if arguments.local_runs > 1:
+                    try:
+                        validate_local(transcript, sys.modules[__name__])
+                    except ValueError as error:
+                        fail(f"local run {ordinal} console records refused: {error}")
+            except SystemExit:
+                print(transcript)
+                raise
+            print("seL4 I/O local plane check: real TCP listen/connect/accept, independent bidirectional bytes, EOF and normal teardown without a NIC proved")
     if arguments.arm == "zenoh":
         run_zenoh_arm(arguments.transcript)
         print("seL4 zenoh plane check: two nodes exchanged four samples over one Zenoh Profile 0 session, byte-exact against the host reference, with exactly the declared authority and every denial observed")

@@ -1,0 +1,101 @@
+# Console record qualification
+
+This is the exam design for backlog
+[`01a11bda-7038-7b80-8963-ae49bf9ce922`](../../.tasks/items/01a11bda-7038-7b80-8963-ae49bf9ce922.md),
+not a claim that the product already serializes records.
+
+## Landed-exam boundary
+
+`just console_record_check` first runs deterministic actual-source contention,
+then twenty consecutive executions of the existing local-network QEMU path.
+The checker, its embedded Rust adapter, controls, recipe, and execution inputs
+must land before the repair is graded. The Rust subject comes from the working
+tree; the adapter lives inside the immutable Python grader closure. No product
+implementation is supplied by this planning change.
+
+The host adapter compiles the exact `console::write_payload` function and the
+actual backing snapshot-begin formatting invocation, together with upstream
+seL4's byte-wise formatter. The repaired shared `slime-root/src/diagnostic.rs`
+is compiled unchanged when present. Kernel byte emission and yield operations
+are replaced by host observation hooks; staging is supplied by bounded fixture
+inputs rather than performing kernel mappings. No host mutex supplies product
+record exclusion: its mutex protects only the captured byte stream and fixture
+coordination. Product ownership decisions must execute in the included module.
+
+After producer A emits its first byte, it is parked. Producer B must either
+emit a byte (the unprotected baseline) or reach the actual product algorithm's
+contended kernel-yield operation before the controller releases A. Merely
+starting B or sleeping is insufficient. Eight rounds of both owner orders and
+normal/refused console output require byte-exact contiguous records and bounded
+completion. Missing synchronization and a non-yielding busy wait are independently
+refused by synthetic sensitivity controls. Their positive subject is an exam
+control, never evidence about repaired product code.
+
+Whole invalid UTF-8, oversized, unavailable staging, missing-window and short
+message refusals must emit only their independently expected refusal diagnostic
+or no output, never an accepted payload prefix. Formatting must complete
+within the bounded buffer before any bytes are emitted. Console refusal diagnostics
+also compete through the same output boundary. Kernel mapping/authority mechanics
+are not replaced by a new host claim: their existing root and plane gates remain.
+
+## Local producer operations
+
+A separate actual-source fixture records individual `debug_write` submissions,
+not just their concatenation. The affected probe's role/traffic/teardown, numeric
+and failure lines, and the network service's local summary lines must each match
+an independently expected complete line in one bounded operation. A correct
+concatenation split into multiple messages still fails. Failure paths are exercised
+explicitly rather than inferred from twenty successful boots. A shared bounded
+producer line helper, when introduced, is compiled from its working-tree source;
+the grader does not supply a replacement implementation. A narrow lexical caller
+and prefix audit connects the tested helpers/blocks to the actual local component
+call sites and rejects parallel qualified-prefix emitters; it is not a formal
+reachability proof. Inline replacement blocks retain their marker literal and local
+inputs in one `Line::<N>::new().bytes(...).decimal(...).emit()` expression. This
+fixed seam is part of the exam, not permission to add unused host-only helpers.
+
+## Frozen repair seam and scheduling scope
+
+The exam expects one library-owned diagnostic module, with `write(&[u8])` returning
+a refusal on invalid/overbound bytes and `print(core::fmt::Arguments)` formatting
+before output. The existing console writer calls that same `write` route; root
+formatting uses the module's exported diagnostic macros. The binary must not
+instantiate a second module with separate ownership state. The 1,024-byte envelope
+is the existing staged-array bound, not a new serialized record format.
+
+A lexical source audit refuses raw root debug macros, byte output and writer
+aliases outside the shared module. It also requires actual native yield and byte
+operations, with no host-only or test-only implementation branch. This audit is
+not arbitrary Rust data-flow analysis or a formal proof of all macro expansion.
+
+The progress claim is limited to the existing two root producers on the pinned
+single-core, non-MCS AArch64 QEMU target: root and console run at maximum priority
+255. Non-MCS `handleYield` appends the current runnable thread to the ready queue,
+allowing an equally prioritized runnable owner to continue. FIFO ownership can
+bound waiting by the preceding bounded record. No lower-priority owner, additional
+root producer, SMP/MCS target, recursive formatting/output, root-fault recovery or
+power-loss durability is qualified by this exam. Kernel-generated diagnostics
+are outside userspace output ownership.
+
+## QEMU regression and raw evidence
+
+The local checker retains every original `LOCAL_CHAINS` and `FAILURE_MARKERS`
+assertion. The repeated qualification additionally requires complete, unique local
+probe/service records and exactly one final HEALTHY census; an intact marker cannot
+hide an extra broken or duplicated record. Controls reject missing, split, reversed,
+changed, duplicated and explicit-failure evidence. No marker reconstruction or
+retry-to-green is permitted.
+
+The repeated arm builds once, checks the same image digest before each boot, and
+writes exclusive ordinal `.serial` files under the printed unique
+`build/console-record-*` directory. These contain original collected QEMU bytes,
+including CRLF and partial failed-run tails. Collection ends at the terminal line;
+post-terminal output is not drained. Failure aborts the sequence and leaves prior
+and failed captures in place. Without opt-in raw capture, existing `run_plane`
+text-mode behavior is unchanged.
+
+Twenty passing boots are a regression envelope, not the proof of atomicity.
+The deterministic actual-source case is mandatory and the baseline must fail.
+`just console_record_controls` only judges exam sensitivity and cannot supply
+real-item qualification evidence. Raw captures are local diagnostics, not a new
+portable evidence format or an upload instruction.
