@@ -59,3 +59,7 @@ readable and link to the decision that replaced them.
   two-node exchange as six slices, each judged from evidence its implementation
   did not write: an independent wire reference proved against the upstream
   corpus, mutation-tested judges, and a QEMU arm in the network plane checker.
+- [Zenoh Profile 0 and a stock Zenoh peer](zenoh-stock-peer.md) — proposed;
+  what a captured eclipse-zenoh 1.0.0 peer sends that Profile 0 refuses (an optional
+  QoS extension, OAM and DeclareFinal, a key-expression alias, keep-alives), the four
+  bounded changes that would take it, and what the capture did not cover.

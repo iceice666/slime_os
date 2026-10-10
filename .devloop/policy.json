@@ -243,6 +243,7 @@
     "scripts/lib/work_item_retirement_publish_controls.py",
     "scripts/lib/work_items.py",
     "scripts/lib/zenoh_exchange.py",
+    "scripts/lib/zenoh_stock_peer.py",
     "scripts/lib/zenoh_wire.py",
     "scripts/lib/zutai_cli.py",
     "scripts/tools/system-spec-source",

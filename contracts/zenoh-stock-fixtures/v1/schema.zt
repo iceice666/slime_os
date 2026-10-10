@@ -1,0 +1,57 @@
+-- Hand-off of the captured stock-peer batches from the checker to the Rust exam.
+--
+-- `scripts/check/check-zenoh-profile0.py --slice stock` writes one record of this shape
+-- to `build/zenoh-stock/fixtures.zti`; the Rust tests under `zenoh_stock::` read it. It
+-- crosses a process boundary, so it is a versioned contract here and not a text format
+-- either side parses by hand.
+--
+-- The bytes are not Slime OS's: they are the batch bodies (without the 2-byte stream
+-- length) that a stock eclipse-zenoh 1.0.0 peer put on a TCP link. The contract fixes
+-- only the container: the cookie our side issued, three ordered groups of named hex
+-- strings, and the bounds a reader enforces before it allocates.
+
+Fixture :: type {
+  name : Text;
+  hex : Text;
+};
+
+Capture :: type {
+  formatVersion : Int;
+  cookieHex : Text;
+  connects : List Fixture;
+  listens : List Fixture;
+  refuse : List Fixture;
+};
+
+FromData @Fixture :: derive
+FromData @Capture :: derive
+
+formatVersion :: Int = 1;
+
+-- Counts per group, fixed by the exam: the stock peer connecting to us, the stock peer
+-- listening for us, and what a bounded profile must keep refusing.
+connectsCount :: Int = 11;
+listensCount :: Int = 8;
+refuseCount :: Int = 5;
+
+-- A batch body is at most one Profile 0 batch; a name is at most this long; the cookie is
+-- the 29 bytes our side issued, within the profile's 64-byte cookie bound.
+maxBatchBytes :: Int = 512;
+maxNameBytes :: Int = 64;
+cookieBytes :: Int = 29;
+
+decodeCapture :: Data -> Validation DecodeIssue Capture
+  = data => decode data;
+
+{
+  Fixture =;
+  Capture =;
+  decodeCapture =;
+  formatVersion =;
+  connectsCount =;
+  listensCount =;
+  refuseCount =;
+  maxBatchBytes =;
+  maxNameBytes =;
+  cookieBytes =;
+}

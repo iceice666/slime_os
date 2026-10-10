@@ -50,6 +50,15 @@ zenoh_composition_check:
 zenoh_xcheck_check:
     python3 scripts/check/check-zenoh-profile0.py --slice xcheck
 
+# The Profile 0 session against batches a stock eclipse-zenoh 1.0.0 peer put on a TCP
+# link, replayed from scripts/lib/zenoh_stock_peer.py: its connect, subscribe, publish,
+# keep-alive and close, and the things a bounded profile must still refuse. The live peer
+# is an explicit local experiment; nothing here needs a registry. Fails until the session
+# accepts a stock peer.
+[group('hardware')]
+zenoh_stock_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice stock
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.
