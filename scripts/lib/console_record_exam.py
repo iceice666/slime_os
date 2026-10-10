@@ -95,6 +95,11 @@ def fixture_source(root: Path) -> str:
         "@DIAGNOSTIC@": diagnostic_include,
         "@CONSOLE@": function,
         "@ROOT@": root_expression.strip(),
+        "@DIRECT_EXACT@": (
+            'assert!(diagnostic::write(&vec![b\'Q\'; 1024]).is_ok(), "exact boundary direct write rejected"); assert_eq!(state().0.lock().unwrap().bytes, vec![b\'Q\'; 1024], "exact boundary direct write changed bytes"); state().0.lock().unwrap().bytes.clear();'
+            if diagnostic.exists()
+            else ""
+        ),
         "@DIRECT_OVERSIZE@": (
             'assert!(diagnostic::write(&vec![b\'Q\'; 1025]).is_err(), "direct oversized record accepted"); assert!(diagnostic::write(b"INVALID\\xff").is_err(), "direct malformed record accepted");'
             if diagnostic.exists()
@@ -166,8 +171,12 @@ def check_fixture_controls(root: Path) -> int:
         .replace("@DIAGNOSTIC@", "")
         .replace("@ROOT@", 'control_println!("SLIME_BACKING snapshot phase={phase} begin")')
         .replace(
+            "@DIRECT_EXACT@",
+            'assert!(diagnostic::write(&vec![b\'Q\'; 1024]).is_ok(), "exact boundary direct write rejected"); assert_eq!(state().0.lock().unwrap().bytes, vec![b\'Q\'; 1024], "exact boundary direct write changed bytes"); state().0.lock().unwrap().bytes.clear();',
+        )
+        .replace(
             "@DIRECT_OVERSIZE@",
-            "assert!(diagnostic::write(&vec![b'Q'; 1025]).is_err()); assert!(diagnostic::write(b\"INVALID\\xff\").is_err());",
+            "assert!(diagnostic::write(&vec![b'Q'; 1025]).is_err(), \"direct oversized record accepted\"); assert!(diagnostic::write(b\"INVALID\\xff\").is_err(), \"direct malformed record accepted\");",
         )
     )
     for key, value in _dispatch_sources(root).items():
@@ -202,6 +211,9 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
         "invalid-badge-routing",
         "cross-holder-routing",
         "wrong-thread-routing",
+        "undersized-write",
+        "undersized-formatter",
+        "staging-refusal-bypass",
     ):
         module = _CONTROL_MODULE
         subject = source
@@ -240,6 +252,20 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
             )
         elif name == "wrong-thread-routing":
             subject = subject.replace("windows.bound(id, thread)", "windows.bound(id, 0)")
+        elif name == "undersized-write":
+            module = module.replace("if bytes.len() > 1024", "if bytes.len() > 1023")
+        elif name == "undersized-formatter":
+            module = module.replace("if text.len() > 1024 - self.len", "if text.len() > 1023 - self.len")
+        elif name == "staging-refusal-bypass":
+            module = module.replace(
+                "pub fn print(args: std::fmt::Arguments) {",
+                'pub fn print(args: std::fmt::Arguments) {\n'
+                '        let text = args.to_string();\n'
+                '        if text.starts_with("SLIME_ROOT console staging refused:") {\n'
+                '            for byte in text.bytes() { crate::debug_put_char(byte); }\n'
+                '            return;\n'
+                '        }',
+            )
         with tempfile.TemporaryDirectory(prefix="console-exam-control-") as directory:
             rust = Path(directory) / "control.rs"
             binary = Path(directory) / "control"
@@ -275,9 +301,19 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
                 )
                 if result.returncode == 0 or reason not in result.stderr:
                     raise AssertionError(f"{name} mutation not refused for authorization")
-            elif result.returncode == 0:
-                raise AssertionError(f"{name} mutation was accepted")
-    return 10
+            else:
+                reason = {
+                    "invalid-bytes": "direct malformed record accepted",
+                    "overflow-prefix": "oversize formatting emitted a partial record",
+                    "missing-window-prefix": "unbound/guessed holder or thread leaked accepted bytes",
+                    "short-message-prefix": "short message leaked payload",
+                    "undersized-write": "exact boundary direct write rejected",
+                    "undersized-formatter": "exact boundary formatted root changed bytes",
+                    "staging-refusal-bypass": "staging refusal records spliced",
+                }[name]
+                if result.returncode == 0 or reason not in result.stderr:
+                    raise AssertionError(f"{name} mutation not refused for {reason}: {result.stderr}")
+    return 13
 
 
 # The frozen grader closure contains the full host adapter, not a mutable resource.
@@ -358,7 +394,10 @@ pub mod sys { #[allow(non_snake_case)] pub fn seL4_DebugPutChar(c: u8) { crate::
 @DISPATCH@
 fn root_record(phase: &str) { @ROOT@; }
 fn console_message(bytes: &[u8], badge: Badge, words: &[Word]) {
-    INPUT.with(|v| *v.borrow_mut() = Ok(bytes.to_vec()));
+    console_message_input(Some(bytes), badge, words);
+}
+fn console_message_input(bytes: Option<&[u8]>, badge: Badge, words: &[Word]) {
+    INPUT.with(|v| *v.borrow_mut() = bytes.map(|b| b.to_vec()).ok_or(()));
     let mut mrs = [0; 4]; mrs[..words.len()].copy_from_slice(words);
     dispatch(Message { badge, mrs, len: words.len(), kind: ipc::ConsoleKind::Write },
         &fixture_windows(), &ConsoleContext { scratch: ScratchPage }, &mut IpcBuffer);
@@ -369,6 +408,16 @@ fn console_record(bytes: &[u8], window: bool, words: &[Word]) {
     console_message(bytes, TaskId(if window { 0 } else { 2 }).service_badge(), &staged);
 }
 fn raw_window() -> Window { Window { task: TaskId(0), thread: 0 } }
+fn contention_console(case: usize) {
+    match case {
+        0 => console_record(b"CONSOLE_RECORD complete\n", true, &[0, 0]),
+        1 => console_record(b"UNACCEPTED_RECORD\xff", true, &[0, 0]),
+        2 => console_record(b"MUST_NOT_APPEAR", false, &[0, 0]),
+        3 => console_message_input(None, TaskId(0).service_badge(), &[0, staged_descriptor(0)]),
+        4 => console_record(&vec![b'X'; 1025], true, &[0, 0]),
+        _ => unreachable!(),
+    }
+}
 fn main() {
     // Authorization checks run through the actual serve prefix and Write arm.
     for badge in [0, 1] {
@@ -412,22 +461,40 @@ fn main() {
     write_payload(Some(raw_window()), &[0, staged_descriptor(0)], &ScratchPage, &mut IpcBuffer);
     assert_eq!(state().0.lock().unwrap().bytes, b"SLIME_ROOT console staging refused: StagingError\n");
     state().0.lock().unwrap().bytes.clear();
-    for malformed in [false, true] {
+    // A valid atomic record may fill the whole byte limit without a newline.
+    @DIRECT_EXACT@
+    let prefix = "SLIME_BACKING snapshot phase=";
+    let suffix = " begin\n";
+    let phase = "R".repeat(1024 - prefix.len() - suffix.len());
+    let exact_root = format!("{prefix}{phase}{suffix}").into_bytes();
+    assert_eq!(exact_root.len(), 1024);
+    root_record(&phase);
+    assert_eq!(state().0.lock().unwrap().bytes, exact_root, "exact boundary formatted root changed bytes");
+    state().0.lock().unwrap().bytes.clear();
+    console_record(&vec![b'Q'; 1024], true, &[0, 0]);
+    assert_eq!(state().0.lock().unwrap().bytes, vec![b'Q'; 1024], "exact boundary staged console changed bytes");
+    state().0.lock().unwrap().bytes.clear();
+    for case in 0..5 {
     for console_first in [false, true] {
     for _round in 0..8 {
     { let mut s = state().0.lock().unwrap(); *s = State::default(); }
-    let a = std::thread::spawn(move || { PRODUCER.with(|v| *v.borrow_mut() = 1); if console_first { console_record(if malformed { b"UNACCEPTED_RECORD\xff" } else { b"CONSOLE_RECORD complete\n" }, true, &[0, 0]); } else { root_record("exam"); } });
+    let a = std::thread::spawn(move || { PRODUCER.with(|v| *v.borrow_mut() = 1); if console_first { contention_console(case); } else { root_record("exam"); } });
     let (lock, cv) = state();
     { let mut s = lock.lock().unwrap(); while !s.paused { s = cv.wait(s).unwrap(); } }
-    let b = std::thread::spawn(move || { PRODUCER.with(|v| *v.borrow_mut() = 2); if console_first { root_record("exam"); } else { console_record(if malformed { b"UNACCEPTED_RECORD\xff" } else { b"CONSOLE_RECORD complete\n" }, true, &[0, 0]); } });
+    let b = std::thread::spawn(move || { PRODUCER.with(|v| *v.borrow_mut() = 2); if console_first { root_record("exam"); } else { contention_console(case); } });
     { let mut s = lock.lock().unwrap(); while !s.contender { s = cv.wait(s).unwrap(); } s.release = true; cv.notify_all(); }
     a.join().unwrap(); b.join().unwrap();
     let output = lock.lock().unwrap().bytes.clone();
     let root = "SLIME_BACKING snapshot phase=exam begin\n";
-    let console = if malformed { "SLIME_ROOT console refused non-utf8 bytes=18\n" } else { "CONSOLE_RECORD complete\n" };
+    let console = match case {
+        0 => "CONSOLE_RECORD complete\n",
+        1 => "SLIME_ROOT console refused non-utf8 bytes=18\n",
+        _ => "SLIME_ROOT console staging refused: StagingError\n",
+    };
     let expected = format!("{root}{console}").into_bytes();
     let reverse = format!("{console}{root}").into_bytes();
-    assert!(output == expected || output == reverse, "accepted records spliced under forced mid-byte contention: {:?}", String::from_utf8_lossy(&output));
+    let reason = if case >= 2 { "staging refusal records spliced" } else { "accepted records spliced" };
+    assert!(output == expected || output == reverse, "{reason} under forced first-byte contention case={case} console_first={console_first}: {:?}", String::from_utf8_lossy(&output));
     }
     }
     }
@@ -441,6 +508,6 @@ fn main() {
     assert_eq!(&after[before..], b"SLIME_ROOT console staging refused: StagingError\n", "oversize staging leaked payload");
     let before = after.len(); root_record(&"Z".repeat(1025));
     assert_eq!(lock.lock().unwrap().bytes.len(), before, "oversize formatting emitted a partial record");
-    println!("console actual-source deterministic contention passed");
+    println!("console actual-source deterministic contention passed: 80 forced pairs (5 routes x 2 owner orders x 8 rounds), exact-1024 direct/console/root acceptance, 1025 refusals");
 }
 """

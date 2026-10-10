@@ -26,8 +26,9 @@ After producer A emits its first byte, it is parked. Producer B must either
 emit a byte (the unprotected baseline) or reach the actual product algorithm's
 contended kernel-yield operation before the controller releases A. Merely
 starting B or sleeping is insufficient. Eight rounds of both owner orders and
-normal/refused console output require byte-exact contiguous records and bounded
-completion. Missing synchronization and a non-yielding busy wait are independently
+normal, non-UTF-8 and staging-refusal console output require byte-exact contiguous
+records and bounded completion. Missing-window, unavailable-frame and oversized
+staging diagnostics compete in both ownership orders, not just isolated checks. Missing synchronization and a non-yielding busy wait are independently
 refused by synthetic sensitivity controls. Their positive subject is an exam
 control, never evidence about repaired product code.
 
@@ -57,13 +58,20 @@ call sites and rejects parallel qualified-prefix emitters; it is not a formal
 reachability proof. Inline replacement blocks retain their marker literal and local
 inputs in one `Line::<N>::new().bytes(...).decimal(...).emit()` expression. This
 fixed seam is part of the exam, not permission to add unused host-only helpers.
+Conditional target/test implementations are refused in the qualified producer
+sources and the shared line helper: the host compiler must not select a different
+record implementation from the AArch64 seL4 image. The existing external-only
+fault injector's architecture-specific assembly is the sole exception: its exact
+body is frozen, and conditional attributes enclosing it are still refused.
 
 ## Frozen repair seam and scheduling scope
 
 The exam expects one library-owned diagnostic module, with `write(&[u8])` returning
 a refusal on invalid/overbound bytes and `print(core::fmt::Arguments)` formatting
-before output. The existing console writer calls that same `write` route; root
-formatting uses the module's exported diagnostic macros. The binary must not
+before output. Valid 1,024-byte direct, staged and formatted records must be
+accepted byte-exact; rejecting 1,025 bytes is not permission to narrow the envelope.
+The existing console writer calls that same `write` route; root formatting uses
+the module's exported diagnostic macros. The binary must not
 instantiate a second module with separate ownership state. The 1,024-byte envelope
 is the existing staged-array bound, not a new serialized record format.
 

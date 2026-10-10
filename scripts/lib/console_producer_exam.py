@@ -14,11 +14,30 @@ import re
 import subprocess
 import tempfile
 
+from console_record_controls import _rust_code
 from console_record_exam import _balanced
 
 
 _PROBE = "components/testkit/io-local-network-probe/src/main.rs"
 _NETWORK = "components/services/network-service/src/main.rs"
+_LINE = "components/lib/src/console_line.rs"
+_FAULT_INJECTION = r'''
+fn inject_fault() -> ! {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("str xzr, [{address}]", address = in(reg) 0usize, options(nostack));
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("mov qword ptr [{address}], 0", address = in(reg) 0usize, options(nostack));
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::arch::asm!("sd zero, 0({address})", address = in(reg) 0usize, options(nostack));
+    }
+    fail(b"fault injection returned")
+}
+'''
 _LOCAL_MAIN_OUTPUTS = (
     'b"[network-service] tcp congestion control="',
     'b"[network-service] application session invalidated',
@@ -155,6 +174,21 @@ def audit_producer_routes(root: Path) -> None:
     """Check actual callers and unique qualified literal locations, not reachability."""
     probe = _without_comments((root / _PROBE).read_text())
     network = _without_comments((root / _NETWORK).read_text())
+    # Only the frozen external-fault injection body may select native assembly.
+    # Audit the rest of each whole source, including attributes before functions
+    # omitted by extraction, so the host fixture cannot select a different sink.
+    fault = _function(network, "inject_fault")
+    if "".join(line.strip() for line in fault.splitlines()) != "".join(
+        line.strip() for line in _FAULT_INJECTION.splitlines()
+    ):
+        raise ValueError("actual external fault injection body changed")
+    conditional_sources = [(_PROBE, probe), (_NETWORK, network.replace(fault, "", 1))]
+    line = root / _LINE
+    if line.exists():
+        conditional_sources.append((_LINE, line.read_text()))
+    for path, source in conditional_sources:
+        if re.search(r"\b(?:cfg|cfg_attr)\b", _rust_code(source)):
+            raise ValueError(f"actual producer conditional compilation is forbidden: {path}")
     expected_routes = {
         "main": ("attached=1", "loans returned=2 shutdown=1"),
         "publish": (
@@ -284,7 +318,7 @@ def fixture_source(root: Path) -> str:
     local_impl_start = network.index("impl LocalStack {")
     local_impl_brace = network.index("{", local_impl_start)
     local_constructor = _function(_balanced(network, local_impl_brace, "{", "}"), "new")
-    line = root / "components/lib/src/console_line.rs"
+    line = root / _LINE
     line_include = f'#[path = "{line}"] mod console_line;' if line.exists() else ""
     line_import = "use crate::console_line::Line;" if line.exists() else ""
     replacements = {
@@ -442,12 +476,108 @@ def check_controls(root: Path) -> int:
                     ) from error
             else:
                 raise AssertionError(f"route mutation was accepted: {mutation}")
+    conditional_mutations = (
+        ("marker target attribute", _PROBE, "marker", '#[cfg(target_arch = "x86_64")]'),
+        ("marker alternate targets", _PROBE, "marker", "alternate"),
+        ("failure test attribute", _PROBE, "fail", "#[cfg_attr(test, inline)]"),
+        ("status target macro", _PROBE, "would_block", "macro"),
+        ("probe numeric target attribute", _PROBE, "write_number", "#[cfg(not(test))]"),
+        ("probe enclosing main attribute", _PROBE, "main", "#[cfg(not(test))]"),
+        ("authority target attribute", _NETWORK, "report_authority", "#[cfg(not(test))]"),
+        ("observed target attribute", _NETWORK, "report_observed", "#[cfg(not(test))]"),
+        ("options target attribute", _NETWORK, "report_socket_options", "#[cfg(not(test))]"),
+        ("events target attribute", _NETWORK, "report_events", "#[cfg(not(test))]"),
+        ("incarnation target attribute", _NETWORK, "allocate_incarnation", "#[cfg(not(test))]"),
+        ("network enclosing main attribute", _NETWORK, "main", "#[cfg(not(test))]"),
+        ("network failure target macro", _NETWORK, "fail", "macro"),
+        ("network numeric target attribute", _NETWORK, "write_number", "#[cfg(not(test))]"),
+        ("fault enclosing attribute", _NETWORK, "inject_fault", "#[cfg(not(test))]"),
+        ("fault body replacement", _NETWORK, "inject_fault", "macro"),
+        ("Line target attribute", _LINE, "emit", '#[cfg(target_arch = "x86_64")]'),
+        ("Line test attribute", _LINE, "emit", "#[cfg_attr(test, inline)]"),
+        ("Line target macro", _LINE, "emit", "macro"),
+    )
+    for description, path, name, conditional in conditional_mutations:
+        with tempfile.TemporaryDirectory(prefix="producer-conditional-control-") as directory:
+            subject = Path(directory)
+            for relative in (_PROBE, _NETWORK, _LINE):
+                original = root / relative
+                if not original.exists() and relative != path:
+                    continue
+                source = (
+                    original.read_text()
+                    if original.exists()
+                    else "pub struct Line; impl Line { pub fn emit(self) {} }"
+                )
+                if relative == path:
+                    function = _function(source, name, required=name != "write_number")
+                    if not function:
+                        source += "\nfn write_number(_: &[u8], _: u64) {}\n"
+                        function = _function(source, name)
+                    start = source.index(function)
+                    visibility = re.search(r"\bpub(?:\([^)]*\))?\s*$", source[:start])
+                    if visibility:
+                        function = source[visibility.start() : start] + function
+                    if conditional == "alternate":
+                        replacement = (
+                            '#[cfg(target_arch = "x86_64")]\n'
+                            + function
+                            + '\n#[cfg(target_arch = "aarch64")]\n'
+                            + function
+                        )
+                    elif conditional == "macro":
+                        replacement = function.replace(
+                            "{", '{ let _ = cfg!(target_arch = "x86_64");', 1
+                        )
+                    else:
+                        replacement = conditional + "\n" + function
+                    source = source.replace(function, replacement, 1)
+                destination = subject / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(source)
+            try:
+                # Extraction must fail before rustc can erase attributes, pick
+                # its host branch, or reject an otherwise malformed mutation.
+                fixture_source(subject)
+            except ValueError as error:
+                reason = (
+                    "actual external fault injection body changed"
+                    if description == "fault body replacement"
+                    else f"actual producer conditional compilation is forbidden: {path}"
+                )
+                if reason not in str(error):
+                    raise AssertionError(
+                        f"conditional mutation failed for unrelated reason: {description}: {error}"
+                    ) from error
+            else:
+                raise AssertionError(f"conditional producer mutation was accepted: {description}")
+    # Comments and every supported literal spelling must not trigger the token
+    # audit; the unchanged native fault assembly remains a legitimate exception.
+    with tempfile.TemporaryDirectory(prefix="producer-conditional-positive-") as directory:
+        subject = Path(directory)
+        for relative in (_PROBE, _NETWORK, _LINE):
+            original = root / relative
+            destination = subject / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source = original.read_text() if original.exists() else "pub struct Line;"
+            destination.write_text(
+                source
+                + r'''
+// #[cfg(test)] cfg!(target_arch = "x86_64")
+/* #[cfg_attr(test, inline)] /* cfg!(test) */ */
+const AUDIT_WORDS: &str = "cfg cfg_attr";
+const AUDIT_RAW_WORDS: &str = r#"#[cfg(test)] cfg_attr"#;
+const AUDIT_BYTES: &[u8] = br#"cfg!(test) cfg_attr"#;
+const AUDIT_CHAR: char = 'c';
+'''
+            )
+        audit_producer_routes(subject)
     result = _run(_ADAPTER + _VALIDATOR + _CONTROLS, 30)
     if result.returncode:
         raise AssertionError(f"producer sensitivity controls failed:\n{result.stderr}")
     if result.stdout.strip() != "producer sensitivity controls passed=39":
         raise AssertionError("producer controls did not report their frozen case count")
-    return 39 + len(route_mutations)
+    return 39 + len(route_mutations) + len(conditional_mutations) + 1
 
 
 _ADAPTER = r"""
