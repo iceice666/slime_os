@@ -5,10 +5,15 @@
 //! producer's output. A [`Line`] collects the whole record first and submits it
 //! in a single call.
 
+/// The largest record the console dispatcher accepts in one write.
+pub const MAX_RECORD_BYTES: usize = 1024;
+
 /// A diagnostic record assembled before its single `debug_write`.
 ///
 /// A record that does not fit `N` bytes, or is not UTF-8, is refused whole:
 /// nothing is written, so a reader never sees a fragment as a complete record.
+/// `N` may not exceed [`MAX_RECORD_BYTES`], so an accepted record is never one
+/// the dispatcher would refuse after a successful send.
 pub struct Line<const N: usize> {
     bytes: [u8; N],
     len: usize,
@@ -17,6 +22,12 @@ pub struct Line<const N: usize> {
 
 impl<const N: usize> Line<N> {
     pub const fn new() -> Self {
+        const {
+            assert!(
+                N <= MAX_RECORD_BYTES,
+                "Line capacity exceeds the console record bound"
+            )
+        };
         Self {
             bytes: [0; N],
             len: 0,
@@ -55,10 +66,17 @@ impl<const N: usize> Line<N> {
         self.bytes(&digits[offset..])
     }
 
-    /// Submit the record in one call, returning whether it was written.
+    /// Submit the record in one call, returning whether it was submitted.
+    ///
+    /// A submitted record is within the dispatcher's bound and UTF-8, so the
+    /// dispatcher prints it whole; send completion still does not acknowledge
+    /// emission.
     pub fn emit(&self) -> bool {
         let record = &self.bytes[..self.len];
-        if self.overflowed || core::str::from_utf8(record).is_err() {
+        if self.overflowed
+            || record.len() > MAX_RECORD_BYTES
+            || core::str::from_utf8(record).is_err()
+        {
             return false;
         }
         slime_rt::debug_write(record) >= 0
