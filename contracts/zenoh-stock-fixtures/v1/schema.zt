@@ -1,0 +1,98 @@
+-- Hand-off of the captured stock-peer batches from the checker to the Rust exam.
+--
+-- `scripts/check/check-zenoh-profile0.py --slice stock` writes one record of this shape
+-- to `build/zenoh-stock/fixtures.zti`; the Rust tests under `zenoh_stock::` read it. It
+-- crosses a process boundary, so it is a versioned contract here and not a text format
+-- either side parses by hand.
+--
+-- The bytes are not Slime OS's: they are the batch bodies (without the 2-byte stream
+-- length) that a stock eclipse-zenoh 1.0.0 peer put on a TCP link. The contract fixes
+-- only the container: the cookie our side issued, three ordered groups of named hex
+-- strings, and the bounds a reader enforces before it allocates.
+
+Fixture :: type {
+  name : Text;
+  hex : Text;
+};
+
+Capture :: type {
+  formatVersion : Int;
+  cookieHex : Text;
+  connects : List Fixture;
+  listens : List Fixture;
+  refuse : List Fixture;
+};
+
+FromData @Fixture :: derive
+FromData @Capture :: derive
+
+formatVersion :: Int = 1;
+
+-- Counts per group, fixed by the exam: the stock peer connecting to us, the stock peer
+-- listening for us, and what a bounded profile must keep refusing: five batches the stock
+-- peer sent and six built from captured batches with the QoS extension where none was seen.
+connectsCount :: Int = 11;
+listensCount :: Int = 8;
+refuseCount :: Int = 11;
+
+-- A batch body is at most one Profile 0 batch; a name is at most this long; the cookie is
+-- the 29 bytes our side issued, within the profile's 64-byte cookie bound.
+maxBatchBytes :: Int = 512;
+maxNameBytes :: Int = 64;
+cookieBytes :: Int = 29;
+
+d ::= import stdlib.data;
+l ::= import stdlib.list;
+r ::= import stdlib.result;
+
+-- The record is closed. `decode` reads the fields it knows and ignores the rest, so a field the
+-- contract does not name would pass unseen; this refuses it, wherever it is written, at the
+-- top level and in every entry of the three groups.
+captureFields :: List Text = { "formatVersion"; "cookieHex"; "connects"; "listens"; "refuse"; };
+fixtureFields :: List Text = { "name"; "hex"; };
+
+member :: Text -> List Text -> Bool
+  = name names => match names { | {;} => false; | {head; ...tail} => if head == name then true else member name tail; };
+
+allMembers :: List Text -> List Text -> Bool
+  = names found => match found { | {;} => true; | {head; ...tail} => member head names && allMembers names tail; };
+
+nameOf :: d.DataField -> Text
+  = field => field.name;
+
+closedRecord :: List Text -> Data -> Bool
+  = names data => match d.asRecord data {
+    | #ok { value = fields; } => allMembers names (l.map nameOf fields);
+    | #err { error = _; } => true;
+  };
+
+allClosed :: List Data -> Bool
+  = items => match items { | {;} => true; | {head; ...tail} => closedRecord fixtureFields head && allClosed tail; };
+
+closedGroup :: Text -> Data -> Bool
+  = group data => match d.field group data {
+    | #ok { value = value; } => match d.asList value { | #ok { value = items; } => allClosed items; | #err { error = _; } => true; };
+    | #err { error = _; } => true;
+  };
+
+closedCapture :: Data -> Bool
+  = data => closedRecord captureFields data && closedGroup "connects" data && closedGroup "listens" data && closedGroup "refuse" data;
+
+unknownField :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a field the contract does not name"; }; };
+
+decodeCapture :: Data -> Validation DecodeIssue Capture
+  = data => if closedCapture data then decode data else r.invalidOne unknownField;
+
+{
+  Fixture =;
+  Capture =;
+  decodeCapture =;
+  formatVersion =;
+  connectsCount =;
+  listensCount =;
+  refuseCount =;
+  maxBatchBytes =;
+  maxNameBytes =;
+  cookieBytes =;
+}
