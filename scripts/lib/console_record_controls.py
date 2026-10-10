@@ -251,9 +251,7 @@ def _read(root: Path, relative: str) -> str:
 
 
 def _debug_write_documentation(source: bytes) -> re.Match[bytes]:
-    blocks = list(
-        re.finditer(rb"((?:^///[^\n]*\n)+)pub fn debug_write\s*\(", source, re.MULTILINE)
-    )
+    blocks = list(re.finditer(rb"((?:^///[^\n]*\n)+)pub fn debug_write\s*\(", source, re.MULTILINE))
     if len(blocks) != 1:
         _reject("debug_write must retain one contiguous owning public documentation block")
     return blocks[0]
@@ -280,6 +278,64 @@ def _transport_sources(root: Path) -> dict[str, bytes]:
 def _require(code: str, pattern: str, description: str) -> None:
     if re.search(pattern, code) is None:
         _reject(description)
+
+
+_DIAGNOSTIC_ENTRY_POINTS = frozenset({"write", "print"})
+
+
+def _audit_diagnostic_entry_points(diagnostic: str) -> None:
+    """Only the serialized write body may reach the kernel byte sink.
+
+    Public functions are limited to the qualified write/print pair, so another
+    root producer cannot reach an unlocked sink through the shared module.
+    """
+    public = re.findall(
+        r"\bpub\s*(\([^)]*\))?\s*(?:const\s+|unsafe\s+|extern\s+\S+\s+)*fn\s+(\w+)", diagnostic
+    )
+    if (
+        any(scope for scope, _ in public)
+        or {name for _, name in public} != _DIAGNOSTIC_ENTRY_POINTS
+        or len(public) != 2
+    ):
+        _reject("diagnostic module may publish only the qualified write and print entry points")
+    if re.search(r"\bpub\s*(?:\([^)]*\)\s*)?(?:static|const|mod|struct|trait)\b", diagnostic):
+        _reject("diagnostic module must not publish alternate output items")
+    # Re-exports are allowed only for the record macros themselves.
+    for exported in re.findall(r"\bpub\s*(?:\([^)]*\)\s*)?use\s+([^;]*);", diagnostic):
+        if any(
+            name not in {"diagnostic_print", "diagnostic_println"}
+            for name in re.findall(r"\w+", exported)
+        ):
+            _reject("diagnostic module must not publish alternate output items")
+    sinks = [match.start() for match in re.finditer(r"\bdebug_put_char\b", diagnostic)]
+    write = re.search(r"\bpub\s+fn\s+write\s*\([^{]*\{", diagnostic)
+    if write is None or len(sinks) != 1:
+        _reject("diagnostic module must have exactly one native byte-sink call, inside write")
+    depth, end = 0, None
+    for index in range(write.end() - 1, len(diagnostic)):
+        if diagnostic[index] == "{":
+            depth += 1
+        elif diagnostic[index] == "}":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end is None or not write.end() <= sinks[0] < end:
+        _reject("diagnostic module must have exactly one native byte-sink call, inside write")
+
+
+def _audit_diagnostic_call_sites(code: str, path: Path) -> None:
+    """Root producers name only the qualified diagnostic entry points."""
+    if re.search(r"\bdiagnostic\s*(?:::\s*\*|\s+as\b)", code):
+        _reject(f"aliased or glob diagnostic route in {path}")
+    for match in re.finditer(r"\bdiagnostic\s*::\s*(\{[^}]*\}|\w+)", code):
+        names = (
+            re.findall(r"\w+", match.group(1))
+            if match.group(1).startswith("{")
+            else [match.group(1)]
+        )
+        if any(name not in _DIAGNOSTIC_ENTRY_POINTS for name in names):
+            _reject(f"unqualified diagnostic entry point in {path}: {match.group(0)}")
 
 
 def audit_routes(root: Path) -> None:
@@ -337,6 +393,7 @@ def audit_routes(root: Path) -> None:
         )
     if re.search(r"\b(?:include|include_str|include_bytes)\s*!", diagnostic):
         _reject("diagnostic native implementation must be in the audited source")
+    _audit_diagnostic_entry_points(diagnostic)
     source_root = root / "slime-root/src"
     for path in sorted(source_root.rglob("*.rs")):
         if path == source_root / "diagnostic.rs":
@@ -345,6 +402,7 @@ def audit_routes(root: Path) -> None:
         match = _RAW_OUTPUT.search(code)
         if match is not None:
             _reject(f"raw root output bypass in {path.relative_to(root)}: {match.group(0)}")
+        _audit_diagnostic_call_sites(code, path.relative_to(root))
 
     transport = _transport_sources(root)[_TRANSPORT]
     documentation = _debug_write_documentation(transport)
@@ -454,7 +512,9 @@ def _audit_controls(product_root: Path) -> int:
         (
             "narrow native staging capacity",
             _TRANSPORT,
-            baseline[_TRANSPORT].replace("bytes.len() > MAX_DESCRIPTOR_LEN", "bytes.len() > 128", 1),
+            baseline[_TRANSPORT].replace(
+                "bytes.len() > MAX_DESCRIPTOR_LEN", "bytes.len() > 128", 1
+            ),
         ),
         (
             "changed native reserve helper",
@@ -485,7 +545,9 @@ def _audit_controls(product_root: Path) -> int:
             "narrow generated transfer window",
             "boot-contracts/src/generated/component_runtime_abi.rs",
             baseline["boot-contracts/src/generated/component_runtime_abi.rs"].replace(
-                "MIN_TRANSFER_WINDOW_BYTES: usize = 4096", "MIN_TRANSFER_WINDOW_BYTES: usize = 128", 1
+                "MIN_TRANSFER_WINDOW_BYTES: usize = 4096",
+                "MIN_TRANSFER_WINDOW_BYTES: usize = 128",
+                1,
             ),
         ),
         (
@@ -504,6 +566,32 @@ def _audit_controls(product_root: Path) -> int:
     mutations = (
         ("raw print", "slime-root/src/console.rs", 'fn bad() { sel4::debug_print!("bad"); }'),
         ("raw alias", "slime-root/src/console.rs", "use sel4::debug_println as out;"),
+        (
+            "alternate unlocked diagnostic entry",
+            "slime-root/src/diagnostic.rs",
+            "pub fn write_raw(bytes: &[u8]) { for byte in bytes { sel4::debug_put_char(*byte); } }",
+        ),
+        (
+            "crate-visible unlocked diagnostic sink",
+            "slime-root/src/diagnostic.rs",
+            "pub(crate) fn emit(bytes: &[u8]) { for byte in bytes { sel4::debug_put_char(*byte); } }",
+        ),
+        (
+            "private second byte sink",
+            "slime-root/src/diagnostic.rs",
+            "fn emit(bytes: &[u8]) { for byte in bytes { sel4::debug_put_char(*byte); } }",
+        ),
+        (
+            "root call through alternate entry",
+            "slime-root/src/console.rs",
+            "fn bad(bytes: &[u8]) { crate::diagnostic::write_raw(bytes); }",
+        ),
+        ("aliased diagnostic module", "slime-root/src/console.rs", "use crate::diagnostic as out;"),
+        (
+            "re-exported private sink",
+            "slime-root/src/diagnostic.rs",
+            "pub use self::write as write_raw;",
+        ),
         ("raw byte sink", "slime-root/src/console.rs", "fn bad() { sel4::debug_put_char(65); }"),
         (
             "private print helper",

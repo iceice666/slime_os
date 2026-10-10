@@ -84,7 +84,10 @@ instantiate a second module with separate ownership state. The 1,024-byte envelo
 is the existing staged-array bound, not a new serialized record format.
 
 A lexical source audit refuses raw root debug macros, byte output and writer
-aliases outside the shared module. It also requires actual native yield and byte
+aliases outside the shared module. Inside it, `write` and `print` are the only
+published functions, the kernel byte sink appears exactly once inside `write`, and
+root callers may name only those two entry points (or the record macros), so an
+unlocked alternate sink cannot carry a different producer. It also requires actual native yield and byte
 operations, with no host-only or test-only implementation branch. This audit is
 not arbitrary Rust data-flow analysis or a formal proof of all macro expansion.
 
