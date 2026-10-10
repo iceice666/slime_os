@@ -394,6 +394,16 @@ def audit_routes(root: Path) -> None:
     if re.search(r"\b(?:include|include_str|include_bytes)\s*!", diagnostic):
         _reject("diagnostic native implementation must be in the audited source")
     _audit_diagnostic_entry_points(diagnostic)
+    # The whole qualified implementation stays in the one audited source: no
+    # file-backed child modules and no crate-local helpers outside it, whose cfg
+    # branches could select a different lock for the host fixture than for seL4.
+    if (root / "slime-root/src/diagnostic").exists() or re.search(r"\bmod\s+\w+\s*;", diagnostic):
+        _reject("diagnostic implementation must not use file-backed submodules")
+    for match in re.finditer(r"(?<!\$)\b(?:crate|super|slime_root)\s*::\s*(\w+)", diagnostic):
+        if match.group(1) != "diagnostic":
+            _reject(
+                f"diagnostic implementation must not depend on crate-local helpers: {match.group(0)}"
+            )
     source_root = root / "slime-root/src"
     for path in sorted(source_root.rglob("*.rs")):
         if path == source_root / "diagnostic.rs":
@@ -591,6 +601,22 @@ def _audit_controls(product_root: Path) -> int:
             "re-exported private sink",
             "slime-root/src/diagnostic.rs",
             "pub use self::write as write_raw;",
+        ),
+        ("file-backed lock submodule", "slime-root/src/diagnostic.rs", "mod lock;"),
+        (
+            "path-redirected submodule",
+            "slime-root/src/diagnostic.rs",
+            '#[path = "other.rs"] mod lock;',
+        ),
+        (
+            "crate-local lock helper",
+            "slime-root/src/diagnostic.rs",
+            "fn acquire() { crate::scheduling::acquire(); }",
+        ),
+        (
+            "parent-module lock helper",
+            "slime-root/src/diagnostic.rs",
+            "fn acquire() { super::scheduling::acquire(); }",
         ),
         ("raw byte sink", "slime-root/src/console.rs", "fn bad() { sel4::debug_put_char(65); }"),
         (

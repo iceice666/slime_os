@@ -87,7 +87,9 @@ A lexical source audit refuses raw root debug macros, byte output and writer
 aliases outside the shared module. Inside it, `write` and `print` are the only
 published functions, the kernel byte sink appears exactly once inside `write`, and
 root callers may name only those two entry points (or the record macros), so an
-unlocked alternate sink cannot carry a different producer. It also requires actual native yield and byte
+unlocked alternate sink cannot carry a different producer. The whole implementation
+stays in that one audited file: file-backed submodules and crate-local helpers are
+refused, so no unaudited child can select a different lock per target. It also requires actual native yield and byte
 operations, with no host-only or test-only implementation branch. This audit is
 not arbitrary Rust data-flow analysis or a formal proof of all macro expansion.
 
