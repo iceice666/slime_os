@@ -194,6 +194,8 @@ For how the planes work and how to add one, read
 | `just io_http_qualification_check` | Completion gate includes a fresh live observation rather than cached evidence. |
 | `just io_link_check` | IO3 gate: a supervised userspace virtio-net driver serves LinkDevice over IO0/IO1. |
 | `just io_local_check` | The loopback listen/accept arm: duplex bytes, EOF, readiness draining, authority refusals. |
+| `just console_record_check` | Actual-source root/console contention and whole local producer operations, then twenty consecutive local QEMU boots with exclusive raw captures; [qualification boundary](../plans/console-record-qualification.md). |
+| `just console_record_controls` | Console exam sensitivity controls only; not product qualification or task evidence. |
 | `just io_network_check` | All six network arms: authority, external TCP, local TCP, client lifetime, service fault, driver reset. |
 | `just io_network_driver_reset_check` | External link reset with pending payload work, epoch advance, and restart. |
 | `just io_network_lifetime_check` | Client death, socket/session reclamation, and supervised restart. |
