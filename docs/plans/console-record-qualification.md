@@ -35,8 +35,12 @@ Whole invalid UTF-8, oversized, unavailable staging, missing-window and short
 message refusals must emit only their independently expected refusal diagnostic
 or no output, never an accepted payload prefix. Formatting must complete
 within the bounded buffer before any bytes are emitted. Console refusal diagnostics
-also compete through the same output boundary. Kernel mapping/authority mechanics
-are not replaced by a new host claim: their existing root and plane gates remain.
+also compete through the same output boundary. The authenticated console dispatch fixture also compiles the actual badge decoder,
+per-holder/thread window lookup, and Write dispatch route. Invalid badges and staged
+writes without their own bound window are refused; inline writes retain the existing
+kernel-minted endpoint authority rather than inventing a new window requirement.
+Kernel mapping/authority mechanics are not replaced by a new host claim: their
+existing root and plane gates remain.
 
 ## Local producer operations
 
@@ -77,12 +81,27 @@ root producer, SMP/MCS target, recursive formatting/output, root-fault recovery 
 power-loss durability is qualified by this exam. Kernel-generated diagnostics
 are outside userspace output ownership.
 
+The owning runtime `debug_write` documentation is checked as part of the frozen
+contract audit. It must state that each call submits one bounded payload to the
+console dispatcher, callers assemble complete records without fragment joining,
+root and console share serialization on the qualified single-core non-MCS path,
+and send completion does not acknowledge emission. The obsolete single-threaded
+graph-loop atomicity explanation cannot remain a qualifying public contract.
+
 ## QEMU regression and raw evidence
 
 The local checker retains every original `LOCAL_CHAINS` and `FAILURE_MARKERS`
-assertion. The repeated qualification additionally requires complete, unique local
-probe/service records and exactly one final HEALTHY census; an intact marker cannot
-hide an extra broken or duplicated record. Controls reject missing, split, reversed,
+assertion. The repeated qualification additionally requires complete local probe/service
+records with their declared multiplicity and exactly one final HEALTHY census;
+an intact marker cannot hide an extra broken or prohibited duplicated record.
+Service coverage includes all sixteen normal records on the local plane, not
+only its three original summary markers: authority, ceilings, incarnation,
+per-application options, congestion control, interface, accepted/listener close,
+per-application traffic and buffer release, wait/frames and observed totals.
+Identical per-holder records are counted rather than incorrectly required to be
+unique. Only service-local causal order is added; independent peer arrivals stay
+unconstrained. Exceptional invalidation, abort and failure output is tested at the
+producer-operation boundary and cannot masquerade as normal local qualification. Controls reject missing, split, reversed,
 changed, duplicated and explicit-failure evidence. No marker reconstruction or
 retry-to-green is permitted.
 

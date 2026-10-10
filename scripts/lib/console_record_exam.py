@@ -38,11 +38,48 @@ def _balanced(source: str, start: int, opening: str, closing: str) -> str:
     raise ValueError("unterminated actual-source region")
 
 
+def _function(source: str, selector: str) -> str:
+    if source.count(selector) != 1:
+        raise ValueError(f"actual-source selector is not unique: {selector}")
+    start = source.index(selector)
+    brace = source.index("{", start)
+    return source[start:brace] + _balanced(source, brace, "{", "}")
+
+
+def _dispatch_sources(root: Path) -> dict[str, str]:
+    """Keep badge decoding, window routing, and the Write arm in production order."""
+    console = (root / "slime-root/src/console.rs").read_text()
+    serve = _function(console, "pub unsafe fn serve(")
+    first = "        let Some((id, _)) = TaskId::from_badge(message.badge) else {"
+    last = "            ipc::ConsoleKind::InputRead => {"
+    if serve.count(first) != 1 or serve.count(last) != 1:
+        raise ValueError("console dispatch source boundaries drifted")
+    start, end = serve.index(first), serve.index(last)
+    if start >= end:
+        raise ValueError("console dispatch source ordering drifted")
+    # The single-iteration loop preserves the extracted badge refusal's continue.
+    dispatch = (
+        "fn dispatch(message: Message, windows: &WindowTable, context: &ConsoleContext, "
+        "buffer: &mut IpcBuffer) { for _ in 0..1 {\n"
+        + serve[start:end]
+        + "            _ => unreachable!(\"non-write host fixture message\"),\n"
+        "        }\n    }\n}\n"
+    )
+    task = (root / "slime-root/src/task.rs").read_text()
+    transfer = (root / "slime-root/src/transfer_window.rs").read_text()
+    return {
+        "@DISPATCH@": dispatch,
+        "@BADGE@": _function(task, "pub const fn from_badge("),
+        "@SERVICE_BADGE@": _function(task, "pub const fn service_badge("),
+        "@BOUND@": _function(transfer, "pub fn bound("),
+        "@THREAD@": _function(transfer, "pub const fn descriptor_thread("),
+        "@ABI@": str(root / "boot-contracts/src/generated/component_runtime_abi.rs"),
+    }
+
+
 def fixture_source(root: Path) -> str:
     console = (root / "slime-root/src/console.rs").read_text()
-    start = console.index("fn write_payload(")
-    brace = console.index("{", start)
-    function = console[start:brace] + _balanced(console, brace, "{", "}")
+    function = _function(console, "fn write_payload(")
     backing = (root / "slime-root/src/object_allocator/global_backing.rs").read_text()
     marker = backing.index('"SLIME_BACKING snapshot phase={phase} begin"')
     invocation_start = backing.rfind("\n", 0, marker) + 1
@@ -53,6 +90,7 @@ def fixture_source(root: Path) -> str:
     diagnostic_include = f'#[path = "{diagnostic}"] mod diagnostic;' if diagnostic.exists() else ""
     template = _TEMPLATE
     for key, value in {
+        **_dispatch_sources(root),
         "@PRINTING@": str(root / "deps/rust-sel4/crates/sel4/src/printing.rs"),
         "@DIAGNOSTIC@": diagnostic_include,
         "@CONSOLE@": function,
@@ -132,6 +170,8 @@ def check_fixture_controls(root: Path) -> int:
             "assert!(diagnostic::write(&vec![b'Q'; 1025]).is_err()); assert!(diagnostic::write(b\"INVALID\\xff\").is_err());",
         )
     )
+    for key, value in _dispatch_sources(root).items():
+        source = source.replace(key, value)
     source = source.replace(
         "@CONSOLE@",
         r"""
@@ -159,6 +199,9 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
         "overflow-prefix",
         "missing-window-prefix",
         "short-message-prefix",
+        "invalid-badge-routing",
+        "cross-holder-routing",
+        "wrong-thread-routing",
     ):
         module = _CONTROL_MODULE
         subject = source
@@ -184,6 +227,19 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
             subject = subject.replace(
                 "if words.len() < 2 {", "if words.len() < 2 { crate::debug_put_char(b'M');"
             )
+        elif name == "invalid-badge-routing":
+            subject = subject.replace(
+                "let Some((id, _)) = TaskId::from_badge(message.badge) else {\n"
+                "            continue;\n        };",
+                "let (id, _) = TaskId::from_badge(message.badge)"
+                ".unwrap_or((TaskId(0), Arrival::Request));",
+            )
+        elif name == "cross-holder-routing":
+            subject = subject.replace(
+                "windows.bound(id, thread)", "windows.bound(TaskId(0), thread)"
+            )
+        elif name == "wrong-thread-routing":
+            subject = subject.replace("windows.bound(id, thread)", "windows.bound(id, 0)")
         with tempfile.TemporaryDirectory(prefix="console-exam-control-") as directory:
             rust = Path(directory) / "control.rs"
             binary = Path(directory) / "control"
@@ -211,9 +267,17 @@ macro_rules! control_println { ($($arg:tt)*) => { diagnostic::print(format_args!
                     raise AssertionError("unserialized subject not refused for splicing")
             elif name == "busywait":
                 raise AssertionError("busywait subject did not exhaust timeout")
+            elif name in ("invalid-badge-routing", "cross-holder-routing", "wrong-thread-routing"):
+                reason = (
+                    "invalid badge leaked accepted bytes"
+                    if name == "invalid-badge-routing"
+                    else "unbound/guessed holder or thread leaked accepted bytes"
+                )
+                if result.returncode == 0 or reason not in result.stderr:
+                    raise AssertionError(f"{name} mutation not refused for authorization")
             elif result.returncode == 0:
                 raise AssertionError(f"{name} mutation was accepted")
-    return 7
+    return 10
 
 
 # The frozen grader closure contains the full host adapter, not a mutable resource.
@@ -222,18 +286,48 @@ _TEMPLATE = r"""
 extern crate self as sel4;
 use std::sync::{Mutex, Condvar, OnceLock};
 use std::cell::RefCell;
-pub type Word = usize;
+pub type Word = u64;
+pub type Badge = u64;
 pub struct IpcBuffer;
 pub struct ScratchPage;
-#[derive(Clone, Copy)] pub struct Window;
+extern crate self as boot_contracts;
+#[path = "@ABI@"] pub mod component_runtime_abi;
+#[derive(Clone, Copy, Debug, PartialEq)] pub struct TaskId(pub u32);
+#[derive(Clone, Copy)] pub enum Arrival { Request, Fault }
+impl TaskId { @BADGE@ @SERVICE_BADGE@ }
+#[derive(Clone, Copy)] pub struct Window { task: TaskId, thread: usize }
+struct WindowTable { entries: [Option<(Window, bool)>; 2] }
+impl WindowTable { @BOUND@ }
+@THREAD@
+struct ConsoleContext { scratch: ScratchPage }
+mod ipc { pub enum ConsoleKind { Write, Other } }
+struct Message { badge: Badge, mrs: [Word; 4], len: usize, kind: ipc::ConsoleKind }
+fn fixture_windows() -> WindowTable {
+    WindowTable { entries: [
+        Some((Window { task: TaskId(0), thread: 0 }, true)),
+        Some((Window { task: TaskId(1), thread: 1 }, true)),
+    ] }
+}
+fn staged_descriptor(thread: usize) -> Word {
+    (component_runtime_abi::DESCRIPTOR_FORM_WINDOW << component_runtime_abi::DESCRIPTOR_FORM_SHIFT)
+        | ((thread as u64) << component_runtime_abi::DESCRIPTOR_THREAD_SHIFT)
+}
 struct Frame(Vec<u8>);
 impl Frame { fn bytes(&self) -> &[u8] { &self.0 } }
 #[derive(Debug)] struct StagingError;
 thread_local! { static INPUT: RefCell<Result<Vec<u8>, ()>> = const { RefCell::new(Err(())) }; static PRODUCER: RefCell<u8> = const { RefCell::new(0) }; }
 mod transfer_window {
     use super::*;
-    pub fn read_staged_array_with(window: Option<Window>, _: Word, _: &[Word], _: &ScratchPage, _: &mut IpcBuffer) -> Result<Frame, StagingError> {
-        if window.is_none() { return Err(StagingError); }
+    pub fn read_staged_array_with(window: Option<Window>, transfer: Word, _: &[Word], _: &ScratchPage, _: &mut IpcBuffer) -> Result<Frame, StagingError> {
+        let form = (transfer >> component_runtime_abi::DESCRIPTOR_FORM_SHIFT) & 255;
+        if form != component_runtime_abi::DESCRIPTOR_FORM_INLINE {
+            if window.is_none() { return Err(StagingError); }
+            // A map reads the selected root-held frame, never a caller-guessed address.
+            let selected = window.unwrap();
+            if selected.task != TaskId(0) || selected.thread != 0 {
+                return Ok(Frame(b"SECOND_HOLDER_WINDOW\n".to_vec()));
+            }
+        }
         INPUT.with(|v| v.borrow().clone().and_then(|bytes| if bytes.len() <= 1024 { Ok(bytes) } else { Err(()) }).map(Frame).map_err(|_| StagingError))
     }
 }
@@ -261,12 +355,50 @@ pub mod _private { pub mod printing { pub use crate::printing::debug_print_helpe
 pub mod sys { #[allow(non_snake_case)] pub fn seL4_DebugPutChar(c: u8) { crate::debug_put_char(c); } }
 @DIAGNOSTIC@
 @CONSOLE@
+@DISPATCH@
 fn root_record(phase: &str) { @ROOT@; }
-fn console_record(bytes: &[u8], window: bool, words: &[Word]) {
+fn console_message(bytes: &[u8], badge: Badge, words: &[Word]) {
     INPUT.with(|v| *v.borrow_mut() = Ok(bytes.to_vec()));
-    write_payload(window.then_some(Window), words, &ScratchPage, &mut IpcBuffer);
+    let mut mrs = [0; 4]; mrs[..words.len()].copy_from_slice(words);
+    dispatch(Message { badge, mrs, len: words.len(), kind: ipc::ConsoleKind::Write },
+        &fixture_windows(), &ConsoleContext { scratch: ScratchPage }, &mut IpcBuffer);
 }
+fn console_record(bytes: &[u8], window: bool, words: &[Word]) {
+    let mut staged = words.to_vec();
+    if staged.len() >= 2 { staged[1] = staged_descriptor(0); }
+    console_message(bytes, TaskId(if window { 0 } else { 2 }).service_badge(), &staged);
+}
+fn raw_window() -> Window { Window { task: TaskId(0), thread: 0 } }
 fn main() {
+    // Authorization checks run through the actual serve prefix and Write arm.
+    for badge in [0, 1] {
+        for descriptor in [0, staged_descriptor(0)] {
+            console_message(b"MUST_NOT_APPEAR", badge, &[0, descriptor]);
+            assert!(state().0.lock().unwrap().bytes.is_empty(), "invalid badge leaked accepted bytes");
+        }
+    }
+    for (badge, descriptor) in [
+        (TaskId(2).service_badge(), staged_descriptor(0)), // unbound holder
+        (TaskId(1).service_badge(), staged_descriptor(0)), // another holder's thread
+        (TaskId(0).service_badge(), staged_descriptor(1)), // another task's thread
+        (TaskId(0).service_badge(), staged_descriptor(usize::MAX)),
+    ] {
+        console_message(b"MUST_NOT_APPEAR", badge, &[TaskId(0).service_badge(), descriptor, 0xdeadbeef]);
+        assert_eq!(state().0.lock().unwrap().bytes, b"SLIME_ROOT console staging refused: StagingError\n", "unbound/guessed holder or thread leaked accepted bytes");
+        state().0.lock().unwrap().bytes.clear();
+    }
+    console_message(b"MUST_NOT_APPEAR", TaskId(1).service_badge(), &[0, staged_descriptor(1)]);
+    assert_eq!(state().0.lock().unwrap().bytes, b"SECOND_HOLDER_WINDOW\n", "dispatch did not map the authenticated holder's frame");
+    state().0.lock().unwrap().bytes.clear();
+    // Inline has no mapping: endpoint possession, not window ownership, authorizes it.
+    console_message(b"INLINE_VALID\n", TaskId(2).service_badge(), &[0, 0]);
+    assert_eq!(state().0.lock().unwrap().bytes, b"INLINE_VALID\n");
+    state().0.lock().unwrap().bytes.clear();
+    // Raw missing-window coverage remains independent of the message dispatcher.
+    INPUT.with(|v| *v.borrow_mut() = Ok(b"MUST_NOT_APPEAR".to_vec()));
+    write_payload(None, &[0, staged_descriptor(0)], &ScratchPage, &mut IpcBuffer);
+    assert_eq!(state().0.lock().unwrap().bytes, b"SLIME_ROOT console staging refused: StagingError\n");
+    state().0.lock().unwrap().bytes.clear();
     // These controls exercise the actual console validation before contention.
     console_record(b"UNACCEPTED_RECORD\xff", true, &[0, 0]);
     assert_eq!(state().0.lock().unwrap().bytes, b"SLIME_ROOT console refused non-utf8 bytes=18\n");
@@ -277,7 +409,7 @@ fn main() {
     console_record(b"MUST_NOT_APPEAR", true, &[0]);
     assert!(state().0.lock().unwrap().bytes.is_empty(), "short message leaked payload");
     INPUT.with(|v| *v.borrow_mut() = Err(()));
-    write_payload(Some(Window), &[0, 0], &ScratchPage, &mut IpcBuffer);
+    write_payload(Some(raw_window()), &[0, staged_descriptor(0)], &ScratchPage, &mut IpcBuffer);
     assert_eq!(state().0.lock().unwrap().bytes, b"SLIME_ROOT console staging refused: StagingError\n");
     state().0.lock().unwrap().bytes.clear();
     for malformed in [false, true] {

@@ -1422,6 +1422,7 @@ def main() -> None:
     if arguments.arm in ("local", "all"):
         if arguments.raw_directory is not None:
             try:
+                arguments.raw_directory.parent.mkdir(parents=True, exist_ok=True)
                 arguments.raw_directory.mkdir(mode=0o700)
             except OSError as error:
                 fail(f"cannot exclusively create raw directory {arguments.raw_directory}: {error}")

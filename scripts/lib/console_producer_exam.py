@@ -19,6 +19,25 @@ from console_record_exam import _balanced
 
 _PROBE = "components/testkit/io-local-network-probe/src/main.rs"
 _NETWORK = "components/services/network-service/src/main.rs"
+_LOCAL_MAIN_OUTPUTS = (
+    'b"[network-service] tcp congestion control="',
+    'b"[network-service] application session invalidated',
+    'b"[network-service] application bytes sent="',
+    'b"[network-service] application buffers released',
+    'b"[network-service] application aborted sessions_released="',
+    'b"[network-service] wait wakes="',
+    'b"[network-service] loopback frames="',
+)
+_EXCLUDED_MAIN_OUTPUTS = (
+    'b"[network-service] DNS seed admitted',
+    'b"[network-service] client death handles="',
+    'b"[network-service] tcp timeout handles="',
+    'b"[network-service] driver reset requests="',
+    'b"[network-service] injected in-flight fault',
+    'b"[network-service] tcp listener refusals unadmitted="',
+    'b"[network-service] tcp peaks rx_bytes="',
+    'b"[network-service] application connection handles live="',
+)
 
 
 def _function(source: str, name: str, *, required: bool = True) -> str:
@@ -194,23 +213,56 @@ def audit_producer_routes(root: Path) -> None:
         r"\bfail\s*\(", _function(network, "main")
     ):
         raise ValueError("actual network failure helper detached from qualified callers")
+    network_main = _function(network, "main")
+    for name, arguments in (
+        ("report_authority", r"&destinations"),
+        ("report_observed", r"&observed"),
+        ("report_socket_options", r"table"),
+        ("allocate_incarnation", r""),
+        ("report_events", r"&mut\s+local_engine"),
+    ):
+        if len(re.findall(rf"\b{name}\s*\(\s*{arguments}\s*\)", network_main)) != 1:
+            raise ValueError(f"actual local network reporter route changed: {name}")
     network_regions = [
-        _function(network, "fail"),
-        _output_block(constructor, 'b"[network-service] loopback interface='),
-        _output_block(_function(network, "main"), 'b"[network-service] wait wakes="'),
-        _output_block(_function(network, "main"), 'b"[network-service] loopback frames="'),
+        _function(network, name)
+        for name in (
+            "fail",
+            "report_authority",
+            "report_observed",
+            "report_socket_options",
+            "report_events",
+            "allocate_incarnation",
+        )
     ]
+    network_regions += [_output_block(constructor, 'b"[network-service] loopback interface=')]
+    network_regions += [_output_block(network_main, literal) for literal in _LOCAL_MAIN_OUTPUTS]
+    # These exact producer regions belong to a declared external interface,
+    # supervision/fault profiles, or DNS, absent from sel4-io-local.
+    # Removing named regions is not an arbitrary-prefix allowlist.
+    excluded_regions = [
+        _function(network, name)
+        for name in (
+            "admit_external_listeners",
+            "attach_stack",
+            "release_stack",
+            "report_dns",
+            "report_tcp_bounds",
+            "report_interface",
+        )
+    ]
+    excluded_regions += [_output_block(network_main, literal) for literal in _EXCLUDED_MAIN_OUTPUTS]
+    qualified_prefixes = tuple(
+        re.findall(r'"(\[network-service\][^"\\]*)', "\n".join(network_regions))
+    )
+    if any(prefix in region for prefix in qualified_prefixes for region in excluded_regions):
+        raise ValueError("qualified producer prefix outside the actual tested routes")
+    network_regions += excluded_regions
     for source, regions, prefixes in (
         (probe, probe_regions, ("[io-local-network-probe]",)),
         (
             network,
             network_regions,
-            (
-                "[network-service] loopback interface=",
-                "[network-service] loopback frames=",
-                "[network-service] wait wakes=",
-                "[network-service] fail:",
-            ),
+            ("[network-service]",),
         ),
     ):
         for region in regions:
@@ -244,7 +296,32 @@ def fixture_source(root: Path) -> str:
         ),
         "@NETWORK_FUNCTIONS@": "\n".join(
             _function(network, name, required=name != "write_number")
-            for name in ("write_number", "fail")
+            for name in (
+                "write_number",
+                "fail",
+                "report_authority",
+                "report_observed",
+                "report_socket_options",
+                "report_events",
+            )
+        ),
+        "@OBSERVED_TYPE@": re.search(r"struct Observed\s*\{", network).group(0)[:-1]
+        + _balanced(network, network.index("{", network.index("struct Observed")), "{", "}"),
+        "@INCARNATION@": _output_block(
+            _function(network, "allocate_incarnation"), 'b"[network-service] incarnation="'
+        ),
+        "@CONGESTION@": _output_block(network_main, 'b"[network-service] tcp congestion control="'),
+        "@APPLICATION_BYTES@": _output_block(
+            network_main, 'b"[network-service] application bytes sent="'
+        ),
+        "@APPLICATION_RELEASE@": _output_block(
+            network_main, 'b"[network-service] application buffers released'
+        ),
+        "@APPLICATION_INVALIDATED@": _output_block(
+            network_main, 'b"[network-service] application session invalidated'
+        ),
+        "@APPLICATION_ABORT@": _output_block(
+            network_main, 'b"[network-service] application aborted sessions_released="'
         ),
         "@NOTIFICATION@": _output_block(probe_main, 'b"[io-local-network-probe] role="'),
         "@TIMEOUT@": _output_block(
@@ -289,10 +366,22 @@ def run_exam(root: Path, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 
 
 def check_controls(root: Path) -> int:
-    """Five operation controls and three actual-source lexical route mutations."""
+    """Frozen operation controls and actual-source lexical route mutations."""
     root = root.resolve()
     audit_producer_routes(root)
-    for mutation in ("detached-marker", "parallel-qualified-prefix", "network-prefix-decoy"):
+    route_mutations = (
+        "detached-marker",
+        "parallel-qualified-prefix",
+        "network-prefix-decoy",
+        "authority-prefix-decoy",
+        "observed-prefix-decoy",
+        "detached-authority",
+        "detached-observed",
+        "detached-incarnation",
+        "detached-options",
+        "detached-events",
+    )
+    for mutation in route_mutations:
         with tempfile.TemporaryDirectory(prefix="producer-route-control-") as directory:
             subject = Path(directory)
             for path in (_PROBE, _NETWORK):
@@ -306,8 +395,36 @@ def check_controls(root: Path) -> int:
                         )
                     elif mutation == "parallel-qualified-prefix":
                         source += '\nfn decoy() { debug_write(b"[io-local-network-probe] role=publisher attached=1\\n"); }\n'
-                elif mutation == "network-prefix-decoy":
-                    source += '\nfn decoy() { debug_write(b"[network-service] loopback interface=127.0.0.1 external_nic=none\\n"); }\n'
+                elif mutation in (
+                    "network-prefix-decoy",
+                    "authority-prefix-decoy",
+                    "observed-prefix-decoy",
+                ):
+                    literal = {
+                        "network-prefix-decoy": "loopback interface=127.0.0.1 external_nic=none",
+                        "authority-prefix-decoy": "authority destinations=1 rights=connect,send,recv",
+                        "observed-prefix-decoy": "observed requests=2 packets=0",
+                    }[mutation]
+                    source += (
+                        f'\nfn decoy() {{ debug_write(b"[network-service] {literal}\\n"); }}\n'
+                    )
+                elif mutation in (
+                    "detached-authority",
+                    "detached-observed",
+                    "detached-incarnation",
+                    "detached-options",
+                    "detached-events",
+                ):
+                    name, arguments = {
+                        "detached-authority": ("report_authority", "&destinations"),
+                        "detached-observed": ("report_observed", "&observed"),
+                        "detached-incarnation": ("allocate_incarnation", ""),
+                        "detached-options": ("report_socket_options", "table"),
+                        "detached-events": ("report_events", "&mut local_engine"),
+                    }[mutation]
+                    source = source.replace(
+                        f"{name}({arguments})", f"unused_{name}({arguments})", 1
+                    )
                 destination.write_text(source)
             try:
                 audit_producer_routes(subject)
@@ -315,6 +432,8 @@ def check_controls(root: Path) -> int:
                 reason = (
                     "actual marker caller route changed"
                     if mutation == "detached-marker"
+                    else "actual local network reporter route changed"
+                    if mutation.startswith("detached-")
                     else "qualified producer prefix outside"
                 )
                 if reason not in str(error):
@@ -326,9 +445,9 @@ def check_controls(root: Path) -> int:
     result = _run(_ADAPTER + _VALIDATOR + _CONTROLS, 30)
     if result.returncode:
         raise AssertionError(f"producer sensitivity controls failed:\n{result.stderr}")
-    if result.stdout.strip() != "producer sensitivity controls passed=5":
+    if result.stdout.strip() != "producer sensitivity controls passed=39":
         raise AssertionError("producer controls did not report their frozen case count")
-    return 8
+    return 39 + len(route_mutations)
 
 
 _ADAPTER = r"""
@@ -403,6 +522,38 @@ mod probe {
 mod network {
     use crate::{debug_write, exit};
     @LINE_IMPORT@
+    const RIGHT_CONNECT: u16 = 1;
+    const RIGHT_SEND: u16 = 2;
+    const RIGHT_RECV: u16 = 4;
+    const RIGHT_LISTEN: u16 = 8;
+    pub struct Destination { rights: u16, socket_limit: u32, listener_limit: u32, dns_record_limit: u32 }
+    struct NetworkDestinations<'a> { rows: &'a [Destination] }
+    impl NetworkDestinations<'_> {
+        fn destination_count(&self) -> usize { self.rows.len() }
+        fn destination(&self, index: usize) -> Option<&Destination> { self.rows.get(index) }
+    }
+    #[derive(Clone, Copy)]
+    struct Options { keepalive_ms: u32, nagle: bool, hop_limit: u8, idle_timeout_ms: u32 }
+    struct ApplicationEntry<'a> { control_binding: &'a [u8], holder_identity: [u8; 32], options: Options }
+    struct NetworkApplications<'a> { rows: &'a [ApplicationEntry<'a>] }
+    impl NetworkApplications<'_> {
+        fn application_count(&self) -> usize { self.rows.len() }
+        fn application(&self, index: usize) -> Option<&ApplicationEntry<'_>> { self.rows.get(index) }
+    }
+    // Local control stems do not equal the declared publisher/subscriber holder.
+    mod boot_contracts { pub mod network_destination {
+        pub fn holder_identity(_: &str) -> [u8; 32] { [0; 32] }
+    } }
+    mod tcp {
+        pub enum Terminal { TimeWait, Closed, Reset, Timeout }
+        pub enum Event {
+            AcceptedClose { unread: usize, unsent: usize, terminal: Terminal, bytes: usize },
+            ListenerClosed { children: usize },
+        }
+        pub struct Engine<'a> { pub events: std::vec::IntoIter<Event>, pub marker: std::marker::PhantomData<&'a ()> }
+        impl Engine<'_> { pub fn take_event(&mut self) -> Option<Event> { self.events.next() } }
+    }
+    @OBSERVED_TYPE@
     @NETWORK_FUNCTIONS@
     struct Wait { value: usize }
     impl Wait { fn wakes(&self) -> usize { self.value } }
@@ -416,7 +567,36 @@ mod network {
     }
     struct Stack { device: Device }
     struct Engine { handles: usize }
-    impl Engine { fn allocated(&self) -> usize { self.handles } }
+    impl Engine {
+        fn allocated(&self) -> usize { self.handles }
+        fn congestion_control(&self) -> &'static [u8] { b"reno" }
+    }
+    struct Application { sent: u64, received: u64 }
+    pub fn authority(rows: &[[u32; 4]]) {
+        assert!(rows.len() <= 64, "bounded destination fixture");
+        let rows: Vec<_> = rows.iter().map(|row| Destination { rights: row[0] as u16, socket_limit: row[1], listener_limit: row[2], dns_record_limit: row[3] }).collect();
+        report_authority(&NetworkDestinations { rows: &rows });
+    }
+    pub fn observed(fields: [u32; 6]) {
+        report_observed(&Observed { requests: fields[0], packets: fields[1], socket_refusals: fields[2], listener_refusals: fields[3], dns_refusals: fields[4], cross_holder_refusals: fields[5] });
+    }
+    pub fn options() { options_fields(0, true, 64, 10000); }
+    pub fn options_fields(keepalive_ms: u32, nagle: bool, hop_limit: u8, idle_timeout_ms: u32) {
+        let options = Options { keepalive_ms, nagle, hop_limit, idle_timeout_ms };
+        let rows = [ApplicationEntry { control_binding: b"local-publisher-control", holder_identity: [1; 32], options }, ApplicationEntry { control_binding: b"local-subscriber-control", holder_identity: [2; 32], options }];
+        report_socket_options(&NetworkApplications { rows: &rows });
+    }
+    pub fn events(terminal: u8, unread: usize, unsent: usize, bytes: usize, children: usize) {
+        let terminal = match terminal { 0 => tcp::Terminal::TimeWait, 1 => tcp::Terminal::Closed, 2 => tcp::Terminal::Reset, _ => tcp::Terminal::Timeout };
+        let events = vec![tcp::Event::AcceptedClose { unread, unsent, terminal, bytes }, tcp::Event::ListenerClosed { children }].into_iter();
+        report_events(&mut tcp::Engine { events, marker: std::marker::PhantomData });
+    }
+    pub fn incarnation(next: u64) { @INCARNATION@ }
+    pub fn congestion() { let engine = Engine { handles: 0 }; @CONGESTION@ }
+    pub fn application_bytes(sent: u64, received: u64) { let application = Application { sent, received }; @APPLICATION_BYTES@ }
+    pub fn application_release() { @APPLICATION_RELEASE@ }
+    pub fn application_invalidated() { @APPLICATION_INVALIDATED@ }
+    pub fn application_abort(released: u64) { @APPLICATION_ABORT@ }
     pub fn failure(reason: &[u8]) { fail(reason); }
     pub fn interface() { @INTERFACE@ }
     pub fn wait(wakes: usize, coalesced: u64) {
@@ -489,6 +669,46 @@ fn main() {
     case!("loopback zero", network::loopback([0; 5], 0, 0), None, &[b"[network-service] loopback frames=0 rejected=0 handles=0 external_frames=0 resets=0 syns=0 fins=0\n".as_slice()]);
     case!("loopback fields", network::loopback([11, 2, 5, 7, 13], 3, 0), None, &[b"[network-service] loopback frames=11 rejected=2 handles=3 external_frames=0 resets=5 syns=7 fins=13\n".as_slice()]);
     case!("loopback external", network::loopback([11, 2, 5, 7, 13], 3, 19), None, &[b"[network-service] loopback frames=11 rejected=2 handles=3 external_frames=19 resets=5 syns=7 fins=13\n".as_slice()]);
+    case!("local authority", network::authority(&[[7, 1, 0, 0]]), None, &[
+        b"[network-service] authority destinations=1 rights=connect,send,recv\n".as_slice(),
+        b"[network-service] declared socket_limit=1 listener_limit=0 dns_record_limit=0\n".as_slice(),
+    ]);
+    case!("empty authority", network::authority(&[]), None, &[
+        b"[network-service] authority destinations=0 rights=\n".as_slice(),
+        b"[network-service] declared socket_limit=0 listener_limit=0 dns_record_limit=0\n".as_slice(),
+    ]);
+    case!("authority field sums", network::authority(&[[9, 2, 3, 5], [6, 7, 11, 13]]), None, &[
+        b"[network-service] authority destinations=2 rights=connect,send,recv,listen\n".as_slice(),
+        b"[network-service] declared socket_limit=9 listener_limit=14 dns_record_limit=18\n".as_slice(),
+    ]);
+    case!("local observed", network::observed([2, 0, 0, 0, 0, 0]), None, &[b"[network-service] observed requests=2 packets=0 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=0\n".as_slice()]);
+    case!("observed fields", network::observed([3, 5, 7, 11, 13, 17]), None, &[b"[network-service] observed requests=3 packets=5 socket_refusals=7 listener_refusals=11 dns_refusals=13 cross_holder_refusals=17\n".as_slice()]);
+    case!("incarnation", network::incarnation(1), None, &[b"[network-service] incarnation=1\n".as_slice()]);
+    case!("incarnation maximum", network::incarnation(1073741823), None, &[b"[network-service] incarnation=1073741823\n".as_slice()]);
+    case!("congestion", network::congestion(), None, &[b"[network-service] tcp congestion control=reno\n".as_slice()]);
+    case!("local options", network::options(), None, &[
+        b"[network-service] tcp options holder=unnamed keepalive_ms=0 nagle=1 hop_limit=64 idle_timeout_ms=10000\n".as_slice(),
+        b"[network-service] tcp options holder=unnamed keepalive_ms=0 nagle=1 hop_limit=64 idle_timeout_ms=10000\n".as_slice(),
+    ]);
+    case!("option fields", network::options_fields(3, false, 7, 11), None, &[
+        b"[network-service] tcp options holder=unnamed keepalive_ms=3 nagle=0 hop_limit=7 idle_timeout_ms=11\n".as_slice(),
+        b"[network-service] tcp options holder=unnamed keepalive_ms=3 nagle=0 hop_limit=7 idle_timeout_ms=11\n".as_slice(),
+    ]);
+    case!("local events", network::events(1, 0, 0, 4096, 0), None, &[
+        b"[network-service] tcp accepted close unread=0 unsent=0 terminal=closed handles=1 bytes=4096\n".as_slice(),
+        b"[network-service] tcp listener closed children=0\n".as_slice(),
+    ]);
+    for (terminal, expected) in [
+        (0, b"[network-service] tcp accepted close unread=3 unsent=5 terminal=time-wait handles=1 bytes=7\n".as_slice()),
+        (2, b"[network-service] tcp accepted close unread=3 unsent=5 terminal=reset handles=1 bytes=7\n".as_slice()),
+        (3, b"[network-service] tcp accepted close unread=3 unsent=5 terminal=timeout handles=1 bytes=7\n".as_slice()),
+    ] { case!("event fields", network::events(terminal, 3, 5, 7, 11), None, &[expected, b"[network-service] tcp listener closed children=11\n".as_slice()]); }
+    case!("publisher application bytes", network::application_bytes(4096, 2048), None, &[b"[network-service] application bytes sent=4096 received=2048\n".as_slice()]);
+    case!("subscriber application bytes", network::application_bytes(2048, 4096), None, &[b"[network-service] application bytes sent=2048 received=4096\n".as_slice()]);
+    case!("application release", network::application_release(), None, &[b"[network-service] application buffers released\n".as_slice()]);
+    case!("application invalidated", network::application_invalidated(), None, &[b"[network-service] application session invalidated\n".as_slice()]);
+    case!("application abort zero", network::application_abort(0), None, &[b"[network-service] application aborted sessions_released=0\n".as_slice()]);
+    case!("application abort one", network::application_abort(1), None, &[b"[network-service] application aborted sessions_released=1\n".as_slice()]);
     println!("producer actual-source cases={cases} failed={failures}");
     assert_eq!(failures, 0, "actual producers violated whole-record operation boundary");
 }
@@ -507,6 +727,33 @@ fn main() {
     assert!(validate(&oversized, &[]).unwrap_err().contains("oversized record"));
     let invalid = capture(|| { debug_write(b"valid prefix\xff"); }, None);
     assert!(validate(&invalid, &[]).unwrap_err().contains("non-UTF-8 record"));
-    println!("producer sensitivity controls passed=5");
+    // Every locally attributable service family has an independent whole-write
+    // positive and split-write negative, not an expected string mined from Rust.
+    let records: [&[u8]; 17] = [
+        b"[network-service] loopback interface=127.0.0.1 external_nic=none\n",
+        b"[network-service] wait wakes=7 coalesced=0\n",
+        b"[network-service] loopback frames=40 rejected=0 handles=0 external_frames=0 resets=0 syns=2 fins=2\n",
+        b"[network-service] authority destinations=1 rights=connect,send,recv\n",
+        b"[network-service] declared socket_limit=1 listener_limit=0 dns_record_limit=0\n",
+        b"[network-service] incarnation=1\n",
+        b"[network-service] tcp options holder=unnamed keepalive_ms=0 nagle=1 hop_limit=64 idle_timeout_ms=10000\n",
+        b"[network-service] tcp congestion control=reno\n",
+        b"[network-service] tcp accepted close unread=0 unsent=0 terminal=closed handles=1 bytes=4096\n",
+        b"[network-service] tcp listener closed children=0\n",
+        b"[network-service] application bytes sent=4096 received=2048\n",
+        b"[network-service] application bytes sent=2048 received=4096\n",
+        b"[network-service] application buffers released\n",
+        b"[network-service] observed requests=2 packets=0 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=0\n",
+        b"[network-service] fail: exam failure\n",
+        b"[network-service] application session invalidated\n",
+        b"[network-service] application aborted sessions_released=1\n",
+    ];
+    for record in records {
+        let whole = capture(|| { debug_write(record); }, None);
+        assert!(validate(&whole, &[record]).is_ok());
+        let split = capture(|| { debug_write(&record[..19]); debug_write(&record[19..]); }, None);
+        assert!(validate(&split, &[record]).unwrap_err().contains("fragmented record"));
+    }
+    println!("producer sensitivity controls passed=39");
 }
 """

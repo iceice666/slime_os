@@ -17,9 +17,67 @@ from typing import NoReturn
 from sel4_gate_markers import match_marker_contract
 
 _PROBE = "[io-local-network-probe]"
-_SERVICE_PREFIXES = (
-    "[network-service] loopback ",
-    "[network-service] wait ",
+_SERVICE_PREFIXES = ("[network-service]",)
+# Frozen sel4-io-local declarations: one publisher destination, two loopback
+# applications with default socket options, two clean session shutdowns.
+# These values are not computed from product source or a captured transcript.
+_ADDITIONAL_LOCAL = (
+    (r"\[network-service\] authority destinations=1 rights=connect,send,recv", 1),
+    (r"\[network-service\] declared socket_limit=1 listener_limit=0 dns_record_limit=0", 1),
+    (r"\[network-service\] incarnation=1", 1),
+    (
+        r"\[network-service\] tcp options holder=unnamed keepalive_ms=0 nagle=1 hop_limit=64 idle_timeout_ms=10000",
+        2,
+    ),
+    (r"\[network-service\] tcp congestion control=reno", 1),
+    (
+        r"\[network-service\] tcp accepted close unread=0 unsent=0 terminal=closed handles=1 bytes=4096",
+        1,
+    ),
+    (r"\[network-service\] tcp listener closed children=0", 1),
+    (r"\[network-service\] application bytes sent=4096 received=2048", 1),
+    (r"\[network-service\] application bytes sent=2048 received=4096", 1),
+    (r"\[network-service\] application buffers released", 2),
+    (
+        r"\[network-service\] observed requests=2 packets=0 socket_refusals=0 listener_refusals=0 dns_refusals=0 cross_holder_refusals=0",
+        1,
+    ),
+)
+
+
+def additional_local_patterns() -> tuple[tuple[str, int], ...]:
+    """Independent normal-path families and exact composition multiplicities."""
+    return _ADDITIONAL_LOCAL
+
+
+def local_control_transcript(gate: object, literal_for: Callable[[str], str]) -> str:
+    """Synthetic positive records in service order, without cross-node ordering."""
+    lines = [literal_for(pattern) for _, chain in gate.LOCAL_CHAINS for pattern in chain]
+    startup = [
+        literal_for(pattern) for pattern, count in _ADDITIONAL_LOCAL[:5] for _ in range(count)
+    ]
+    lines[1:1] = startup
+    wait = next(
+        index for index, line in enumerate(lines) if line.startswith("[network-service] wait ")
+    )
+    # Accepted-close/listener-close are service events before session teardown;
+    # each byte report immediately precedes its own buffer-release report.
+    tail = [literal_for(_ADDITIONAL_LOCAL[index][0]) for index in (5, 6, 7, 9, 8, 9)]
+    lines[wait:wait] = tail
+    frames = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("[network-service] loopback frames=")
+    )
+    lines.insert(frames + 1, literal_for(_ADDITIONAL_LOCAL[-1][0]))
+    return "\n".join(lines) + "\n"
+
+
+_DEBUG_WRITE_CONTRACT = (
+    "Each call submits one bounded payload to the console dispatcher.",
+    "Callers must assemble a complete record before submission; fragments are not joined.",
+    "The root and console dispatcher share record serialization on the qualified single-core non-MCS path.",
+    "Send completion does not acknowledge emission.",
 )
 _HEALTH = "SLIME_GRAPH HEALTHY"
 _RAW_OUTPUT = re.compile(
@@ -33,7 +91,7 @@ def _reject(message: str) -> NoReturn:
 
 
 def validate_local(transcript: str, gate: object) -> None:
-    """Preserve producer order, then require whole, unique qualified records.
+    """Preserve producer order, then require whole records at pinned multiplicities.
 
     Admission remains a prefix contract because it carries additional boot
     fields. Unrelated boot records are not reinterpreted as local evidence.
@@ -47,9 +105,11 @@ def validate_local(transcript: str, gate: object) -> None:
             for pattern in chain:
                 if len(re.findall(pattern, transcript)) != 1:
                     _reject("local admission prefix must occur exactly once")
-    patterns = tuple(
+    original = tuple(
         pattern for label, chain in chains if label != "local admission" for pattern in chain
     )
+    requirements = tuple((pattern, 1) for pattern in original) + _ADDITIONAL_LOCAL
+    patterns = tuple(pattern for pattern, _ in requirements)
     counts = [0] * len(patterns)
     for line in transcript.split("\n"):
         # Stable producer stems make incomplete-prefix extras observable too.
@@ -74,10 +134,38 @@ def validate_local(transcript: str, gate: object) -> None:
         ]
         if len(matches) != 1:
             _reject(f"malformed or unqualified local record: {line!r}")
+        for value in re.findall(r"=([0-9]+)(?: |$)", line):
+            if len(value) > 20 or int(value) > (1 << 64) - 1:
+                _reject(f"local numeric field exceeds bounded u64 producer: {line!r}")
         counts[matches[0]] += 1
-    for pattern, count in zip(patterns, counts, strict=True):
-        if count != 1:
-            _reject(f"local record requires exactly one occurrence, got {count}: {pattern}")
+    for (pattern, expected), count in zip(requirements, counts, strict=True):
+        if count != expected:
+            _reject(f"local record requires exactly {expected} occurrences, got {count}: {pattern}")
+    # Only service-local causal obligations are added; peer interleaving is free.
+    records = transcript.split("\n")
+    positions = {
+        pattern: [index for index, line in enumerate(records) if re.fullmatch(pattern, line)]
+        for pattern in patterns
+    }
+    startup = [pattern for pattern, _ in _ADDITIONAL_LOCAL[:5]] + [original[0]]
+    shutdown = [original[1], original[2], _ADDITIONAL_LOCAL[-1][0]]
+    for order in (startup, shutdown):
+        for before, after in zip(order, order[1:], strict=False):
+            if max(positions[before]) >= min(positions[after]):
+                _reject("local service records violate causal producer order")
+    before_cleanup = positions[original[1]][0]
+    after_startup = positions[original[0]][0]
+    for pattern, _ in _ADDITIONAL_LOCAL[5:10]:
+        if not all(after_startup < position < before_cleanup for position in positions[pattern]):
+            _reject("local session records must be between interface and cleanup")
+    if positions[_ADDITIONAL_LOCAL[5][0]][0] >= positions[_ADDITIONAL_LOCAL[6][0]][0]:
+        _reject("local accepted close must precede its listener close")
+    if positions[_ADDITIONAL_LOCAL[6][0]][0] >= positions[_ADDITIONAL_LOCAL[8][0]][0]:
+        _reject("local subscriber byte report must follow its listener close")
+    released = positions[_ADDITIONAL_LOCAL[9][0]]
+    sent = sorted(positions[_ADDITIONAL_LOCAL[7][0]] + positions[_ADDITIONAL_LOCAL[8][0]])
+    if not sent[0] < released[0] < sent[1] < released[1]:
+        _reject("each local session byte report must precede its buffer release")
 
 
 def _rust_code(text: str) -> str:
@@ -216,6 +304,25 @@ def audit_routes(root: Path) -> None:
         if match is not None:
             _reject(f"raw root output bypass in {path.relative_to(root)}: {match.group(0)}")
 
+    transport = _read(root, "components/runtime/src/syscall/sel4_transport.rs")
+    documentation = re.search(
+        r"((?:^///[^\n]*\n)+)pub fn debug_write\s*\(", transport, re.MULTILINE
+    )
+    if documentation is None:
+        _reject("debug_write must retain its frozen public record contract")
+    contract = " ".join(
+        line.removeprefix("///").strip() for line in documentation.group(1).splitlines()
+    )
+    contract = " ".join(contract.split())
+    for clause in _DEBUG_WRITE_CONTRACT:
+        if clause not in contract:
+            _reject(f"debug_write public record contract missing clause: {clause}")
+    if any(
+        phrase in contract
+        for phrase in ("single-threaded", "atomicity structural", "DebugWrite on ARM")
+    ):
+        _reject("debug_write public record contract retains obsolete serialization rationale")
+
     scheduler = _rust_code(_read(root, "slime-root/src/graph_runtime/console_runtime.rs"))
     priority_calls = re.findall(r"\btcb_set_sched_params\s*\(([^;]*)\)", scheduler)
     expected = re.compile(
@@ -277,6 +384,10 @@ def _audit_controls() -> int:
         "slime-root/src/main.rs": 'fn main() { slime_root::diagnostic_println!("root"); }\n',
         "slime-root/src/console.rs": "fn payload(bytes: &[u8]) { crate::diagnostic::write(bytes); }\n",
         "slime-root/src/diagnostic.rs": "pub fn write(bytes: &[u8]) { for byte in bytes { sel4::debug_put_char(*byte); } sel4::r#yield(); }\npub fn print(args: core::fmt::Arguments) {}\n",
+        "components/runtime/src/syscall/sel4_transport.rs": "".join(
+            f"/// {clause}\n" for clause in _DEBUG_WRITE_CONTRACT
+        )
+        + "pub fn debug_write(bytes: &[u8]) -> i64 { 0 }\n",
         "slime-root/src/graph_runtime/console_runtime.rs": "fn schedule() { tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), 255, 255); }\n",
         "sel4/config/qemu-arm-virt.cmake": 'set(KernelPlatform "qemu-arm-virt" CACHE STRING "")\nset(KernelIsMCS OFF CACHE BOOL "")\nset(KernelMaxNumNodes 1 CACHE STRING "")\n',
         "sel4/pins.toml": "[qemu_arm_virt]\ncpus = 1\n",
@@ -318,6 +429,27 @@ def _audit_controls() -> int:
         ),
     )
     replacements = (
+        (
+            "missing debug_write public contract",
+            "components/runtime/src/syscall/sel4_transport.rs",
+            "pub fn debug_write(bytes: &[u8]) -> i64 { 0 }\n",
+        ),
+        (
+            "obsolete debug_write rationale",
+            "components/runtime/src/syscall/sel4_transport.rs",
+            baseline["components/runtime/src/syscall/sel4_transport.rs"].replace(
+                "pub fn debug_write",
+                "/// The root graph is single-threaded, making atomicity structural.\npub fn debug_write",
+            ),
+        ),
+        (
+            "false emission acknowledgement",
+            "components/runtime/src/syscall/sel4_transport.rs",
+            baseline["components/runtime/src/syscall/sel4_transport.rs"].replace(
+                "Send completion does not acknowledge emission.",
+                "Send completion acknowledges emission.",
+            ),
+        ),
         ("missing library module", "slime-root/src/lib.rs", ""),
         ("missing binary shared route", "slime-root/src/main.rs", "fn main() {}"),
         ("missing console shared route", "slime-root/src/console.rs", "fn payload() {}"),
@@ -429,8 +561,8 @@ def check_controls(root: Path, gate: object, literal_for: Callable[[str], str]) 
     patterns = tuple(pattern for _, chain in gate.LOCAL_CHAINS for pattern in chain)
     if len(patterns) != 22:
         _reject(f"local record contract has {len(patterns)} markers, expected 22")
-    lines = [literal_for(pattern) for pattern in patterns]
-    baseline = "\n".join(lines) + "\n"
+    baseline = local_control_transcript(gate, literal_for)
+    lines = baseline.rstrip("\n").split("\n")
     validate_local(baseline, gate)
     evaluated = 0
 
@@ -483,6 +615,48 @@ def check_controls(root: Path, gate: object, literal_for: Callable[[str], str]) 
     for pattern in gate.FAILURE_MARKERS:
         refuse(f"explicit failure {pattern}", baseline + literal_for(pattern) + "\n")
     refuse("probe debug status outside failure path", baseline + _PROBE + " debug status=7\n")
+    refuse("unknown service family", baseline + "[network-service] ungraded record=1\n")
+    huge = baseline.replace(
+        "[network-service] wait wakes=7", "[network-service] wait wakes=18446744073709551616", 1
+    )
+    if huge == baseline:
+        wait_pattern = gate.LOCAL_CHAINS[1][1][1]
+        wait_line = literal_for(wait_pattern)
+        huge = baseline.replace(
+            wait_line, re.sub(r"wakes=\d+", "wakes=18446744073709551616", wait_line), 1
+        )
+    refuse("unbounded numeric field", huge)
+    reordered = lines.copy()
+    sent_index = reordered.index(literal_for(_ADDITIONAL_LOCAL[7][0]))
+    release_index = reordered.index(literal_for(_ADDITIONAL_LOCAL[9][0]))
+    reordered[sent_index], reordered[release_index] = (
+        reordered[release_index],
+        reordered[sent_index],
+    )
+    refuse("buffer release before its session byte report", "\n".join(reordered) + "\n")
+    reordered = lines.copy()
+    accepted, listener = (
+        reordered.index(literal_for(_ADDITIONAL_LOCAL[index][0])) for index in (5, 6)
+    )
+    reordered[accepted], reordered[listener] = reordered[listener], reordered[accepted]
+    refuse("listener close before accepted close", "\n".join(reordered) + "\n")
+    reordered = lines.copy()
+    subscriber = reordered.index(literal_for(_ADDITIONAL_LOCAL[8][0]))
+    pair = reordered[subscriber : subscriber + 2]
+    del reordered[subscriber : subscriber + 2]
+    listener = reordered.index(literal_for(_ADDITIONAL_LOCAL[6][0]))
+    reordered[listener:listener] = pair
+    refuse("subscriber byte report before listener close", "\n".join(reordered) + "\n")
+    refuse("local invalidation", baseline + "[network-service] application session invalidated\n")
+    refuse("local abort", baseline + "[network-service] application aborted sessions_released=1\n")
+    for before, after in (
+        (_ADDITIONAL_LOCAL[0][0], _ADDITIONAL_LOCAL[1][0]),
+        (_ADDITIONAL_LOCAL[2][0], _ADDITIONAL_LOCAL[4][0]),
+    ):
+        reordered = lines.copy()
+        first, second = (reordered.index(literal_for(pattern)) for pattern in (before, after))
+        reordered[first], reordered[second] = reordered[second], reordered[first]
+        refuse("reordered additional service startup", "\n".join(reordered) + "\n")
     audit_count = _audit_controls()
     print(
         f"seL4 gate control check: console records rejected {evaluated} mutations; source route audit rejected {audit_count} independent fixtures (no product qualification)"

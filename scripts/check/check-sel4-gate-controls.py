@@ -2920,7 +2920,7 @@ def check_large_image_controls() -> int:
 
 def check_console_repeat_controls(gate) -> int:
     """Judge local orchestration without substituting fake boots as qualification."""
-    valid = "\n".join(literal_for(pattern) for _, chain in gate.LOCAL_CHAINS for pattern in chain)
+    valid = console_record_controls.local_control_transcript(gate, literal_for)
     with tempfile.TemporaryDirectory(prefix="console-repeat-controls-") as temporary:
         root = _Path(temporary)
         image = root / "image"
@@ -2946,10 +2946,10 @@ def check_console_repeat_controls(gate) -> int:
                         fail("local repeat control accepted forbidden evidence")
                 return seen, build.call_count
 
-        directory = root / "twenty"
+        directory = root / "fresh-checkout" / "build" / "twenty"
         seen, builds = invoke(directory)
         if builds != 1 or [path.name for path in seen] != [f"run-{n:02d}.serial" for n in range(1, 21)]:
-            fail("local repeat control did not build once and collect exactly twenty ordinal captures")
+            fail("fresh-checkout local repeat control did not create parents, build once and collect exactly twenty ordinal captures")
         if len(list(directory.iterdir())) != 20:
             fail("local repeat control lost captures")
         before = {path: path.read_bytes() for path in directory.iterdir()}
