@@ -95,6 +95,12 @@ console dispatcher, callers assemble complete records without fragment joining,
 root and console share serialization on the qualified single-core non-MCS path,
 and send completion does not acknowledge emission. The obsolete single-threaded
 graph-loop atomicity explanation cannot remain a qualifying public contract.
+The transport implementation is not a repair surface: fixed source digests freeze
+the native sender outside that editable doc block, its public syscall dispatch,
+wire helpers, and the generated runtime ABI constant provider/wrapper. This is a
+source-preservation boundary, not a claim that the host fixture executes seL4 IPC.
+A producer capture stub cannot qualify a sender that splits calls into multiple
+IPC messages or narrows the staging capacity.
 
 ## QEMU regression and raw evidence
 

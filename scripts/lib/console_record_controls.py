@@ -2,11 +2,13 @@
 
 Synthetic controls judge validators, not a boot or a Rust semantic proof. The
 source audit deliberately qualifies only the declared single-core, non-MCS ARM
-root routes: it is a lexical refusal boundary, not a general output-flow proof.
+root routes and preserves the existing component transport by source pins: it is
+a lexical refusal boundary, not a general output-flow proof.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 import tempfile
 import tomllib
@@ -79,6 +81,18 @@ _DEBUG_WRITE_CONTRACT = (
     "The root and console dispatcher share record serialization on the qualified single-core non-MCS path.",
     "Send completion does not acknowledge emission.",
 )
+_TRANSPORT = "components/runtime/src/syscall/sel4_transport.rs"
+# This exam permits only the owning debug_write documentation to change. Raw
+# source pins preserve the existing one-send body, both buffer branches, staging
+# helpers, public dispatch, and descriptor/window constants; they are not a
+# semantic proof for replacement transports. Updating these pins needs a new exam.
+_TRANSPORT_PINS = {
+    _TRANSPORT: "0852765ed62a984c28fb7adaa6683d0930cf977bb7f3a7de567e04c2f4083341",
+    "components/runtime/src/syscall/wire.rs": "99e0addc975774fc936999b5c7ab99c4cb0b4a242d3bd0de5a175b51f7f48470",
+    "components/runtime/src/syscall.rs": "036eee8cdd4296e5948e6e0c09e6284b4de8a676f2b1700033b9a71afdf63d54",
+    "boot-contracts/src/component_runtime_abi.rs": "cd3cb23f530832aea891395df6c5ddfe8dc40429f5fdafde7edea75ed09324ca",
+    "boot-contracts/src/generated/component_runtime_abi.rs": "6e2f28339c5a748171430bfd104e37fa5ceb7d38022965164123e9ed67d6f1a2",
+}
 _HEALTH = "SLIME_GRAPH HEALTHY"
 _RAW_OUTPUT = re.compile(
     r"\b(?:debug_print|debug_println|debug_print_helper|debug_put_char|DebugWrite|DebugPutChar|"
@@ -236,6 +250,33 @@ def _read(root: Path, relative: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _debug_write_documentation(source: bytes) -> re.Match[bytes]:
+    blocks = list(
+        re.finditer(rb"((?:^///[^\n]*\n)+)pub fn debug_write\s*\(", source, re.MULTILINE)
+    )
+    if len(blocks) != 1:
+        _reject("debug_write must retain one contiguous owning public documentation block")
+    return blocks[0]
+
+
+def _transport_sources(root: Path) -> dict[str, bytes]:
+    """Require exact frozen sources, excluding only debug_write's owning docs."""
+    sources = {}
+    for relative, expected in _TRANSPORT_PINS.items():
+        path = root / relative
+        if not path.is_file():
+            _reject(f"required qualification source missing: {relative}")
+        source = path.read_bytes()
+        frozen = source
+        if relative == _TRANSPORT:
+            documentation = _debug_write_documentation(source)
+            frozen = source[: documentation.start(1)] + source[documentation.end(1) :]
+        if hashlib.sha256(frozen).hexdigest() != expected:
+            _reject(f"transport source differs from frozen one-send baseline: {relative}")
+        sources[relative] = source
+    return sources
+
+
 def _require(code: str, pattern: str, description: str) -> None:
     if re.search(pattern, code) is None:
         _reject(description)
@@ -246,8 +287,9 @@ def audit_routes(root: Path) -> None:
 
     The runtime helper separately compiles the exact module and exercises its
     lock/record semantics. This audit checks source tokens, target configuration,
-    and the two existing root-writer routes; it does not claim arbitrary Rust
-    data-flow analysis, component-output qualification, or SMP/MCS support.
+    and the two existing root-writer routes, while freezing the existing component
+    transport outside debug_write's owning docs. It does not claim native component
+    execution, arbitrary Rust data-flow analysis, or SMP/MCS support.
     """
     library = _rust_code(_read(root, "slime-root/src/lib.rs"))
     binary = _rust_code(_read(root, "slime-root/src/main.rs"))
@@ -304,14 +346,11 @@ def audit_routes(root: Path) -> None:
         if match is not None:
             _reject(f"raw root output bypass in {path.relative_to(root)}: {match.group(0)}")
 
-    transport = _read(root, "components/runtime/src/syscall/sel4_transport.rs")
-    documentation = re.search(
-        r"((?:^///[^\n]*\n)+)pub fn debug_write\s*\(", transport, re.MULTILINE
-    )
-    if documentation is None:
-        _reject("debug_write must retain its frozen public record contract")
+    transport = _transport_sources(root)[_TRANSPORT]
+    documentation = _debug_write_documentation(transport)
     contract = " ".join(
-        line.removeprefix("///").strip() for line in documentation.group(1).splitlines()
+        line.removeprefix("///").strip()
+        for line in documentation.group(1).decode("utf-8").splitlines()
     )
     contract = " ".join(contract.split())
     for clause in _DEBUG_WRITE_CONTRACT:
@@ -377,17 +416,21 @@ def audit_routes(root: Path) -> None:
         _reject("qualified kernel priority count must remain 256, making seL4_MaxPrio 255")
 
 
-def _audit_controls() -> int:
-    """Independent temporary sources prove that qualification refuses bypasses."""
+def _audit_controls(product_root: Path) -> int:
+    """Temporary fixtures retain authentic frozen transport, not a producer stub."""
+    sources = _transport_sources(product_root)
+    documentation = _debug_write_documentation(sources[_TRANSPORT])
+    sources[_TRANSPORT] = (
+        sources[_TRANSPORT][: documentation.start(1)]
+        + "".join(f"/// {clause}\n" for clause in _DEBUG_WRITE_CONTRACT).encode("utf-8")
+        + sources[_TRANSPORT][documentation.end(1) :]
+    )
     baseline = {
+        **{relative: source.decode("utf-8") for relative, source in sources.items()},
         "slime-root/src/lib.rs": "pub mod diagnostic;\n",
         "slime-root/src/main.rs": 'fn main() { slime_root::diagnostic_println!("root"); }\n',
         "slime-root/src/console.rs": "fn payload(bytes: &[u8]) { crate::diagnostic::write(bytes); }\n",
         "slime-root/src/diagnostic.rs": "pub fn write(bytes: &[u8]) { for byte in bytes { sel4::debug_put_char(*byte); } sel4::r#yield(); }\npub fn print(args: core::fmt::Arguments) {}\n",
-        "components/runtime/src/syscall/sel4_transport.rs": "".join(
-            f"/// {clause}\n" for clause in _DEBUG_WRITE_CONTRACT
-        )
-        + "pub fn debug_write(bytes: &[u8]) -> i64 { 0 }\n",
         "slime-root/src/graph_runtime/console_runtime.rs": "fn schedule() { tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), 255, 255); }\n",
         "sel4/config/qemu-arm-virt.cmake": 'set(KernelPlatform "qemu-arm-virt" CACHE STRING "")\nset(KernelIsMCS OFF CACHE BOOL "")\nset(KernelMaxNumNodes 1 CACHE STRING "")\n',
         "sel4/pins.toml": "[qemu_arm_virt]\ncpus = 1\n",
@@ -395,6 +438,69 @@ def _audit_controls() -> int:
         "deps/sel4/libsel4/include/sel4/constants.h": "enum priorityConstants { seL4_MaxPrio = CONFIG_NUM_PRIORITIES - 1 };\n",
         "deps/sel4/config.cmake": 'config_string(KernelNumPriorities NUM_PRIORITIES "Priorities" DEFAULT 256 UNQUOTE)\n',
     }
+    transport_body = baseline[_TRANSPORT].split("pub fn debug_write", 1)[1]
+    split_send = baseline[_TRANSPORT].replace(
+        "pub fn debug_write" + transport_body,
+        "pub fn debug_write"
+        + transport_body.replace(
+            "    let transfer = match stage(bytes, &[]) {",
+            "    for bytes in bytes.chunks(512) {\n    let transfer = match stage(bytes, &[]) {",
+            1,
+        ).replace("    bytes.len() as i64\n}", "    }\n    bytes.len() as i64\n}", 1),
+        1,
+    )
+    transport_mutations = (
+        ("split native sends", _TRANSPORT, split_send),
+        (
+            "narrow native staging capacity",
+            _TRANSPORT,
+            baseline[_TRANSPORT].replace("bytes.len() > MAX_DESCRIPTOR_LEN", "bytes.len() > 128", 1),
+        ),
+        (
+            "changed native reserve helper",
+            _TRANSPORT,
+            baseline[_TRANSPORT].replace(
+                "fn reserve(bytes: usize, caps: usize) -> Result<u64, i64> {",
+                "fn reserve(bytes: usize, caps: usize) -> Result<u64, i64> {\n    if bytes > 128 { return Err(ERR_INVALID_ARG); }",
+                1,
+            ),
+        ),
+        (
+            "narrow wire descriptor capacity",
+            "components/runtime/src/syscall/wire.rs",
+            baseline["components/runtime/src/syscall/wire.rs"].replace(
+                "MAX_DESCRIPTOR_LEN: usize = 0xffff", "MAX_DESCRIPTOR_LEN: usize = 128", 1
+            ),
+        ),
+        (
+            "split public debug_write dispatch",
+            "components/runtime/src/syscall.rs",
+            baseline["components/runtime/src/syscall.rs"].replace(
+                "    transport::debug_write(bytes)",
+                "    for chunk in bytes.chunks(512) { transport::debug_write(chunk); }\n    bytes.len() as i64",
+                1,
+            ),
+        ),
+        (
+            "narrow generated transfer window",
+            "boot-contracts/src/generated/component_runtime_abi.rs",
+            baseline["boot-contracts/src/generated/component_runtime_abi.rs"].replace(
+                "MIN_TRANSFER_WINDOW_BYTES: usize = 4096", "MIN_TRANSFER_WINDOW_BYTES: usize = 128", 1
+            ),
+        ),
+        (
+            "replace ABI constant provider",
+            "boot-contracts/src/component_runtime_abi.rs",
+            baseline["boot-contracts/src/component_runtime_abi.rs"].replace(
+                'include!("generated/component_runtime_abi.rs");',
+                'mod original { include!("generated/component_runtime_abi.rs"); }\npub use original::*;\npub const MIN_TRANSFER_WINDOW_BYTES: usize = 128;',
+                1,
+            ),
+        ),
+    )
+    for description, relative, replacement in transport_mutations:
+        if replacement == baseline[relative]:
+            _reject(f"transport control did not mutate frozen fixture: {description}")
     mutations = (
         ("raw print", "slime-root/src/console.rs", 'fn bad() { sel4::debug_print!("bad"); }'),
         ("raw alias", "slime-root/src/console.rs", "use sel4::debug_println as out;"),
@@ -544,6 +650,18 @@ def _audit_controls() -> int:
                 _reject(f"source audit accepted {description}")
             finally:
                 path.write_text(baseline[relative], encoding="utf-8")
+        for description, relative, replacement in transport_mutations:
+            path = root / relative
+            path.write_bytes(replacement.encode("utf-8"))
+            try:
+                audit_routes(root)
+            except ValueError as error:
+                if "transport source differs from frozen one-send baseline" not in str(error):
+                    _reject(f"transport control rejected for an unrelated reason: {description}")
+            else:
+                _reject(f"source audit accepted {description}")
+            finally:
+                path.write_bytes(baseline[relative].encode("utf-8"))
         missing = root / "slime-root/src/diagnostic.rs"
         missing.unlink()
         try:
@@ -552,12 +670,11 @@ def _audit_controls() -> int:
             pass
         else:
             _reject("source audit accepted a missing native diagnostic module")
-    return len(mutations) + len(replacements) + 1
+    return len(mutations) + len(replacements) + len(transport_mutations) + 1
 
 
 def check_controls(root: Path, gate: object, literal_for: Callable[[str], str]) -> int:
     """Exercise independent validator/audit controls without qualifying product."""
-    del root  # Product audit is deliberately a separate qualification-only call.
     patterns = tuple(pattern for _, chain in gate.LOCAL_CHAINS for pattern in chain)
     if len(patterns) != 22:
         _reject(f"local record contract has {len(patterns)} markers, expected 22")
@@ -657,7 +774,7 @@ def check_controls(root: Path, gate: object, literal_for: Callable[[str], str]) 
         first, second = (reordered.index(literal_for(pattern)) for pattern in (before, after))
         reordered[first], reordered[second] = reordered[second], reordered[first]
         refuse("reordered additional service startup", "\n".join(reordered) + "\n")
-    audit_count = _audit_controls()
+    audit_count = _audit_controls(root)
     print(
         f"seL4 gate control check: console records rejected {evaluated} mutations; source route audit rejected {audit_count} independent fixtures (no product qualification)"
     )
