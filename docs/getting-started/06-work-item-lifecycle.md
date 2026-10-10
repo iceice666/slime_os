@@ -365,6 +365,14 @@ partially published branch/PR before retrying; never prune history automatically
 - **Reopening verifies first.** `myque reopen <ITEM>` retrieves the retained
   bytes and checks their digest before restoring the item under the same UUID;
   missing history or a mismatch leaves it retired with an actionable failure.
+- **Failure diagnostics are a separate qualification.**
+  `just devloop_diagnostics_check` grades the real pinned CLI in an isolated
+  fixture store against [diagnostic receipts](../../contracts/devloop-diagnostics/README.md).
+  The operator entrypoint reports local diagnostic receipts even when the
+  pinned CLI captures adapter stderr; retained output is bounded and cached
+  receipts are validated before reuse.
+  `just devloop_diagnostics_controls` qualifies only the judge's refusals,
+  never the repair; neither command records evidence on a real item.
 
 ## Projection
 

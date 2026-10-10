@@ -10,19 +10,27 @@ claims reject invalid inputs.
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import hashlib
 import json
 import os
 import re
 import struct
+import subprocess
 import sys as _sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path as _Path
+from unittest.mock import patch
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import ROOT, load_script  # noqa: E402
+import console_record_controls  # noqa: E402
+import console_record_exam  # noqa: E402
+import console_producer_exam  # noqa: E402
 from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E402
 from sel4_plane import run_plane, verify_image_identity  # noqa: E402
 
@@ -791,7 +799,15 @@ def stop(_signal, _frame):
 
 signal.signal(signal.SIGTERM, stop)
 mode = os.environ["SLIME_QEMU_CONTROL_MODE"]
-if mode == "terminal":
+if mode == "raw-terminal":
+    sys.stdout.buffer.write(b"raw\\r\\n\\xff\\r\\nSLIME CONTROL TERMINAL\\r\\n")
+    sys.stdout.buffer.flush()
+elif mode in ("raw-failure", "raw-timeout"):
+    sys.stdout.buffer.write(b"partial\\r\\xff")
+    sys.stdout.buffer.flush()
+    if mode == "raw-failure":
+        raise SystemExit(7)
+elif mode == "terminal":
     print("SLIME CONTROL TERMINAL", flush=True)
 elif mode == "input":
     print("SLIME CONTROL READY", flush=True)
@@ -855,7 +871,7 @@ memory_mib = 64
     )
     terminal = re.compile(r"SLIME CONTROL TERMINAL")
 
-    def run(mode: str, timeout: int, *, launch_input: bool = False, stepped: str | None = None) -> str:
+    def run(mode: str, timeout: int, *, launch_input: bool = False, stepped: str | None = None, raw: _Path | None = None) -> str:
         pid_path = root / f"{mode}.pid"
         stop_path = root / f"{mode}.stopped"
         try:
@@ -877,11 +893,12 @@ memory_mib = 64
                     input_text="private launch control\n" if launch_input else None,
                     input_character_delay=0,
                     input_steps=(((re.compile(stepped),), "private launch control\n"),) if stepped is not None else (),
+                    raw_transcript=raw,
                 ),
             )
             return str(result)
         finally:
-            if mode in {"terminal", "timeout", "input"} and pid_path.is_file():
+            if mode in {"terminal", "timeout", "input", "raw-terminal", "raw-timeout"} and pid_path.is_file():
                 require_stopped(pid_path, stop_path, f"{mode} runtime control")
 
     transcript = run("terminal", 2)
@@ -919,6 +936,20 @@ memory_mib = 64
         "exited with status 0",
         lambda: run("early-success", 2),
     )
+    raw_terminal = root / "raw-terminal.serial"
+    if run("raw-terminal", 2, raw=raw_terminal) != "raw\n\ufffd\nSLIME CONTROL TERMINAL":
+        fail("raw capture matcher did not decode the expected terminal prefix")
+    if raw_terminal.read_bytes() != b"raw\r\n\xff\r\nSLIME CONTROL TERMINAL\r\n":
+        fail("raw terminal capture changed original serial bytes")
+    for mode, timeout, expected in (("raw-failure", 2, "exited with status 7"), ("raw-timeout", 1, "timed out after 1s")):
+        raw_path = root / f"{mode}.serial"
+        require_rejection(mode, expected, lambda mode=mode, timeout=timeout, raw_path=raw_path: run(mode, timeout, raw=raw_path))
+        if raw_path.read_bytes() != b"partial\r\xff":
+            fail(f"{mode} lost or changed partial raw serial bytes")
+    before = raw_terminal.read_bytes()
+    require_rejection("raw capture overwrite", "cannot exclusively create", lambda: run("terminal", 2, raw=raw_terminal))
+    if raw_terminal.read_bytes() != before:
+        fail("existing raw transcript was overwritten")
     empty_path = root / "empty-path"
     empty_path.mkdir()
     require_rejection(
@@ -942,7 +973,7 @@ memory_mib = 64
         "timeout, early process failure/success, missing QEMU and missing launch readiness; "
         "readiness-gated input was not logged"
     )
-    return 7
+    return 11
 
 
 def capacity_workload_transcript() -> str:
@@ -2887,10 +2918,96 @@ def check_large_image_controls() -> int:
     return 30 + len(mutations) + 1
 
 
+def check_console_repeat_controls(gate) -> int:
+    """Judge local orchestration without substituting fake boots as qualification."""
+    valid = console_record_controls.local_control_transcript(gate, literal_for)
+    with tempfile.TemporaryDirectory(prefix="console-repeat-controls-") as temporary:
+        root = _Path(temporary)
+        image = root / "image"
+        image.write_bytes(b"one fixed control image")
+
+        def invoke(directory, *, runs=20, texts=None, error=None, change_digest=False):
+            seen = []
+            def fake_run(**arguments):
+                ordinal = len(seen)
+                seen.append(arguments["raw_transcript"])
+                text = valid if texts is None else texts[ordinal]
+                with arguments["raw_transcript"].open("xb") as handle:
+                    handle.write((text + "\r\n").encode())
+                return text
+            with patch.dict(_sys.modules, {gate.__name__: gate}), patch.object(_sys, "argv", ["local-control", "--arm", "local", "--local-runs", str(runs), "--raw-directory", str(directory)]), patch.object(gate, "build_image", return_value=image) as build, patch.object(gate, "run_plane", side_effect=fake_run), contextlib.redirect_stdout(io.StringIO()), patch.object(gate, "sha256_file", side_effect=["a", "a", "b"] if change_digest else None, return_value="a"):
+                try:
+                    gate.main()
+                except SystemExit as refusal:
+                    if error is None or error not in str(refusal):
+                        fail(f"local repeat control refused for wrong reason: {refusal}")
+                else:
+                    if error is not None:
+                        fail("local repeat control accepted forbidden evidence")
+                return seen, build.call_count
+
+        directory = root / "fresh-checkout" / "build" / "twenty"
+        seen, builds = invoke(directory)
+        if builds != 1 or [path.name for path in seen] != [f"run-{n:02d}.serial" for n in range(1, 21)]:
+            fail("fresh-checkout local repeat control did not create parents, build once and collect exactly twenty ordinal captures")
+        if len(list(directory.iterdir())) != 20:
+            fail("local repeat control lost captures")
+        before = {path: path.read_bytes() for path in directory.iterdir()}
+        seen, builds = invoke(directory, error="cannot exclusively create raw directory")
+        if seen or builds or any(path.read_bytes() != data for path, data in before.items()):
+            fail("existing local evidence directory was changed or executed")
+        for name, texts, reason in (("original-failure", [valid, valid + "\nSLIME_ROOT FATAL"], "failure marker"), ("strict-failure", [valid + "\n" + literal_for(gate.LOCAL_CHAINS[2][1][0])], "console records refused")):
+            directory = root / name
+            seen, builds = invoke(directory, texts=texts, error=reason)
+            if builds != 1 or len(seen) != len(texts) or len(list(directory.iterdir())) != len(texts):
+                fail("failed local sequence retried, lost evidence, or continued")
+        directory = root / "changed-image"
+        seen, builds = invoke(directory, error="image changed between runs", change_digest=True)
+        if builds != 1 or len(seen) != 1 or len(list(directory.iterdir())) != 1:
+            fail("changed local image executed or erased prior capture")
+    return 5
+
+
 def main() -> None:
     if Path_cwd() != ROOT:
         fail(f"run from repository root: {ROOT}")
-    total = 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--console-record", action="store_true", help="qualify actual root/console record paths under forced contention")
+    parser.add_argument("--console-record-controls", action="store_true", help="judge console exam negative controls without qualifying product output")
+    arguments = parser.parse_args()
+    if arguments.console_record and arguments.console_record_controls:
+        fail("choose qualification or controls, not both")
+    console_gate = load_script("console_record_network", "check/check-sel4-io-network-plane.py")
+    if arguments.console_record or arguments.console_record_controls:
+        controls = console_record_controls.check_controls(ROOT, console_gate, literal_for)
+        controls += console_record_exam.check_fixture_controls(ROOT)
+        controls += console_producer_exam.check_controls(ROOT)
+        controls += check_console_repeat_controls(console_gate)
+        print(f"console record controls: {controls} cases judged (including positive harness control)", flush=True)
+        if arguments.console_record_controls:
+            return
+        try:
+            result = console_record_exam.run_exam(ROOT)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            fail(f"console actual-source fixture unavailable or did not progress: {error}")
+        if result.returncode:
+            fail(f"console actual-source fixture failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
+        try:
+            producer_result = console_producer_exam.run_exam(ROOT)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            fail(f"console producer fixture unavailable: {error}")
+        if producer_result.returncode:
+            fail(f"console producer record fixture failed ({producer_result.returncode}):\n{producer_result.stdout}\n{producer_result.stderr}")
+        print(producer_result.stdout, end="")
+        try:
+            console_record_controls.audit_routes(ROOT)
+        except (OSError, ValueError) as error:
+            fail(f"console output route or scheduling audit: {error}")
+        print(result.stdout, end="")
+        print("console record actual-source contention and qualified routing passed; QEMU regression is a separate recipe step")
+        return
+    total = console_record_controls.check_controls(ROOT, console_gate, literal_for)
+    total += check_console_repeat_controls(console_gate)
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
     total += check_large_image_controls()

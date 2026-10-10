@@ -21,7 +21,7 @@ pub(crate) fn probe_authority_devices(
     #[cfg(target_arch = "x86_64")]
     {
         let _ = (bootinfo, allocator);
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_ROOT io authority inventory devices=0 mode=userspace transport=absent"
         );
         AuthorityInventory::new()
@@ -90,7 +90,7 @@ fn probe_virtio_mmio_transports(
     inventory.devices_mut().sort_unstable_by_key(|entry| {
         core::cmp::Reverse(entry.map_or(0, |d| d.region * GRANULE_SIZE + d.offset))
     });
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT io authority inventory devices={} mode=userspace",
         inventory.len()
     );
@@ -125,7 +125,7 @@ pub(crate) fn probe_devices(
     bootinfo: &sel4::BootInfo,
     allocator: &mut ObjectAllocator,
 ) -> BlockDevices {
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT devices untypeds={}",
         allocator.device_untyped_count(),
     );
@@ -138,7 +138,7 @@ pub(crate) fn probe_devices(
     // `repr(align(4096))`, and it is claimed exactly once.
     let base = ptr::addr_of!(DEVICE_PAGE) as usize;
     if let Err(error) = ScratchPage::claim(bootinfo, base) {
-        sel4::debug_println!("SLIME_ROOT device page unavailable: {error:?}");
+        slime_root::diagnostic_println!("SLIME_ROOT device page unavailable: {error:?}");
         return devices;
     }
     // Every transport the platform declares, a granule at a time. One claimed
@@ -176,7 +176,9 @@ pub(crate) fn probe_devices(
         ) {
             Ok(region) => region,
             Err(error) => {
-                sel4::debug_println!("SLIME_ROOT device map failed paddr={paddr:#x} {error:?}");
+                slime_root::diagnostic_println!(
+                    "SLIME_ROOT device map failed paddr={paddr:#x} {error:?}"
+                );
                 return devices;
             }
         };
@@ -187,7 +189,7 @@ pub(crate) fn probe_devices(
                 continue;
             };
             found += 1;
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_ROOT virtio transport={:#x} version={} device={} vendor={:#x}",
                 transport.paddr,
                 transport.version,
@@ -198,7 +200,7 @@ pub(crate) fn probe_devices(
                 attached[attached_count] = Some(transport);
                 attached_count += 1;
             } else {
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_ROOT virtio transport ignored paddr={:#x} reason=table-full",
                     transport.paddr,
                 );
@@ -223,7 +225,9 @@ pub(crate) fn probe_devices(
             continue;
         }
         if let Err(error) = region.unmap() {
-            sel4::debug_println!("SLIME_ROOT device unmap failed paddr={paddr:#x} {error:?}");
+            slime_root::diagnostic_println!(
+                "SLIME_ROOT device unmap failed paddr={paddr:#x} {error:?}"
+            );
             return devices;
         }
     }
@@ -253,7 +257,7 @@ pub(crate) fn probe_devices(
             continue;
         };
         #[cfg(slime_boot_selector)]
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_ROOT virtio irq polled transport={:#x}",
             transport.paddr,
         );
@@ -275,7 +279,7 @@ pub(crate) fn probe_devices(
                 if holds { slot.take() } else { None }
             });
             let Some(region) = region else {
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_ROOT virtio transport skipped paddr={:#x} reason=no-region",
                     transport.paddr,
                 );
@@ -295,7 +299,7 @@ pub(crate) fn probe_devices(
             devices.push(block);
         }
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT virtio probed granules={mapped} slots={} found={found}",
         mapped * VIRTIO_MMIO_SLOTS_PER_GRANULE,
     );
@@ -325,7 +329,7 @@ fn bring_up_shared_block(
     let buffer_base = ptr::addr_of!(BOOT_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
     for address in [queue_base, buffer_base] {
         if let Err(error) = ScratchPage::claim(bootinfo, address) {
-            sel4::debug_println!("SLIME_ROOT block page unavailable: {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block page unavailable: {error:?}");
             return None;
         }
     }
@@ -336,7 +340,7 @@ fn bring_up_shared_block(
     ) {
         Ok(page) => page,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block queue unavailable: {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block queue unavailable: {error:?}");
             return None;
         }
     };
@@ -347,11 +351,11 @@ fn bring_up_shared_block(
     ) {
         Ok(page) => page,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block buffer unavailable: {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block buffer unavailable: {error:?}");
             return None;
         }
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT block dma queue={:#x} buffer={:#x}",
         queue.physical_address(),
         buffer.physical_address(),
@@ -359,11 +363,11 @@ fn bring_up_shared_block(
     let block = match virtio_blk::VirtioBlock::new(shared, offset, queue, buffer) {
         Ok(block) => block,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block bring-up failed {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block bring-up failed {error:?}");
             return None;
         }
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT block ready transport={:#x} sectors={}",
         transport.paddr,
         block.capacity_sectors(),
@@ -407,7 +411,7 @@ fn bring_up_block(
     let buffer_base = ptr::addr_of!(BOOT_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
     for address in [base, queue_base, buffer_base] {
         if let Err(error) = ScratchPage::claim(bootinfo, address) {
-            sel4::debug_println!("SLIME_ROOT block page unavailable: {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block page unavailable: {error:?}");
             return None;
         }
     }
@@ -416,7 +420,9 @@ fn bring_up_block(
     let region = match region.remap(sel4::init_thread::slot::VSPACE.cap(), base) {
         Ok(region) => region,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block map failed paddr={granule:#x} {error:?}");
+            slime_root::diagnostic_println!(
+                "SLIME_ROOT block map failed paddr={granule:#x} {error:?}"
+            );
             return None;
         }
     };
@@ -427,7 +433,7 @@ fn bring_up_block(
     ) {
         Ok(page) => page,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block queue unavailable: {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block queue unavailable: {error:?}");
             return None;
         }
     };
@@ -438,11 +444,11 @@ fn bring_up_block(
     ) {
         Ok(page) => page,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block buffer unavailable: {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block buffer unavailable: {error:?}");
             return None;
         }
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT block dma queue={:#x} buffer={:#x}",
         queue.physical_address(),
         buffer.physical_address(),
@@ -451,11 +457,11 @@ fn bring_up_block(
     let block = match virtio_blk::VirtioBlock::new(borrowed, offset, queue, buffer) {
         Ok(block) => block,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT block bring-up failed {error:?}");
+            slime_root::diagnostic_println!("SLIME_ROOT block bring-up failed {error:?}");
             return None;
         }
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT block ready transport={:#x} sectors={}",
         transport.paddr,
         block.capacity_sectors(),

@@ -161,7 +161,7 @@ impl ObjectAllocator {
                 super::ExtentKind::Infrastructure,
             );
         #[cfg(not(test))]
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_BACKING infrastructure_extent parent={} paddr={} bytes={}",
             extent.parent.bits(),
             extent.paddr,
@@ -227,7 +227,7 @@ impl ObjectAllocator {
             child.paddr = parent.paddr + (side << bits);
             self.extents[position] = Some(child);
             #[cfg(not(test))]
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING extent_split parent={} child={} paddr={} bytes={}",
                 parent.parent.bits(),
                 slot,
@@ -262,7 +262,7 @@ impl ObjectAllocator {
             record.split = false;
             record.children = [NO_EXTENT; 2];
             #[cfg(not(test))]
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING extent_merge parent={} paddr={} bytes={}",
                 parent.parent.bits(),
                 parent.paddr,

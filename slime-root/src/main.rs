@@ -121,7 +121,7 @@ enum LoanLifecycleRequest {
 /// died rather than hung.
 macro_rules! fatal {
     ($($arg:tt)*) => {{
-        sel4::debug_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
+        slime_root::diagnostic_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
         #[cfg(target_arch = "x86_64")]
         // SAFETY: the fatal path is terminal and single-threaded — the root
         // suspends on the next line — so this cannot overlap another render.
@@ -288,12 +288,12 @@ fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
         polls += 1;
     }
     if phase == "startup" {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_TIMER delivered badge={:#x} polls={polls}",
             timer_adapter.signal_badge(),
         );
     } else {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_TIMER phase={phase} delivered badge={:#x} polls={polls}",
             timer_adapter.signal_badge(),
         );
@@ -316,31 +316,31 @@ fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
         Err(error) => fatal!("timer clock unreadable after {phase} service: {error:?}"),
     };
     if phase == "startup" {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_TIMER serviced events={} programming={:?}",
             drained.events.len(),
             drained.programming,
         );
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_TIMER advanced start={} end={} delta={}",
             timer_start.0,
             timer_end.0,
             timer_end.0.wrapping_sub(timer_start.0),
         );
-        sel4::debug_println!("SLIME_TIMER OK");
+        slime_root::diagnostic_println!("SLIME_TIMER OK");
     } else {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_TIMER phase={phase} serviced events={} programming={:?}",
             drained.events.len(),
             drained.programming,
         );
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_TIMER phase={phase} advanced start={} end={} delta={}",
             timer_start.0,
             timer_end.0,
             timer_end.0.wrapping_sub(timer_start.0),
         );
-        sel4::debug_println!("SLIME_TIMER phase={phase} OK");
+        slime_root::diagnostic_println!("SLIME_TIMER phase={phase} OK");
     }
 }
 
@@ -356,10 +356,10 @@ fn run_duo_early_fault_control(
     ) {
         fatal!("Duo early-fault control did not refuse an out-of-range RTC deadline")
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_DUO EARLY_FAULT phase=post-timer cause=timer-range-refused bounded=1"
     );
-    sel4::debug_println!("SLIME_DUO reset request kind=cold");
+    slime_root::diagnostic_println!("SLIME_DUO reset request kind=cold");
     if !timer_adapter.request_cold_reset(reset_registers) {
         fatal!("CV1800B cold-reset register access failed after early fault")
     }
@@ -373,7 +373,7 @@ fn request_duo_cold_reset(
     timer_registers: device::MappedGranule,
     reset_registers: device::MappedGranule,
 ) -> ! {
-    sel4::debug_println!("SLIME_DUO reset request kind=cold");
+    slime_root::diagnostic_println!("SLIME_DUO reset request kind=cold");
     if !platform_timer::request_cv1800b_cold_reset(timer_registers, reset_registers) {
         fatal!("CV1800B cold-reset register access failed")
     }
@@ -384,7 +384,7 @@ fn request_duo_cold_reset(
 
 #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 fn request_duo_test_reset() -> ! {
-    sel4::debug_println!("SLIME_DUO test terminator accepted");
+    slime_root::diagnostic_println!("SLIME_DUO test terminator accepted");
     // SAFETY: root startup writes both `Some` values before the console thread
     // starts; the two MMIO mappings remain live for the root's lifetime.
     let timer = unsafe { ptr::addr_of!(DUO_TIMER_REGISTERS).read() };
@@ -861,13 +861,13 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             "SLIME_FOUNDATION FAIL allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}"
         )
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
     let mut ordinary_ranges = 0usize;
     let mut ordinary_bytes = 0usize;
     for (index, range) in allocator.ordinary_ranges().enumerate() {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_ROOT ordinary range={index} paddr={:#x} bytes={}",
             range.paddr,
             range.bytes,
@@ -875,7 +875,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         ordinary_ranges += 1;
         ordinary_bytes = ordinary_bytes.saturating_add(range.bytes);
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT ordinary ranges={ordinary_ranges} bytes={ordinary_bytes} end={:#x}",
         allocator.ordinary_physical_end(),
     );
@@ -932,7 +932,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         fatal!("ordinary memory probe capability delete failed: {error:?}")
     }
     allocator.release_slot(probe_slot.index());
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT ordinary probe paddr={probe_paddr:#x} bytes={GRANULE_SIZE} beyond_legacy={beyond_legacy} verified=1"
     );
 
@@ -960,7 +960,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             if let Err(error) = ScratchPage::claim(bootinfo, address) {
                 fatal!("framebuffer page unavailable: {error:?}")
             }
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_DISPLAY mode={}x{}x{} paddr={:#x}",
                 info.width(),
                 info.height(),
@@ -989,13 +989,15 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             unsafe {
                 framebuffer::with_panel(allocator, |panel, allocator| {
                     match boot_record::render_stage(panel, allocator, "SLIME OS - ROOT RUNNING") {
-                        Ok(()) => sel4::debug_println!("SLIME_DISPLAY stage root"),
-                        Err(error) => sel4::debug_println!("SLIME_DISPLAY stage failed {error:?}"),
+                        Ok(()) => slime_root::diagnostic_println!("SLIME_DISPLAY stage root"),
+                        Err(error) => {
+                            slime_root::diagnostic_println!("SLIME_DISPLAY stage failed {error:?}")
+                        }
                     }
                 });
             }
         }
-        Err(error) => sel4::debug_println!("SLIME_DISPLAY absent {error:?}"),
+        Err(error) => slime_root::diagnostic_println!("SLIME_DISPLAY absent {error:?}"),
     }
     // ---- end display phase ----
 
@@ -1079,7 +1081,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 device::TerminalReceiver::Com1(device::Com1Input::new(port_slot.cap(), first)),
             )
         };
-        sel4::debug_println!("SLIME_ROOT product input ready uart={paddr:#x}");
+        slime_root::diagnostic_println!("SLIME_ROOT product input ready uart={paddr:#x}");
         let input = device::TerminalInput::new(receiver);
         #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
         let input = input.with_test_terminator(0x1d, request_duo_test_reset);
@@ -1163,7 +1165,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         };
         timer_adapter.attach_registers(registers);
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_TIMER acquired irq={TIMER_IRQ} freq_hz={}",
         timer_adapter.frequency_hz(),
     );
@@ -1236,7 +1238,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             "SLIME_FOUNDATION FAIL accounting before={foundation_before:?} after={foundation_after:?}"
         )
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta={} caps_deleted=2 preserved_anchors={}",
         2 * GRANULE_SIZE,
         foundation_anchors,
@@ -1272,7 +1274,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Err(error) => fatal!("generation rejected: {error:?}"),
     };
     #[cfg(slime_boot_selector)]
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_BOOT selected identity={:02x?} number={} pending={} attempts={}",
         boot_runtime.running_identity(),
         generation.number,
@@ -1345,12 +1347,12 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
     admission.required_root_slots = planned_slots;
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT plan slots required={planned_slots} available={}",
         allocator.free_slots(),
     );
 
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT generation admitted number={} executables={} instances={} grants={} health={} bootstrap={}",
         generation.number,
         admission.executable_len(),
@@ -1379,7 +1381,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // exactly this about itself — "the two things a transcript cannot show" —
     // and reports the shape rather than asserting a number here, because the
     // number is a property of the generation rather than of the root.
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT fabric graph={} schemas={} routes={} participants={} interpositions={}",
         if admission.fabric_graph_admitted {
             "admitted"
@@ -1402,13 +1404,13 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         .iter()
         .flatten()
     {
-        sel4::debug_println!("SLIME_ROOT fabric interposition hop={name}");
+        slime_root::diagnostic_println!("SLIME_ROOT fabric interposition hop={name}");
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT authority manifest={:02x?}",
         generation.authority_manifest_identity()
     );
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT graph admitted executables={} instances={} slimecm={} elf={} unrecognized={}",
         admission.executable_len(),
         admission.instance_len(),
@@ -1555,7 +1557,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         let Some(task) = tasks.get(id) else {
             fatal!("constructed task {} is missing", id.0)
         };
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_ROOT native fixture staged task={} role={} source={} badge={:#x} fault_badge={:#x} grants={} child_slots={} root_slots={} frames={} tables={} entry={:#x}",
             id.0,
             role.name(),
@@ -1578,7 +1580,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         });
     }
 
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT allocations complete tasks={} objects={} slots={} bytes={}",
         tasks.len(),
         allocator.objects_allocated(),
@@ -1642,7 +1644,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             let Some(record) = buffers.mapping(index) else {
                 fatal!("SLIME_BUF FAIL mapping {index} missing after map")
             };
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_BUF mapped buffer={} vaddr={:#x}..{:#x} pages={} rights={} holder={} frames={} tables={}",
                 record.buffer.0,
                 record.base,
@@ -1657,7 +1659,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 adapter.tables_mapped(),
             );
         }
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_BUF accounting live={} pages={} mappings={} holder_pages={} orphans={}",
             buffers.live_count(),
             buffers.total_pages(),
@@ -1680,7 +1682,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             fatal!("activation failed: {error:?}")
         }
         activated += 1;
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_ROOT task activated task={} role={}",
             fixture.id.0,
             fixture.role.name()
@@ -1757,7 +1759,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 buffers.holder_mappings(SHARED_HOLDER),
             )
         }
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_BUF teardown unmapped={} revoked={} released={} live=0 pages=0 mappings=0 holder_pages=0 orphans=0",
             adapter.unmapped(),
             adapter.revoked(),
@@ -1770,17 +1772,17 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     let mut reclaimed_slots = 0;
     for fixture in fixtures.iter().flatten().copied() {
         match supervision.take_termination(fixture.id.0) {
-            Ok(Some(termination)) => sel4::debug_println!(
+            Ok(Some(termination)) => slime_root::diagnostic_println!(
                 "SLIME_ROOT task settled task={} role={} termination={termination:?}",
                 fixture.id.0,
                 fixture.role.name(),
             ),
-            Ok(None) => sel4::debug_println!(
+            Ok(None) => slime_root::diagnostic_println!(
                 "SLIME_ROOT task unsettled task={} role={}",
                 fixture.id.0,
                 fixture.role.name()
             ),
-            Err(error) => sel4::debug_println!(
+            Err(error) => slime_root::diagnostic_println!(
                 "SLIME_ROOT supervision rejected task={} error={error:?}",
                 fixture.id.0
             ),
@@ -1789,7 +1791,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             Ok(record) => {
                 reclaimed_tasks += 1;
                 reclaimed_slots += record.slot_count();
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_ROOT task reclaimed task={} source={} slots={} arena={}",
                     fixture.id.0,
                     fixture.source,
@@ -1814,17 +1816,17 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 table.reclaimed_pages(),
             )
         }
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_MEM teardown grown={} reclaimed={} pages=0",
             table.grown_pages(),
             table.reclaimed_pages(),
         );
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT cleanup tasks={reclaimed_tasks} slots={reclaimed_slots} live={}",
         tasks.len()
     );
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} extent_reuses={}",
         allocator.live_slots(),
         allocator.live_objects(),
@@ -1838,7 +1840,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         .flatten()
         .map(|fixture| fixture.authority.grants)
         .sum();
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT READY tasks={activated} grants={granted} declared_grants={} reclaimed_slots={}",
         admission.grants,
         tasks.reclaimed_slots(),

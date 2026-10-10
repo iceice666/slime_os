@@ -9,6 +9,7 @@ use boot_contracts::network_destination::{
     RIGHT_CONNECT, RIGHT_LISTEN, RIGHT_RECV, RIGHT_SEND, Right, Transport,
 };
 use boot_contracts::network_interface::{self, Interface as DeclaredInterface, NetworkInterfaces};
+use slime_components::console_line::Line;
 use slime_components::tick_clock::TickClock;
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_request;
@@ -263,9 +264,11 @@ fn main(_: u32) {
         .unwrap_or_else(|_| fail(b"external engine incarnation"));
     if let Some(table) = application_table.as_ref() {
         report_socket_options(table);
-        debug_write(b"[network-service] tcp congestion control=");
-        debug_write(engine.congestion_control());
-        debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[network-service] tcp congestion control=")
+            .bytes(engine.congestion_control())
+            .bytes(b"\n")
+            .emit();
     }
     let mut dns_rx = [0; resolver::BUFFER_BYTES];
     let mut dns_tx = [0; resolver::BUFFER_BYTES];
@@ -493,12 +496,13 @@ fn main(_: u32) {
                                 release_capabilities(&mut capabilities, client.holder);
                             }
                             if let Some(application) = applications[index].take() {
-                                write_number(
-                                    b"[network-service] application bytes sent=",
-                                    application.sent,
-                                );
-                                write_number(b" received=", application.received);
-                                debug_write(b"\n");
+                                Line::<128>::new()
+                                    .bytes(b"[network-service] application bytes sent=")
+                                    .decimal(application.sent)
+                                    .bytes(b" received=")
+                                    .decimal(application.received)
+                                    .bytes(b"\n")
+                                    .emit();
                                 if !application.release() {
                                     fail(b"application buffer release");
                                 }
@@ -527,11 +531,11 @@ fn main(_: u32) {
                             } else {
                                 0
                             };
-                            write_number(
-                                b"[network-service] application aborted sessions_released=",
-                                released,
-                            );
-                            debug_write(b"\n");
+                            Line::<128>::new()
+                                .bytes(b"[network-service] application aborted sessions_released=")
+                                .decimal(released)
+                                .bytes(b"\n")
+                                .emit();
                             // Session teardown does not end a resident service's control authority.
                             client.closed = !resident;
                             (0, network_service::CAPABILITY_NONE, 0)
@@ -695,25 +699,35 @@ fn main(_: u32) {
     let _ = engine.reset_all(cleanup_time);
     let _ = local_engine.reset_all(cleanup_time);
     if let Some(wait) = waiting {
-        write_number(b"[network-service] wait wakes=", wait.wakes() as u64);
-        write_number(b" coalesced=", coalesced);
-        debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[network-service] wait wakes=")
+            .decimal(wait.wakes() as u64)
+            .bytes(b" coalesced=")
+            .decimal(coalesced)
+            .bytes(b"\n")
+            .emit();
     }
     let external_frames = stack
         .as_ref()
         .map_or(0, |stack| u64::from(stack.link.tx.counts.frames));
     if let Some(stack) = local {
-        write_number(
-            b"[network-service] loopback frames=",
-            stack.device.egress_count(),
-        );
-        write_number(b" rejected=", stack.device.rejected_count());
-        write_number(b" handles=", local_engine.allocated() as u64);
-        write_number(b" external_frames=", external_frames);
-        write_number(b" resets=", stack.device.reset_count());
-        write_number(b" syns=", stack.device.syn_count());
-        write_number(b" fins=", stack.device.fin_count());
-        debug_write(b"\n");
+        Line::<256>::new()
+            .bytes(b"[network-service] loopback frames=")
+            .decimal(stack.device.egress_count())
+            .bytes(b" rejected=")
+            .decimal(stack.device.rejected_count())
+            .bytes(b" handles=")
+            .decimal(local_engine.allocated() as u64)
+            .bytes(b" external_frames=")
+            .decimal(external_frames)
+            .bytes(b" resets=")
+            .decimal(stack.device.reset_count())
+            .bytes(b" syns=")
+            .decimal(stack.device.syn_count())
+            .bytes(b" fins=")
+            .decimal(stack.device.fin_count())
+            .bytes(b"\n")
+            .emit();
     }
     if let Some(mut stack) = stack {
         if external_listeners != 0 {
@@ -792,24 +806,29 @@ fn admit_external_listeners(
 fn report_socket_options(table: &NetworkApplications<'_>) {
     for index in 0..table.application_count() {
         let entry = table.application(index).unwrap();
-        debug_write(b"[network-service] tcp options holder=");
-        match entry
+        let holder = entry
             .control_binding
             .iter()
             .rposition(|byte| *byte == b'-')
             .and_then(|end| core::str::from_utf8(&entry.control_binding[..end]).ok())
             .filter(|stem| {
                 boot_contracts::network_destination::holder_identity(stem) == entry.holder_identity
-            }) {
-            Some(stem) => debug_write(stem.as_bytes()),
-            None => debug_write(b"unnamed"),
-        };
+            })
+            .map_or(b"unnamed".as_slice(), str::as_bytes);
         let options = entry.options;
-        write_number(b" keepalive_ms=", u64::from(options.keepalive_ms));
-        write_number(b" nagle=", u64::from(options.nagle));
-        write_number(b" hop_limit=", u64::from(options.hop_limit));
-        write_number(b" idle_timeout_ms=", u64::from(options.idle_timeout_ms));
-        debug_write(b"\n");
+        Line::<256>::new()
+            .bytes(b"[network-service] tcp options holder=")
+            .bytes(holder)
+            .bytes(b" keepalive_ms=")
+            .decimal(u64::from(options.keepalive_ms))
+            .bytes(b" nagle=")
+            .decimal(u64::from(options.nagle))
+            .bytes(b" hop_limit=")
+            .decimal(u64::from(options.hop_limit))
+            .bytes(b" idle_timeout_ms=")
+            .decimal(u64::from(options.idle_timeout_ms))
+            .bytes(b"\n")
+            .emit();
     }
 }
 
@@ -822,27 +841,30 @@ fn report_events(engine: &mut tcp::Engine<'_>) {
                 terminal,
                 bytes,
             } => {
-                write_number(
-                    b"[network-service] tcp accepted close unread=",
-                    unread as u64,
-                );
-                write_number(b" unsent=", unsent as u64);
-                debug_write(match terminal {
-                    tcp::Terminal::TimeWait => b" terminal=time-wait".as_slice(),
-                    tcp::Terminal::Closed => b" terminal=closed",
-                    tcp::Terminal::Reset => b" terminal=reset",
-                    tcp::Terminal::Timeout => b" terminal=timeout",
-                });
-                write_number(b" handles=", 1);
-                write_number(b" bytes=", bytes as u64);
-                debug_write(b"\n");
+                Line::<256>::new()
+                    .bytes(b"[network-service] tcp accepted close unread=")
+                    .decimal(unread as u64)
+                    .bytes(b" unsent=")
+                    .decimal(unsent as u64)
+                    .bytes(match terminal {
+                        tcp::Terminal::TimeWait => b" terminal=time-wait".as_slice(),
+                        tcp::Terminal::Closed => b" terminal=closed",
+                        tcp::Terminal::Reset => b" terminal=reset",
+                        tcp::Terminal::Timeout => b" terminal=timeout",
+                    })
+                    .bytes(b" handles=")
+                    .decimal(1)
+                    .bytes(b" bytes=")
+                    .decimal(bytes as u64)
+                    .bytes(b"\n")
+                    .emit();
             }
             tcp::Event::ListenerClosed { children } => {
-                write_number(
-                    b"[network-service] tcp listener closed children=",
-                    children as u64,
-                );
-                debug_write(b"\n");
+                Line::<128>::new()
+                    .bytes(b"[network-service] tcp listener closed children=")
+                    .decimal(children as u64)
+                    .bytes(b"\n")
+                    .emit();
             }
         }
     }
@@ -979,8 +1001,11 @@ fn allocate_incarnation() -> u64 {
     if observed != previous {
         fail(b"incarnation concurrent writer");
     }
-    write_number(b"[network-service] incarnation=", next);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[network-service] incarnation=")
+        .decimal(next)
+        .bytes(b"\n")
+        .emit();
     next
 }
 
@@ -1438,11 +1463,11 @@ fn report_authority(destinations: &NetworkDestinations<'_>) {
         listeners += u64::from(destination.listener_limit);
         dns += u64::from(destination.dns_record_limit);
     }
-    write_number(
-        b"[network-service] authority destinations=",
-        destinations.destination_count() as u64,
-    );
-    debug_write(b" rights=");
+    let mut authority = Line::<128>::new();
+    authority
+        .bytes(b"[network-service] authority destinations=")
+        .decimal(destinations.destination_count() as u64)
+        .bytes(b" rights=");
     let mut separator = b"".as_slice();
     for (bit, name) in [
         (RIGHT_CONNECT, b"connect".as_slice()),
@@ -1451,35 +1476,38 @@ fn report_authority(destinations: &NetworkDestinations<'_>) {
         (RIGHT_LISTEN, b"listen".as_slice()),
     ] {
         if rights & bit != 0 {
-            debug_write(separator);
-            debug_write(name);
+            authority.bytes(separator).bytes(name);
             separator = b",";
         }
     }
-    debug_write(b"\n");
-    write_number(b"[network-service] declared socket_limit=", sockets);
-    write_number(b" listener_limit=", listeners);
-    write_number(b" dns_record_limit=", dns);
-    debug_write(b"\n");
+    authority.bytes(b"\n").emit();
+    Line::<128>::new()
+        .bytes(b"[network-service] declared socket_limit=")
+        .decimal(sockets)
+        .bytes(b" listener_limit=")
+        .decimal(listeners)
+        .bytes(b" dns_record_limit=")
+        .decimal(dns)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn report_observed(observed: &Observed) {
-    write_number(
-        b"[network-service] observed requests=",
-        u64::from(observed.requests),
-    );
-    write_number(b" packets=", u64::from(observed.packets));
-    write_number(b" socket_refusals=", u64::from(observed.socket_refusals));
-    write_number(
-        b" listener_refusals=",
-        u64::from(observed.listener_refusals),
-    );
-    write_number(b" dns_refusals=", u64::from(observed.dns_refusals));
-    write_number(
-        b" cross_holder_refusals=",
-        u64::from(observed.cross_holder_refusals),
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[network-service] observed requests=")
+        .decimal(u64::from(observed.requests))
+        .bytes(b" packets=")
+        .decimal(u64::from(observed.packets))
+        .bytes(b" socket_refusals=")
+        .decimal(u64::from(observed.socket_refusals))
+        .bytes(b" listener_refusals=")
+        .decimal(u64::from(observed.listener_refusals))
+        .bytes(b" dns_refusals=")
+        .decimal(u64::from(observed.dns_refusals))
+        .bytes(b" cross_holder_refusals=")
+        .decimal(u64::from(observed.cross_holder_refusals))
+        .bytes(b"\n")
+        .emit();
 }
 
 fn send(slot: u32, bytes: &[u8]) {
@@ -1526,8 +1554,10 @@ fn inject_fault() -> ! {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[network-service] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[network-service] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

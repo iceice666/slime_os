@@ -97,7 +97,7 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_MEM budget holders={} declared={}",
         private_budget
             .as_ref()
@@ -111,7 +111,7 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_CLOCK authority holders={} timer_quota={}",
         clock_authority
             .as_ref()
@@ -127,7 +127,7 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_WAIT sources declared={} resource={}",
         wait_sources
             .as_ref()
@@ -300,7 +300,7 @@ pub(super) fn launch_instance_graph(
         // thread runs at is not observable from anything else in the
         // transcript, and a declaration nothing can check is indistinguishable
         // from the constant it replaced (B48).
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_GRAPH schedule instance={} priority={declared_priority} default={}",
             instance.name,
             task::CHILD_PRIORITY,
@@ -314,7 +314,7 @@ pub(super) fn launch_instance_graph(
             Ok(None) => 1,
             Err(error) => fatal!("SLIME_GRAPH FAIL thread plan rejected: {error:?}"),
         };
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_GRAPH threads instance={} count={declared_threads}",
             instance.name,
         );
@@ -334,7 +334,7 @@ pub(super) fn launch_instance_graph(
                 Err(error) => fatal!("SLIME_GRAPH FAIL thread schedule rejected: {error:?}"),
             };
             *slot = resolved;
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_GRAPH schedule instance={} thread={thread_index} priority={resolved}",
                 instance.name,
             );
@@ -535,7 +535,7 @@ pub(super) fn launch_instance_graph(
             // and reaching none. The boot layout names the slot and this
             // records that the root honoured it.
             if matches!(capability, graph::CapabilityEntry::BufferFactory(_)) {
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_GRAPH factory placed task={} component={} slot={slot} kind={}",
                     id.0,
                     instance.name,
@@ -568,7 +568,7 @@ pub(super) fn launch_instance_graph(
                     instance.name
                 )
             }
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_IO quota task={} instance={} devices={} shared_granule={}",
                 id.0,
                 instance.name,
@@ -579,7 +579,7 @@ pub(super) fn launch_instance_graph(
         if let Err(error) = launched_instances.record(instance_index, instance.executable, id) {
             fatal!("SLIME_GRAPH FAIL instance mapping rejected: {error:?}")
         }
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_GRAPH staged task={} instance={} executable={} grants={} bindings={} window={:#x} frames={} tables={} entry={:#x}",
             id.0,
             instance.name,
@@ -594,7 +594,7 @@ pub(super) fn launch_instance_graph(
         launched += 1;
     }
 
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_GRAPH staged instances={launched} root_autostart={} loadable_executables={} slimecm={} wrong_target={} unrecognized={}",
         admission.root_autostart_instances(generation).count(),
         admission.loadable,
@@ -619,7 +619,7 @@ pub(super) fn launch_instance_graph(
         Ok(report) => report,
         Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
     };
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_GRAPH peer endpoints created={} grants={} installed={}",
         peers.len(),
         materialized.grants,
@@ -665,7 +665,7 @@ pub(super) fn launch_instance_graph(
             task.cspace.installed(installed as u32);
         }
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_GRAPH notifications created={} bindings={}",
         notification_report.created,
         notification_report.bindings,
@@ -698,7 +698,7 @@ pub(super) fn launch_instance_graph(
                 launched.task.0
             ),
         };
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_CLOCK authority task={} instance={} flags={:#x} timers={} badge={:#x}",
             launched.task.0,
             generation
@@ -739,7 +739,7 @@ pub(super) fn launch_instance_graph(
             ),
         };
         if declared != 0 {
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_WAIT supervision task={} instance={} sources={declared}",
                 launched.task.0,
                 generation
@@ -777,7 +777,7 @@ pub(super) fn launch_instance_graph(
             ),
         };
         if scheduling_policy.is_some() {
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_SCHED class task={} instance={} class={} priority={} worker={} worker_priority={}",
                 launched.task.0,
                 generation
@@ -791,7 +791,7 @@ pub(super) fn launch_instance_graph(
         }
     }
     if let Some(policy) = scheduling_policy.as_ref() {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_SCHED policy bands={} instances={} promotions={} unnamed={}",
             policy.class_count(),
             policy.instance_count(),
@@ -804,7 +804,7 @@ pub(super) fn launch_instance_graph(
             let Some(band) = policy.band(index) else {
                 fatal!("SLIME_SCHED FAIL band {index} is missing")
             };
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_SCHED band class={} priority={}",
                 boot_contracts::scheduling_class::class_name(band.class_id),
                 band.priority,
@@ -830,7 +830,7 @@ pub(super) fn launch_instance_graph(
             ),
         };
         if lifecycle_policy.is_some() {
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_LIFECYCLE state task={} instance={} state={} attempts={}",
                 launched.task.0,
                 generation
@@ -859,7 +859,7 @@ pub(super) fn launch_instance_graph(
                 policy.restart_count()
             )
         }
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_LIFECYCLE policy transitions={} restarts={} admitted={admitted} dependencies={} parameters={} initial={} terminal={}",
             policy.transition_count(),
             policy.restart_count(),
@@ -872,7 +872,7 @@ pub(super) fn launch_instance_graph(
             let Some(edge) = policy.transition(index) else {
                 fatal!("SLIME_LIFECYCLE FAIL transition {index} is missing")
             };
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_LIFECYCLE edge from={} to={}",
                 boot_contracts::lifecycle_policy::state_name(edge.from_state),
                 boot_contracts::lifecycle_policy::state_name(edge.to_state),
@@ -882,7 +882,7 @@ pub(super) fn launch_instance_graph(
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
     let table = bootstrap.and_then(|id| tasks.authority(id));
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "[layout] path={} slots={} max={}",
         generation
             .instance(admission.bootstrap_instance)
@@ -895,7 +895,7 @@ pub(super) fn launch_instance_graph(
             let Some(capability) = capability else {
                 continue;
             };
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "[layout] {slot} {} {} {:#x}",
                 capability.kind_name(),
                 resource_label(generation, capability),
@@ -903,7 +903,7 @@ pub(super) fn launch_instance_graph(
             );
         }
     }
-    sel4::debug_println!("[layout] end");
+    slime_root::diagnostic_println!("[layout] end");
 
     #[cfg(slime_private_fail_large_map)]
     {
@@ -980,7 +980,7 @@ pub(super) fn launch_instance_graph(
         let private_extents = plan.extent_descriptors * holders;
         let private_cslots = plan.required_cslots * holders;
         let private_reserved = plan.reserved_bytes * holders;
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_MEM qualification scope=contract-aggregate-headroom holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={} limit={}",
             capacity.holders,
             plan.private_pages,
@@ -1070,7 +1070,7 @@ pub(super) fn launch_instance_graph(
             fatal!("SLIME_GRAPH FAIL root instance dependency barrier unsatisfied")
         }
     }
-    sel4::debug_println!("SLIME_GRAPH activated instances={activated}");
+    slime_root::diagnostic_println!("SLIME_GRAPH activated instances={activated}");
     // No component request has been received yet: activation can queue a
     // synchronous IPC call, but only the service loop below can mutate the
     // ClockService scheduler or program its hardware deadline. This second
@@ -1100,7 +1100,7 @@ pub(super) fn launch_instance_graph(
         // ceiling could be wrong in the generation and invisible in the
         // transcript -- and a gate checking the declared ceilings against the
         // observed ones saw only the spawned children (B52).
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_GRAPH quota task={} instance={} executable={} pages={} buffers={} mappings={} loans={}",
             launched_instance.task.0,
             instance.name,
@@ -1118,7 +1118,7 @@ pub(super) fn launch_instance_graph(
         // different facts, and a gate comparing the generation's declaration
         // against this line is what proves the declared quota *is* the ceiling
         // rather than something the root recomputed on its own.
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_MEM quota task={} instance={} declared={} installed={} base={:#x}",
             launched_instance.task.0,
             instance.name,
@@ -1166,7 +1166,7 @@ pub(super) fn launch_instance_graph(
                     launched_instance.task.0
                 )
             };
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_MEM accounting task={} instance={} reservation={} reserved={} payload={} tables={} alignment={} frames_large={} frames_base={} descriptors={} extents={} cslots={}",
                 launched_instance.task.0,
                 instance.name,
@@ -1183,7 +1183,7 @@ pub(super) fn launch_instance_graph(
             );
         }
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",
         launched_instances.len(),
         budget.as_ref().map_or(0, SharedBufferBudget::holder_count),

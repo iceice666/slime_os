@@ -184,7 +184,7 @@ impl PeerEndpointTable {
             });
             self.len += 1;
             report.grants += 1;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH endpoint grant={} producer_instance={} consumer_instance={}",
                 grant.name,
                 producer,
@@ -255,7 +255,7 @@ impl PeerEndpointTable {
                 .copy(&root.absolute_cptr(minted), entry.cap_rights(side))
                 .map_err(PeerEndpointError::Mint)?;
             installed += 1;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH native endpoint task={} slot={} side={}",
                 task.0,
                 native,
