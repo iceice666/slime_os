@@ -1,0 +1,11 @@
+s ::= import "schema.zt";
+r ::= import stdlib.reflect;
+{
+  formatVersion = s.formatVersion;
+  kind = s.kind;
+  maxReceiptBytes = s.maxReceiptBytes;
+  maxOutputBytes = s.maxOutputBytes;
+  maxPathBytes = s.maxPathBytes;
+  receiptFields = r.schemaFields s.DiagnosticReceipt;
+  identityFields = r.schemaFields s.ExecutionIdentity;
+}

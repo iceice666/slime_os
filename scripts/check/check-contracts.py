@@ -261,6 +261,18 @@ subprocess.run(
     check=True,
 )
 
+subprocess.run(
+    [sys.executable, str(ROOT / "scripts/generate/generate-devloop-diagnostics-bindings.py"), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
+subprocess.run(
+    [sys.executable, str(ROOT / "scripts/generate/generate-observation-capacity-bindings.py"), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
 run("check", str(TRANSFER_CONTRACT / "schema.zt"))
 run("check", str(TRANSFER_CONTRACT / "gen_rust.zt"))
 

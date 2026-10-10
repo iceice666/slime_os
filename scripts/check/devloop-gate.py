@@ -47,7 +47,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import ROOT  # noqa: E402
+import devloop_diagnostics  # noqa: E402
 import devloop_observations  # noqa: E402
+import observation_capacity  # noqa: E402
 import work_items  # noqa: E402
 
 # A terminal record that cannot be read as a finished item. The gate proves the
@@ -93,17 +95,12 @@ def observation(
 
 
 def recipe(target: str, environment: dict[str, str] | None = None) -> tuple[bool, str]:
-    finished = subprocess.run(
-        ["just", target], cwd=ROOT, capture_output=True, text=True, env=environment
-    )
-    return finished.returncode == 0, finished.stdout + finished.stderr
+    return devloop_diagnostics.capture(target, environment)
 
 
 def declared_targets() -> set[str]:
     """Every recipe `just` currently publishes in this repository."""
-    finished = subprocess.run(
-        ["just", "--summary"], cwd=ROOT, capture_output=True, text=True
-    )
+    finished = subprocess.run(["just", "--summary"], cwd=ROOT, capture_output=True, text=True)
     if finished.returncode:
         raise CannotRun(f"cannot list just targets: {finished.stderr.strip()}")
     return set(finished.stdout.split())
@@ -211,19 +208,71 @@ def run_once(
     for a gate that collects one; `just-target` leaves it absent.
     """
     key = run_key(request, gate, target)
+    if gate == "just-observations":
+        try:
+            observation_capacity.replay(key, request, target)
+        except observation_capacity.Refused as error:
+            raise CannotRun(str(error)) from error
+        except (OSError, ValueError) as error:
+            message = f"diagnostic capacity retention error for run {key}: {error}"
+            try:
+                devloop_diagnostics.notify(message)
+            except (OSError, ValueError):
+                pass
+            raise CannotRun(message) from error
     previous = reusable(key, time.time())
     if previous is not None:
         sys.stderr.write(
             f"devloop gate {gate} reused the `just {target}` run {key[:12]} "
             f"under this execution identity: {'passed' if previous['passed'] else 'failed'}\n"
         )
+        if previous.get("diagnosticReceipt"):
+            try:
+                devloop_diagnostics.announce(previous["diagnosticReceipt"], key, request, target)
+            except (OSError, ValueError) as error:
+                message = f"diagnostic retention error for run {key}: {error}"
+                try:
+                    devloop_diagnostics.notify(message)
+                except (OSError, ValueError):
+                    pass
+                raise CannotRun(message) from error
         return previous, None
     before = code_fingerprint()
-    passed, output = recipe(target, environment)
-    record = {"key": key, "justTarget": target, "passed": passed, "finishedAt": time.time()}
+    try:
+        result = recipe(target, environment)
+        passed, output = result
+        record = {"key": key, "justTarget": target, "passed": passed, "finishedAt": time.time()}
+        if isinstance(result, devloop_diagnostics.Capture):
+            receipt = devloop_diagnostics.retain(key, request, target, result)
+            record["diagnosticReceipt"] = receipt
+            if gate == "just-observations" and result.transcript_digest is None:
+                if code_fingerprint() != before:
+                    devloop_diagnostics.announce(receipt, key, request, target)
+                    raise CannotRun(
+                        f"diagnostic capacity refusal for run {key}: code closure changed; replay not retained"
+                    )
+                observation_capacity.retain(key, request, target, result, receipt)
+            devloop_diagnostics.announce(receipt, key, request, target)
+    except observation_capacity.Refused as error:
+        raise CannotRun(str(error)) from error
+    except (OSError, ValueError) as error:
+        message = f"diagnostic capture error for run {key}: {error}"
+        try:
+            devloop_diagnostics.notify(message)
+        except (OSError, ValueError):
+            pass
+        raise CannotRun(message) from error
     if environment is not None:
+        if isinstance(result, devloop_diagnostics.Capture) and result.transcript_digest is None:
+            message = f"diagnostic transcript error for run {key}: stderr exceeds bounded digest buffer; raw capture retained"
+            devloop_diagnostics.notify(message)
+            raise CannotRun(message)
         record["report"] = observations_report(target, passed)
-        record["transcriptDigest"] = hashlib.sha256(output.encode()).hexdigest()
+        record["transcriptDigest"] = (
+            result.transcript_digest
+            if isinstance(result, devloop_diagnostics.Capture)
+            else hashlib.sha256(output.encode()).hexdigest()
+        )
     if code_fingerprint() == before:
         RUNS.mkdir(parents=True, exist_ok=True)
         partial = RUNS / f"{key}.json.partial"
@@ -365,8 +414,24 @@ def just_observations(request: dict) -> list[dict]:
 
 
 def work_item_store(request: dict) -> list[dict]:
-    tasks_passed, tasks_output = recipe("tasks_check")
-    docs_passed, _ = recipe("docs_check")
+    # Counts need the complete text, independently of the bounded raw log.
+    def complete_recipe(target: str) -> tuple[bool, str]:
+        key = run_key(request, "work-item-store", target)
+        try:
+            result = devloop_diagnostics.capture(target, None, complete_text=True)
+            receipt = devloop_diagnostics.retain(key, request, target, result)
+            devloop_diagnostics.announce(receipt, key, request, target)
+            return result[0], result.complete_text
+        except (OSError, ValueError) as error:
+            message = f"diagnostic capture error for run {key}: {error}"
+            try:
+                devloop_diagnostics.notify(message)
+            except (OSError, ValueError):
+                pass
+            raise CannotRun(message) from error
+
+    tasks_passed, tasks_output = complete_recipe("tasks_check")
+    docs_passed, _ = complete_recipe("docs_check")
 
     # Retired identities must resolve from the terminal record alone, offline.
     retired = work_items.retired()
