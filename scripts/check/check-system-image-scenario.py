@@ -231,6 +231,14 @@ def check_root_roles() -> int:
         "reclamation-unwind",
         "private-memory-fail-second-allocation",
         "private-memory-fail-large-map",
+        "private-memory-stress",
+        "cspace-expanded",
+        "metadata-lifecycle",
+        "bootstrap-boundaries",
+        "private-memory-elastic",
+        "private-memory-fragmentation",
+        "private-memory-rollback",
+        "private-memory-conservation",
     )
     if tuple(CONTRACT.ROOT_ROLES) != expected:
         fail(f"the contract admits root roles {tuple(CONTRACT.ROOT_ROLES)}; expected {expected}")
