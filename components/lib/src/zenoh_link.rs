@@ -423,6 +423,9 @@ impl<L: ByteLink> Link<L> {
             Ok(bytes) => bytes,
             Err(error) => return Err(self.fail(error)),
         };
+        if report.sent_bytes != 0 {
+            self.session.note_sent(now_ms);
+        }
         self.fill(&mut report)?;
         self.drain(now_ms, &mut report)?;
         if !self.closed {
@@ -447,10 +450,14 @@ impl<L: ByteLink> Link<L> {
                 }
             }
         }
-        report.sent_bytes += match self.flush() {
+        let flushed = match self.flush() {
             Ok(bytes) => bytes,
             Err(error) => return Err(self.fail(error)),
         };
+        if flushed != 0 {
+            self.session.note_sent(now_ms);
+        }
+        report.sent_bytes += flushed;
         Ok(report)
     }
 

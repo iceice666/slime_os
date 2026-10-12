@@ -460,6 +460,15 @@ impl Session {
         self.last_tx_ms = now_ms;
     }
 
+    /// Tells the session a batch reached the wire at `now_ms`, which restarts the keep-alive
+    /// cadence from that moment. A call that builds a frame has no clock and stamps the latest time
+    /// the session was given, which can be earlier than the flush; the link that owns the send slot
+    /// knows the real time.
+    pub fn note_sent(&mut self, now_ms: u64) {
+        self.now_ms = self.now_ms.max(now_ms);
+        self.last_tx_ms = self.last_tx_ms.max(now_ms);
+    }
+
     /// Connector only: writes INIT_SYN and starts waiting for INIT_ACK.
     pub fn connect<'a>(
         &mut self,

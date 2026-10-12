@@ -349,7 +349,12 @@ fn lease_expiry_closes() {
     let (_, events) = expect_recv(&mut b, &frame, 1500);
     assert_eq!(events, [Ev::Declared(1)]);
     assert_eq!(b.lease_deadline(), Some(1500 + LEASE_MS));
-    assert!(b.tick_lease(3500, &mut out).expect("tick").events.is_empty());
+    assert!(
+        b.tick_lease(3500, &mut out)
+            .expect("tick")
+            .events
+            .is_empty()
+    );
     assert!(b.is_open());
 
     let outcome = b.tick_lease(3501, &mut out).expect("tick");
@@ -367,7 +372,12 @@ fn lease_expiry_closes() {
     let (_, events) = expect_recv(&mut a, &close, 3502);
     assert_eq!(events, [Ev::Closed(p::CLOSE_EXPIRED as u8)]);
     assert_eq!(a.state(), State::Closed);
-    assert!(b.tick_lease(9999, &mut out).expect("tick").events.is_empty());
+    assert!(
+        b.tick_lease(9999, &mut out)
+            .expect("tick")
+            .events
+            .is_empty()
+    );
     println!("[zenoh-exam] session ok lease-expiry-closes");
 }
 

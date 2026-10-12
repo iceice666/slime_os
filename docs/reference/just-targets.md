@@ -182,6 +182,7 @@ For how the planes work and how to add one, read
 | `just spawn_gen` | `python3 scripts/generate/generate-spawn-bindings.py` |
 | `just store_gen` | `python3 scripts/generate/generate-store-bindings.py` |
 | `just syscall_abi_gen` | The `label -> operation` pairs the contract declared, from its own table. |
+| `just zenoh_stock_gen` | Render the captured stock-peer batches as the Rust constants `zenoh_stock::` reads, from `contracts/zenoh-stock-fixtures/v1`. |
 
 ## planes / mechanism
 
