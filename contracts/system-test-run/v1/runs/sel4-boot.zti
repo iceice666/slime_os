@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-boot";
-  imageClosureIdentity = "e04d7f827fee07f68e5a0f221af86eb1b1174a66ee1507002e9e9958fc7ad4e8";
+  imageClosureIdentity = "1e5cf4fd9c9f496112544184f3f7910e3a54094d5208462d7afd2fa42fee1e60";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

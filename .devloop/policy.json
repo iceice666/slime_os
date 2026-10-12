@@ -439,7 +439,7 @@
           "kind": "int"
         },
         {
-          "id": "closureResolveSeconds",
+          "id": "corpusResolveSeconds",
           "kind": "int"
         }
       ]

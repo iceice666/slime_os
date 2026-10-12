@@ -134,10 +134,11 @@ system_image_closure_check: system_spec_check
     python3 scripts/check/check-system-image-closure.py
 
 # Every gate that consumes the committed closure corpus, on one tree: freshness,
-# resolution and its controls, the frozen test-run records, and the scenario
-# and root-role arms.
+# resolution and its controls, the frozen test-run records, the scenario and
+# root-role arms, and image/closure ownership. A recipe change here changes the
+# `just-recipes` closure input, so regenerate the closures with it.
 [group('contracts')]
-system_image_closure_gates_check: system_image_closure_check system_test_run_check system_image_scenario_check
+system_image_closure_gates_check: system_image_closure_check system_test_run_check system_image_scenario_check system_image_closure_aggregate_check
     python3 scripts/generate/generate-system-image-closures.py --check
 
 [group('contracts')]
