@@ -36,7 +36,8 @@ eclipse-zenoh 1.0.0 peer on the plain demo topic is also taken
 ([decision](../decisions/zenoh-stock-peer.md)): the optional QoS extension on
 `INIT_SYN` and, only where it was observed, on `OAM` and on the outer `DECLARE`; an
 `OAM` and a `DeclareFinal` after `OPEN`; and one numeric key-expression alias for the
-demo key. Everything else is refused with a class from the closed vocabulary in
+demo key, in the declaring peer's mapping only (a reference in the receiver's mapping
+names an alias this side declared, and it declares none, so it is `invalid-keyexpr`). Everything else is refused with a class from the closed vocabulary in
 `contracts/zenoh-profile/v1`, never tolerated: routers and clients, wildcard key
 expressions, other resolutions, unknown extensions and messages. A second alias is
 refused as over-bound and an undeclared one as `invalid-keyexpr`.

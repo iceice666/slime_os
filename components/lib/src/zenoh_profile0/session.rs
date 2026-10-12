@@ -289,10 +289,12 @@ pub struct Session {
 }
 
 /// The alias a reference names, or the refusal a reference to an alias nobody declared draws. The
-/// alias resolves to the declared key and no other.
-fn resolve(alias: Option<Alias>, named: u32) -> Result<Alias, SessionError> {
+/// alias resolves to the declared key and no other. The peer declared it, so it lives in the
+/// sender's mapping; a reference in the receiver's mapping names an alias this side declared, and
+/// this side declares none.
+fn resolve(alias: Option<Alias>, named: u32, mapping: Mapping) -> Result<Alias, SessionError> {
     match alias {
-        Some(held) if held.id == named => Ok(held),
+        Some(held) if held.id == named && mapping == Mapping::Sender => Ok(held),
         _ => Err(SessionError::Decode(Refusal::InvalidKeyexpr)),
     }
 }
@@ -630,9 +632,11 @@ impl Session {
                     events.push(Event::SubscriberDeclared { id })?;
                 }
                 Network::DeclareSubscriberAlias {
-                    id, alias: named, ..
+                    id,
+                    mapping,
+                    alias: named,
                 } => {
-                    let held = resolve(alias, named)?;
+                    let held = resolve(alias, named, mapping)?;
                     if remote.is_some() {
                         return Err(SessionError::SubscriberLimit);
                     }
@@ -653,12 +657,12 @@ impl Session {
                     ..
                 } => deliver(local, key.as_bytes(), attachment, payload, &mut events)?,
                 Network::PushPutAlias {
+                    mapping,
                     alias: named,
                     attachment,
                     payload,
-                    ..
                 } => {
-                    let held = resolve(alias, named)?;
+                    let held = resolve(alias, named, mapping)?;
                     deliver(local, held.key(), attachment, payload, &mut events)?;
                 }
                 Network::DeclareKeyExpr { id, key } => {

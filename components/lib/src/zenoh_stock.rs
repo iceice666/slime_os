@@ -983,6 +983,37 @@ fn the_cookie_is_the_captured_one() {
     assert_eq!(fixtures::FORMAT_VERSION, 1);
 }
 
+/// An alias the peer declared is in the peer's own mapping. A reference that clears the sender bit
+/// names an alias this side declared, and this side declares none, so it is not resolved.
+#[test]
+fn an_alias_in_the_receiver_mapping_is_not_resolved() {
+    let declare = captured("connects-04-declare-keyexpr-declare-subscriber");
+    // The batch ends with the DeclareSubscriber body `42 01 01`; clearing bit 6 of the inner
+    // header makes its key reference receiver-mapped.
+    let tail = declare.len() - 3;
+    assert_eq!(&declare[tail..], &[0x42, 0x01, 0x01]);
+    let mut receiver_subscriber = declare.clone();
+    receiver_subscriber[tail] = 0x02;
+    let (mut ours, now) = opened_listener();
+    assert_eq!(
+        feed_next(&mut ours, &receiver_subscriber, now)
+            .expect_err("a receiver-mapped alias subscriber"),
+        SessionError::Decode(crate::zenoh_profile0::Refusal::InvalidKeyexpr)
+    );
+    assert_eq!(ours.peer_subscriber_key(), None);
+
+    let (mut ours, now) = opened_listener();
+    feed_next(&mut ours, &declare, now).expect("the captured declaration");
+    let mut receiver_put = captured("connects-05-push-1");
+    let at = after_sn(&receiver_put);
+    assert_eq!(receiver_put[at], 0x5d);
+    receiver_put[at] = 0x1d;
+    assert_eq!(
+        feed_next(&mut ours, &receiver_put, now + 1).expect_err("a receiver-mapped alias put"),
+        SessionError::Decode(crate::zenoh_profile0::Refusal::InvalidKeyexpr)
+    );
+}
+
 /// When the exam hands over its validated record, the generated constants are exactly that record:
 /// the same cookie, the same groups, the same names and bytes in the same order. A constant that
 /// drifted from the checker's captured bytes fails here instead of replaying stale bytes. Without
