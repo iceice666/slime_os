@@ -8,7 +8,8 @@
 
 use super::{
     ATTACHMENT_GID_LEN_AT, EXT_ATTACHMENT, EXT_WIRE_EXPR, FLAG_BIT5, FLAG_BIT6, FLAG_Z, GID_BYTES,
-    ID_CLOSE, ID_D_SUBSCRIBER, ID_DECLARE, ID_FRAME, ID_INIT, ID_OPEN, ID_PUSH, ID_PUT,
+    ID_CLOSE, ID_D_SUBSCRIBER, ID_DECLARE, ID_FRAME, ID_INIT, ID_KEEP_ALIVE, ID_OPEN, ID_PUSH,
+    ID_PUT,
     MAX_ATTACHMENT_BYTES, MAX_BATCH_BYTES, MAX_COOKIE_BYTES, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES,
     Mapping, Refusal, STREAM_LENGTH_BYTES, U_SUBSCRIBER_HEADER, WIRE_EXPR_FLAG_NAMED,
     WIRE_EXPR_FLAG_SENDER, key_expression,
@@ -262,6 +263,13 @@ pub fn close(out: &mut [u8], reason: u8, session: bool) -> Result<usize, EncodeE
     let mut writer = Writer::new(out);
     writer.byte(ID_CLOSE | if session { FLAG_BIT5 } else { 0 })?;
     writer.byte(reason)?;
+    Ok(writer.len)
+}
+
+/// KEEP_ALIVE: the single byte `0x04`.
+pub fn keep_alive(out: &mut [u8]) -> Result<usize, EncodeError> {
+    let mut writer = Writer::new(out);
+    writer.byte(ID_KEEP_ALIVE)?;
     Ok(writer.len)
 }
 

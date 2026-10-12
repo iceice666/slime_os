@@ -22,11 +22,15 @@ pub const LEB128_SHORT_BITS: u32 = 16;
 pub const ID_INIT: u32 = 1;
 pub const ID_OPEN: u32 = 2;
 pub const ID_CLOSE: u32 = 3;
+pub const ID_KEEP_ALIVE: u32 = 4;
 pub const ID_FRAME: u32 = 5;
 pub const ID_PUSH: u32 = 29;
 pub const ID_DECLARE: u32 = 30;
+pub const ID_OAM: u32 = 31;
+pub const ID_DECLARE_KEYEXPR: u32 = 0;
 pub const ID_DECLARE_SUBSCRIBER: u32 = 2;
 pub const ID_UNDECLARE_SUBSCRIBER: u32 = 3;
+pub const ID_DECLARE_FINAL: u32 = 26;
 pub const ID_PUT: u32 = 1;
 
 pub const FLAG_BIT5: u32 = 32;
@@ -34,6 +38,8 @@ pub const FLAG_BIT6: u32 = 64;
 pub const FLAG_EXTENSIONS: u32 = 128;
 pub const EXT_WIRE_EXPR: u32 = 95;
 pub const EXT_ATTACHMENT: u32 = 67;
+pub const EXT_QOS_UNIT: u32 = 1;
+pub const EXT_QOS_NETWORK: u32 = 33;
 
 pub const CLOSE_GENERIC: u32 = 0;
 pub const CLOSE_UNSUPPORTED: u32 = 1;

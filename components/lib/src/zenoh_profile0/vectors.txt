@@ -93,7 +93,6 @@ batch close_reserved_flag refused malformed-message 6300
 batch close_trailing_byte refused trailing-bytes 230000
 batch close_reason_unknown refused malformed-message 2308
 batch transport_oam refused unsupported-message 0000
-batch transport_keep_alive refused unsupported-message 04
 batch transport_fragment refused unsupported-message 2601aa
 batch transport_join refused unsupported-message 07
 batch transport_unknown_id refused unsupported-message 08

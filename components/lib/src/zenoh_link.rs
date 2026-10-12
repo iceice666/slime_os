@@ -1,6 +1,7 @@
 //! Zenoh Profile 0 transport runtime: one [`Session`] over a [`ByteLink`].
 //!
-//! Every buffer is fixed. The link holds at most one framed batch awaiting send
+//! Every buffer is fixed. A pump that finds the send slot free lets the session add a KEEP_ALIVE
+//! when one is due; with a batch waiting it only checks the lease. The link holds at most one framed batch awaiting send
 //! and never drops a received batch: while the send slot is busy the next batch
 //! stays in the [`StreamFramer`] until a reply can be queued. A [`LinkHandle`]
 //! carries the generation of the link that issued it, so a restart, which builds
@@ -426,14 +427,24 @@ impl<L: ByteLink> Link<L> {
         self.drain(now_ms, &mut report)?;
         if !self.closed {
             let mut body = [0u8; MAX_BATCH_BYTES];
-            let outcome = self.session.tick(now_ms, &mut body)?;
+            // The single send slot decides whether a keep-alive may be written at all: with a batch
+            // waiting in it only the lease is checked, so the keep-alive never collides with that
+            // batch and the batch goes out whole.
+            let outcome = if self.send_len == 0 {
+                self.session.tick(now_ms, &mut body)?
+            } else {
+                self.session.tick_lease(now_ms, &mut body)?
+            };
+            let ended = !outcome.events.is_empty();
             self.absorb(&outcome);
             if outcome.sent != 0 {
                 let batch = outcome.batch(&body);
                 if self.send_len == 0 {
                     self.queue(batch)?;
                 }
-                self.closed = true;
+                if ended {
+                    self.closed = true;
+                }
             }
         }
         report.sent_bytes += match self.flush() {
