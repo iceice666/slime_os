@@ -1,7 +1,7 @@
 # Zenoh Profile 0 and a stock Zenoh peer
 
 **Status:** Proposed
-**Related work items:** `` (this decision's exam and
+**Related work items:** `01a12f05-3402-7b5a-8909-9ea21bdd56e9` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; R1
 `01a0724c-5400-7206-ae86-ad13584c8530` (deferred). R0 is `01a00b4d-2400-7987-93d6-19201c397dff`.
 
@@ -66,10 +66,13 @@ and link, not the node components, change:
    reply, because the peer needed no reply in any run.
 3. **Key-expression alias.** One alias, declared once with `DeclareKeyExpr`, resolves
    a `DeclareSubscriber` or a `Put` to the declared key. A second alias is `over-bound`,
-   an undeclared alias or a redeclaration to another key is `invalid-keyexpr`. The
+   an undeclared alias, a redeclaration to another key and a repeat of the same declaration are
+   `invalid-keyexpr`: the alias is declared once, and a repeat is not a no-op. The
    key itself keeps every bound it has, and that includes the key of a `DeclareKeyExpr`, and the alias resolves to the declared
    key and no other, so a suffix on it is `invalid-keyexpr`, on a subscriber declaration and on
-   a `Put`, rather than accepted, concatenated or ignored. The key of a `DeclareKeyExpr`: a
+   a `Put`, rather than accepted, concatenated or ignored. It resolves a `DeclareSubscriber`
+   and a `Put` only: an `UndeclareSubscriber` that names scope 1 is `invalid-keyexpr` too,
+   because an undeclaration keeps naming the subscriber by the key it was declared with. The key of a `DeclareKeyExpr`: a
    130-byte alias key, the captured declaration with one byte added, is `over-bound`, as
    the 130-byte keys of a subscriber declaration and a `PUSH` already are. The session still holds one subscriber: a second
    declaration, received or sent, is `subscriber-limit` and leaves the first in place, and an
@@ -85,7 +88,10 @@ and link, not the node components, change:
    nothing, because the link ticks the session in every state that is not closed. A `KEEP_ALIVE` is traffic only
    on an open session: in the idle state and while awaiting `INIT_ACK`, `OPEN_SYN` or
    `OPEN_ACK` it is `unexpected-message` and the session is unchanged, so a keep-alive
-   cannot refresh a handshake. A `KEEP_ALIVE` is the single byte `04`; a batch with another
+   cannot refresh a handshake. When the link has sent an ordinary batch, or still holds one pending, at a quarter-lease
+   boundary, no `KEEP_ALIVE` is added: the batch goes out whole, the cadence restarts from it
+   and the link stays open, which also keeps the keep-alive from colliding with the link's
+   single send slot. A `KEEP_ALIVE` is the single byte `04`; a batch with another
    byte after it stays refused, as `trailing-bytes`, like a trailing byte on a `CLOSE`.
 
 Everything else the profile refuses stays refused with its class.

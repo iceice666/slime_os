@@ -177,6 +177,17 @@ def suffixed_alias_batch(path: str) -> str:
     return body.hex()
 
 
+def undeclare_on_alias() -> str:
+    """An UndeclareSubscriber addressing the declared alias with an empty suffix.
+
+    The alias resolves a DeclareSubscriber and a Put to the declared key, and nothing else: the
+    undeclaration path keeps naming its subscriber by the key it was declared with. This is the
+    accepted corpus row frame_undeclare_subscriber_sn7 with its wire expression changed to scope 1,
+    no suffix (`02 02 01` after the extension header). The upstream 1.0.0 decoder reads it (scope 1,
+    empty suffix), and Profile 0 must refuse it rather than resolve the alias there."""
+    return "25071e83015f" + "020201"
+
+
 WRONG_POSITION_QOS = ("frame", "push", "put", "subscriber", "final", "undeclare")
 WRONG_POSITION_NAMES = {
     "frame": "frame",
@@ -190,6 +201,7 @@ REFUSE = REFUSE + (
     ("refuse-alias-key-130-bytes", oversized_alias_key()),
     ("refuse-alias-suffix-on-subscriber", suffixed_alias_batch("subscriber")),
     ("refuse-alias-suffix-on-put", suffixed_alias_batch("put")),
+    ("refuse-alias-on-undeclare", undeclare_on_alias()),
 ) + tuple(
     (f"refuse-qos-on-{WRONG_POSITION_NAMES[position]}", wrong_position_qos(position))
     for position in WRONG_POSITION_QOS
@@ -224,6 +236,11 @@ OK_SCENARIOS = (
     "tick-silent-while-awaiting-init-ack",
     "tick-silent-while-awaiting-open-syn",
     "tick-silent-while-awaiting-open-ack",
+    # A keep-alive is for a link that has sent nothing else. At the quarter-lease boundary with an
+    # ordinary batch pending or just sent, no KEEP_ALIVE is added: the batch goes out whole, the
+    # cadence restarts from it, and the link stays open. This is also the case where a keep-alive
+    # and the link's single send slot would collide.
+    "keep-alive-suppressed-by-traffic",
 )
 REFUSED_SCENARIOS = (
     ("refuse-client", "unsupported-whatami"),
@@ -234,6 +251,9 @@ REFUSED_SCENARIOS = (
     ("alias-undeclared", "invalid-keyexpr"),
     ("alias-second", "over-bound"),
     ("alias-redeclared-to-other-key", "invalid-keyexpr"),
+    # The alias is declared once: the same DeclareKeyExpr repeated for alias 1 with the same key is
+    # refused as well, not accepted as a no-op.
+    ("alias-redeclared-same-key", "invalid-keyexpr"),
     # The session's single subscriber slot, enforced twice: a second declaration received from the
     # peer, and a second one sent by this side. The class is the session error, not a decoder class.
     ("second-subscriber-received", "subscriber-limit"),
@@ -255,6 +275,9 @@ REFUSED_SCENARIOS = (
     # subscriber declaration and on a Put, so the session cannot accept, concatenate or ignore it.
     ("refuse-alias-suffix-on-subscriber", "invalid-keyexpr"),
     ("refuse-alias-suffix-on-put", "invalid-keyexpr"),
+    # Aliases resolve a DeclareSubscriber and a Put only: an UndeclareSubscriber naming scope 1 is
+    # refused, so the resolver does not reach the undeclaration path.
+    ("refuse-alias-on-undeclare", "invalid-keyexpr"),
     # Undeclaring a subscriber the session does not hold, or with another id or key, is refused in
     # both directions and leaves the held subscriber in place. The Rust test compares the session's
     # state, held subscriber and sequence numbers before and after.

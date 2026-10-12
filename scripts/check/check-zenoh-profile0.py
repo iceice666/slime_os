@@ -712,6 +712,10 @@ def stock_fixtures() -> list[tuple[str, str]]:
         original_bytes = bytes.fromhex(by_name[suffix_source])
         if len(suffixed) != len(original_bytes) + 2 or b"\x01a" not in suffixed or suffixed == original_bytes:
             fail(f"stock fixtures: refuse-alias-suffix-on-{suffix_path} is not {suffix_source} plus a one-byte suffix on the alias")
+    undeclare_alias = bytes.fromhex(by_name.get("refuse/refuse-alias-on-undeclare", ""))
+    undeclare_row = bytes.fromhex(undeclare_source)
+    if not (len(undeclare_alias) == 9 and undeclare_alias[:6] == undeclare_row[:6] and undeclare_alias[6:] == bytes.fromhex("020201")):
+        fail("stock fixtures: refuse-alias-on-undeclare is not the corpus undeclaration with scope 1 and no suffix")
     for position, (source_hex, sets_flag, extension) in sources.items():
         built = bytes.fromhex(by_name.get(f"refuse/refuse-qos-on-{position}", ""))
         original = bytes.fromhex(source_hex)
@@ -742,8 +746,8 @@ def stock_fixtures() -> list[tuple[str, str]]:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is
 # completed and retired to .tasks/terminal, where its body is no longer an active item. While the
 # item is active its stored body is compared with these; once it is gone these still bind.
-STOCK_PINNED_CASES = 66
-STOCK_PINNED_CONTROLS = 131
+STOCK_PINNED_CASES = 69
+STOCK_PINNED_CONTROLS = 136
 
 
 def stock_item_pins() -> tuple[int, int]:
@@ -966,7 +970,7 @@ def stock_handoff_controls() -> int:
         ("an unknown extra field inside an entry", honest.replace('{ name = "connects-11-close"; hex = "0300"; };', '{ name = "connects-11-close"; hex = "0300"; extra = 1; };', 1)),
         ("an unknown extra field written over several lines", honest.replace("formatVersion = 1;", "formatVersion = 1;\n  surprise =\n    1;", 1)),
         ("a wrong format version written over several lines", honest.replace("formatVersion = 1;", "formatVersion =\n    2;", 1)),
-        ("a fifteenth refuse entry written over several lines", honest.replace("  refuse = [\n", "  refuse = [\n" + '    {\n      name = "extra";\n      hex = "00";\n    };\n', 1)),
+        ("a sixteenth refuse entry written over several lines", honest.replace("  refuse = [\n", "  refuse = [\n" + '    {\n      name = "extra";\n      hex = "00";\n    };\n', 1)),
     ]
     (ROOT / "build").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / "build") as scratch:
@@ -1031,6 +1035,11 @@ def stock_controls() -> int:
         ("a failed property record added to an honest transcript", good + ["stock property invented failed"]),
         ("a failed property record for a captured batch added to an honest transcript", good + ["stock property connects-01-init-syn failed"]),
         ("a property record with no verdict added to an honest transcript", good + ["stock property invented"]),
+        ("an alias on an undeclaration admitted instead of refused", [line for line in good if not line.startswith("stock refused refuse-alias-on-undeclare ")]),
+        ("an alias on an undeclaration refused with the wrong class", swap("stock refused refuse-alias-on-undeclare ", "stock refused refuse-alias-on-undeclare over-bound")),
+        ("an identical alias redeclaration admitted instead of refused", [line for line in good if not line.startswith("stock refused alias-redeclared-same-key ")]),
+        ("an identical alias redeclaration refused with the wrong class", swap("stock refused alias-redeclared-same-key ", "stock refused alias-redeclared-same-key over-bound")),
+        ("a keep-alive sent over pending traffic that was not reported", [line for line in good if line != "stock ok keep-alive-suppressed-by-traffic"]),
         ("a suffix on the declared alias admitted on a subscriber", [line for line in good if not line.startswith("stock refused refuse-alias-suffix-on-subscriber ")]),
         ("a suffix on the declared alias admitted on a Put", [line for line in good if not line.startswith("stock refused refuse-alias-suffix-on-put ")]),
         ("a suffix on the declared alias refused with the wrong class", swap("stock refused refuse-alias-suffix-on-put ", "stock refused refuse-alias-suffix-on-put over-bound")),
@@ -1280,7 +1289,7 @@ def stock_validate_handoff(path: _Path) -> None:
     version = re.search(r"\bformatVersion = (\d+)", decoded)
     if not version or int(version.group(1)) != 1:
         fail("stock hand-off: formatVersion is not 1")
-    for group, count in (("connects", 11), ("listens", 8), ("refuse", 14)):
+    for group, count in (("connects", 11), ("listens", 8), ("refuse", 15)):
         rows = stock_decoded_rows(decoded, group)
         if len(rows) != count:
             fail(f"stock hand-off: {group} has {len(rows)} rows, the contract fixes {count}")
