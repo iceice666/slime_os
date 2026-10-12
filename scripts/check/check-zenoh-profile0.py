@@ -693,6 +693,20 @@ def stock_fixtures() -> list[tuple[str, str]]:
         "declare-final": (by_name["listens/listens-05-declare-subscriber-declare-final"], True, b"\x21\x08"),
         "undeclare-subscriber": (undeclare_source, True, b"\x21\x08"),
     }
+    key_source = bytes.fromhex(by_name["connects/connects-04-declare-keyexpr-declare-subscriber"])
+    key_built = bytes.fromhex(by_name.get("refuse/refuse-alias-key-130-bytes", ""))
+    at = key_source.find(bytes.fromhex("2001008101"))
+    key_end = at + 5 + 129
+    if not (
+        at >= 0
+        and len(key_built) == len(key_source) + 1
+        and key_built[: at + 3] == key_source[: at + 3]
+        and key_built[at + 3 : at + 5] == bytes.fromhex("8201")
+        and key_built[at + 5 : key_end] == key_source[at + 5 : key_end]
+        and key_built[key_end : key_end + 1] == b"a"
+        and key_built[key_end + 1 :] == key_source[key_end:]
+    ):
+        fail("stock fixtures: refuse-alias-key-130-bytes is not the captured DeclareKeyExpr with a 130-byte key")
     for position, (source_hex, sets_flag, extension) in sources.items():
         built = bytes.fromhex(by_name.get(f"refuse/refuse-qos-on-{position}", ""))
         original = bytes.fromhex(source_hex)
@@ -723,8 +737,8 @@ def stock_fixtures() -> list[tuple[str, str]]:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is
 # completed and retired to .tasks/terminal, where its body is no longer an active item. While the
 # item is active its stored body is compared with these; once it is gone these still bind.
-STOCK_PINNED_CASES = 57
-STOCK_PINNED_CONTROLS = 119
+STOCK_PINNED_CASES = 64
+STOCK_PINNED_CONTROLS = 125
 
 
 def stock_item_pins() -> tuple[int, int]:
@@ -943,7 +957,7 @@ def stock_handoff_controls() -> int:
         ("an unknown extra field inside an entry", honest.replace('{ name = "connects-11-close"; hex = "0300"; };', '{ name = "connects-11-close"; hex = "0300"; extra = 1; };', 1)),
         ("an unknown extra field written over several lines", honest.replace("formatVersion = 1;", "formatVersion = 1;\n  surprise =\n    1;", 1)),
         ("a wrong format version written over several lines", honest.replace("formatVersion = 1;", "formatVersion =\n    2;", 1)),
-        ("a twelfth refuse entry written over several lines", honest.replace("  refuse = [\n", "  refuse = [\n" + '    {\n      name = "extra";\n      hex = "00";\n    };\n', 1)),
+        ("a thirteenth refuse entry written over several lines", honest.replace("  refuse = [\n", "  refuse = [\n" + '    {\n      name = "extra";\n      hex = "00";\n    };\n', 1)),
     ]
     (ROOT / "build").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / "build") as scratch:
@@ -1005,6 +1019,12 @@ def stock_controls() -> int:
         ("a property reported for a batch that was never captured", good + ["stock property stock-connects-99-invented ok"]),
         ("a property line that does not end in ok", [line.replace("stock property listens-03-oam ok", "stock property listens-03-oam failed") for line in good]),
         ("the properties run on the batches in another order", [line for line in good if not line.startswith("stock property ")] + list(reversed([line for line in good if line.startswith("stock property ")]))),
+        ("an alias key over the bound admitted instead of refused", [line for line in good if not line.startswith("stock refused refuse-alias-key-130-bytes ")]),
+        ("an alias key over the bound refused with the wrong class", swap("stock refused refuse-alias-key-130-bytes ", "stock refused refuse-alias-key-130-bytes invalid-keyexpr")),
+        ("a received unknown undeclaration admitted instead of refused", [line for line in good if not line.startswith("stock refused unknown-subscriber-received ")]),
+        ("a sent unknown undeclaration refused with the wrong class", swap("stock refused unknown-subscriber-sent ", "stock refused unknown-subscriber-sent invalid-keyexpr")),
+        ("a tick before OPEN that sent something in the idle state", [line for line in good if line != "stock ok tick-silent-in-idle"]),
+        ("a tick while awaiting OPEN_ACK that sent something", [line for line in good if line != "stock ok tick-silent-while-awaiting-open-ack"]),
         ("a keep-alive in the idle state admitted instead of refused", [line for line in good if not line.startswith("stock refused keep-alive-in-idle ")]),
         ("a keep-alive while awaiting OPEN_ACK admitted instead of refused", [line for line in good if not line.startswith("stock refused keep-alive-while-awaiting-open-ack ")]),
         ("a keep-alive before open refused with the wrong class", swap("stock refused keep-alive-while-awaiting-open-syn ", "stock refused keep-alive-while-awaiting-open-syn invalid-keyexpr")),
@@ -1245,7 +1265,7 @@ def stock_validate_handoff(path: _Path) -> None:
     version = re.search(r"\bformatVersion = (\d+)", decoded)
     if not version or int(version.group(1)) != 1:
         fail("stock hand-off: formatVersion is not 1")
-    for group, count in (("connects", 11), ("listens", 8), ("refuse", 11)):
+    for group, count in (("connects", 11), ("listens", 8), ("refuse", 12)):
         rows = stock_decoded_rows(decoded, group)
         if len(rows) != count:
             fail(f"stock hand-off: {group} has {len(rows)} rows, the contract fixes {count}")

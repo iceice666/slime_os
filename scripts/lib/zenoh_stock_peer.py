@@ -135,6 +135,22 @@ def wrong_position_qos(position: str) -> str:
 # a subscriber. It is the accepted corpus row frame_undeclare_subscriber_sn7, which the upstream
 # encoder produced and the checker pins by name and digest; judge_stock_corpus ties this constant to it.
 UNDECLARE_SOURCE = "25071e83015f83010300302f736c696d655f64656d6f2f636f756e7465722f736c696d655f64656d6f5f6d7367733a3a6d73673a3a6464735f3a3a436f756e7465725f2f5249485330315f61383266643566666362393664306131393761356164333638306431633465366261343361393632393238656364353932666235363565623831323935393562"
+def oversized_alias_key() -> str:
+    """The captured DeclareKeyExpr with its key one byte over the 129-byte bound.
+
+    The captured declaration carries the 129-byte demo key (`81 01` is the varint 129). This one
+    lengthens the key by a byte and the length to 130 (`82 01`), so it is the same message shape,
+    which the upstream 1.0.0 decoder reads, and Profile 0 must refuse it as `over-bound` once it
+    parses a DeclareKeyExpr, as it refuses the 130-byte keys of a subscriber declaration and a PUSH."""
+    body = bytearray.fromhex(dict(CONNECTS)["connects-04-declare-keyexpr-declare-subscriber"])
+    marker = bytes.fromhex("2001008101")
+    assert body.count(marker) == 1
+    at = body.index(marker)
+    body[at + 3 : at + 5] = bytes.fromhex("8201")
+    body.insert(at + 5 + 129, ord("a"))
+    return body.hex()
+
+
 WRONG_POSITION_QOS = ("frame", "push", "put", "subscriber", "final", "undeclare")
 WRONG_POSITION_NAMES = {
     "frame": "frame",
@@ -144,7 +160,7 @@ WRONG_POSITION_NAMES = {
     "final": "declare-final",
     "undeclare": "undeclare-subscriber",
 }
-REFUSE = REFUSE + tuple(
+REFUSE = REFUSE + (("refuse-alias-key-130-bytes", oversized_alias_key()),) + tuple(
     (f"refuse-qos-on-{WRONG_POSITION_NAMES[position]}", wrong_position_qos(position))
     for position in WRONG_POSITION_QOS
 )
@@ -170,6 +186,14 @@ OK_SCENARIOS = (
     "keep-alive-sent-lease-2000",
     "keep-alive-sent-lease-10000",
     "silence-past-lease-closes",
+    # A tick sends nothing before OPEN. Link::pump ticks the session in every state that is not
+    # closed, so an implementation that schedules keep-alives from the local lease could otherwise
+    # put 0x04 into a stalled handshake. Each case ticks at times between a quarter lease and the
+    # lease, and expects no output and no state change.
+    "tick-silent-in-idle",
+    "tick-silent-while-awaiting-init-ack",
+    "tick-silent-while-awaiting-open-syn",
+    "tick-silent-while-awaiting-open-ack",
 )
 REFUSED_SCENARIOS = (
     ("refuse-client", "unsupported-whatami"),
@@ -195,6 +219,13 @@ REFUSED_SCENARIOS = (
     # the decoder knows message id 4 it must still refuse a batch that is not exactly that byte, as
     # the corpus refuses a trailing byte on a CLOSE and an INIT_SYN: `trailing-bytes`.
     ("keep-alive-trailing-byte", "trailing-bytes"),
+    # The alias key keeps the existing 129-byte bound, as a subscriber declaration's and a PUSH's do.
+    ("refuse-alias-key-130-bytes", "over-bound"),
+    # Undeclaring a subscriber the session does not hold, or with another id or key, is refused in
+    # both directions and leaves the held subscriber in place. The Rust test compares the session's
+    # state, held subscriber and sequence numbers before and after.
+    ("unknown-subscriber-received", "unknown-subscriber"),
+    ("unknown-subscriber-sent", "unknown-subscriber"),
     ("keep-alive-while-awaiting-init-ack", "unexpected-message"),
     ("keep-alive-while-awaiting-open-syn", "unexpected-message"),
     ("keep-alive-while-awaiting-open-ack", "unexpected-message"),

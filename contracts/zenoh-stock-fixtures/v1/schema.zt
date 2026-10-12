@@ -30,10 +30,10 @@ formatVersion :: Int = 1;
 
 -- Counts per group, fixed by the exam: the stock peer connecting to us, the stock peer
 -- listening for us, and what a bounded profile must keep refusing: five batches the stock
--- peer sent and six built from captured batches with the QoS extension where none was seen.
+-- peer sent and seven built from captured batches with the QoS extension where none was seen.
 connectsCount :: Int = 11;
 listensCount :: Int = 8;
-refuseCount :: Int = 11;
+refuseCount :: Int = 12;
 
 -- A batch body is at most one Profile 0 batch; a name is at most this long; the cookie is
 -- the 29 bytes our side issued, within the profile's 64-byte cookie bound.

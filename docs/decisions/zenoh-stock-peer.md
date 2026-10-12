@@ -1,7 +1,7 @@
 # Zenoh Profile 0 and a stock Zenoh peer
 
 **Status:** Proposed
-**Related work items:** `01a12e9a-8bed-770b-9d01-62e9f3881cba` (this decision's exam and
+**Related work items:** `01a12edd-2cb3-7600-80d9-9069c778e44c` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; R1
 `01a0724c-5400-7206-ae86-ad13584c8530` (deferred). R0 is `01a00b4d-2400-7987-93d6-19201c397dff`.
 
@@ -67,13 +67,20 @@ and link, not the node components, change:
 3. **Key-expression alias.** One alias, declared once with `DeclareKeyExpr`, resolves
    a `DeclareSubscriber` or a `Put` to the declared key. A second alias is `over-bound`,
    an undeclared alias or a redeclaration to another key is `invalid-keyexpr`. The
-   key itself keeps every bound it has. The session still holds one subscriber: a second
-   declaration, received or sent, is `subscriber-limit` and leaves the first in place. A FRAME yields at most four events
+   key itself keeps every bound it has, and that includes the key of a `DeclareKeyExpr`: a
+   130-byte alias key, the captured declaration with one byte added, is `over-bound`, as
+   the 130-byte keys of a subscriber declaration and a `PUSH` already are. The session still holds one subscriber: a second
+   declaration, received or sent, is `subscriber-limit` and leaves the first in place, and an
+   undeclaration that does not name the held subscriber, received or sent, is
+   `unknown-subscriber` and leaves it in place too. A FRAME yields at most four events
    (`MAX_EVENTS`): once an alias makes PUSHes small enough to coalesce, five in one FRAME is
    `too-many-messages`, not a dropped fifth.
 4. **Keep-alive.** An open session sends `KEEP_ALIVE` every quarter of the peer's
    announced lease when it has sent nothing else, accepts the peer's as traffic, and
-   closes with the expiry reason after one lease of silence. A `KEEP_ALIVE` is traffic only
+   closes with the expiry reason after one lease of silence. Before `OPEN` nothing is
+   sent on a tick: in the idle state and while awaiting `INIT_ACK`, `OPEN_SYN` or
+   `OPEN_ACK`, a tick between a quarter lease and the lease produces no output and changes
+   nothing, because the link ticks the session in every state that is not closed. A `KEEP_ALIVE` is traffic only
    on an open session: in the idle state and while awaiting `INIT_ACK`, `OPEN_SYN` or
    `OPEN_ACK` it is `unexpected-message` and the session is unchanged, so a keep-alive
    cannot refresh a handshake. A `KEEP_ALIVE` is the single byte `04`; a batch with another
