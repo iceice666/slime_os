@@ -707,6 +707,11 @@ def stock_fixtures() -> list[tuple[str, str]]:
         and key_built[key_end + 1 :] == key_source[key_end:]
     ):
         fail("stock fixtures: refuse-alias-key-130-bytes is not the captured DeclareKeyExpr with a 130-byte key")
+    for suffix_path, suffix_source in (("subscriber", "listens/listens-05-declare-subscriber-declare-final"), ("put", "connects/connects-05-push-1")):
+        suffixed = bytes.fromhex(by_name.get(f"refuse/refuse-alias-suffix-on-{suffix_path}", ""))
+        original_bytes = bytes.fromhex(by_name[suffix_source])
+        if len(suffixed) != len(original_bytes) + 2 or b"\x01a" not in suffixed or suffixed == original_bytes:
+            fail(f"stock fixtures: refuse-alias-suffix-on-{suffix_path} is not {suffix_source} plus a one-byte suffix on the alias")
     for position, (source_hex, sets_flag, extension) in sources.items():
         built = bytes.fromhex(by_name.get(f"refuse/refuse-qos-on-{position}", ""))
         original = bytes.fromhex(source_hex)
@@ -737,8 +742,8 @@ def stock_fixtures() -> list[tuple[str, str]]:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is
 # completed and retired to .tasks/terminal, where its body is no longer an active item. While the
 # item is active its stored body is compared with these; once it is gone these still bind.
-STOCK_PINNED_CASES = 64
-STOCK_PINNED_CONTROLS = 125
+STOCK_PINNED_CASES = 66
+STOCK_PINNED_CONTROLS = 131
 
 
 def stock_item_pins() -> tuple[int, int]:
@@ -866,7 +871,11 @@ def judge_stock(lines: list[str]) -> tuple[int, int]:
     exactly("stock scenarios", ok_wanted, done)
     if done != list(ok_wanted):
         fail(f"stock scenarios are out of order: {done}, the exam runs them as {list(ok_wanted)}")
-    properties = [f[2] for f in split if len(f) == 4 and f[:2] == ["stock", "property"] and f[3] == "ok"]
+    reported = [f for f in split if f[:2] == ["stock", "property"]]
+    unsuccessful = [" ".join(f) for f in reported if f[3:] != ["ok"]]
+    if unsuccessful:
+        fail(f"stock properties reported a failure or a malformed record: {', '.join(unsuccessful[:3])}")
+    properties = [f[2] for f in reported]
     if properties != [name[len("replay:") :] for name in replay_wanted]:
         fail(f"stock properties held for {properties}, the exam requires every captured batch in capture order")
     exactly("stock replays", replay_wanted, [f"replay:{name}" for name in replays])
@@ -957,7 +966,7 @@ def stock_handoff_controls() -> int:
         ("an unknown extra field inside an entry", honest.replace('{ name = "connects-11-close"; hex = "0300"; };', '{ name = "connects-11-close"; hex = "0300"; extra = 1; };', 1)),
         ("an unknown extra field written over several lines", honest.replace("formatVersion = 1;", "formatVersion = 1;\n  surprise =\n    1;", 1)),
         ("a wrong format version written over several lines", honest.replace("formatVersion = 1;", "formatVersion =\n    2;", 1)),
-        ("a thirteenth refuse entry written over several lines", honest.replace("  refuse = [\n", "  refuse = [\n" + '    {\n      name = "extra";\n      hex = "00";\n    };\n', 1)),
+        ("a fifteenth refuse entry written over several lines", honest.replace("  refuse = [\n", "  refuse = [\n" + '    {\n      name = "extra";\n      hex = "00";\n    };\n', 1)),
     ]
     (ROOT / "build").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / "build") as scratch:
@@ -1019,6 +1028,12 @@ def stock_controls() -> int:
         ("a property reported for a batch that was never captured", good + ["stock property stock-connects-99-invented ok"]),
         ("a property line that does not end in ok", [line.replace("stock property listens-03-oam ok", "stock property listens-03-oam failed") for line in good]),
         ("the properties run on the batches in another order", [line for line in good if not line.startswith("stock property ")] + list(reversed([line for line in good if line.startswith("stock property ")]))),
+        ("a failed property record added to an honest transcript", good + ["stock property invented failed"]),
+        ("a failed property record for a captured batch added to an honest transcript", good + ["stock property connects-01-init-syn failed"]),
+        ("a property record with no verdict added to an honest transcript", good + ["stock property invented"]),
+        ("a suffix on the declared alias admitted on a subscriber", [line for line in good if not line.startswith("stock refused refuse-alias-suffix-on-subscriber ")]),
+        ("a suffix on the declared alias admitted on a Put", [line for line in good if not line.startswith("stock refused refuse-alias-suffix-on-put ")]),
+        ("a suffix on the declared alias refused with the wrong class", swap("stock refused refuse-alias-suffix-on-put ", "stock refused refuse-alias-suffix-on-put over-bound")),
         ("an alias key over the bound admitted instead of refused", [line for line in good if not line.startswith("stock refused refuse-alias-key-130-bytes ")]),
         ("an alias key over the bound refused with the wrong class", swap("stock refused refuse-alias-key-130-bytes ", "stock refused refuse-alias-key-130-bytes invalid-keyexpr")),
         ("a received unknown undeclaration admitted instead of refused", [line for line in good if not line.startswith("stock refused unknown-subscriber-received ")]),
@@ -1265,7 +1280,7 @@ def stock_validate_handoff(path: _Path) -> None:
     version = re.search(r"\bformatVersion = (\d+)", decoded)
     if not version or int(version.group(1)) != 1:
         fail("stock hand-off: formatVersion is not 1")
-    for group, count in (("connects", 11), ("listens", 8), ("refuse", 12)):
+    for group, count in (("connects", 11), ("listens", 8), ("refuse", 14)):
         rows = stock_decoded_rows(decoded, group)
         if len(rows) != count:
             fail(f"stock hand-off: {group} has {len(rows)} rows, the contract fixes {count}")

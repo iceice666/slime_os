@@ -151,6 +151,32 @@ def oversized_alias_key() -> str:
     return body.hex()
 
 
+def suffixed_alias_batch(path: str) -> str:
+    """A captured batch addressing the declared alias with a one-byte suffix `a`.
+
+    The captures address alias 1 with no suffix. These keep scope 1 and set the wire expression's
+    N flag with the suffix after the scope: the subscriber body `42 01 01` becomes `62 01 01 01 61`,
+    and the PUSH header `5d` becomes `7d` with `01 61` after the scope. The upstream 1.0.0 decoder
+    reads both (scope 1, suffix "a"), so a stock codec can produce them; the alias resolves to the
+    declared key and no other, so Profile 0 must refuse a suffix on it."""
+    suffix = bytes.fromhex("0161")
+    if path == "subscriber":
+        body = bytearray.fromhex(dict(LISTENS)["listens-05-declare-subscriber-declare-final"])
+        at = body.index(bytes.fromhex("9e210842" + "0101")) + 3
+        assert body[at : at + 3].hex() == "420101"
+        body[at] = 0x62
+        body[at + 3 : at + 3] = suffix
+    elif path == "put":
+        body = bytearray.fromhex(dict(CONNECTS)["connects-05-push-1"])
+        header_at = _varint_end(body, 1)
+        assert body[header_at : header_at + 3].hex() == "5d0181"
+        body[header_at] = 0x7D
+        body[header_at + 2 : header_at + 2] = suffix
+    else:
+        raise ValueError(path)
+    return body.hex()
+
+
 WRONG_POSITION_QOS = ("frame", "push", "put", "subscriber", "final", "undeclare")
 WRONG_POSITION_NAMES = {
     "frame": "frame",
@@ -160,7 +186,11 @@ WRONG_POSITION_NAMES = {
     "final": "declare-final",
     "undeclare": "undeclare-subscriber",
 }
-REFUSE = REFUSE + (("refuse-alias-key-130-bytes", oversized_alias_key()),) + tuple(
+REFUSE = REFUSE + (
+    ("refuse-alias-key-130-bytes", oversized_alias_key()),
+    ("refuse-alias-suffix-on-subscriber", suffixed_alias_batch("subscriber")),
+    ("refuse-alias-suffix-on-put", suffixed_alias_batch("put")),
+) + tuple(
     (f"refuse-qos-on-{WRONG_POSITION_NAMES[position]}", wrong_position_qos(position))
     for position in WRONG_POSITION_QOS
 )
@@ -221,6 +251,10 @@ REFUSED_SCENARIOS = (
     ("keep-alive-trailing-byte", "trailing-bytes"),
     # The alias key keeps the existing 129-byte bound, as a subscriber declaration's and a PUSH's do.
     ("refuse-alias-key-130-bytes", "over-bound"),
+    # Alias 1 resolves to the declared key and no other: a suffix after the alias is refused, on a
+    # subscriber declaration and on a Put, so the session cannot accept, concatenate or ignore it.
+    ("refuse-alias-suffix-on-subscriber", "invalid-keyexpr"),
+    ("refuse-alias-suffix-on-put", "invalid-keyexpr"),
     # Undeclaring a subscriber the session does not hold, or with another id or key, is refused in
     # both directions and leaves the held subscriber in place. The Rust test compares the session's
     # state, held subscriber and sequence numbers before and after.
