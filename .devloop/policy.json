@@ -427,6 +427,22 @@
           "kind": "int"
         }
       ]
+    },
+    {
+      "id": "closure-wall-time",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [
+        {
+          "id": "generationCheckSeconds",
+          "kind": "int"
+        },
+        {
+          "id": "closureResolveSeconds",
+          "kind": "int"
+        }
+      ]
     }
   ]
 }
