@@ -46,6 +46,7 @@ from pathlib import Path
 import system_image_closure_contract as CONTRACT
 from harness import ROOT
 from system_image_closure import (
+    ResolutionCache,
     SystemImageClosureError,
     compile_closure,
     compile_negative_case,
@@ -55,6 +56,11 @@ from system_image_closure import (
 from system_spec import prefetch_systems, system_paths
 
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+# Shared by every resolution of a *committed* closure: this checker writes only
+# into temporary directories, so the trees those closures name never change
+# while it runs. A control that resolves a closure it wrote does not use it.
+READS = ResolutionCache()
+
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
 BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
 
@@ -276,7 +282,7 @@ def check_root_roles() -> int:
         path = CLOSURE_ROOT / f"{name}.zti"
         if not path.is_file():
             fail(f"{name}: declared a root-role closure but has none")
-        resolved = resolve_closure(path)
+        resolved = resolve_closure(path, cache=READS)
         if resolved.root_role != role:
             fail(f"{name}: resolved root role {resolved.root_role!r} differs from {role!r}")
         if resolved.root_parameters != tuple(sorted(parameters)):
@@ -454,8 +460,8 @@ def check_scenarios() -> int:
             fail(f"{name}: declared as a scenario but has no closure")
         if not base_path.is_file():
             fail(f"{name}: base composition {base_name} has no closure")
-        scenario = resolve_closure(scenario_path)
-        base = resolve_closure(base_path)
+        scenario = resolve_closure(scenario_path, cache=READS)
+        base = resolve_closure(base_path, cache=READS)
         if scenario.build_parameters != parameters:
             fail(
                 f"{name}: resolved parameters {scenario.build_parameters} differ from the "
@@ -531,7 +537,7 @@ def check_scenarios() -> int:
 
 def check_malformed_refused() -> None:
     """A parameter naming something undeclared is refused, not silently created."""
-    base = resolve_closure(CLOSURE_ROOT / "sel4-traffic.zti")
+    base = resolve_closure(CLOSURE_ROOT / "sel4-traffic.zti", cache=READS)
     for parameters, needle in (
         ({CONTRACT.PARAMETER_FABRIC_LIMIT_OVERRIDE: "notALimit=2"}, "undeclared limit"),
         ({CONTRACT.PARAMETER_FABRIC_LIMIT_OVERRIDE: "inFlightOperations=0"}, "positive integer"),
@@ -556,7 +562,7 @@ def check_every_closure_applies() -> int:
     count = 0
     prefetch_systems(system_paths())
     for path in sorted(CLOSURE_ROOT.glob("*.zti")):
-        resolved = resolve_closure(path)
+        resolved = resolve_closure(path, cache=READS)
         try:
             applied(resolved)
         except SystemExit as error:

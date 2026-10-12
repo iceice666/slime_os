@@ -52,6 +52,7 @@ from pathlib import Path
 
 from harness import ROOT
 from system_image_closure import (
+    ResolutionCache,
     SystemImageClosureError,
     resolve_closure,
 )
@@ -150,9 +151,11 @@ def check_resolution(
     components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
     prefetch_systems(system_paths())
     identities: dict[str, str] = {}
+    # Nothing below mutates a named tree, so one cache serves the whole corpus.
+    reads = ResolutionCache()
     for name, path in closures.items():
         try:
-            resolved = resolve_closure(path)
+            resolved = resolve_closure(path, cache=reads)
         except (SystemImageClosureError, SystemExit) as error:
             fail(f"{name}: closure does not resolve: {error}")
         identity = resolved.compiled.identity.hex()

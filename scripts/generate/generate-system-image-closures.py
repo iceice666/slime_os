@@ -30,6 +30,7 @@ import argparse
 import json
 import subprocess
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 import system_image_closure_contract as CONTRACT
@@ -310,6 +311,10 @@ def ignored_files(path: Path) -> list[str]:
     return sorted(line[3:] for line in status.stdout.splitlines() if line.startswith("!! "))
 
 
+# Every closure names the same workspace trees, and this script reads the
+# repository exactly once per run: the memo is what keeps a hundred closures
+# from being a hundred walks of the loader submodule.
+@lru_cache(maxsize=None)
 def identity_of(relative: str, kind: str) -> str:
     path = ROOT / relative
     if kind == "tree":

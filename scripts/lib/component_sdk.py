@@ -373,20 +373,34 @@ def tree_files(root: Path, *, exclude: tuple[str, ...] = ()) -> list[Path]:
     A symlink is a refusal rather than a followed edge: an exported tree that
     carries one describes bytes outside itself.
     """
+    return [path for _, path in _tree_entries(root, exclude)]
+
+
+def _tree_entries(root: Path, exclude: tuple[str, ...]) -> list[tuple[str, Path]]:
+    """`tree_files` with each file's POSIX relative path, in that order."""
     if not root.is_dir():
         _fail(f"not a directory: {root}")
-    found: list[Path] = []
-    for path in sorted(root.rglob("*"), key=lambda entry: entry.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix()
-        if any(relative == entry or relative.startswith(f"{entry}/") for entry in exclude):
-            continue
-        if path.is_symlink():
-            _fail(f"tree contains a symlink: {relative}")
-        if path.is_dir():
-            continue
-        if not path.is_file():
-            _fail(f"tree contains a non-regular file: {relative}")
-        found.append(path)
+    # Relative POSIX paths are built from strings during one `scandir` walk:
+    # the pathlib form costs more than the hashing it precedes on the trees a
+    # closure names, and the order is the same sorted relative path either way.
+    found: list[tuple[str, Path]] = []
+    pending: list[tuple[str, Path]] = [("", root)]
+    while pending:
+        prefix, directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                relative = f"{prefix}{entry.name}"
+                if any(relative == item or relative.startswith(f"{item}/") for item in exclude):
+                    continue
+                if entry.is_symlink():
+                    _fail(f"tree contains a symlink: {relative}")
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append((f"{relative}/", directory / entry.name))
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    _fail(f"tree contains a non-regular file: {relative}")
+                found.append((relative, directory / entry.name))
+    found.sort(key=lambda item: item[0])
     return found
 
 
@@ -399,10 +413,10 @@ def tree_digest(root: Path, *, exclude: tuple[str, ...] = ()) -> str:
     """
     digest = hashlib.sha256()
     digest.update(TREE_DOMAIN)
-    files = tree_files(root, exclude=exclude)
+    files = _tree_entries(root, exclude)
     digest.update(len(files).to_bytes(8, "little"))
-    for path in files:
-        _absorb(digest, path.relative_to(root).as_posix().encode("utf-8"))
+    for relative, path in files:
+        _absorb(digest, relative.encode("utf-8"))
         digest.update(b"\1" if os.access(path, os.X_OK) else b"\0")
         _absorb(digest, hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()

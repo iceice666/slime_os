@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
 import system_image_closure_contract as image_contract
 import system_test_run_contract as test_contract
-from component_spec import admit_specs, interface_catalogue
+from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
 from harness import ROOT
 from system_spec import CompiledSystem, compile_system, derive_manifest
@@ -149,6 +150,36 @@ def _fail(message: str) -> None:
     raise SystemImageClosureError(message)
 
 
+@dataclass
+class ResolutionCache:
+    """Repository reads shared across many resolutions in one process.
+
+    A closure corpus names the same trees -- the loader submodule, the root
+    crate, the prefix snapshot, every release input -- a hundred times over,
+    and the component-spec corpus once per closure. Sharing one cache turns
+    those into one read each. It is valid only while the paths it has read
+    stay unchanged: a caller that mutates an artifact between resolutions, as
+    the negative controls do, must not carry a cache across the mutation.
+    """
+
+    identities: dict[tuple[Path, str], str] = dataclasses.field(default_factory=dict)
+    specs: dict[str, CompiledSpec] | None = None
+
+    def identity(self, path: Path, kind: str) -> str:
+        key = (path, kind)
+        found = self.identities.get(key)
+        if found is None:
+            found = self.identities[key] = artifact_identity(path, kind)
+        return found
+
+    def compiled_specs(self) -> dict[str, CompiledSpec]:
+        if self.specs is None:
+            self.specs = {
+                entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())
+            }
+        return self.specs
+
+
 def normalize(value: object) -> bytes:
     return (
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
@@ -233,7 +264,13 @@ def _run_zutai(path: Path, checker: Path, variable: str, source_bound: int) -> d
     return value
 
 
-def _artifact(raw: object, label: str, *, base: Path | None = None) -> tuple[dict, Path | None]:
+def _artifact(
+    raw: object,
+    label: str,
+    *,
+    base: Path | None = None,
+    cache: ResolutionCache | None = None,
+) -> tuple[dict, Path | None]:
     value = _exact(raw, _ARTIFACT_FIELDS, label)
     path_text = _bounded_text(value["path"], image_contract.MAX_PATH_BYTES, f"{label}.path")
     kind = _bounded_text(value["kind"], image_contract.MAX_NAME_BYTES, f"{label}.kind")
@@ -248,7 +285,9 @@ def _artifact(raw: object, label: str, *, base: Path | None = None) -> tuple[dic
     resolved = (base / relative).resolve()
     if not resolved.is_relative_to(base.resolve()):
         _fail(f"{label}.path: path escapes closure root")
-    observed = artifact_identity(resolved, kind)
+    observed = (
+        artifact_identity(resolved, kind) if cache is None else cache.identity(resolved, kind)
+    )
     if observed != value["identity"]:
         _fail(f"{label}: identity mismatch for {path_text}")
     return value, resolved
@@ -437,20 +476,32 @@ def _compile_test_run(
     )
 
 
-def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
+def resolve_closure(
+    path: Path,
+    *,
+    source_root: Path = ROOT,
+    cache: ResolutionCache | None = None,
+) -> ResolvedClosure:
+    """Re-read every path a closure names and refuse any identity that disagrees.
+
+    `cache` shares those reads across a corpus; see `ResolutionCache` for when
+    that is sound.
+    """
     compiled = compile_closure(path)
     value = compiled.value
     base = source_root.resolve()
-    _, system_path = _artifact(value["systemSpec"], "systemSpec", base=base)
+    reads = ResolutionCache() if cache is None else cache
+    _, system_path = _artifact(value["systemSpec"], "systemSpec", base=base, cache=reads)
     assert system_path is not None
-    components = {entry.name: entry.spec for entry in admit_specs(catalogue=interface_catalogue())}
+    specs = reads.compiled_specs()
+    components = {entry.name: entry.spec for entry in specs.values()}
     system = compile_system(system_path, components=components)
     if system.identity.hex() != value["systemIdentity"]:
         _fail("systemIdentity does not match the compiled system")
     if system.spec["targetRequirement"] != value["target"]["profile"]:
         _fail("system target requirement does not match the closure target profile")
     artifacts: dict[str, Path] = {"systemSpec": system_path}
-    _, prefix = _artifact(value["target"]["prefix"], "target.prefix", base=base)
+    _, prefix = _artifact(value["target"]["prefix"], "target.prefix", base=base, cache=reads)
     assert prefix is not None
     artifacts["prefix"] = prefix
     profile_name = value["target"]["profile"]
@@ -479,7 +530,6 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
         if digest != observed_prefix[key]:
             _fail(f"target.prefix {relative} does not match the source pin")
-    specs = {entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())}
     selections = {entry["component"]: entry for entry in value["implementations"]}
     if set(selections) != set(system.spec["components"]):
         _fail("implementation selections do not exactly cover the system components")
@@ -493,7 +543,10 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
         if selection["identity"] != spec.identity.hex():
             _fail(f"{component}: component-spec identity mismatch")
         _, implementation_artifact = _artifact(
-            selection["artifact"], f"implementations[{component}].artifact", base=base
+            selection["artifact"],
+            f"implementations[{component}].artifact",
+            base=base,
+            cache=reads,
         )
         assert implementation_artifact is not None
         artifacts[f"component:{component}"] = implementation_artifact
@@ -507,12 +560,14 @@ def resolve_closure(path: Path, *, source_root: Path = ROOT) -> ResolvedClosure:
                 _fail(f"{component}: external ELF hash disagrees with component spec")
             external[implementation["binary"]] = implementation_artifact
     for name in ("root", "loader"):
-        _, artifact = _artifact(value[name]["implementation"], f"{name}.implementation", base=base)
+        _, artifact = _artifact(
+            value[name]["implementation"], f"{name}.implementation", base=base, cache=reads
+        )
         assert artifact is not None
         artifacts[name] = artifact
     for entry in value["releaseInputs"]:
         _, artifact = _artifact(
-            entry["artifact"], f"releaseInputs[{entry['name']}].artifact", base=base
+            entry["artifact"], f"releaseInputs[{entry['name']}].artifact", base=base, cache=reads
         )
         assert artifact is not None
         artifacts[f"release:{entry['name']}"] = artifact
