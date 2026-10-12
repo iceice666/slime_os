@@ -386,6 +386,20 @@ def render(value: object, indent: int = 0) -> str:
     raise TypeError(type(value))
 
 
+# One compile, and so one computed-source render, per system spec per run; the
+# same once-per-run reading of the repository `identity_of` relies on.
+_SYSTEMS: dict[str, object] = {}
+
+
+def compiled_system(source: str, components: dict):
+    found = _SYSTEMS.get(source)
+    if found is None:
+        found = _SYSTEMS[source] = compile_system(
+            SYSTEM_ROOT / f"{source}.zti", components=components
+        )
+    return found
+
+
 def closure_for(
     name: str,
     specs: dict,
@@ -405,7 +419,7 @@ def closure_for(
     build keys rather than one identity an environment variable disambiguated.
     """
     source = base or name
-    system = compile_system(SYSTEM_ROOT / f"{source}.zti", components=components)
+    system = compiled_system(source, components)
     profile_name = system.spec["targetRequirement"]
     if not profile_name.startswith(("aarch64-sel4", "riscv64-sel4")):
         return None

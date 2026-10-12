@@ -156,14 +156,17 @@ class ResolutionCache:
 
     A closure corpus names the same trees -- the loader submodule, the root
     crate, the prefix snapshot, every release input -- a hundred times over,
-    and the component-spec corpus once per closure. Sharing one cache turns
-    those into one read each. It is valid only while the paths it has read
-    stay unchanged: a caller that mutates an artifact between resolutions, as
-    the negative controls do, must not carry a cache across the mutation.
+    the component-spec corpus once per closure, and each system spec once per
+    closure built over it, re-rendering a computed one's source each time.
+    Sharing one cache turns those into one read or render each. It is valid
+    only while the paths it has read stay unchanged: a caller that mutates an
+    artifact or a system source between resolutions, as the negative controls
+    do, must not carry a cache across the mutation.
     """
 
     identities: dict[tuple[Path, str], str] = dataclasses.field(default_factory=dict)
     specs: dict[str, CompiledSpec] | None = None
+    systems: dict[Path, CompiledSystem] = dataclasses.field(default_factory=dict)
 
     def identity(self, path: Path, kind: str) -> str:
         key = (path, kind)
@@ -178,6 +181,14 @@ class ResolutionCache:
                 entry.name: entry for entry in admit_specs(catalogue=interface_catalogue())
             }
         return self.specs
+
+    def compiled_system(self, path: Path) -> CompiledSystem:
+        """`compile_system` with its computed-source drift check, once per path."""
+        found = self.systems.get(path)
+        if found is None:
+            components = {entry.name: entry.spec for entry in self.compiled_specs().values()}
+            found = self.systems[path] = compile_system(path, components=components)
+        return found
 
 
 def normalize(value: object) -> bytes:
@@ -494,8 +505,7 @@ def resolve_closure(
     _, system_path = _artifact(value["systemSpec"], "systemSpec", base=base, cache=reads)
     assert system_path is not None
     specs = reads.compiled_specs()
-    components = {entry.name: entry.spec for entry in specs.values()}
-    system = compile_system(system_path, components=components)
+    system = reads.compiled_system(system_path)
     if system.identity.hex() != value["systemIdentity"]:
         _fail("systemIdentity does not match the compiled system")
     if system.spec["targetRequirement"] != value["target"]["profile"]:

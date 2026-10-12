@@ -148,11 +148,13 @@ def check_resolution(
 ) -> dict[str, str]:
     """Every closure resolves, names a distinct identity, and agrees with its spec."""
     catalogue = interface_catalogue()
-    components = {entry.name: entry.spec for entry in admit_specs(catalogue=catalogue)}
+    compiled = {entry.name: entry for entry in admit_specs(catalogue=catalogue)}
+    components = {name: entry.spec for name, entry in compiled.items()}
     prefetch_systems(system_paths())
     identities: dict[str, str] = {}
-    # Nothing below mutates a named tree, so one cache serves the whole corpus.
-    reads = ResolutionCache()
+    # Nothing below mutates a named tree, so one cache, seeded with the corpus
+    # this check already admitted, serves the whole corpus.
+    reads = ResolutionCache(specs=compiled)
     for name, path in closures.items():
         try:
             resolved = resolve_closure(path, cache=reads)
