@@ -336,7 +336,9 @@ def check_negative_cases_have_no_image() -> int:
     return len(cases)
 
 
-def check_no_undeclared_build_knobs(extra_source: str | None = None) -> tuple[int, int, int]:
+def check_no_undeclared_build_knobs(
+    extra_source: str | None = None, also_non_keying: str | None = None
+) -> tuple[int, int, int]:
     """Every `SLIME_*` build knob is closure-declared, non-keying, or a named legacy knob.
 
     An ambient environment variable that changes image bytes is exactly what
@@ -408,6 +410,19 @@ def check_no_undeclared_build_knobs(extra_source: str | None = None) -> tuple[in
         "SLIME_TRANSFER_RECEIVER",
         "SLIME_WRONG_TARGET_EXECUTABLE",
     }
+
+    if also_non_keying is not None:
+        NON_KEYING[also_non_keying] = "a negative control's second classification"
+    classes = {
+        "closure-declared": set(CLOSURE_DECLARED),
+        "closure parameter": set(CLOSURE_PARAMETERS),
+        "non-keying": set(NON_KEYING),
+        "legacy pending deletion": set(LEGACY_PENDING_DELETION),
+    }
+    for knob in sorted(set().union(*classes.values())):
+        owners = [name for name, members in classes.items() if knob in members]
+        if len(owners) > 1:
+            fail(f"build knob {knob} is in more than one class: {owners}")
 
     closure_builder = ROOT / "scripts" / "build" / "build-system-image.py"
     found: dict[str, set[str]] = {}
@@ -577,6 +592,13 @@ def check_gate_controls(images: dict[str, set[str]]) -> int:
             "a newly introduced ambient build knob",
             lambda: check_no_undeclared_build_knobs('\n"SLIME_INVENTED_SCENARIO"\n'),
             "in none of the three classes",
+        ),
+        (
+            "a closure-declared knob also classified non-keying",
+            lambda: check_no_undeclared_build_knobs(
+                also_non_keying="SLIME_NETWORK_FAULT_IN_FLIGHT"
+            ),
+            "is in more than one class",
         ),
         (
             "a name that is both a scenario and a root-role closure",

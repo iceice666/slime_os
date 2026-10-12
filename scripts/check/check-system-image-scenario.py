@@ -278,6 +278,7 @@ def check_root_roles() -> int:
     roles = GENERATOR_MODULE.ROOT_ROLE_CLOSURES
     if not roles:
         fail("no root-role closure is declared, so this arm asserts nothing")
+    check_every_role_has_closure(roles)
     for name, (base_name, role, parameters) in sorted(roles.items()):
         path = CLOSURE_ROOT / f"{name}.zti"
         if not path.is_file():
@@ -292,6 +293,18 @@ def check_root_roles() -> int:
         ).identity:
             fail(f"{name}: root-role closure and its base share an identity")
     return len(roles)
+
+
+def check_every_role_has_closure(roles: dict) -> None:
+    """Every non-default contract role is built by some root-role closure, and no other."""
+    mapped = {role for _base, role, _parameters in roles.values()}
+    admitted = set(CONTRACT.ROOT_ROLES) - {CONTRACT.ROOT_ROLE_EMBEDDED_GENERATION}
+    if mapped != admitted:
+        fail(
+            f"root-role closures cover {sorted(mapped)}, but the contract admits "
+            f"{sorted(admitted)}: missing {sorted(admitted - mapped)}, "
+            f"unadmitted {sorted(mapped - admitted)}"
+        )
 
 
 def check_root_role_bytes(name: str) -> tuple[str, str]:

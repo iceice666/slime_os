@@ -184,10 +184,11 @@ class ResolutionCache:
 
     def compiled_system(self, path: Path) -> CompiledSystem:
         """`compile_system` with its computed-source drift check, once per path."""
-        found = self.systems.get(path)
+        key = path.resolve()
+        found = self.systems.get(key)
         if found is None:
             components = {entry.name: entry.spec for entry in self.compiled_specs().values()}
-            found = self.systems[path] = compile_system(path, components=components)
+            found = self.systems[key] = compile_system(key, components=components)
         return found
 
 

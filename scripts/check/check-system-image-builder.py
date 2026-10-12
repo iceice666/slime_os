@@ -59,7 +59,6 @@ from system_image_closure import (
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
-    compile_system,
     derive_manifest,
     prefetch_systems,
     system_paths,
@@ -149,7 +148,6 @@ def check_resolution(
     """Every closure resolves, names a distinct identity, and agrees with its spec."""
     catalogue = interface_catalogue()
     compiled = {entry.name: entry for entry in admit_specs(catalogue=catalogue)}
-    components = {name: entry.spec for name, entry in compiled.items()}
     prefetch_systems(system_paths())
     identities: dict[str, str] = {}
     # Nothing below mutates a named tree, so one cache, seeded with the corpus
@@ -189,9 +187,7 @@ def check_resolution(
             if resolved.root_role == "embedded-generation":
                 fail(f"{name}: declared a root-role closure but carries the ordinary role")
             expected = derive_manifest(
-                compile_system(
-                    SYSTEM_ROOT / f"{GENERATOR_ROOT_ROLES[name][0]}.zti", components=components
-                )
+                reads.compiled_system(SYSTEM_ROOT / f"{GENERATOR_ROOT_ROLES[name][0]}.zti")
             )
             if resolved.manifest != expected:
                 fail(f"{name}: root-role closure's manifest differs from its base's")
@@ -211,9 +207,7 @@ def check_resolution(
                 # Profile-only: the manifest is still exactly its base's, so
                 # the comparison below applies and is worth keeping.
                 expected = derive_manifest(
-                    compile_system(
-                        SYSTEM_ROOT / f"{GENERATOR_SCENARIOS[name][0]}.zti", components=components
-                    )
+                    reads.compiled_system(SYSTEM_ROOT / f"{GENERATOR_SCENARIOS[name][0]}.zti")
                 )
                 if resolved.manifest != expected:
                     fail(f"{name}: profile-only scenario's manifest differs from its base's")
@@ -223,9 +217,7 @@ def check_resolution(
                 f"{name}: carries build parameters or a non-default build profile but is "
                 "not a declared scenario"
             )
-        expected = derive_manifest(
-            compile_system(SYSTEM_ROOT / f"{name}.zti", components=components)
-        )
+        expected = derive_manifest(reads.compiled_system(SYSTEM_ROOT / f"{name}.zti"))
         if resolved.manifest != expected:
             fail(f"{name}: resolved closure manifest differs from its system spec's derivation")
     return identities
