@@ -1114,10 +1114,14 @@ def stock_controls() -> int:
             return "\n".join(line for line in corpus_text.splitlines() if not line.startswith((f"batch {name} ", f"stream {name} ")))
 
         def rekeep(tail: str) -> str:
-            return "\n".join(
-                f"batch transport_keep_alive {tail}" if line.startswith("batch transport_keep_alive ") else line
-                for line in corpus_text.splitlines()
-            )
+            # The keep-alive row may be gone from the corpus, which the exam allows. The variant is
+            # then added as a row, so each control still puts the variant in front of the judge
+            # instead of handing it the unchanged corpus.
+            row = f"batch transport_keep_alive {tail}"
+            lines = corpus_text.splitlines()
+            if any(line.startswith("batch transport_keep_alive ") for line in lines):
+                return "\n".join(row if line.startswith("batch transport_keep_alive ") else line for line in lines)
+            return "\n".join([*lines, row])
 
         def restream(name: str, position: int, value: str) -> str:
             return "\n".join(
