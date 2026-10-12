@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import system_spec
 from harness import ROOT
 from system_image_closure import (
     SystemImageClosureError,
@@ -232,6 +233,38 @@ def check_identity_boundaries(temporary: Path) -> None:
         fail("test-run marker oracle changed image-closure identity")
 
 
+def check_computed_source_drift() -> None:
+    """Default resolution refuses a committed computed system its source no longer renders.
+
+    `closure_image.build` resolves before every build, and a plane gate that
+    builds through it need not depend on `system_spec_check`; this refusal is
+    what keeps such a build from booting a stale graph. The source's rendering
+    is substituted rather than the file edited, so no repository byte changes.
+    """
+    name = "sel4-call"
+    closure = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / f"{name}.zti"
+    if name not in system_spec.COMPUTED_SYSTEM_SOURCES:
+        fail(f"{name} is no longer a computed system; choose another control subject")
+    committed = (system_spec.SYSTEM_ROOT / f"{name}.zti").read_text(encoding="utf-8")
+    original = system_spec.render_computed_system
+
+    def changed_source(system: str, *args, **kwargs) -> str:
+        if system == name:
+            return committed.replace("generation = ", "generation = 9", 1)
+        return original(system, *args, **kwargs)
+
+    system_spec.render_computed_system = changed_source
+    try:
+        resolve_closure(closure)
+    except (SystemImageClosureError, system_spec.SystemSpecError) as error:
+        if "drift" not in str(error):
+            fail(f"stale computed system refused for the wrong reason: {error}")
+    else:
+        fail(f"{name}: a committed system its source no longer renders was resolved")
+    finally:
+        system_spec.render_computed_system = original
+
+
 def check_repository_metadata(temporary: Path) -> None:
     """A tree input's identity is its content, not how the checkout was made."""
     primary = temporary / "metadata-primary"
@@ -325,6 +358,7 @@ def main() -> None:
         temporary = Path(directory)
         check_refusals(temporary)
         check_prefix_pins()
+        check_computed_source_drift()
         check_target_spec_path()
         check_identity_boundaries(temporary)
         check_repository_metadata(temporary)
