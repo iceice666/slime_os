@@ -731,9 +731,12 @@ impl Session {
     }
 
     /// When the next KEEP_ALIVE is due: a quarter of the peer's lease after this side last sent.
-    /// The announced lease is the one the peer closes on, so it sets the cadence.
+    /// The announced lease is the one the peer closes on, so it sets the cadence. A lease under
+    /// four milliseconds still spaces keep-alives a millisecond apart, so a pump never queues a
+    /// second one in the instant of the first.
     pub fn keep_alive_due(&self) -> u64 {
-        self.last_tx_ms.saturating_add(self.peer_lease_ms / 4)
+        self.last_tx_ms
+            .saturating_add((self.peer_lease_ms / 4).max(1))
     }
 
     /// Closes the session locally with a CLOSE batch carrying `reason`.

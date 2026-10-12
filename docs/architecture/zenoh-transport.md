@@ -31,10 +31,15 @@ Owners:
 Profile 0 admits one static peer link over one TCP connection: the
 `INIT`/`OPEN` handshake as connector or listener, reliable `FRAME` batches
 carrying `DECLARE_SUBSCRIBER`, `UNDECLARE_SUBSCRIBER` and a `PUSH` with a `Put`
-body and the 33-byte `rmw_zenoh` attachment, and `CLOSE`. Everything else is
-refused with a class from the closed vocabulary in `contracts/zenoh-profile/v1`,
-never tolerated: routers and clients, wildcard key expressions, other
-resolutions, unknown extensions and messages.
+body and the 33-byte `rmw_zenoh` attachment, `KEEP_ALIVE`, and `CLOSE`. A stock
+eclipse-zenoh 1.0.0 peer on the plain demo topic is also taken
+([decision](../decisions/zenoh-stock-peer.md)): the optional QoS extension on
+`INIT_SYN` and, only where it was observed, on `OAM` and on the outer `DECLARE`; an
+`OAM` and a `DeclareFinal` after `OPEN`; and one numeric key-expression alias for the
+demo key. Everything else is refused with a class from the closed vocabulary in
+`contracts/zenoh-profile/v1`, never tolerated: routers and clients, wildcard key
+expressions, other resolutions, unknown extensions and messages. A second alias is
+refused as over-bound and an undeclared one as `invalid-keyexpr`.
 
 Bounds are enforced before any byte is taken and equal the demo contract's: a
 512-byte batch, 129-byte key expression, 33-byte attachment, 12-byte payload,
@@ -59,10 +64,14 @@ declaration before it may publish, and a subscriber never accepts a `Put` for a
 key it did not declare. Frames the session sends use the sender key mapping,
 as the upstream encoder writes them.
 
-There is no keep-alive: the decoder refuses message id 4, so the lease is renewed
-only by traffic, and a link quiet for longer than the peer's lease is closed by
-`tick` with the expiry reason. The demo exchanges its samples well inside the 2 s
-lease.
+An open session sends a one-byte `KEEP_ALIVE` (message id 4) every quarter of the
+peer's announced lease when it has sent nothing else, floored at one millisecond,
+and takes the peer's as traffic that renews the lease. Before `OPEN` a `KEEP_ALIVE`
+is `unexpected-message` and changes nothing, and it is exactly the one byte: a
+trailing byte is `trailing-bytes`. A link quiet for longer than the peer's lease is
+closed by `tick` with the expiry reason. The demo exchanges its samples well inside
+the 2 s lease. A link whose send slot is occupied runs only the expiry half
+(`tick_lease`), so a keep-alive never collides with a batch waiting there.
 
 A refused call leaves the session unchanged. The only transitions into
 `Closed` are a received `CLOSE`, a local `close()` and lease expiry; a caller

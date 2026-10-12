@@ -624,3 +624,44 @@ fn a_quiet_link_closes_at_the_lease_and_traffic_renews_it() {
     // A KEEP_ALIVE is what renews a link with nothing else to say.
     assert_eq!(decode_batch(&[0x04]), Ok(Message::KeepAlive));
 }
+
+/// A peer lease under four milliseconds must not make the cadence zero: after a KEEP_ALIVE the
+/// next one is due a millisecond later, not in the same instant.
+#[test]
+fn a_tiny_peer_lease_still_spaces_keep_alives() {
+    let mut a = connector();
+    let cookie = cookie();
+    let mut b = Session::new(
+        Role::Listener,
+        &Config {
+            zid: &ZID_LISTENER,
+            lease_ms: 3,
+            initial_sn: LISTENER_SN,
+            cookie: &cookie,
+        },
+    )
+    .expect("listener");
+    let mut out = [0u8; MAX_BATCH_BYTES];
+    let outcome = a.connect(0, &mut out).expect("connect");
+    let (init_syn, _) = owned(&outcome, &out);
+    let (init_ack, _) = expect_recv(&mut b, &init_syn, 1);
+    let (open_syn, _) = expect_recv(&mut a, &init_ack, 2);
+    let (open_ack, _) = expect_recv(&mut b, &open_syn, 3);
+    expect_recv(&mut a, &open_ack, 4);
+    assert_eq!(a.peer_lease_ms(), 3);
+
+    let first = a.tick(5, &mut out).expect("tick");
+    assert_eq!(decode_batch(first.batch(&out)), Ok(Message::KeepAlive));
+    assert!(
+        a.keep_alive_due() > 5,
+        "due {} after a send at 5",
+        a.keep_alive_due()
+    );
+    let second = a.tick(5, &mut out).expect("tick");
+    assert!(
+        second.batch(&out).is_empty(),
+        "a second KEEP_ALIVE in the same millisecond"
+    );
+    let third = a.tick(6, &mut out).expect("tick");
+    assert_eq!(decode_batch(third.batch(&out)), Ok(Message::KeepAlive));
+}

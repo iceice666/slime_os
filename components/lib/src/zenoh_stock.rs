@@ -983,6 +983,43 @@ fn the_cookie_is_the_captured_one() {
     assert_eq!(fixtures::FORMAT_VERSION, 1);
 }
 
+/// When the exam hands over its validated record, the generated constants are exactly that record:
+/// the same cookie, the same groups, the same names and bytes in the same order. A constant that
+/// drifted from the checker's captured bytes fails here instead of replaying stale bytes. Without
+/// the variable, a plain `cargo test`, there is no record to compare and nothing is asserted.
+#[test]
+fn the_constants_are_the_handed_off_record() {
+    let Some(path) = std::env::var_os("ZENOH_STOCK_FIXTURES") else {
+        return;
+    };
+    let record = std::fs::read_to_string(&path).expect("the hand-off record is readable");
+    let mut wanted = String::new();
+    wanted.push_str("{\n");
+    wanted.push_str(&format!(
+        "  formatVersion = {};\n",
+        fixtures::FORMAT_VERSION
+    ));
+    wanted.push_str(&format!("  cookieHex = \"{}\";\n", fixtures::COOKIE_HEX));
+    for (group, rows) in [
+        ("connects", &fixtures::CONNECTS[..]),
+        ("listens", &fixtures::LISTENS[..]),
+        ("refuse", &fixtures::REFUSE[..]),
+    ] {
+        wanted.push_str(&format!("  {group} = [\n"));
+        for (name, bytes) in rows {
+            wanted.push_str(&format!(
+                "    {{ name = \"{name}\"; hex = \"{bytes}\"; }};\n"
+            ));
+        }
+        wanted.push_str("  ];\n");
+    }
+    wanted.push_str("}\n");
+    assert_eq!(
+        record, wanted,
+        "fixtures.rs differs from the record the exam handed over; run `just zenoh_stock_gen`"
+    );
+}
+
 /// Every section, in the order the exam lists them.
 #[test]
 fn the_stock_peer_exam() {
