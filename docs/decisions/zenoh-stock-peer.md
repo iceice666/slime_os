@@ -1,7 +1,7 @@
 # Zenoh Profile 0 and a stock Zenoh peer
 
 **Status:** Proposed
-**Related work items:** `01a12f05-3402-7b5a-8909-9ea21bdd56e9` (this decision's exam and
+**Related work items:** `01a12f13-a343-7924-af20-18148fc1b0d9` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; R1
 `01a0724c-5400-7206-ae86-ad13584c8530` (deferred). R0 is `01a00b4d-2400-7987-93d6-19201c397dff`.
 
@@ -144,7 +144,7 @@ Everything else the profile refuses stays refused with its class.
   `zenoh_link::tests`, and requires each to pass by name. The decoder's property tests walk only the accepted rows of the corpus, so they never see a stock batch; the stock tests run the same three properties (no proper prefix is accepted unless it is a shorter frame, a flipped bit never panics or exceeds a bound, every two-chunk split reassembles) on each captured batch and print a line for each, which the exam requires. The batches are not added to `vectors.txt` for this: `zenoh_encoder_check` and the cross-check harness read every accepted row, and neither knows a keep-alive, an OAM or a QoS extension. They run in a second `cargo test`
   process, apart from the stock tests: they print `[zenoh-exam]` lines for the recipes that
   own them, and none of those lines may reach the stock transcript. While
-  `transport_keep_alive` exists it stays refused with its captured byte `04`; it may be
+  `transport_keep_alive` exists it stays refused as `unsupported-message` with its captured byte `04`; it may be
   removed, but it cannot become an accepted row, which the encoder gate and the
   cross-check harness could not read. The encoder tests hold the key, payload, cookie and batch bounds, and the link
   tests hold send after close, stale handles, a full receive queue and stream handling,

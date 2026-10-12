@@ -187,6 +187,10 @@ STOCK_RETAINED_TESTS = (*STOCK_DECODER_TESTS, *STOCK_SESSION_TESTS, *STOCK_ENCOD
 # below prove it does.
 STOCK_MAY_CHANGE = frozenset({"transport_keep_alive"})
 STOCK_MAY_CHANGE_BYTES = {"transport_keep_alive": "04"}
+# The class it is refused with today. While the row stays it keeps its class too: the retained
+# corpus test agrees with whatever the row says, so a class changed in the row and the decoder
+# together would otherwise pass.
+STOCK_MAY_CHANGE_CLASS = {"transport_keep_alive": "unsupported-message"}
 # The refused vectors that must stay exactly as they were when the exam landed, by name, with a
 # digest of `<name> <class> <bytes>` for each in name order. The checker reads the working tree's
 # corpus and compares; a refused vector may be added, and transport_keep_alive may go, but none of
@@ -747,7 +751,7 @@ def stock_fixtures() -> list[tuple[str, str]]:
 # completed and retired to .tasks/terminal, where its body is no longer an active item. While the
 # item is active its stored body is compared with these; once it is gone these still bind.
 STOCK_PINNED_CASES = 69
-STOCK_PINNED_CONTROLS = 136
+STOCK_PINNED_CONTROLS = 138
 
 
 def stock_item_pins() -> tuple[int, int]:
@@ -821,6 +825,8 @@ def judge_stock_corpus(text: str) -> int:
         row = refused.get(name)
         if row is not None and row[1] != captured_bytes:
             fail(f"stock corpus: {name} must keep the captured bytes {captured_bytes}, not {row[1]}")
+        if row is not None and row[0] != STOCK_MAY_CHANGE_CLASS[name]:
+            fail(f"stock corpus: {name} must stay refused as {STOCK_MAY_CHANGE_CLASS[name]}, not {row[0]}")
     absent = sorted(set(STOCK_ACCEPTED_NAMES) - set(accepted))
     if absent:
         fail(f"stock corpus: accepted upstream batches removed or renamed: {', '.join(absent[:6])}")
@@ -1170,6 +1176,8 @@ def stock_controls() -> int:
             ("a batch row reusing an accepted batch's name", corpus_text + f"\nbatch {first_accepted} refused empty-batch -"),
             ("the keep-alive row accepted with invented bytes", rekeep("ok 00 invented")),
             ("the keep-alive row still refused but with other bytes", rekeep("refused unsupported-message ff")),
+            ("the keep-alive row refused with another existing class", rekeep("refused malformed-message 04")),
+            ("the keep-alive row refused with an invented class", rekeep("refused invented-class 04")),
             ("the keep-alive row turned into an accepted row with the captured byte", rekeep(f"ok {STOCK_MAY_CHANGE_BYTES['transport_keep_alive']} KEEP_ALIVE;captured")),
             ("an accepted stock_ row for a captured batch", corpus_text + f"\nbatch stock_init_syn ok {zenoh_stock_peer.batches('connects')[0][1]} INIT_SYN;captured"),
         ]

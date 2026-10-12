@@ -24,6 +24,6 @@ A record with another `formatVersion`, a group of another size, an odd or non-he
 in any entry and however it is laid out, is refused: the decoder closes the field set
 itself, because the derived `decode` ignores a field it does not know. The Rust reader is part of the
 implementation, not this planning contract; the scope is
-`01a12f05-3402-7b5a-8909-9ea21bdd56e9` (see the exam in
+`01a12f13-a343-7924-af20-18148fc1b0d9` (see the exam in
 `scripts/check/check-zenoh-profile0.py`). The decision is
 [`docs/decisions/zenoh-stock-peer.md`](../../docs/decisions/zenoh-stock-peer.md).
