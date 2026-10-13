@@ -59,6 +59,8 @@ OK_SCENARIOS = (
     "boundary-whole-then-fragmented",
     "two-messages-in-a-row",
     "reassembly-after-timeout-reuses-storage",
+    "reassembly-after-refusals-reuses-storage",
+    "put-roundtrip-across-sequence-width",
     "reassembly-completes-at-the-timeout-edge",
     "heap-declared-payload-boundary",
     "heap-fills-notice-queue",
@@ -145,6 +147,14 @@ REFUSED_SCENARIOS = (
     ("fragmented-put-attachment-length-65536", "over-bound"),
     ("fragmented-put-payload-length-65536", "over-bound"),
     ("fragmented-put-payload-truncated", "truncated"),
+    # The top bit of each field's width: a value canonical in its field at bit 15 or bit 31 is refused
+    # for what it says, so a reader one bit narrow fails; and a Put cut off inside its attachment is
+    # truncated, as the whole-frame parser's `take` reports it.
+    ("fragmented-put-scope-32768", "invalid-keyexpr"),
+    ("fragmented-put-key-length-32768", "over-bound"),
+    ("fragmented-put-attachment-length-2147483648", "over-bound"),
+    ("fragmented-put-payload-length-2147483648", "over-bound"),
+    ("fragmented-put-attachment-truncated", "truncated"),
     ("reassembly-one-ms-after-the-timeout", "reassembly-timeout"),
     # Every variable-length integer in a fragment run is read the way the Rust reader reads it: at most
     # the field's width, and canonically. The fragment's own sequence number and the four lengths and
@@ -213,8 +223,20 @@ def queue_line(held: int, in_progress: int, size: int, sent: str, back: str) -> 
     return f"links queue {held} {in_progress} {size} {sent} {back}"
 
 
-PINNED_CASES = 113
-PINNED_CONTROLS = 274
+# Sequence numbers at which the width of the encoded number changes, one for each step from one byte to
+# five: a run that starts one short of the step has fragments whose headers differ in size, so a link
+# that sizes every slice from its first fragment's header overruns the announced batch.
+WIDTH_STARTS = (127, 16383, 2097151, 268435455)
+# Each way a reassembly ends early, after which the one-message storage must be free again.
+REUSE_CAUSES = ("sequence-gap", "whole-frame-during-reassembly", "best-effort-fragment-during-reassembly")
+
+
+def width_split(start: int) -> list[bytes]:
+    return zenoh_fragment.reference_split(full_key_message(FULL_KEY_PAYLOAD), FULL_KEY_BATCH, start)
+
+
+PINNED_CASES = 135
+PINNED_CONTROLS = 303
 
 
 class LinksError(ValueError):
@@ -293,6 +315,17 @@ def good_lines() -> list[str]:
             ]
         if name == "reassembly-completes-at-the-timeout-edge":
             lines.append(deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))
+        if name == "reassembly-after-refusals-reuses-storage":
+            lines += [
+                f"links reuseafter {cause} {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}"
+                for cause in REUSE_CAUSES
+            ]
+        if name == "put-roundtrip-across-sequence-width":
+            lines += [
+                f"links widthsplit {start} {index} {len(body)} {body[0]:02x} {sha(body)}"
+                for start in WIDTH_STARTS
+                for index, body in enumerate(width_split(start))
+            ]
         if name == "reassembly-after-timeout-reuses-storage":
             lines.append(f"links reuse {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}")
         if name == "reassemble-sender-mapped-alias":
@@ -329,6 +362,8 @@ SHAPES = {
     ("links", "queue"): 7,
     ("links", "aliased"): 5,
     ("links", "deadline"): 6,
+    ("links", "reuseafter"): 6,
+    ("links", "widthsplit"): 7,
 }
 
 
@@ -429,13 +464,31 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if advance != wanted_advance:
         raise LinksError(f"the session sequence after a whole fragment run is {wanted_advance}, reported {advance}")
 
+    reuseafter = [(f[2], int(f[3]), int(f[4]), f[5]) for f in only("reuseafter")]
+    wanted_reuseafter = [(cause, reuse_capacity(), REUSE_SIZE, sha(zenoh_fragment.payload_bytes(REUSE_SIZE))) for cause in REUSE_CAUSES]
+    if reuseafter != wanted_reuseafter:
+        raise LinksError(f"after each early end of a reassembly, {list(REUSE_CAUSES)}, a message must reassemble into storage of one message: {wanted_reuseafter}, reported {reuseafter}")
+
+    widthsplit = [(int(f[2]), int(f[3]), int(f[4]), f[5], f[6]) for f in only("widthsplit")]
+    wanted_width = [
+        (start, index, len(body), f"{body[0]:02x}", sha(body))
+        for start in WIDTH_STARTS
+        for index, body in enumerate(width_split(start))
+    ]
+    for start in WIDTH_STARTS:
+        widths = {len(zenoh_wire.leb128((start + index) & 0xFFFFFFFF)) for index in range(len(width_split(start)))}
+        if len(widths) < 2:
+            raise LinksError(f"the run from {start} does not cross a sequence-number width change")
+    if widthsplit != wanted_width:
+        raise LinksError("a Put split across a sequence-number width change differs from the host reference")
+
     refused = [(f[2], f[3]) for f in only("refused")]
     if [name for name, _ in refused] != [name for name, _ in REFUSED_SCENARIOS]:
         raise LinksError(f"refusals reported {[n for n, _ in refused]}, the exam names {[n for n, _ in REFUSED_SCENARIOS]}")
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit)
     return positive, len(refused)
 
 
@@ -670,6 +723,29 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a deadline run that reassembled to another payload", swap("links deadline ", corrupt_last(good[first("links deadline ")]))),
         ("a deadline run of another timeout", swap("links deadline ", deadline_line(TIMEOUT_MS + 1, 0, TIMEOUT_MS + 1, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))),
         ("the timeout-edge scenario dropped", [line for line in good if line != "links ok reassembly-completes-at-the-timeout-edge"]),
+        ("fragmented-put-scope-32768 admitted instead of refused", drop("links refused fragmented-put-scope-32768 ")),
+        ("fragmented-put-scope-32768 refused with the wrong class", swap("links refused fragmented-put-scope-32768 ", "links refused fragmented-put-scope-32768 over-bound")),
+        ("fragmented-put-key-length-32768 admitted instead of refused", drop("links refused fragmented-put-key-length-32768 ")),
+        ("fragmented-put-key-length-32768 refused with the wrong class", swap("links refused fragmented-put-key-length-32768 ", "links refused fragmented-put-key-length-32768 unsupported-message")),
+        ("fragmented-put-attachment-length-2147483648 admitted instead of refused", drop("links refused fragmented-put-attachment-length-2147483648 ")),
+        ("fragmented-put-attachment-length-2147483648 refused with the wrong class", swap("links refused fragmented-put-attachment-length-2147483648 ", "links refused fragmented-put-attachment-length-2147483648 unsupported-message")),
+        ("fragmented-put-payload-length-2147483648 admitted instead of refused", drop("links refused fragmented-put-payload-length-2147483648 ")),
+        ("fragmented-put-payload-length-2147483648 refused with the wrong class", swap("links refused fragmented-put-payload-length-2147483648 ", "links refused fragmented-put-payload-length-2147483648 unsupported-message")),
+        ("fragmented-put-attachment-truncated admitted instead of refused", drop("links refused fragmented-put-attachment-truncated ")),
+        ("fragmented-put-attachment-truncated refused with the wrong class", swap("links refused fragmented-put-attachment-truncated ", "links refused fragmented-put-attachment-truncated over-bound")),
+        ("the early-end reuse lines dropped", drop("links reuseafter ")),
+        ("the reuse after a sequence gap dropped", drop("links reuseafter sequence-gap ")),
+        ("the reuse after a whole frame mid-run dropped", drop("links reuseafter whole-frame-during-reassembly ")),
+        ("the reuse after a best-effort fragment mid-run dropped", drop("links reuseafter best-effort-fragment-during-reassembly ")),
+        ("a reuse after a sequence gap into storage one byte short", swap("links reuseafter sequence-gap ", good[first("links reuseafter sequence-gap ")].replace(f" {reuse_capacity()} ", f" {reuse_capacity() - 1} ", 1))),
+        ("a reuse after a sequence gap that reassembled to another payload", swap("links reuseafter sequence-gap ", corrupt_last(good[first("links reuseafter sequence-gap ")]))),
+        ("a reuse after an early end that is not one of the pinned causes", swap("links reuseafter sequence-gap ", good[first("links reuseafter sequence-gap ")].replace("sequence-gap", "timeout", 1))),
+        ("the split across width steps dropped", drop("links widthsplit ")),
+        ("the split from 127 dropped", drop("links widthsplit 127 ")),
+        ("the split from 268435455 dropped", drop("links widthsplit 268435455 ")),
+        ("a second fragment sized from the first header at the one-byte step", swap("links widthsplit 127 1 ", good[first("links widthsplit 127 1 ")].replace(f" {len(width_split(127)[1])} ", f" {len(width_split(127)[1]) + 1} ", 1))),
+        ("a second fragment sized from the first header at the two-byte step", swap("links widthsplit 16383 1 ", good[first("links widthsplit 16383 1 ")].replace(f" {len(width_split(16383)[1])} ", f" {len(width_split(16383)[1]) + 1} ", 1))),
+        ("a split across a width step with another body", swap("links widthsplit 2097151 2 ", corrupt_last(good[first("links widthsplit 2097151 2 ")]))),
         ("a dropped aliased-Put line", drop("links aliased ")),
         ("an aliased Put reported receiver-mapped", swap("links aliased ", good[first("links aliased ")].replace(" 5d ", " 1d ", 1))),
         ("an aliased Put of another size", swap("links aliased ", good[first("links aliased ")].replace(" 5000 ", " 4999 ", 1))),
@@ -807,6 +883,40 @@ def reference_controls() -> int:
         at = whole.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])) + 2
         return bytes(whole[:at]) + bytes([0x80, 0x80, 0x04]) + bytes(whole[at + 1 :])
 
+    def with_leb(offset: int, old_len: int, value: bytes, message: bytes) -> bytes:
+        return message[:offset] + value + message[offset + old_len :]
+
+    def attachment_length_at(message: bytes) -> int:
+        return message.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])) + 2
+
+    def attachment_length_2_31() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return with_leb(attachment_length_at(whole), 1, bytes([0x80, 0x80, 0x80, 0x80, 0x08]), whole)
+
+    def payload_length_2_31() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return with_leb(attachment_length_at(whole) + 1 + 33, 1, bytes([0x80, 0x80, 0x80, 0x80, 0x08]), whole)
+
+    def key_length_32768() -> bytes:
+        whole = full_key(10, 20)
+        return with_leb(2, 1, bytes([0x80, 0x80, 0x02]), whole)
+
+    def attachment_cut() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return whole[: attachment_length_at(whole) + 1 + 10]
+
+    def cached_width_split(message: bytes, batch_bytes: int, start: int) -> list[bytes]:
+        """A splitter that sizes every slice from the first fragment's header: wrong across a width step."""
+        chunk = batch_bytes - zenoh_fragment.STREAM_LENGTH_BYTES - 1 - len(zenoh_wire.leb128(start))
+        out, at, number = [], 0, start
+        while at < len(message):
+            piece = message[at : at + chunk]
+            at += len(piece)
+            flags = zenoh_fragment.ID_FRAGMENT | zenoh_fragment.FLAG_R | (zenoh_fragment.FLAG_M if at < len(message) else 0)
+            out.append(bytes([flags]) + zenoh_wire.leb128(number) + piece)
+            number += 1
+        return out
+
     def key_length_over() -> bytes:
         whole = bytearray(full_key(10, 20))
         return bytes(whole[:2]) + bytes([0x80, 0x80, 0x04]) + bytes(whole[3:])
@@ -905,6 +1015,12 @@ def reference_controls() -> int:
         ("a canonical key length of 256", lambda: zenoh_fragment.decode_message(zenoh_wire.push_put("k" * 256, zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(5), True), max_key=129)),
         ("a canonical attachment length of 65536", lambda: zenoh_fragment.decode_message(attachment_length_65536(), max_key=129)),
         ("a canonical payload length of 65536 against 16384", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(65536), max_key=129, max_payload=16384)),
+        ("a canonical alias scope of 32768", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x02])), alias=1)),
+        ("a canonical key length of 32768", lambda: zenoh_fragment.decode_message(key_length_32768(), max_key=129)),
+        ("a canonical attachment length of 2147483648", lambda: zenoh_fragment.decode_message(attachment_length_2_31(), max_key=129)),
+        ("a canonical payload length of 2147483648 against 16384", lambda: zenoh_fragment.decode_message(payload_length_2_31(), max_key=129, max_payload=16384)),
+        ("a message cut off inside the attachment", lambda: zenoh_fragment.decode_message(attachment_cut(), max_key=129)),
+        ("a run sized from its first fragment's header across a width step", lambda: zenoh_fragment.reassemble(cached_width_split(full_key_message(FULL_KEY_PAYLOAD), FULL_KEY_BATCH, 127), 127, FULL_KEY_BATCH)),
         ("a payload shorter than its length says", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(100)[:-10], max_key=129)),
         ("a payload one byte short", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(100)[:-1], max_key=129)),
         ("a last fragment one millisecond past the timeout", lambda: zenoh_fragment.check_deadline(0, TIMEOUT_MS + 1, TIMEOUT_MS)),
@@ -946,6 +1062,12 @@ def reference_controls() -> int:
         "a canonical payload length of 65536 against 16384": "longer than the configuration declares",
         "a payload shorter than its length says": "truncated",
         "a payload one byte short": "truncated",
+        "a canonical alias scope of 32768": "never declared",
+        "a canonical key length of 32768": "longer than the configuration declares",
+        "a canonical attachment length of 2147483648": "not 33 bytes",
+        "a canonical payload length of 2147483648 against 16384": "longer than the configuration declares",
+        "a message cut off inside the attachment": "truncated",
+        "a run sized from its first fragment's header across a width step": "announced batch",
         "two messages joined in one run": "trailing-bytes",
         "a last fragment one millisecond past the timeout": "reassembly-timeout",
         "a timeout of one millisecond with a last fragment at two": "reassembly-timeout",
@@ -984,6 +1106,20 @@ def reference_controls() -> int:
         raise LinksError("control: a canonical key length of 256 was not read")
     if len(zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(65536), max_key=129, max_payload=65536)["payload"]) != 65536:
         raise LinksError("control: a canonical payload length of 65536 was not read")
+    if zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x02])), alias=32768)["scope"] != 32768:
+        raise LinksError("control: a canonical scope of 32768 was not read")
+    if zenoh_fragment.decode_message(full_key(32768, 5), max_key=32768)["key"] != b"k" * 32768:
+        raise LinksError("control: a canonical key length of 32768 was not read")
+    try:
+        zenoh_fragment.decode_message(payload_length_2_31(), max_key=129, max_payload=1 << 31)
+    except zenoh_fragment.FragmentError as error:
+        if "truncated" not in str(error):
+            raise LinksError(f"control: a payload length of 2147483648 was not read in full: {error}") from None
+    else:
+        raise LinksError("control: a payload of 2147483648 bytes was found in a short message")
+    for start in WIDTH_STARTS:
+        if zenoh_fragment.reassemble(width_split(start), start, FULL_KEY_BATCH) != full_key_message(FULL_KEY_PAYLOAD):
+            raise LinksError(f"control: a run across the width step at {start} was not taken")
     for last in (TIMEOUT_MS - 1, TIMEOUT_MS):
         zenoh_fragment.check_deadline(0, last, TIMEOUT_MS)
     # The demo key is a valid key expression and the subscriber's own, so these refusals are not blanket.

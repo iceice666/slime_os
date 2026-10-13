@@ -257,8 +257,10 @@ def decode_message(
         raise FragmentError("a Put without the attachment extension")
     at += 2
     att_len, at = read_leb32(msg, at)
-    if att_len != zenoh_wire.ATTACHMENT_BYTES or at + att_len > len(msg):
+    if att_len != zenoh_wire.ATTACHMENT_BYTES:
         raise FragmentError("the attachment is not 33 bytes")
+    if at + att_len > len(msg):
+        raise FragmentError("truncated: the message ends inside the attachment")
     att = msg[at : at + att_len]
     if att[16] != zenoh_wire.GID_BYTES:
         raise FragmentError("the attachment's GID length byte is not 16")
