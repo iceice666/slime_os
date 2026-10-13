@@ -30,6 +30,7 @@ from pathlib import Path
 import http_capture
 import zenoh_exchange
 import zenoh_listener_peer
+import zenoh_stock_peer
 import zenoh_wire
 import zutai_cli
 from harness import ROOT
@@ -251,13 +252,62 @@ def judge_guest(batches: list[bytes], reported: dict[int, str], contract: dict) 
     return {"frames": len(frames), "bytes": sum(len(f) for f in frames), "keep_alives": keep_alives, "closed": closed, "samples": received}
 
 
+def _leb(batch: bytes, at: int, label: str) -> tuple[int, int]:
+    try:
+        return zenoh_wire.read_leb128(batch, at)
+    except zenoh_wire.WireError as error:
+        raise CaptureError(f"{label}: {error}") from error
+
+
+def _init_ack(batch: bytes) -> None:
+    """INIT_ACK: header, version 9, a peer, a 1 to 16 byte ZID, optional size parameters, a cookie.
+
+    The header carries no extension flag: the stock peer's INIT_ACK captured in
+    `zenoh_stock_peer` has none, and an extension this exam does not name is not read past.
+    """
+    _need(len(batch) >= 3, "INIT_ACK: truncated before the ZID")
+    _need(not batch[0] & zenoh_wire.FLAG_Z, "INIT_ACK: an extension the exam does not name")
+    _need(batch[1] == zenoh_wire.PROTOCOL_VERSION, f"INIT_ACK: wire version {batch[1]}, not {zenoh_wire.PROTOCOL_VERSION}")
+    _need(batch[2] & 3 == zenoh_wire.WHATAMI_PEER, "INIT_ACK: the peer is not in peer mode")
+    at = 3 + (batch[2] >> 4) + 1
+    _need(at <= len(batch), "INIT_ACK: truncated inside the ZID")
+    if batch[0] & zenoh_wire.FLAG_S:
+        _need(at + 3 <= len(batch), "INIT_ACK: truncated inside the size parameters")
+        at += 3
+    size, at = _leb(batch, at, "INIT_ACK cookie")
+    _need(at + size == len(batch), f"INIT_ACK: a cookie of {size} bytes with {len(batch) - at} left")
+
+
+def _open_ack(batch: bytes) -> None:
+    """OPEN_ACK: header, a lease and an initial sequence number, and nothing after them."""
+    _need(not batch[0] & zenoh_wire.FLAG_Z, "OPEN_ACK: an extension the exam does not name")
+    lease, at = _leb(batch, 1, "OPEN_ACK lease")
+    _need(lease > 0, "OPEN_ACK: a zero lease")
+    _, at = _leb(batch, at, "OPEN_ACK initial sequence number")
+    _need(at == len(batch), f"OPEN_ACK: {len(batch) - at} bytes after the initial sequence number")
+
+
 def judge_peer(batches: list[bytes]) -> int:
-    """The peer's batches: an INIT_ACK and an OPEN_ACK, then only frames, keep-alives and a close."""
+    """The peer's batches, each parsed to its fields: an INIT_ACK, an OPEN_ACK, then frames, keep-alives
+    and at most one close, after which nothing."""
     _need(len(batches) >= 2, "the peer sent fewer than an INIT_ACK and an OPEN_ACK")
     _need(_kind(batches[0]) == zenoh_wire.ID_INIT and batches[0][0] & zenoh_wire.FLAG_A, "the first peer batch is not an INIT_ACK")
+    _init_ack(batches[0])
     _need(_kind(batches[1]) == zenoh_wire.ID_OPEN and batches[1][0] & zenoh_wire.FLAG_A, "the second peer batch is not an OPEN_ACK")
+    _open_ack(batches[1])
+    closed = False
     for batch in batches[2:]:
-        _need(_kind(batch) in (zenoh_wire.ID_FRAME, ID_KEEP_ALIVE, zenoh_wire.ID_CLOSE), f"a peer batch of kind {_kind(batch)}")
+        _need(not closed, "a peer batch after the peer's CLOSE")
+        if batch == bytes([ID_KEEP_ALIVE]):
+            continue
+        if _kind(batch) == zenoh_wire.ID_CLOSE:
+            _need(len(batch) == 2 and batch[0] in (zenoh_wire.ID_CLOSE, zenoh_wire.ID_CLOSE | zenoh_wire.FLAG_A), f"a CLOSE of {len(batch)} bytes with header {batch[0]:#04x}")
+            closed = True
+        elif batch[0] in (zenoh_wire.ID_FRAME, zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R):
+            _, at = _leb(batch, 1, "FRAME sequence number")
+            _need(at < len(batch), "a FRAME that carries no message")
+        else:
+            raise CaptureError(f"a peer batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     return len(batches)
 
 
@@ -572,7 +622,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 116
+PINNED_CONTROLS = 135
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -755,6 +805,13 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
     def extra(*frames: bytes) -> Callable[[dict], dict]:
         return edit(lambda s: s.setdefault("extra", []).extend(_ethernet(f, True) for f in frames))
 
+    def peer_at(index: int, change: Callable[[bytes], bytes]) -> Callable[[dict], dict]:
+        def run(s: dict) -> dict:
+            s["peer"][index] = change(s["peer"][index])
+            return s
+
+        return run
+
     def raw(*frames: bytes) -> Callable[[dict], dict]:
         return edit(lambda s: s.setdefault("extra", []).extend(frames))
 
@@ -828,6 +885,25 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a batch the exam does not name", put_bytes(lambda g: g.insert(2, bytes([zenoh_wire.ID_DECLARE])))),
         ("a peer that sends no INIT_ACK", edit(lambda s: s.update(peer=[bytes([ID_KEEP_ALIVE])]))),
         ("a peer batch the exam does not name", edit(lambda s: s["peer"].append(bytes([0x0D])))),
+        ("a peer stream of three one-byte headers", edit(lambda s: s.update(peer=[b"\x21", b"\x22", b"\x03"]))),
+        ("an INIT_ACK of another wire version", peer_at(0, lambda b: b[:1] + b"\x08" + b[2:])),
+        ("an INIT_ACK from a client", peer_at(0, lambda b: b[:2] + bytes([(b[2] & 0xF0) | 2]) + b[3:])),
+        ("an INIT_ACK with an extension flag", peer_at(0, lambda b: bytes([b[0] | 0x80]) + b[1:])),
+        ("an INIT_ACK cut inside its ZID", peer_at(0, lambda b: b[:6])),
+        ("an INIT_ACK whose cookie runs past the batch", peer_at(0, lambda b: b[:-1])),
+        ("an INIT_ACK with a byte after the cookie", peer_at(0, lambda b: b + b"\x00")),
+        ("an OPEN_ACK with a lease and no sequence number", peer_at(1, lambda b: b[:2])),
+        ("an OPEN_ACK with a byte after the sequence number", peer_at(1, lambda b: b + b"\x00")),
+        ("an OPEN_ACK with a zero lease", peer_at(1, lambda b: b[:1] + b"\x00" + b[2:])),
+        ("a keep-alive with a byte after it", edit(lambda s: s["peer"].append(b"\x04\x00"))),
+        ("a keep-alive with a flag set", edit(lambda s: s["peer"].append(b"\x24"))),
+        ("a CLOSE of one byte", edit(lambda s: s["peer"].append(b"\x03"))),
+        ("a CLOSE of three bytes", edit(lambda s: s["peer"].append(b"\x03\x00\x00"))),
+        ("a FRAME with no sequence number", edit(lambda s: s["peer"].append(b"\x25"))),
+        ("a FRAME with no message", edit(lambda s: s["peer"].append(b"\x25\x01"))),
+        ("a keep-alive after the peer's CLOSE", edit(lambda s: s["peer"].extend([b"\x03\x00", b"\x04"]))),
+        ("a FRAME after the peer's CLOSE", edit(lambda s: s["peer"].extend([b"\x03\x00", b"\x25\x01\x04"]))),
+        ("a second CLOSE from the peer", edit(lambda s: s["peer"].extend([b"\x03\x00", b"\x03\x00"]))),
         ("a listener on another address", edit(lambda s: s.update(listen="tcp/0.0.0.0:17447"))),
         ("a listener on another port", edit(lambda s: s.update(listen="tcp/127.0.0.1:17448"))),
         ("a listener that saw no remote peer", edit(lambda s: s.update(remote_peers=0))),
@@ -899,6 +975,7 @@ def honest_variants() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer sequence number about to wrap", update(peer_isn=0xFFFFFFF0)),
         ("keep-alives from the guest", lambda s: {**s, "guest": s["guest"][:2] + [bytes([ID_KEEP_ALIVE])] * 3 + s["guest"][2:]}),
         ("a guest that never sends CLOSE", lambda s: {**s, "guest": s["guest"][:-1]}),
+        ("the batches a stock peer sent when it listened, as captured", lambda s: {**s, "peer": [bytes.fromhex(h) for _n, h in zenoh_stock_peer.batches("listens")]}),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("an ARP reply from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2)]}),
     ]

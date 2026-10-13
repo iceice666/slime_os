@@ -151,7 +151,7 @@ def serve(port: int, receipt: Path) -> int:
         received.append((str(sample.key_expr), bytes(sample.payload), b"" if attachment is None else bytes(attachment)))
         most, seen = max(most, len(session.info.peers_zid()), 1), True
 
-    session.declare_subscriber(KEY, on_sample)
+    subscriber = session.declare_subscriber(KEY, on_sample)
     print(READY, flush=True)
     quiet_since = None
     deadline = time.monotonic() + DEADLINE_SECONDS
@@ -167,6 +167,8 @@ def serve(port: int, receipt: Path) -> int:
         time.sleep(0.2)
     receipt.write_text(receipt_text(listen, most, received), encoding="utf-8")
     print(f"[zenoh-listener] received={len(received)} remote-peers={most}", flush=True)
+    # The handle is held to here so the subscriber stays declared for the whole collection.
+    subscriber.undeclare()
     session.close()
     return 0
 
