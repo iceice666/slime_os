@@ -85,6 +85,8 @@ OK_SCENARIOS = (
     "edge-payload-1mib",
     "edge-payload-2mib",
     "edge-payload-256mib",
+    "edge-fixed-batch-89",
+    "edge-fixed-batch-4096",
     "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
     "boundary-at-sequence-width-changes",
@@ -287,41 +289,118 @@ EDGES = (
 )
 
 
-def edge_config(batch: int, key: str, payload: int) -> dict:
+# The same admitted bounds in fixed mode, where the whole Put travels in one FRAME and is never
+# fragmented: the smallest batch, with the largest message the contract lets it hold, and the largest
+# batch, with a key of 1000 bytes, far past the demo's 129. (name, batch, key, payload).
+FIXED_EDGES = (
+    ("edge-fixed-batch-89", 89, "k" * 10, 12),
+    ("edge-fixed-batch-4096", 4096, "k" * 1000, 3029),
+)
+CHUNK = 1 << 20
+
+
+def edge_config(batch: int, key: str, payload: int, mode: str = "heap") -> dict:
     c = dict(
-        name="edge", mode="heap", batchBytes=batch, payloadBytes=payload, keyBytes=len(key),
+        name="edge", mode=mode, batchBytes=batch, payloadBytes=payload, keyBytes=len(key),
         attachmentBytes=33, maxKeys=1, maxSubscribers=1, outstandingSamples=1,
-        stackBytes=0, reassemblyTimeoutMs=5000, heapBytes=0,
+        stackBytes=0, reassemblyTimeoutMs=5000 if mode == "heap" else 0, heapBytes=0,
     )
     c["stackBytes"] = required_stack(c)
-    c["heapBytes"] = heap_needed(c)
+    c["heapBytes"] = heap_needed(c) if mode == "heap" else 0
     return c
+
+
+def pattern_digest(size: int) -> str:
+    """The sha256 of the payload pattern of `size` bytes, taken a slice at a time."""
+    hasher = hashlib.sha256()
+    for offset in range(0, size, CHUNK):
+        hasher.update(zenoh_fragment.payload_slice(offset, min(size, offset + CHUNK)))
+    return hasher.hexdigest()
+
+
+def edge_message(key: str, payload: int) -> bytearray:
+    """Our own Put of `payload` bytes, built in place so a payload of 256 MiB is held once."""
+    head = zenoh_wire.push_put(key, zenoh_fragment.attachment(), b"", True)
+    if head[-1] != 0:
+        raise LinksError("the empty-payload Put does not end in its zero length")
+    prefix = head[:-1] + zenoh_wire.leb128(payload)
+    message = bytearray(len(prefix) + payload)
+    message[: len(prefix)] = prefix
+    for offset in range(0, payload, CHUNK):
+        stop = min(payload, offset + CHUNK)
+        message[len(prefix) + offset : len(prefix) + stop] = zenoh_fragment.payload_slice(offset, stop)
+    if payload <= 1 << 16 and bytes(message) != zenoh_wire.push_put(key, zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(payload), True):
+        raise LinksError("the Put built in place differs from the wire encoder's")
+    return message
+
+
+def tapped_bodies(message, batch: int, digests: list[str]):
+    """The fragment bodies of `message`, noting the sha256 of each and keeping none."""
+    for body in zenoh_fragment.split_iter(message, batch, EDGE_SN):
+        digests.append(sha(body))
+        yield body
+
+
+def edge_sizes(name: str, batch: int, key: str) -> tuple[int, int, int]:
+    """The longest handshake message and the declaration and undeclaration of `key`, stream length
+    included, each of which must fit one batch because none can be fragmented."""
+    handshake = len(zenoh_wire.init(bytes(range(1, 17)), batch=batch, cookie=bytes(range(1, 65)))) + 2
+    declare = len(zenoh_wire.frame(0xFFFFFFFF, zenoh_wire.declare_subscriber(0xFFFFFFFF, key, True))) + 2
+    undeclare = len(zenoh_wire.frame(0xFFFFFFFF, zenoh_wire.undeclare_subscriber(0xFFFFFFFF, key, True))) + 2
+    if max(handshake, declare, undeclare) > batch:
+        raise LinksError(f"{name}: a handshake or a declaration does not fit its batch")
+    return handshake, declare, undeclare
 
 
 @lru_cache(maxsize=None)
 def edge_lines() -> tuple[str, ...]:
-    """What the link must report at each edge, computed from the host reference, after the limits
-    contract has accepted the configuration the edge instantiates."""
+    """What the link must report at each heap edge, computed from the host reference after the limits
+    contract has accepted the configuration the edge instantiates. The message is held once and the
+    fragments are hashed as they are made, so a payload of 256 MiB costs 256 MiB and no more."""
     demo, large = pinned_configs()[:2]
     out = []
     for name, batch, key, payload in EDGES:
         if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload)])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
-        handshake = len(zenoh_wire.init(bytes(range(1, 17)), batch=batch, cookie=bytes(range(1, 65)))) + 2
-        declare = len(zenoh_wire.frame(0xFFFFFFFF, zenoh_wire.declare_subscriber(0xFFFFFFFF, key, True))) + 2
-        undeclare = len(zenoh_wire.frame(0xFFFFFFFF, zenoh_wire.undeclare_subscriber(0xFFFFFFFF, key, True))) + 2
-        if max(handshake, declare, undeclare) > batch:
-            raise LinksError(f"{name}: a handshake or a declaration does not fit its batch")
-        message = zenoh_wire.push_put(key, zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(payload), True)
-        bodies = zenoh_fragment.reference_split(message, batch, EDGE_SN)
-        joined = zenoh_fragment.reassemble(bodies, EDGE_SN, batch)
-        decoded = zenoh_fragment.decode_message(joined, max_key=len(key), subscribed=key)
-        if decoded["payload"] != zenoh_fragment.payload_bytes(payload) or decoded["key"] != key.encode():
+        handshake, declare, undeclare = edge_sizes(name, batch, key)
+        message = edge_message(key, payload)
+        digests: list[str] = []
+        joined = hashlib.sha256()
+        for chunk in zenoh_fragment.reassemble_iter(tapped_bodies(message, batch, digests), EDGE_SN, batch):
+            joined.update(chunk)
+        if joined.hexdigest() != sha(message):
             raise LinksError(f"{name}: the host reference does not reassemble its own Put")
-        digest = sha("\n".join(sha(body) for body in bodies).encode())
+        decoded = zenoh_fragment.decode_message(message, max_key=len(key), subscribed=key)
+        if bytes(decoded["key"]) != key.encode() or sha(decoded["payload"]) != pattern_digest(payload):
+            raise LinksError(f"{name}: the host reference does not read its own Put back")
+        del decoded, message
         out.append(
             f"links edge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
-            f"{len(bodies)} {digest} {sha(zenoh_fragment.payload_bytes(payload))}"
+            f"{len(digests)} {sha(chr(10).join(digests).encode())} {pattern_digest(payload)}"
+        )
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def fixed_edge_lines() -> tuple[str, ...]:
+    """What a fixed link must report at each admitted edge: the Put travels whole, in one FRAME that
+    fits the batch less its stream length, and is never fragmented."""
+    demo, large = pinned_configs()[:2]
+    out = []
+    for name, batch, key, payload in FIXED_EDGES:
+        if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload, "fixed")])):
+            raise LinksError(f"the limits contract refuses the configuration of {name}")
+        handshake, declare, undeclare = edge_sizes(name, batch, key)
+        message = bytes(edge_message(key, payload))
+        frame = zenoh_wire.frame(EDGE_SN, message)
+        if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > batch:
+            raise LinksError(f"{name}: the Put does not travel whole in one frame")
+        decoded = zenoh_fragment.decode_message(message, max_key=len(key), subscribed=key)
+        if bytes(decoded["key"]) != key.encode() or bytes(decoded["payload"]) != zenoh_fragment.payload_bytes(payload):
+            raise LinksError(f"{name}: the host reference does not read its own Put back")
+        out.append(
+            f"links fixededge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
+            f"{len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(payload))}"
         )
     return tuple(out)
 
@@ -488,8 +567,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 222
-PINNED_CONTROLS = 485
+PINNED_CASES = 226
+PINNED_CONTROLS = 498
 
 
 class LinksError(ValueError):
@@ -568,7 +647,9 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
-        if name.startswith("edge-"):
+        if name.startswith("edge-fixed-"):
+            lines.append(next(line for line in fixed_edge_lines() if line.split()[2] == name))
+        elif name.startswith("edge-"):
             lines.append(next(line for line in edge_lines() if line.split()[2] == name))
         if name == "reassemble-underfilled-interior":
             lines += list(underfilled_lines())
@@ -641,6 +722,7 @@ SHAPES = {
     ("links", "subid"): 7,
     ("links", "shortkey"): 5,
     ("links", "edge"): 12,
+    ("links", "fixededge"): 12,
     ("links", "counts"): 9,
     ("links", "underfilled"): 7,
     ("links", "boundarysn"): 6,
@@ -719,6 +801,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    fixededges = [" ".join(f) for f in only("fixededge")]
+    if fixededges != list(fixed_edge_lines()):
+        raise LinksError(f"the admitted edges of a fixed link must open, declare and send a whole Put through the link: {list(fixed_edge_lines())}, reported {fixededges}")
 
     edges = [" ".join(f) for f in only("edge")]
     if edges != list(edge_lines()):
@@ -820,7 +906,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges)
     return positive, len(refused)
 
 
@@ -1004,6 +1090,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out = list(good)
         out[a], out[b] = out[b], out[a]
         return out
+
+    def fixed_swap(name: str, index: int, value: str) -> list[str]:
+        at = first(f"links fixededge {name} ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
 
     def under_swap(index: int, value: str) -> list[str]:
         at = first("links underfilled ")
@@ -1239,6 +1331,19 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("the 1 MiB payload reported as 16384", edge_swap("edge-payload-1mib", 5, "16384")),
         ("a 1 MiB send with another number of fragments", edge_swap("edge-payload-1mib", 9, str(int(good[first("links edge edge-payload-1mib ")].split()[9]) - 1))),
         ("a 1 MiB payload that reassembled differently", edge_swap("edge-payload-1mib", 11, sha(b"other"))),
+        ("the fixed-edge lines dropped", drop("links fixededge ")),
+        ("the fixed edge at the smallest batch dropped", drop("links fixededge edge-fixed-batch-89 ")),
+        ("the fixed edge at the largest batch dropped", drop("links fixededge edge-fixed-batch-4096 ")),
+        ("a fixed link at 89 reported at 512", fixed_swap("edge-fixed-batch-89", 3, "512")),
+        ("a fixed link at 4096 reported at 2048", fixed_swap("edge-fixed-batch-4096", 3, "2048")),
+        ("a fixed link at 4096 with the key cut to 129 bytes", fixed_swap("edge-fixed-batch-4096", 4, "129")),
+        ("a fixed link at 4096 with the payload cut to 1024", fixed_swap("edge-fixed-batch-4096", 5, "1024")),
+        ("a fixed handshake reported one byte long", fixed_swap("edge-fixed-batch-89", 6, "90")),
+        ("a fixed declaration reported one byte short", fixed_swap("edge-fixed-batch-4096", 7, str(int(good[first("links fixededge edge-fixed-batch-4096 ")].split()[7]) - 1))),
+        ("a fixed frame reported one byte longer than the batch holds", fixed_swap("edge-fixed-batch-4096", 9, "4095")),
+        ("a fixed frame with other bytes", fixed_swap("edge-fixed-batch-89", 10, sha(b"other"))),
+        ("a fixed payload that arrived differently", fixed_swap("edge-fixed-batch-4096", 11, sha(b"other"))),
+        ("the fixed-edge scenarios dropped", [line for line in good if not line.startswith("links ok edge-fixed-")]),
         ("the batch-edge lines dropped", drop("links edge ")),
         ("the smallest-batch edge dropped", drop("links edge edge-batch-89 ")),
         ("the largest-batch edge dropped", drop("links edge edge-batch-4096 ")),

@@ -63,12 +63,23 @@ def read_leb32(data: bytes, at: int, bits: int = 32) -> tuple[int, int]:
     raise FragmentError(f"LEB128 over {bits} bits")
 
 
-def payload_bytes(size: int) -> bytes:
-    """The payload the captures carried: a fixed pattern, so a reassembled message is checkable.
+_PERIOD = bytes((i * 7 + 1) % 251 for i in range(251))
 
-    The pattern repeats every 251 bytes, so it is built from one period and not byte by byte."""
-    period = bytes((i * 7 + 1) % 251 for i in range(251))
-    return (period * (size // 251 + 1))[:size]
+
+def payload_slice(start: int, stop: int) -> bytes:
+    """Bytes `start` to `stop` of the payload pattern, without building the payload before them.
+
+    The pattern repeats every 251 bytes, so any slice is cut from a few repeats of one period."""
+    count = stop - start
+    if count <= 0:
+        return b""
+    offset = start % 251
+    return (_PERIOD * ((offset + count) // 251 + 1))[offset : offset + count]
+
+
+def payload_bytes(size: int) -> bytes:
+    """The payload the captures carried: a fixed pattern, so a reassembled message is checkable."""
+    return payload_slice(0, size)
 
 
 def attachment() -> bytes:
@@ -93,23 +104,27 @@ def message(size: int, header: int = 0x1D) -> bytes:
     )
 
 
-def reference_split(msg: bytes, batch: int, first_sn: int) -> list[bytes]:
-    """Split `msg` into FRAGMENT bodies for a link whose batch is `batch` bytes.
+def split_iter(msg, batch: int, first_sn: int):
+    """Yield the FRAGMENT bodies of `msg` for a link whose batch is `batch` bytes, one at a time.
 
     A fragment body is at most `batch - 2` bytes, the stream length being the other two. Sequence
-    numbers are consecutive from `first_sn`. Every body but the last carries the "more" flag."""
+    numbers are consecutive from `first_sn`. Every body but the last carries the "more" flag. `msg` is
+    anything that can be sliced and measured, so a message too large to copy is split in place."""
     if batch <= STREAM_LENGTH_BYTES + 6:
         raise FragmentError("a batch cannot hold a fragment header and a slice")
-    bodies: list[bytes] = []
     at, sn = 0, first_sn
     while at < len(msg):
         header_len = 1 + len(zenoh_wire.leb128(sn))
         chunk = msg[at : at + (batch - STREAM_LENGTH_BYTES - header_len)]
         at += len(chunk)
         more = at < len(msg)
-        bodies.append(bytes([ID_FRAGMENT | FLAG_R | (FLAG_M if more else 0)]) + zenoh_wire.leb128(sn) + chunk)
+        yield bytes([ID_FRAGMENT | FLAG_R | (FLAG_M if more else 0)]) + zenoh_wire.leb128(sn) + chunk
         sn = (sn + 1) & 0xFFFFFFFF
-    return bodies
+
+
+def reference_split(msg: bytes, batch: int, first_sn: int) -> list[bytes]:
+    """Split `msg` into FRAGMENT bodies for a link whose batch is `batch` bytes."""
+    return list(split_iter(msg, batch, first_sn))
 
 
 def reference_split_uneven(msg: bytes, batch: int, first_sn: int, lead: tuple[int, ...]) -> list[bytes]:
@@ -164,27 +179,37 @@ def decode_fragment(body: bytes, batch: int | None = None) -> Fragment:
     return Fragment(more=bool(header & FLAG_M), sn=sn, data=body[at:])
 
 
-def reassemble(bodies: list[bytes], expected_sn: int | None = None, batch: int | None = None) -> bytes:
-    """Join a run of FRAGMENT bodies into the message, refusing a run that is not a whole message.
+def reassemble_iter(bodies, expected_sn: int | None = None, batch: int | None = None):
+    """Yield the data of a run of FRAGMENT bodies, refusing a run that is not a whole message.
 
     The run must be consecutive sequence numbers, every fragment but the last marked "more", and
     the last not. The sequence number wraps at 32 bits, as the transport's does. When the session's
     next expected sequence number is given, the first fragment must carry exactly it: a run replayed
     from an earlier point, or one that skips ahead, is refused, as a FRAME with the wrong sequence
-    number is."""
-    if not bodies:
+    number is. Fragments are taken one at a time, so a run too large to hold is checked in place; a
+    refusal is raised when the run is consumed."""
+    previous = None
+    for body in bodies:
+        part = decode_fragment(body, batch)
+        if previous is None:
+            if expected_sn is not None and part.sn != expected_sn & 0xFFFFFFFF:
+                raise FragmentError("the first fragment is not the session's next sequence number")
+        else:
+            if part.sn != (previous.sn + 1) & 0xFFFFFFFF:
+                raise FragmentError("fragment sequence numbers are not consecutive")
+            if not previous.more:
+                raise FragmentError("a fragment marked final is followed by another")
+        yield part.data
+        previous = part
+    if previous is None:
         raise FragmentError("no fragments")
-    parts = [decode_fragment(body, batch) for body in bodies]
-    if expected_sn is not None and parts[0].sn != expected_sn & 0xFFFFFFFF:
-        raise FragmentError("the first fragment is not the session's next sequence number")
-    for earlier, later in zip(parts, parts[1:], strict=False):
-        if later.sn != (earlier.sn + 1) & 0xFFFFFFFF:
-            raise FragmentError("fragment sequence numbers are not consecutive")
-    if any(not part.more for part in parts[:-1]):
-        raise FragmentError("a fragment marked final is followed by another")
-    if parts[-1].more:
+    if previous.more:
         raise FragmentError("the last fragment still says more follows")
-    return b"".join(part.data for part in parts)
+
+
+def reassemble(bodies: list[bytes], expected_sn: int | None = None, batch: int | None = None) -> bytes:
+    """Join a run of FRAGMENT bodies into the message, refusing a run that is not a whole message."""
+    return b"".join(reassemble_iter(bodies, expected_sn, batch))
 
 
 def next_sn(first_sn: int, count: int) -> int:
@@ -311,7 +336,7 @@ def decode_message(
         raise FragmentError("truncated: the payload is shorter than its length says")
     if at + size < len(msg):
         raise FragmentError("trailing-bytes: the message has data after its payload")
-    return {"scope": scope, "key": key, "attachment": att, "payload": msg[at:]}
+    return {"scope": scope, "key": key, "attachment": att, "payload": memoryview(msg)[at:]}
 
 
 # Captured from the stock peer: (payload bytes, batch bytes, first sequence number, fragment
