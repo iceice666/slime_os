@@ -1459,6 +1459,12 @@ def links_item_pins() -> tuple[int, int]:
 
 
 def run_links() -> list[str]:
+    # The pinned corpus is judged on this path too, not only by `zenoh_stock_check`: an
+    # implementation that removes `transport_fragment` could otherwise drop or alter another pinned
+    # refusal and update the Rust corpus count while every named test and the links transcript pass.
+    if not STOCK_CORPUS.is_file():
+        fail(f"{STOCK_CORPUS.relative_to(ROOT)} is missing")
+    judge_stock_corpus(STOCK_CORPUS.read_text())
     environment = dict(_os.environ)
     _stdout, retained = cargo_tests(
         (STOCK_DECODER_FILTER, STOCK_SESSION_FILTER, STOCK_ENCODE_FILTER, STOCK_LINK_FILTER, STOCK_FILTER),
@@ -1474,6 +1480,10 @@ def run_links() -> list[str]:
 
 
 def links_main(controls_only: bool) -> int:
+    # The corpus judge and its mutations run here as a precondition: this gate relies on them to keep
+    # the 100 pinned refused vectors where they are. Their refusals belong to the stock gate's count,
+    # so they are not added to this one's.
+    stock_controls()
     try:
         refused_controls = zenoh_links_exam.all_controls()
         item_cases, item_floor = links_item_pins()

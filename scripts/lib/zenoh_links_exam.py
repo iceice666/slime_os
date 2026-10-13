@@ -82,7 +82,7 @@ REFUSED_SCENARIOS = (
 # 2 edge lines make 39 positive cases; 12 refusals make 51. The control floor is the number the
 # judge, the host reference and the limits contract refuse today.
 PINNED_CASES = 51
-PINNED_CONTROLS = 78
+PINNED_CONTROLS = 88
 
 
 class LinksError(ValueError):
@@ -334,6 +334,11 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a heap payload larger than its heap", trio(heap=exact(heap, payloadBytes=1 << 20)), False),
         ("a heap batch that cannot hold a fragment's framing", trio(heap=exact(heap, batchBytes=8)), False),
         ("a heap batch of 9", trio(heap=exact(heap, batchBytes=9)), True),
+        ("an attachment of 33 bytes, the wire size", trio(large=exact(large, attachmentBytes=33)), True),
+        ("an attachment of 32 bytes, one byte short", trio(large=exact(large, attachmentBytes=32)), False),
+        ("an attachment of 34 bytes, one byte over", trio(large=exact(large, attachmentBytes=34)), False),
+        ("an attachment of 1 byte", trio(large=exact(large, attachmentBytes=1)), False),
+        ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=message_bytes(dict(heap, attachmentBytes=1)))), False),
         ("a field the contract does not name", [dict(demo, note="x")] + [large, heap], False),
         ("a removed field", [{k: v for k, v in demo.items() if k != "heapBytes"}, large, heap], False),
     ]
@@ -455,6 +460,12 @@ def reference_controls() -> int:
         ("a fragment with no data", lambda: zenoh_fragment.decode_fragment(bodies[0][:5])),
         ("a message whose payload length is wrong", lambda: zenoh_fragment.decode_message(zenoh_fragment.message(size)[:-1])),
         ("a batch too small for a fragment", lambda: zenoh_fragment.reference_split(b"x" * 10, 8, 0)),
+        ("a noncanonical sequence number (26 80 00 aa)", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("268000aa"))),
+        ("a sequence number over 32 bits (26 ff ff ff ff 10 aa)", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("26ffffffff10aa"))),
+        ("a sequence number of six bytes", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("26ffffffffff0faa"))),
+        ("a truncated sequence number", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("2680"))),
+        ("a noncanonical scope in the message", lambda: zenoh_fragment.decode_message(bytes.fromhex("1d8000") + zenoh_fragment.message(size)[2:])),
+        ("a noncanonical payload length in the message", lambda: zenoh_fragment.decode_message(zenoh_fragment.message(size)[: -size - 2] + bytes.fromhex("a8a700") + zenoh_fragment.payload_bytes(size))),
     ]
     refused = 0
     for label, action in cases:
@@ -464,6 +475,9 @@ def reference_controls() -> int:
             refused += 1
             continue
         raise LinksError(f"control: the fragment reference accepted {label}")
+    # The largest canonical sequence number is accepted, so the refusals above are not a blanket one.
+    if zenoh_fragment.decode_fragment(bytes.fromhex("26ffffffff0faa")).sn != 0xFFFFFFFF:
+        raise LinksError("control: the largest canonical sequence number was not read")
     damaged = bytearray(bodies[1])
     damaged[10] ^= 1
     if hashlib.sha256(bytes(damaged)).hexdigest() == zenoh_fragment.CAPTURES[0][5][1]:

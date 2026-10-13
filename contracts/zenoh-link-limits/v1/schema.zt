@@ -58,6 +58,13 @@ streamLengthBytes :: Int = 2;
 -- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
 aliasIds :: Int = 65535;
 
+-- Source: Profile 0 requires exactly the 33-byte `rmw_zenoh` attachment on every Put and refuses
+-- one that is shorter (`malformed-message`) or longer (`over-bound`) in every configuration
+-- (`components/lib/src/zenoh_profile0.rs`). The field is the wire size, not a choice, so a
+-- configuration that declares another size could not carry a valid Put. The optional attachment is
+-- a later item.
+requiredAttachmentBytes :: Int = 33;
+
 -- The bytes a PUSH and a Put add around their key, attachment and payload, and the frame header
 -- before them: the frame header and a five-byte sequence number, the push header, the scope, a
 -- two-byte key length, the Put header, the attachment extension and its length, and a two-byte
@@ -141,7 +148,7 @@ requiredStack :: Config -> Int
 commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
     && c.batchBytes >= 1 && c.batchBytes + streamLengthBytes <= dataBytes
-    && c.payloadBytes >= 1 && c.keyBytes >= 1 && c.attachmentBytes >= 1
+    && c.payloadBytes >= 1 && c.keyBytes >= 1 && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
     && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
     && c.outstandingSamples >= 1
@@ -210,6 +217,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   dataBytes =;
   streamLengthBytes =;
   aliasIds =;
+  requiredAttachmentBytes =;
   framingBytes =;
   fragmentFramingBytes =;
   stackFactor =;

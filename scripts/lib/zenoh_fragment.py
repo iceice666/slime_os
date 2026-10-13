@@ -41,6 +41,27 @@ class FragmentError(ValueError):
     """Input the reference refuses to encode or decode."""
 
 
+def read_leb32(data: bytes, at: int) -> tuple[int, int]:
+    """A canonical LEB128 that fits 32 bits, read the way the Rust reader reads it.
+
+    At most five bytes; a value above 32 bits is an overflow; a multi-byte value whose last byte is
+    zero is not canonical. `zenoh_wire.read_leb128` accepts all three, so the fragment reference
+    does not use it for a sequence number, a scope or a length."""
+    value = 0
+    for count in range(5):
+        if at + count >= len(data):
+            raise FragmentError("truncated LEB128")
+        byte = data[at + count]
+        value |= (byte & 0x7F) << (7 * count)
+        if not byte & 0x80:
+            if value >> 32:
+                raise FragmentError("LEB128 over 32 bits")
+            if count > 0 and byte & 0x7F == 0:
+                raise FragmentError("noncanonical LEB128")
+            return value, at + count + 1
+    raise FragmentError("LEB128 over 32 bits")
+
+
 def payload_bytes(size: int) -> bytes:
     """The payload the captures carried: a fixed pattern, so a reassembled message is checkable."""
     return bytes((i * 7 + 1) % 251 for i in range(size))
@@ -105,7 +126,7 @@ def decode_fragment(body: bytes) -> Fragment:
         raise FragmentError("an unreliable fragment")
     if header & FLAG_Z:
         raise FragmentError("a fragment with extensions")
-    sn, at = zenoh_wire.read_leb128(body, 1)
+    sn, at = read_leb32(body, 1)
     if at >= len(body):
         raise FragmentError("a fragment with no data")
     return Fragment(more=bool(header & FLAG_M), sn=sn, data=body[at:])
@@ -133,16 +154,16 @@ def decode_message(msg: bytes) -> dict:
     """Decode the reassembled PUSH with a Put: the alias, the attachment and the payload."""
     if not msg or msg[0] != 0x1D:
         raise FragmentError("not a PUSH in the alias form")
-    scope, at = zenoh_wire.read_leb128(msg, 1)
+    scope, at = read_leb32(msg, 1)
     if at + 2 > len(msg) or msg[at] != zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z or msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
         raise FragmentError("a Put without the attachment extension")
     at += 2
-    att_len, at = zenoh_wire.read_leb128(msg, at)
+    att_len, at = read_leb32(msg, at)
     if att_len != zenoh_wire.ATTACHMENT_BYTES or at + att_len > len(msg):
         raise FragmentError("the attachment is not 33 bytes")
     att = msg[at : at + att_len]
     at += att_len
-    size, at = zenoh_wire.read_leb128(msg, at)
+    size, at = read_leb32(msg, at)
     if at + size != len(msg):
         raise FragmentError("the payload length disagrees with the message")
     return {"scope": scope, "attachment": att, "payload": msg[at:]}
