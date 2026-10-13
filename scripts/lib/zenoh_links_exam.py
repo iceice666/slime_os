@@ -354,7 +354,7 @@ def counts_lines() -> tuple[str, ...]:
 # Sequence numbers either side of each step in the width of the encoded number. The largest payload
 # that travels whole is one byte smaller at the larger width, so a link that sizes the frame from a
 # cached width puts a whole batch one byte over the announced one.
-BOUNDARY_SNS = (127, 128, 16383, 16384)
+BOUNDARY_SNS = (127, 128, 16383, 16384, 2097151, 2097152, 268435455, 268435456)
 
 
 @lru_cache(maxsize=None)
@@ -364,7 +364,7 @@ def boundarysn_lines() -> tuple[str, ...]:
         edge = whole_edge(EDGE_BATCH, sn)
         out.append(f"links boundarysn {sn} {edge} whole 1")
         out.append(f"links boundarysn {sn} {edge + 1} fragmented 2")
-    for narrow, wide in ((127, 128), (16383, 16384)):
+    for narrow, wide in ((127, 128), (16383, 16384), (2097151, 2097152), (268435455, 268435456)):
         if whole_edge(EDGE_BATCH, narrow) != whole_edge(EDGE_BATCH, wide) + 1:
             raise LinksError(f"the whole-message edge does not move by a byte between sequence numbers {narrow} and {wide}")
     return tuple(out)
@@ -460,8 +460,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 208
-PINNED_CONTROLS = 461
+PINNED_CASES = 216
+PINNED_CONTROLS = 469
 
 
 class LinksError(ValueError):
@@ -1166,6 +1166,14 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("the sequence-width boundary lines dropped", drop("links boundarysn ")),
         ("the boundary at 127 dropped", drop("links boundarysn 127 ")),
         ("the boundary at 16383 dropped", drop("links boundarysn 16383 ")),
+        ("the boundary at 2097151 dropped", drop("links boundarysn 2097151 ")),
+        ("the boundary at 2097152 dropped", drop("links boundarysn 2097152 ")),
+        ("the boundary at 268435455 dropped", drop("links boundarysn 268435455 ")),
+        ("the boundary at 268435456 dropped", drop("links boundarysn 268435456 ")),
+        ("a cached three-byte width at 2097152", swap("links boundarysn 2097152 " + str(whole_edge(EDGE_BATCH, 2097152)) + " whole", f"links boundarysn 2097152 {whole_edge(EDGE_BATCH, 2097151)} whole 1")),
+        ("a cached four-byte width at 268435456", swap("links boundarysn 268435456 " + str(whole_edge(EDGE_BATCH, 268435456)) + " whole", f"links boundarysn 268435456 {whole_edge(EDGE_BATCH, 268435455)} whole 1")),
+        ("a message one byte over the edge reported whole at 2097152", swap("links boundarysn 2097152 " + str(whole_edge(EDGE_BATCH, 2097152) + 1) + " fragmented", f"links boundarysn 2097152 {whole_edge(EDGE_BATCH, 2097152) + 1} whole 1")),
+        ("a message one byte over the edge reported whole at 268435456", swap("links boundarysn 268435456 " + str(whole_edge(EDGE_BATCH, 268435456) + 1) + " fragmented", f"links boundarysn 268435456 {whole_edge(EDGE_BATCH, 268435456) + 1} whole 1")),
         ("a cached one-byte width at 128", swap("links boundarysn 128 " + str(whole_edge(EDGE_BATCH, 128)) + " whole", f"links boundarysn 128 {whole_edge(EDGE_BATCH, 127)} whole 1")),
         ("a cached two-byte width at 16384", swap("links boundarysn 16384 " + str(whole_edge(EDGE_BATCH, 16384)) + " whole", f"links boundarysn 16384 {whole_edge(EDGE_BATCH, 16383)} whole 1")),
         ("a message one byte over the edge reported whole at 128", swap("links boundarysn 128 " + str(whole_edge(EDGE_BATCH, 128) + 1) + " fragmented", f"links boundarysn 128 {whole_edge(EDGE_BATCH, 128) + 1} whole 1")),
