@@ -64,8 +64,11 @@ def read_leb32(data: bytes, at: int, bits: int = 32) -> tuple[int, int]:
 
 
 def payload_bytes(size: int) -> bytes:
-    """The payload the captures carried: a fixed pattern, so a reassembled message is checkable."""
-    return bytes((i * 7 + 1) % 251 for i in range(size))
+    """The payload the captures carried: a fixed pattern, so a reassembled message is checkable.
+
+    The pattern repeats every 251 bytes, so it is built from one period and not byte by byte."""
+    period = bytes((i * 7 + 1) % 251 for i in range(251))
+    return (period * (size // 251 + 1))[:size]
 
 
 def attachment() -> bytes:
@@ -102,6 +105,29 @@ def reference_split(msg: bytes, batch: int, first_sn: int) -> list[bytes]:
     while at < len(msg):
         header_len = 1 + len(zenoh_wire.leb128(sn))
         chunk = msg[at : at + (batch - STREAM_LENGTH_BYTES - header_len)]
+        at += len(chunk)
+        more = at < len(msg)
+        bodies.append(bytes([ID_FRAGMENT | FLAG_R | (FLAG_M if more else 0)]) + zenoh_wire.leb128(sn) + chunk)
+        sn = (sn + 1) & 0xFFFFFFFF
+    return bodies
+
+
+def reference_split_uneven(msg: bytes, batch: int, first_sn: int, lead: tuple[int, ...]) -> list[bytes]:
+    """Split like `reference_split`, but the leading fragments carry the given slice lengths.
+
+    A slice is at most the maximum, never more, so a sender may flush early: the lengths in `lead`
+    are the first fragments' slices and every later one is filled to the maximum."""
+    if batch <= STREAM_LENGTH_BYTES + 6:
+        raise FragmentError("a batch cannot hold a fragment header and a slice")
+    bodies: list[bytes] = []
+    at, sn = 0, first_sn
+    while at < len(msg):
+        header_len = 1 + len(zenoh_wire.leb128(sn))
+        limit = batch - STREAM_LENGTH_BYTES - header_len
+        take = lead[len(bodies)] if len(bodies) < len(lead) else limit
+        if not 1 <= take <= limit:
+            raise FragmentError("a slice is empty or longer than a fragment holds")
+        chunk = msg[at : at + take]
         at += len(chunk)
         more = at < len(msg)
         bodies.append(bytes([ID_FRAGMENT | FLAG_R | (FLAG_M if more else 0)]) + zenoh_wire.leb128(sn) + chunk)

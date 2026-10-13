@@ -83,6 +83,9 @@ OK_SCENARIOS = (
     "edge-batch-4096",
     "edge-key-2028",
     "edge-payload-1mib",
+    "edge-payload-2mib",
+    "edge-payload-256mib",
+    "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
     "boundary-at-sequence-width-changes",
 )
@@ -277,6 +280,10 @@ EDGES = (
     ("edge-key-2028", 2048, "k" * 2028, 5000),
     # A payload far above the 16384 of the heap configuration, sent and reassembled whole.
     ("edge-payload-1mib", 4096, "k" * 129, 1 << 20),
+    # The payload length is a variable-length field: 1 MiB needs three bytes, 2 MiB four and 256 MiB
+    # five, the first of the widest width, so a writer that stops at three or four bytes fails here.
+    ("edge-payload-2mib", 4096, "k" * 129, 1 << 21),
+    ("edge-payload-256mib", 4096, "k" * 129, 1 << 28),
 )
 
 
@@ -317,6 +324,27 @@ def edge_lines() -> tuple[str, ...]:
             f"{len(bodies)} {digest} {sha(zenoh_fragment.payload_bytes(payload))}"
         )
     return tuple(out)
+
+
+# A sender may flush early: a fragment carries at most `batch - 2` bytes, not exactly that. This run's
+# interior fragments are 1000, 1 and 1500 bytes of slice, so a receiver that insists every fragment
+# marked "more" fills the batch fails. (Every stock capture and every reference-split run fills them.)
+UNDERFILLED_BATCH = 2048
+UNDERFILLED_LEAD = (1000, 1, 1500)
+
+
+@lru_cache(maxsize=None)
+def underfilled_lines() -> tuple[str, ...]:
+    message = full_key_message(FULL_KEY_PAYLOAD)
+    bodies = zenoh_fragment.reference_split_uneven(message, UNDERFILLED_BATCH, FULL_KEY_SN, UNDERFILLED_LEAD)
+    if zenoh_fragment.reassemble(bodies, FULL_KEY_SN, UNDERFILLED_BATCH) != message:
+        raise LinksError("the host reference does not reassemble an underfilled run")
+    full = len(bodies[0]) == UNDERFILLED_BATCH - zenoh_fragment.STREAM_LENGTH_BYTES
+    if full or any(len(b) >= UNDERFILLED_BATCH - zenoh_fragment.STREAM_LENGTH_BYTES for b in bodies[:-1][:len(UNDERFILLED_LEAD)]):
+        raise LinksError("an underfilled run must have interior fragments shorter than the maximum")
+    lengths = ",".join(str(len(b)) for b in bodies)
+    digest = sha("\n".join(sha(b) for b in bodies).encode())
+    return (f"links underfilled {UNDERFILLED_BATCH} {len(bodies)} {lengths} {digest} {sha(message)}",)
 
 
 # A configuration with more than four of each resource, filled to its limits: nine keys and nine
@@ -460,8 +488,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 216
-PINNED_CONTROLS = 469
+PINNED_CASES = 222
+PINNED_CONTROLS = 485
 
 
 class LinksError(ValueError):
@@ -542,6 +570,8 @@ def good_lines() -> list[str]:
             ]
         if name.startswith("edge-"):
             lines.append(next(line for line in edge_lines() if line.split()[2] == name))
+        if name == "reassemble-underfilled-interior":
+            lines += list(underfilled_lines())
         if name == "nine-keys-subscribers-and-samples":
             lines += list(counts_lines())
         if name == "boundary-at-sequence-width-changes":
@@ -612,6 +642,7 @@ SHAPES = {
     ("links", "shortkey"): 5,
     ("links", "edge"): 12,
     ("links", "counts"): 9,
+    ("links", "underfilled"): 7,
     ("links", "boundarysn"): 6,
     ("links", "highalias"): 5,
     ("links", "reuseafter"): 6,
@@ -692,6 +723,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     edges = [" ".join(f) for f in only("edge")]
     if edges != list(edge_lines()):
         raise LinksError(f"the admitted edges must open, declare, send and reassemble through the link: {list(edge_lines())}, reported {edges}")
+
+    underfilled = [" ".join(f) for f in only("underfilled")]
+    if underfilled != list(underfilled_lines()):
+        raise LinksError(f"a run whose interior fragments are shorter than the maximum must reassemble: {list(underfilled_lines())}, reported {underfilled}")
 
     counts = [" ".join(f) for f in only("counts")]
     if counts != list(counts_lines()):
@@ -785,7 +820,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled)
     return positive, len(refused)
 
 
@@ -969,6 +1004,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out = list(good)
         out[a], out[b] = out[b], out[a]
         return out
+
+    def under_swap(index: int, value: str) -> list[str]:
+        at = first("links underfilled ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
 
     def counts_swap(index: int, value: str) -> list[str]:
         at = first("links counts ")
@@ -1178,6 +1219,22 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a cached two-byte width at 16384", swap("links boundarysn 16384 " + str(whole_edge(EDGE_BATCH, 16384)) + " whole", f"links boundarysn 16384 {whole_edge(EDGE_BATCH, 16383)} whole 1")),
         ("a message one byte over the edge reported whole at 128", swap("links boundarysn 128 " + str(whole_edge(EDGE_BATCH, 128) + 1) + " fragmented", f"links boundarysn 128 {whole_edge(EDGE_BATCH, 128) + 1} whole 1")),
         ("the sequence-width scenario dropped", [line for line in good if line != "links ok boundary-at-sequence-width-changes"]),
+        ("the underfilled-run line dropped", drop("links underfilled ")),
+        ("an underfilled run reported with full fragments", under_swap(4, ",".join(str(len(b)) for b in full_key_bodies()))),
+        ("an underfilled run reported with one fragment fewer", under_swap(3, str(int(good[first("links underfilled ")].split()[3]) - 1))),
+        ("an underfilled run with other bodies", under_swap(5, sha(b"other"))),
+        ("an underfilled run that reassembled to another message", under_swap(6, sha(b"other"))),
+        ("an underfilled run at another batch", under_swap(2, "4096")),
+        ("the underfilled scenario dropped", [line for line in good if line != "links ok reassemble-underfilled-interior"]),
+        ("the 2 MiB edge dropped", drop("links edge edge-payload-2mib ")),
+        ("the 256 MiB edge dropped", drop("links edge edge-payload-256mib ")),
+        ("the 2 MiB payload reported as 1 MiB", edge_swap("edge-payload-2mib", 5, str(1 << 20))),
+        ("the 256 MiB payload reported as 2 MiB", edge_swap("edge-payload-256mib", 5, str(1 << 21))),
+        ("the 256 MiB payload reported as 4294967295", edge_swap("edge-payload-256mib", 5, "4294967295")),
+        ("a 2 MiB send with another number of fragments", edge_swap("edge-payload-2mib", 9, str(int(good[first("links edge edge-payload-2mib ")].split()[9]) + 1))),
+        ("a 256 MiB send with another number of fragments", edge_swap("edge-payload-256mib", 9, str(int(good[first("links edge edge-payload-256mib ")].split()[9]) - 1))),
+        ("a 256 MiB send with other bodies", edge_swap("edge-payload-256mib", 10, sha(b"other"))),
+        ("a 256 MiB payload that reassembled differently", edge_swap("edge-payload-256mib", 11, sha(b"other"))),
         ("the 1 MiB edge dropped", drop("links edge edge-payload-1mib ")),
         ("the 1 MiB payload reported as 16384", edge_swap("edge-payload-1mib", 5, "16384")),
         ("a 1 MiB send with another number of fragments", edge_swap("edge-payload-1mib", 9, str(int(good[first("links edge edge-payload-1mib ")].split()[9]) - 1))),
@@ -1681,6 +1738,11 @@ def reference_controls() -> int:
     for last in (TIMEOUT_MS - 1, TIMEOUT_MS):
         zenoh_fragment.check_deadline(0, last, TIMEOUT_MS)
         zenoh_fragment.check_deadline(DEADLINE_FIRST, DEADLINE_FIRST + last, TIMEOUT_MS)
+    # A run whose interior fragments are shorter than the maximum is taken, so the reassembler does not
+    # insist that every fragment fills the batch.
+    uneven = zenoh_fragment.reference_split_uneven(zenoh_fragment.message(size), batch, sn, (1000, 1))
+    if zenoh_fragment.reassemble(uneven, sn, batch) != zenoh_fragment.message(size):
+        raise LinksError("control: a run with short interior fragments was not taken")
     # A valid key shorter than the maximum and an alias with bit 15 set are read, so none of the key and
     # alias refusals is a blanket one.
     short_run = zenoh_fragment.reference_split(zenoh_fragment.full_key_for_exam(5000, SHORT_KEY), 2048, sn)
