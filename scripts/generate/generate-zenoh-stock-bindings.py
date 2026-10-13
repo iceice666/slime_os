@@ -30,11 +30,11 @@ RUST_OUTPUT = ROOT / "components" / "lib" / "src" / "zenoh_stock" / "fixtures.rs
 INVALID = "INVALID_ZENOH_STOCK_FIXTURES"
 
 
-def render() -> str:
+def render(source: str | None = None) -> str:
     with tempfile.TemporaryDirectory(prefix="slime-zenoh-stock-bindings-") as temporary:
         staging = Path(temporary)
         record = staging / "fixtures.zti"
-        record.write_text(zenoh_stock_peer.fixture_zti(), encoding="utf-8")
+        record.write_text(zenoh_stock_peer.fixture_zti() if source is None else source, encoding="utf-8")
         staged = staging / "components" / "lib" / "src" / "zenoh_stock" / "fixtures.rs"
         staged.parent.mkdir(parents=True)
         environment = os.environ.copy()
@@ -60,6 +60,46 @@ def render() -> str:
         if INVALID in rust:
             raise SystemExit("zenoh-stock-fixtures record is refused by its contract")
         return rust
+
+
+def corrupted_records(honest: str) -> list[tuple[str, str]]:
+    """Records the contract's constants forbid, each of which the generator must refuse."""
+    row = '    { name = "connects-01-init-syn"; hex = "'
+    start = honest.index(row) + len(row)
+    first = honest[start : honest.index('"', start)]
+
+    def with_first(hexed: str) -> str:
+        return honest[:start] + hexed + honest[start + len(first) :]
+
+    cookie = zenoh_stock_peer.COOKIE.encode().hex()
+    marker = "  connects = [\n"
+    line_start = honest.index(row)
+    return [
+        ("a twelfth connects row", honest.replace(marker, marker + '    { name = "connects-12-extra"; hex = "04"; };\n', 1)),
+        ("a connects row missing", honest[:line_start] + honest[honest.index("\n", line_start) + 1 :]),
+        ("non-hex bytes", with_first("zz" + first[2:])),
+        ("uppercase hex", with_first(first.upper())),
+        ("odd-length hex", with_first(first + "0")),
+        ("a batch over 512 bytes", with_first("00" * 513)),
+        ("formatVersion 2", honest.replace("formatVersion = 1;", "formatVersion = 2;")),
+        ("a cookie of another length", honest.replace(cookie, "00" * 28, 1)),
+        ("a non-hex cookie", honest.replace(cookie, "zz" * 29, 1)),
+        ("a name over 64 bytes", honest.replace('name = "connects-01-init-syn"', 'name = "' + "n" * 65 + '"', 1)),
+    ]
+
+
+def controls() -> None:
+    honest = zenoh_stock_peer.fixture_zti()
+    render(honest)
+    for label, record in corrupted_records(honest):
+        if record == honest:
+            raise SystemExit(f"control '{label}' did not change the record")
+        try:
+            render(record)
+        except SystemExit:
+            continue
+        raise SystemExit(f"generator rendered a record it must refuse: {label}")
+    print(f"Zenoh stock fixture controls: {len(corrupted_records(honest))} corrupted records refused")
 
 
 def format_rust(source: str) -> str:
@@ -88,7 +128,11 @@ def write_atomic(path: Path, contents: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--controls", action="store_true", help="prove the generator refuses corrupted records")
     arguments = parser.parse_args()
+    if arguments.controls:
+        controls()
+        return
     generated = format_rust(render())
     if arguments.check:
         if not RUST_OUTPUT.exists() or RUST_OUTPUT.read_text(encoding="utf-8") != generated:

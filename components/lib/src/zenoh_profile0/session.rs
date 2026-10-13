@@ -701,15 +701,18 @@ impl Session {
     /// session that has sent nothing for a quarter of its own announced lease writes a KEEP_ALIVE; before
     /// OPEN, or while the lent storage cannot take one, it only accepts and does nothing.
     pub fn tick<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
-        let expired = self.tick_lease(now_ms, out)?;
+        let expired = self.expire(now_ms, out)?;
         if expired.sent != 0 {
+            self.now_ms = self.now_ms.max(now_ms);
             return Ok(expired);
         }
         if self.state == State::Open && now_ms >= self.keep_alive_due() {
             let sent = encode::keep_alive(out)?;
+            self.now_ms = self.now_ms.max(now_ms);
             self.sent_now(now_ms);
             return Ok(Outcome::sending(sent));
         }
+        self.now_ms = self.now_ms.max(now_ms);
         Ok(Outcome::nothing())
     }
 
@@ -721,7 +724,14 @@ impl Session {
         now_ms: u64,
         out: &mut [u8],
     ) -> Result<Outcome<'a>, SessionError> {
+        let outcome = self.expire(now_ms, out)?;
         self.now_ms = self.now_ms.max(now_ms);
+        Ok(outcome)
+    }
+
+    /// The expiry check without the clock: a refused call must leave the session as it was, so
+    /// the callers advance `now_ms` only after the whole operation has succeeded.
+    fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
         match self.lease_deadline() {
             Some(deadline) if now_ms > deadline => {
                 let sent = encode::close(out, CLOSE_EXPIRED, true)?;

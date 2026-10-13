@@ -706,3 +706,21 @@ fn handshake_with_leases(connector_ms: u64, listener_ms: u64) -> (Session, Sessi
     assert!(a.is_open() && b.is_open());
     (a, b)
 }
+
+/// A tick refused for want of output storage leaves the session as it was, the clock included: a
+/// later send must not be stamped from a call that did not succeed.
+#[test]
+fn a_refused_tick_does_not_advance_the_clock() {
+    let (mut a, _b) = handshake_with_leases(2_000, 2_000);
+    let before = a.now_ms;
+    let due = a.keep_alive_due();
+    assert!(a.tick(due, &mut []).is_err(), "no room for the KEEP_ALIVE");
+    assert_eq!(a.now_ms, before, "keep-alive refused");
+    assert_eq!(a.keep_alive_due(), due);
+    let expired = a.lease_deadline().expect("open") + 1;
+    assert!(a.tick(expired, &mut []).is_err(), "no room for the CLOSE");
+    assert_eq!(a.now_ms, before, "expiry refused");
+    assert!(a.tick_lease(expired, &mut []).is_err());
+    assert_eq!(a.now_ms, before, "expiry refused through tick_lease");
+    assert!(a.is_open());
+}
