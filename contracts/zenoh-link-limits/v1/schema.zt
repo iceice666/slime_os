@@ -1,0 +1,221 @@
+-- The limits one Zenoh Profile 0 link is built and declared with.
+--
+-- Profile 0 was sized for one message, the demo's `Counter`, and its bounds were fixed in code. A
+-- link now carries a named configuration in one of two modes:
+--
+--   fixed  No heap. Every buffer is an array sized from the configuration, a message must fit in one
+--          batch, and a fragment is refused. `demo` is the configuration the first release shipped
+--          and does not change; `large` is the same mode with bigger arrays.
+--   heap   The owning component supplies the storage a fragmented message is reassembled into, from
+--          its own allocator. A message may be larger than a batch and is sent and received as
+--          fragments. One message is reassembled at a time.
+--
+-- A configuration is judged here, before a link is built from it, so a declaration that cannot hold
+-- its own largest message, cannot cross the network service in one operation, or leaves the owning
+-- component too little stack or heap is refused instead of failing later.
+--
+-- What this contract does not do is choose a size. Nothing here says how many keys a link may hold
+-- or how large a message may be: the protocol has no such cap (a subscriber id is 32 bits, an alias
+-- id 16, a message any length), and the repository's own `1` and `12` come from the demo's single
+-- `Counter`. A configuration declares what it needs, and this contract checks that the declaration
+-- is consistent with the memory it also declares. The limits that remain each have a source, named
+-- beside them.
+
+Config :: type {
+  name : Text;
+  mode : Text;
+  batchBytes : Int;
+  payloadBytes : Int;
+  keyBytes : Int;
+  attachmentBytes : Int;
+  maxKeys : Int;
+  maxSubscribers : Int;
+  outstandingSamples : Int;
+  stackBytes : Int;
+  reassemblyTimeoutMs : Int;
+  heapBytes : Int;
+};
+
+Limits :: type {
+  formatVersion : Int;
+  configs : List Config;
+};
+
+FromData @Config :: derive
+FromData @Limits :: derive
+
+formatVersion :: Int = 1;
+
+modeFixed :: Text = "fixed";
+modeHeap :: Text = "heap";
+
+-- Source: the network service moves at most one data page per operation (`DATA_BYTES` in
+-- `components/proto/src/network_service.rs`), and every batch travels behind a two-byte length.
+dataBytes :: Int = 4096;
+streamLengthBytes :: Int = 2;
+
+-- Source: the key-expression alias id and the scope every reference to it carries are 16 bits
+-- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
+aliasIds :: Int = 65535;
+
+-- The bytes a PUSH and a Put add around their key, attachment and payload, and the frame header
+-- before them: the frame header and a five-byte sequence number, the push header, the scope, a
+-- two-byte key length, the Put header, the attachment extension and its length, and a two-byte
+-- payload length. The host reference encoder is what proves this figure; the contract holds it
+-- with a margin.
+framingBytes :: Int = 32;
+
+-- What a fragment adds around its slice of a message: the header byte and a sequence number of at
+-- most five bytes, with a margin. Observed: a stock peer with a 2048-byte batch sent fragments of
+-- 2046 bytes, the batch less the stream length.
+fragmentFramingBytes :: Int = 8;
+
+-- Arithmetic from the code's own arrays, not a measured high-water mark. A link's locals are
+-- several batch-sized arrays and a scratch twice that size, so the stack covers `stackFactor`
+-- batches; each declared key and subscriber slot is a key array and a small header; each queued
+-- sample notice is a small header, and in fixed mode also the payload array it copies. The
+-- implementation's host tests hold these to `size_of` of the real types.
+stackFactor :: Int = 8;
+slotOverheadBytes :: Int = 16;
+noticeOverheadBytes :: Int = 24;
+noticesPerSample :: Int = 2;
+
+d ::= import stdlib.data;
+l ::= import stdlib.list;
+r ::= import stdlib.result;
+t ::= import stdlib.text;
+
+-- The record is closed. `decode` reads the fields it knows and ignores the rest, so a field the
+-- contract does not name would pass unseen; this refuses it at the top level and in every config.
+limitsFields :: List Text = { "formatVersion"; "configs"; };
+configFields :: List Text = { "name"; "mode"; "batchBytes"; "payloadBytes"; "keyBytes"; "attachmentBytes"; "maxKeys"; "maxSubscribers"; "outstandingSamples"; "stackBytes"; "reassemblyTimeoutMs"; "heapBytes"; };
+
+member :: Text -> List Text -> Bool
+  = name names => match names { | {;} => false; | {head; ...tail} => if head == name then true else member name tail; };
+
+allMembers :: List Text -> List Text -> Bool
+  = names found => match found { | {;} => true; | {head; ...tail} => member head names && allMembers names tail; };
+
+nameOf :: d.DataField -> Text
+  = field => field.name;
+
+closedRecord :: List Text -> Data -> Bool
+  = names data => match d.asRecord data {
+    | #ok { value = fields; } => allMembers names (l.map nameOf fields);
+    | #err { error = _; } => true;
+  };
+
+allClosed :: List Data -> Bool
+  = items => match items { | {;} => true; | {head; ...tail} => closedRecord configFields head && allClosed tail; };
+
+closedConfigs :: Data -> Bool
+  = data => match d.field "configs" data {
+    | #ok { value = value; } => match d.asList value { | #ok { value = items; } => allClosed items; | #err { error = _; } => true; };
+    | #err { error = _; } => true;
+  };
+
+closedLimits :: Data -> Bool
+  = data => closedRecord limitsFields data && closedConfigs data;
+
+count :: List Config -> Int
+  = items => match items { | {;} => 0; | { _; ...rest } => 1 + count rest; };
+
+-- The whole serialized message a Put becomes: payload, key, attachment and framing.
+messageBytes :: Config -> Int
+  = c => c.payloadBytes + c.keyBytes + c.attachmentBytes + framingBytes;
+
+-- The key and subscriber slots a configuration declares.
+slotBytes :: Config -> Int
+  = c => (c.maxKeys + c.maxSubscribers) * (c.keyBytes + slotOverheadBytes);
+
+-- The queued sample notices. A fixed link copies each payload into its notice; a heap link hands
+-- the sample out as a slice of the reassembly buffer, so its notices carry no payload.
+noticeBytes :: Config -> Int
+  = c => noticesPerSample * c.outstandingSamples
+    * (noticeOverheadBytes + (if c.mode == modeFixed then c.payloadBytes else 0));
+
+-- The memory the owning component declares for the link's fixed storage.
+requiredStack :: Config -> Int
+  = c => stackFactor * c.batchBytes + slotBytes c + noticeBytes c;
+
+commonOk :: Config -> Bool
+  = c => t.length c.name >= 1 && t.length c.name <= 16
+    && c.batchBytes >= 1 && c.batchBytes + streamLengthBytes <= dataBytes
+    && c.payloadBytes >= 1 && c.keyBytes >= 1 && c.attachmentBytes >= 1
+    && c.maxKeys >= 1 && c.maxKeys <= aliasIds
+    && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
+    && c.outstandingSamples >= 1
+    && c.stackBytes >= requiredStack c;
+
+-- No heap: the message is one batch, so there is nothing to reassemble.
+fixedOk :: Config -> Bool
+  = c => messageBytes c <= c.batchBytes
+    && c.reassemblyTimeoutMs == 0 && c.heapBytes == 0;
+
+-- A heap link: the batch must carry more than a fragment's own framing, so a message makes
+-- progress, a stalled reassembly must expire, and one message is held in a buffer the component's
+-- allocator provides.
+heapOk :: Config -> Bool
+  = c => c.batchBytes > fragmentFramingBytes
+    && c.reassemblyTimeoutMs >= 1
+    && c.heapBytes >= messageBytes c;
+
+configOk :: Config -> Bool
+  = c => commonOk c
+    && (if c.mode == modeFixed then fixedOk c else if c.mode == modeHeap then heapOk c else false);
+
+allConfigsOk :: List Config -> Bool
+  = items => match items { | {;} => true; | { head; ...rest } => configOk head && allConfigsOk rest; };
+
+hasName :: Text -> List Config -> Bool
+  = name items => match items {
+    | {;} => false;
+    | { head; ...rest } => if head.name == name then true else hasName name rest;
+  };
+
+-- Two configurations may not share a name, since a link and an exam name one by it.
+distinct :: List Config -> Bool
+  = items => match items {
+    | {;} => true;
+    | { head; ...rest } => if hasName head.name rest then false else distinct rest;
+  };
+
+limitsOk :: Limits -> Bool
+  = rec => rec.formatVersion == formatVersion
+    && count rec.configs >= 1
+    && allConfigsOk rec.configs && distinct rec.configs;
+
+unknownField :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a field the contract does not name"; }; };
+
+outOfBounds :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a configuration outside the bounds the contract declares"; }; };
+
+bounded :: Validation DecodeIssue Limits -> Validation DecodeIssue Limits
+  = checked => match checked {
+    | #valid { value = rec; } => if limitsOk rec then #valid { value = rec; } else r.invalidOne outOfBounds;
+    | #invalid { errors = errs; } => #invalid { errors = errs; };
+  };
+
+decodeLimits :: Data -> Validation DecodeIssue Limits
+  = data => if closedLimits data then bounded (decode data) else r.invalidOne unknownField;
+
+{
+  Config =;
+  Limits =;
+  decodeLimits =;
+  formatVersion =;
+  modeFixed =;
+  modeHeap =;
+  dataBytes =;
+  streamLengthBytes =;
+  aliasIds =;
+  framingBytes =;
+  fragmentFramingBytes =;
+  stackFactor =;
+  slotOverheadBytes =;
+  noticeOverheadBytes =;
+  noticesPerSample =;
+  messageBytes =;
+  requiredStack =;
+}

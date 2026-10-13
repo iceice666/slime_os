@@ -65,6 +65,14 @@ It also pins the captured pushes to the demo contract's four samples and attachm
 fixture cannot drift from the topic the demo exchanges. The recipe fails until the session
 accepts a stock peer; nothing here claims `rmw_zenoh` interoperability or liveliness.
 
+`--slice links` judges the link-limits and fragmentation change: the three configurations a link is
+declared with (`demo`, `large`, `heap`), pinned and validated through `contracts/zenoh-link-limits/v1`;
+the fragments a stock peer put on the wire for one large Put, reproduced byte for byte by the host
+reference `scripts/lib/zenoh_fragment.py`; our own Put fragmented the same way; the edge between a
+message that travels whole and one that is fragmented; and the refusals. The retained decoder, session,
+encoder and link suites and the stock-peer tests are run and required by name beside it, so the
+fixed decoder keeps refusing a fragment and the pinned corpus does not move.
+
 `--slice composition` judges the derived `sel4-zenoh` composition against the
 demo contract's authority and refuses 15 mutations of an honest one. It is the
 static half of the QEMU arm; the boot is `check-sel4-io-network-plane.py --arm zenoh`.
@@ -89,6 +97,7 @@ from typing import NoReturn
 
 import devloop_observations
 import zenoh_exchange
+import zenoh_links_exam
 import zenoh_stock_peer
 import zenoh_wire
 import zutai_cli
@@ -161,9 +170,12 @@ STOCK_LINK_TESTS = tuple(f"zenoh_link::tests::{name}" for name in (
 ))
 STOCK_SESSION_TESTS = tuple(f"zenoh_profile0::session::tests::{name}" for name in (
     "a_quiet_link_closes_at_the_lease_and_traffic_renews_it",
+    "a_refused_tick_does_not_advance_the_clock",
+    "a_tiny_own_lease_still_spaces_keep_alives",
     "connect_handshake",
     "declare_then_push_delivered",
     "frames_the_session_sends_use_the_sender_key_mapping",
+    "keep_alives_follow_the_lease_this_side_announced",
     "lease_expiry_closes",
     "listen_handshake",
     "refuses_cookie_mismatch",
@@ -185,12 +197,16 @@ STOCK_RETAINED_TESTS = (*STOCK_DECODER_TESTS, *STOCK_SESSION_TESTS, *STOCK_ENCOD
 # capture and none matches, because the stock peer attaches a QoS extension and a body those
 # vectors do not have. An implementation accepts the shapes the capture shows, and the 19 replays
 # below prove it does.
-STOCK_MAY_CHANGE = frozenset({"transport_keep_alive"})
-STOCK_MAY_CHANGE_BYTES = {"transport_keep_alive": "04"}
+STOCK_MAY_CHANGE = frozenset({"transport_keep_alive", "transport_fragment"})
+# transport_fragment is the single reliable final fragment `2601aa`. Once the decoder reads a
+# FRAGMENT message it is a valid one, so the row cannot stay refused; it cannot become an accepted
+# row either, for the reason the keep-alive row cannot. The link-limits change removes it
+# (`--slice links` requires fragments to be taken, and the stock slice allows the row to go).
+STOCK_MAY_CHANGE_BYTES = {"transport_keep_alive": "04", "transport_fragment": "2601aa"}
 # The class it is refused with today. While the row stays it keeps its class too: the retained
 # corpus test agrees with whatever the row says, so a class changed in the row and the decoder
 # together would otherwise pass.
-STOCK_MAY_CHANGE_CLASS = {"transport_keep_alive": "unsupported-message"}
+STOCK_MAY_CHANGE_CLASS = {"transport_keep_alive": "unsupported-message", "transport_fragment": "unsupported-message"}
 # The refused vectors that must stay exactly as they were when the exam landed, by name, with a
 # digest of `<name> <class> <bytes>` for each in name order. The checker reads the working tree's
 # corpus and compares; a refused vector may be added, and transport_keep_alive may go, but none of
@@ -220,12 +236,12 @@ STOCK_FIXED_NAMES = tuple((
     "put_attachment_32_bytes put_attachment_34_bytes put_attachment_gid_len_15 "
     "put_attachment_truncated put_encoding_flag put_extension_chained put_payload_13_bytes "
     "put_payload_len_noncanonical put_payload_len_overflow put_payload_truncated "
-    "put_timestamp_flag put_unknown_extension transport_fragment transport_join transport_oam "
+    "put_timestamp_flag put_unknown_extension transport_join transport_oam "
     "transport_unknown_id usub_ext_chained usub_ext_not_mandatory usub_flags_reserved_bits "
     "usub_missing_wire_expr_ext usub_no_suffix usub_nonzero_scope usub_reserved_header_bit "
     "usub_wildcard usub_wrong_ext_id usub_zbuf_length_132 usub_zbuf_truncated"
 ).split())
-STOCK_FIXED_DIGEST = "7784f50485c9f195fe271dc2f1a92ab28791fcf8e6e7fb08e1e9d0f949ccda12"
+STOCK_FIXED_DIGEST = "4422567dd0966737e41d7e7fb79f0bd66c1fa4c15744ceff4942b36fdaf54987"
 # The accepted batches are the upstream encoder's output and are pinned by name, bytes and
 # summary: replacing one, dropping one or renaming a copy all change the digest.
 STOCK_ACCEPTED_NAMES = tuple((
@@ -1123,6 +1139,14 @@ def stock_controls() -> int:
                 return "\n".join(row if line.startswith("batch transport_keep_alive ") else line for line in lines)
             return "\n".join([*lines, row])
 
+        def refragment(tail: str) -> str:
+            # As rekeep: the fragment row may be gone, so a variant is added as a row when it is.
+            row = f"batch transport_fragment {tail}"
+            lines = corpus_text.splitlines()
+            if any(line.startswith("batch transport_fragment ") for line in lines):
+                return "\n".join(row if line.startswith("batch transport_fragment ") else line for line in lines)
+            return "\n".join([*lines, row])
+
         def restream(name: str, position: int, value: str) -> str:
             return "\n".join(
                 " ".join(line.split()[:position] + [value] + line.split()[position + 1 :])
@@ -1183,6 +1207,11 @@ def stock_controls() -> int:
             ("the keep-alive row refused with another existing class", rekeep("refused malformed-message 04")),
             ("the keep-alive row refused with an invented class", rekeep("refused invented-class 04")),
             ("the keep-alive row turned into an accepted row with the captured byte", rekeep(f"ok {STOCK_MAY_CHANGE_BYTES['transport_keep_alive']} KEEP_ALIVE;captured")),
+            ("the fragment row accepted with invented bytes", refragment("ok 00 invented")),
+            ("the fragment row still refused but with other bytes", refragment("refused unsupported-message ff")),
+            ("the fragment row refused with another existing class", refragment("refused malformed-message 2601aa")),
+            ("the fragment row refused with an invented class", refragment("refused invented-class 2601aa")),
+            ("the fragment row turned into an accepted row with the captured bytes", refragment(f"ok {STOCK_MAY_CHANGE_BYTES['transport_fragment']} FRAGMENT;captured")),
             ("an accepted stock_ row for a captured batch", corpus_text + f"\nbatch stock_init_syn ok {zenoh_stock_peer.batches('connects')[0][1]} INIT_SYN;captured"),
         ]
         for label, mutated in corpus_mutations:
@@ -1193,8 +1222,10 @@ def stock_controls() -> int:
             fail(f"control: {label} was accepted by the stock corpus judge")
         # The keep-alive row may go or stay refused with the captured byte: the exam must not stand in
         # the way of the item, whichever of those it chooses.
-        judge_stock_corpus(drop(sorted(STOCK_MAY_CHANGE)[0]))
+        for may_change in sorted(STOCK_MAY_CHANGE):
+            judge_stock_corpus(drop(may_change))
         judge_stock_corpus(rekeep(f"refused unsupported-message {STOCK_MAY_CHANGE_BYTES['transport_keep_alive']}"))
+        judge_stock_corpus(refragment(f"refused unsupported-message {STOCK_MAY_CHANGE_BYTES['transport_fragment']}"))
         extra = len(corpus_mutations)
     else:
         extra = 0
@@ -1407,6 +1438,74 @@ def stock_main(controls_only: bool) -> int:
     return 0
 
 
+LINKS_FILTER = "zenoh_links::"
+# Everything the stock-peer exam already requires to keep passing, plus its own tests: a fragment
+# change edits the decoder, session and link, and the fixed decoder must keep refusing a fragment.
+LINKS_RETAINED_TESTS = (*STOCK_RETAINED_TESTS,)
+
+
+def links_item_pins() -> tuple[int, int]:
+    """The case count and the control floor the admitted links item fixes, read from its stored body,
+    so the number the checker reports and the number the acceptance requires cannot drift."""
+    for path in sorted((ROOT / ".tasks" / "items").glob("*.md")):
+        text = path.read_text()
+        if "zenoh_links_check" not in text or "slime-zenoh-profile0-link-limits-" not in text:
+            continue
+        cases = re.search(r'id = "all-cases-observed";.*?intValue = (\d+);', text, re.S)
+        floor = re.search(r'observation = "negativeControlsRefused";.*?lower = (\d+);', text, re.S)
+        if cases and floor:
+            return int(cases.group(1)), int(floor.group(1))
+    return 0, 0
+
+
+def run_links() -> list[str]:
+    environment = dict(_os.environ)
+    _stdout, retained = cargo_tests(
+        (STOCK_DECODER_FILTER, STOCK_SESSION_FILTER, STOCK_ENCODE_FILTER, STOCK_LINK_FILTER, STOCK_FILTER),
+        {**environment, "ZENOH_STOCK_FIXTURES": str(STOCK_FIXTURES)},
+    )
+    passed = tests_passed(retained)
+    missing = [name for name in LINKS_RETAINED_TESTS if name not in passed]
+    if missing:
+        fail(f"links: retained tests did not run and pass ({len(missing)} of {len(LINKS_RETAINED_TESTS)}): {', '.join(missing[:4])}")
+    # The links tests run alone, and their evidence is all the links judge sees.
+    links_stdout, _output = cargo_tests((LINKS_FILTER,), environment)
+    return exam_lines(links_stdout)
+
+
+def links_main(controls_only: bool) -> int:
+    try:
+        refused_controls = zenoh_links_exam.all_controls()
+        item_cases, item_floor = links_item_pins()
+        positive, refusals = zenoh_links_exam.judge(zenoh_links_exam.good_lines())
+    except (zenoh_links_exam.LinksError, zenoh_exchange.ExchangeError) as error:
+        fail(str(error))
+    if positive + refusals != zenoh_links_exam.PINNED_CASES:
+        fail(f"links: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_links_exam.PINNED_CASES}")
+    if refused_controls < zenoh_links_exam.PINNED_CONTROLS:
+        fail(f"links: {refused_controls} controls, the checker pins at least {zenoh_links_exam.PINNED_CONTROLS}")
+    # While the item is an active work item, its stored body must say the same. A retired item has no
+    # body here, so this comparison is skipped and the pins above are the whole guard.
+    if item_cases and item_cases != zenoh_links_exam.PINNED_CASES:
+        fail(f"links: the admitted item fixes {item_cases} cases, the checker pins {zenoh_links_exam.PINNED_CASES}")
+    if item_floor and item_floor != zenoh_links_exam.PINNED_CONTROLS:
+        fail(f"links: the admitted item requires {item_floor} controls, the checker pins {zenoh_links_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 links judge: refused {refused_controls} corrupted records")
+        return 0
+    stock_fixtures()
+    STOCK_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    STOCK_FIXTURES.write_text(zenoh_stock_peer.fixture_zti())
+    try:
+        cases, refusals = zenoh_links_exam.judge(run_links())
+    except zenoh_links_exam.LinksError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=links cases={cases} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=cases + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 links check: a link takes the limits it declares, fragments and reassembles as a stock peer does, and refuses what it must")
+    return 0
+
+
 def composition_main(controls_only: bool) -> int:
     contract = zenoh_exchange.demo()
     try:
@@ -1430,7 +1529,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -1439,6 +1538,8 @@ def main() -> int:
         return xcheck_main(arguments.controls_only)
     if arguments.slice == "stock":
         return stock_main(arguments.controls_only)
+    if arguments.slice == "links":
+        return links_main(arguments.controls_only)
     refused_controls = controls(arguments.slice)
     if arguments.controls_only:
         print(f"zenoh profile 0 {arguments.slice} judge: refused {refused_controls} corrupted transcripts")
