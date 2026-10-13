@@ -546,6 +546,10 @@ fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refus
             // The id is the scope every reference to the alias carries, so it has the same 16 bits;
             // a wider one could never be named and would only take the single alias slot.
             let id = reader.leb(p::LEB128_SHORT_BITS)?;
+            // Scope 0 is the global scope, so no reference can name an alias with id 0.
+            if id == 0 {
+                return Err(Refusal::InvalidKeyexpr);
+            }
             match key_reference(reader, true)? {
                 KeyRef::Full(key) => Ok(Network::DeclareKeyExpr { id, key }),
                 KeyRef::Alias(_) => Err(Refusal::InvalidKeyexpr),
