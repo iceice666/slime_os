@@ -1,7 +1,7 @@
 # Zenoh Profile 0 links declared by a named configuration
 
 **Status:** Proposed
-**Related work items:** `01a13723-8dec-7d18-9a31-d7feaeca5c1b` (this decision's exam and
+**Related work items:** `01a13739-0e91-7019-b55b-cb329da7c2d4` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer item
 `01a12f13-a343-7924-af20-18148fc1b0d9` (merged), whose exam this one extends.
 
@@ -63,7 +63,7 @@ declaration before a link is built from it.
 4. **The contract sets no size.** [`contracts/zenoh-link-limits/v1`](../../contracts/zenoh-link-limits/README.md)
    states what a configuration may declare and checks the declaration is consistent with the memory it
    also declares. The limits it keeps each have a source: a batch, which includes its two-byte length, must fit the
-   4096 bytes the network service moves in one operation (`DATA_BYTES`); a key count is at most 65535
+   4096 bytes the network service moves in one operation (`DATA_BYTES`) and hold the 89 bytes of the largest handshake message, which cannot be fragmented; a key count is at most 65535
    because the alias id is 16 bits, and a key is at most 65535 bytes because its length is a 16-bit field, and a payload is at most 4294967295 bytes because its length is 32 bits; the stack must cover the link's arrays, its key and subscriber slots
    and its queued sample notices; the heap must hold every queued sample notice (two per outstanding sample) and the message being reassembled, because a sample is handed out as a slice of the buffer it was reassembled into. It sets no ceiling on keys,
    subscribers, samples, payload or heap.

@@ -59,6 +59,13 @@ dataBytes :: Int = 4096;
 -- the batch less this.
 streamLengthBytes :: Int = 2;
 
+-- Source: INIT and OPEN are transport messages and cannot be sent as FRAGMENTs, so a batch must hold
+-- the largest one the profile permits. An INIT_ACK with a 16-byte ZID (`MAX_ZID_BYTES`), the size
+-- parameters and a 64-byte cookie (`MAX_COOKIE_BYTES`) is 87 bytes: header, version, ZID length and
+-- ZID, resolution and batch size, cookie length and cookie. An OPEN_SYN with the longest lease and
+-- sequence number and a 64-byte cookie is 76.
+handshakeBytes :: Int = 87;
+
 -- Source: the key-expression alias id and the scope every reference to it carries are 16 bits
 -- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
 aliasIds :: Int = 65535;
@@ -168,7 +175,7 @@ requiredStack :: Config -> Int
 
 commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
-    && c.batchBytes >= 1 && c.batchBytes <= dataBytes
+    && c.batchBytes >= handshakeBytes + streamLengthBytes && c.batchBytes <= dataBytes
     && c.payloadBytes >= 1 && c.payloadBytes <= maxPayloadLengthBytes && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
     && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
@@ -247,6 +254,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   modeHeap =;
   dataBytes =;
   streamLengthBytes =;
+  handshakeBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
   maxKeyLengthBytes =;

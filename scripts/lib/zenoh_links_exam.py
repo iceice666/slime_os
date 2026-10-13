@@ -76,6 +76,7 @@ OK_SCENARIOS = (
     "demo-config-unchanged",
     "large-delivers-1024-whole",
     "four-keys-and-subscribers",
+    "subscriber-ids-use-all-32-bits",
 )
 REFUSED_SCENARIOS = (
     ("fixed-refuses-fragment", "unsupported-message"),
@@ -149,6 +150,15 @@ REFUSED_SCENARIOS = (
     # as the whole-frame decoder refuses it, not delivered as if it were global.
     ("fragmented-put-full-key-nonzero-scope", "invalid-keyexpr"),
     ("fragmented-put-empty-key", "invalid-keyexpr"),
+    # A PUSH whose body is not a Put is unsupported, one that ends before its body is truncated, and a
+    # message that ends in the middle of any variable-length field of the reconstructed Put is
+    # truncated, not defaulted, not malformed and not an overflow.
+    ("fragmented-push-delete-body", "unsupported-message"),
+    ("fragmented-push-ends-before-body", "truncated"),
+    ("fragmented-put-scope-unterminated", "truncated"),
+    ("fragmented-put-key-length-unterminated", "truncated"),
+    ("fragmented-put-attachment-length-unterminated", "truncated"),
+    ("fragmented-put-payload-length-unterminated", "truncated"),
     # The PUSH and the Put inside a fragmented message carry what a whole-frame one carries and nothing
     # more: each of these is refused with the class the corpus gives it.
     ("fragmented-push-extension-flag", "unsupported-extension"),
@@ -230,6 +240,18 @@ DEADLINE_PAYLOAD = 5000
 DEADLINE_FIRST = 7_000_000
 
 
+# A subscriber id is an `EntityId`, 32 bits: the largest that fits 31 bits, the top bit alone and the
+# largest of all, each declared and undeclared with the encodings pinned, so a reader or a slot of 16
+# or 31 bits fails on a valid declaration.
+SUBSCRIBER_IDS = (0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
+
+
+def subscriber_id_line(sub_id: int) -> str:
+    declare = zenoh_wire.declare_subscriber(sub_id, key(), True)
+    undeclare = zenoh_wire.undeclare_subscriber(sub_id, key(), True)
+    return f"links subid {sub_id} {len(declare)} {sha(declare)} {len(undeclare)} {sha(undeclare)}"
+
+
 def deadline_line(timeout: int, first: int, middle: int, last: int, outcome: str, digest: str) -> str:
     return f"links deadline {timeout} {first} {middle} {last} {outcome} {digest}"
 
@@ -300,8 +322,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 167
-PINNED_CONTROLS = 368
+PINNED_CASES = 177
+PINNED_CONTROLS = 396
 
 
 class LinksError(ValueError):
@@ -380,6 +402,8 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
+        if name == "subscriber-ids-use-all-32-bits":
+            lines += [subscriber_id_line(sub_id) for sub_id in SUBSCRIBER_IDS]
         if name == "reassembly-completes-at-the-timeout-edge":
             lines += deadline_lines()
         if name == "put-roundtrip-at-the-declared-payload":
@@ -436,6 +460,7 @@ SHAPES = {
     ("links", "queue"): 7,
     ("links", "aliased"): 5,
     ("links", "deadline"): 8,
+    ("links", "subid"): 7,
     ("links", "reuseafter"): 6,
     ("links", "heapfrag"): 6,
     ("links", "drained"): 5,
@@ -511,6 +536,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
 
+    subid = [" ".join(f) for f in only("subid")]
+    if subid != [subscriber_id_line(sub_id) for sub_id in SUBSCRIBER_IDS]:
+        raise LinksError(f"subscriber ids {[hex(i) for i in SUBSCRIBER_IDS]} must be declared and undeclared with the pinned encodings: {[subscriber_id_line(i) for i in SUBSCRIBER_IDS]}, reported {subid}")
+
     deadline = [" ".join(f) for f in only("deadline")]
     if deadline != deadline_lines():
         raise LinksError(f"a run whose last fragment arrives exactly the declared timeout after the first, which started after the clock had passed it, must reassemble and the same run a millisecond later must not: {deadline_lines()}, reported {deadline}")
@@ -583,7 +612,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid)
     return positive, len(refused)
 
 
@@ -695,7 +724,10 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a 1 MiB heap payload with its heap", trio(heap=exact(heap, payloadBytes=1 << 20, heapBytes=heap_needed(dict(heap, payloadBytes=1 << 20)))), True),
         ("a heap payload larger than its heap", trio(heap=exact(heap, payloadBytes=1 << 20)), False),
         ("a heap batch that cannot hold a fragment's framing", trio(heap=exact(heap, batchBytes=8)), False),
-        ("a heap batch of 9", trio(heap=exact(heap, batchBytes=9)), True),
+        ("a heap batch one byte under the largest handshake message", trio(heap=exact(heap, batchBytes=88)), False),
+        ("a heap batch that holds the largest handshake message exactly", trio(heap=exact(heap, batchBytes=89)), True),
+        ("a fixed batch one byte under the largest handshake message", trio(large=exact(large, batchBytes=88, payloadBytes=1, keyBytes=1)), False),
+        ("a fixed batch that holds the largest handshake message exactly", trio(large=exact(large, batchBytes=89, payloadBytes=1, keyBytes=1)), True),
         ("an attachment of 33 bytes, the wire size", trio(large=exact(large, attachmentBytes=33)), True),
         ("an attachment of 32 bytes, one byte short", trio(large=exact(large, attachmentBytes=32)), False),
         ("an attachment of 34 bytes, one byte over", trio(large=exact(large, attachmentBytes=34)), False),
@@ -902,6 +934,26 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fixed-refuses-fragment-sequence-truncated refused with the wrong class", swap("links refused fixed-refuses-fragment-sequence-truncated ", "links refused fixed-refuses-fragment-sequence-truncated over-bound")),
         ("a truncated sequence number refused as malformed-message on a heap link", swap("links refused fragment-sequence-truncated ", "links refused fragment-sequence-truncated malformed-message")),
         ("a truncated sequence number refused as truncated on a fixed link", swap("links refused fixed-refuses-fragment-sequence-truncated ", "links refused fixed-refuses-fragment-sequence-truncated truncated")),
+        ("fragmented-push-delete-body admitted instead of refused", drop("links refused fragmented-push-delete-body ")),
+        ("fragmented-push-delete-body refused with the wrong class", swap("links refused fragmented-push-delete-body ", "links refused fragmented-push-delete-body over-bound")),
+        ("fragmented-push-ends-before-body admitted instead of refused", drop("links refused fragmented-push-ends-before-body ")),
+        ("fragmented-push-ends-before-body refused with the wrong class", swap("links refused fragmented-push-ends-before-body ", "links refused fragmented-push-ends-before-body over-bound")),
+        ("fragmented-put-scope-unterminated admitted instead of refused", drop("links refused fragmented-put-scope-unterminated ")),
+        ("fragmented-put-scope-unterminated refused with the wrong class", swap("links refused fragmented-put-scope-unterminated ", "links refused fragmented-put-scope-unterminated over-bound")),
+        ("fragmented-put-key-length-unterminated admitted instead of refused", drop("links refused fragmented-put-key-length-unterminated ")),
+        ("fragmented-put-key-length-unterminated refused with the wrong class", swap("links refused fragmented-put-key-length-unterminated ", "links refused fragmented-put-key-length-unterminated over-bound")),
+        ("fragmented-put-attachment-length-unterminated admitted instead of refused", drop("links refused fragmented-put-attachment-length-unterminated ")),
+        ("fragmented-put-attachment-length-unterminated refused with the wrong class", swap("links refused fragmented-put-attachment-length-unterminated ", "links refused fragmented-put-attachment-length-unterminated over-bound")),
+        ("fragmented-put-payload-length-unterminated admitted instead of refused", drop("links refused fragmented-put-payload-length-unterminated ")),
+        ("fragmented-put-payload-length-unterminated refused with the wrong class", swap("links refused fragmented-put-payload-length-unterminated ", "links refused fragmented-put-payload-length-unterminated over-bound")),
+        ("the subscriber-id lines dropped", drop("links subid ")),
+        ("the top-bit subscriber id dropped", drop("links subid 2147483648 ")),
+        ("the largest subscriber id dropped", drop("links subid 4294967295 ")),
+        ("a top-bit subscriber id declared with another encoding", swap("links subid 2147483648 ", corrupt_last(good[first("links subid 2147483648 ")]))),
+        ("a subscriber id read in 31 bits", swap("links subid 2147483648 ", subscriber_id_line(0x7FFFFFFF))),
+        ("a subscriber id read in 16 bits", swap("links subid 4294967295 ", subscriber_id_line(0xFFFF))),
+        ("a subscriber id with a short declaration", swap("links subid 2147483648 ", good[first("links subid 2147483648 ")].replace(" 139 ", " 138 ", 1))),
+        ("the subscriber-id scenario dropped", [line for line in good if line != "links ok subscriber-ids-use-all-32-bits"]),
         ("an interior fragment marked final taken as a complete message", drop("links refused fragment-interior-marked-final ")),
         ("a last fragment still saying more taken as complete", drop("links refused fragment-final-marked-more ")),
         ("an interior fragment marked final refused as reassembly-timeout", swap("links refused fragment-interior-marked-final ", "links refused fragment-interior-marked-final reassembly-timeout")),
@@ -1055,6 +1107,22 @@ def reference_controls() -> int:
         whole = bytearray(zenoh_fragment.full_key_for_exam(5))
         whole[put_at(bytes(whole)) + 1] = value
         return bytes(whole)
+
+    def delete_body() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return whole[: put_at(whole)] + bytes([0x02])
+
+    def before_body() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return whole[: put_at(whole)]
+
+    def unterminated_attachment_length() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return whole[: put_at(whole) + 2] + bytes([0x80])
+
+    def unterminated_payload_length() -> bytes:
+        whole = zenoh_fragment.full_key_for_exam(5)
+        return whole[: put_at(whole) + 2 + 1 + zenoh_wire.ATTACHMENT_BYTES] + bytes([0x80])
 
     def clear_more(body: bytes) -> bytes:
         return bytes([body[0] & ~zenoh_fragment.FLAG_M]) + body[1:]
@@ -1219,6 +1287,12 @@ def reference_controls() -> int:
         ("a Put with an encoding", lambda: zenoh_fragment.decode_message(put_flag(0x40), max_key=129)),
         ("a Put with an unknown extension", lambda: zenoh_fragment.decode_message(put_extension(0x41), max_key=129)),
         ("a Put with a chained attachment extension", lambda: zenoh_fragment.decode_message(put_extension(0xC3), max_key=129)),
+        ("a PUSH whose body is a delete", lambda: zenoh_fragment.decode_message(delete_body(), max_key=129)),
+        ("a PUSH that ends before its body", lambda: zenoh_fragment.decode_message(before_body(), max_key=129)),
+        ("an unterminated scope", lambda: zenoh_fragment.decode_message(bytes([0x5D, 0x80]))),
+        ("an unterminated key length", lambda: zenoh_fragment.decode_message(bytes([0x7D, 0x00, 0x80]), max_key=129)),
+        ("an unterminated attachment length", lambda: zenoh_fragment.decode_message(unterminated_attachment_length(), max_key=129)),
+        ("an unterminated payload length", lambda: zenoh_fragment.decode_message(unterminated_payload_length(), max_key=129)),
         ("a last fragment before the first", lambda: zenoh_fragment.check_deadline(10, 9, TIMEOUT_MS)),
         ("a timeout of one millisecond with a last fragment at two", lambda: zenoh_fragment.check_deadline(0, 2, 1)),
         ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
@@ -1276,6 +1350,12 @@ def reference_controls() -> int:
         "a Put with a chained attachment extension": "unsupported-extension",
         "a full-key Put with an empty key": "empty key",
         "a truncated sequence number": "truncated",
+        "a PUSH whose body is a delete": "unsupported-message",
+        "a PUSH that ends before its body": "truncated",
+        "an unterminated scope": "truncated",
+        "an unterminated key length": "truncated",
+        "an unterminated attachment length": "truncated",
+        "an unterminated payload length": "truncated",
         "a backward continuation sequence number": "not consecutive",
         "a full-key Put in a nonzero scope": "nonzero scope",
         "a run sized from its first fragment's header across a width step": "announced batch",
