@@ -58,6 +58,7 @@ OK_SCENARIOS = (
     "reassemble-stock-5000-512",
     "boundary-whole-then-fragmented",
     "two-messages-in-a-row",
+    "reassembly-after-timeout-reuses-storage",
     "heap-storage-from-component",
     "put-roundtrip-5000-2048",
     "fragment-run-advances-session-sequence",
@@ -83,6 +84,17 @@ REFUSED_SCENARIOS = (
     ("fragment-stale-first-sequence", "sequence-mismatch"),
     ("fragment-skipped-first-sequence", "sequence-mismatch"),
     ("frame-during-reassembly", "unexpected-message"),
+    # A fragment carries a sequence number and no message id, so a second message cannot be told from a
+    # continuation on the wire. What can be refused is what interleaving leaves behind: two messages
+    # joined in one run, which reassemble to a message with data after it, and a fragment of the other
+    # (best-effort) channel arriving mid-run.
+    ("fragments-of-two-messages-in-one-run", "trailing-bytes"),
+    ("best-effort-fragment-during-reassembly", "unsupported-message"),
+    # The Put inside a fragmented message is held to what a single-batch Put is held to, in heap mode.
+    ("fragmented-put-without-attachment", "malformed-message"),
+    ("fragmented-put-with-short-attachment", "malformed-message"),
+    ("fragmented-put-alias-scope-zero", "invalid-keyexpr"),
+    ("fragmented-put-alias-scope-65536", "leb128-overflow"),
     ("message-over-declared-heap", "over-bound"),
     ("reassembly-timeout", "reassembly-timeout"),
     ("storage-refused", "out-of-memory"),
@@ -98,8 +110,17 @@ ADVANCE = (
     ("fullkey-5000-2048", 1000),
     ("fullkey-wraps-32-bits", 0xFFFFFFFE),
 )
-PINNED_CASES = 60
-PINNED_CONTROLS = 108
+# Storage of exactly one message of this payload: a timed-out reassembly that kept its buffer leased
+# leaves no room for the next, so a successful reassembly into it proves the storage was released.
+REUSE_SIZE = 5000
+
+
+def reuse_capacity() -> int:
+    return REUSE_SIZE + 129 + 33 + FRAMING
+
+
+PINNED_CASES = 68
+PINNED_CONTROLS = 130
 
 
 class LinksError(ValueError):
@@ -176,6 +197,8 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
+        if name == "reassembly-after-timeout-reuses-storage":
+            lines.append(f"links reuse {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}")
         if name == "fragment-run-advances-session-sequence":
             count = len(full_key_bodies())
             lines += [
@@ -196,6 +219,7 @@ SHAPES = {
     ("links", "fullkey"): 6,
     ("links", "boundary"): 5,
     ("links", "advance"): 6,
+    ("links", "reuse"): 5,
 }
 
 
@@ -252,6 +276,11 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if boundary != [(edge, "whole", 1), (edge + 1, "fragmented", 2)]:
         raise LinksError(f"the edge between whole and fragmented is at {edge} payload bytes, reported {boundary}")
 
+    reuse = [(int(f[2]), int(f[3]), f[4]) for f in only("reuse")]
+    wanted_reuse = [(reuse_capacity(), REUSE_SIZE, sha(zenoh_fragment.payload_bytes(REUSE_SIZE)))]
+    if reuse != wanted_reuse:
+        raise LinksError(f"reassembly into storage of one message after a timeout is {wanted_reuse}, reported {reuse}")
+
     count = len(full_key_bodies())
     advance = [(f[2], int(f[3]), int(f[4]), int(f[5])) for f in only("advance")]
     wanted_advance = [(label, before, count, zenoh_fragment.next_sn(before, count)) for label, before in ADVANCE]
@@ -264,7 +293,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse)
     return positive, len(refused)
 
 
@@ -454,6 +483,21 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a changed large configuration", swap("links config large", good[config_at].replace(" 2048 1024 ", " 2048 1025 ", 1))),
         ("a missing heap configuration", drop("links config heap")),
         ("the configurations in another order", swapped(0, 1)),
+        ("a dropped storage-reuse line", drop("links reuse ")),
+        ("reuse reported into storage larger than one message", swap("links reuse ", good[first("links reuse ")].replace(f" {reuse_capacity()} ", f" {reuse_capacity() * 2} ", 1))),
+        ("reuse reported into storage one byte short of the message", swap("links reuse ", good[first("links reuse ")].replace(f" {reuse_capacity()} ", f" {reuse_capacity() - 1} ", 1))),
+        ("reuse of a payload that is not the one sent", swap("links reuse ", corrupt_last(good[first("links reuse ")]))),
+        ("reuse of a shorter message", swap("links reuse ", good[first("links reuse ")].replace(f" {REUSE_SIZE} ", f" {REUSE_SIZE - 1} ", 1))),
+        ("the reuse scenario reported without its line", drop("links reuse ")),
+        ("two messages in one run admitted instead of refused", drop("links refused fragments-of-two-messages-in-one-run ")),
+        ("two messages in one run refused with the wrong class", swap("links refused fragments-of-two-messages-in-one-run ", "links refused fragments-of-two-messages-in-one-run malformed-message")),
+        ("a best-effort fragment mid-run admitted instead of refused", drop("links refused best-effort-fragment-during-reassembly ")),
+        ("a fragmented Put without the attachment admitted", drop("links refused fragmented-put-without-attachment ")),
+        ("a fragmented Put without the attachment refused with the wrong class", swap("links refused fragmented-put-without-attachment ", "links refused fragmented-put-without-attachment unsupported-extension")),
+        ("a fragmented Put with a short attachment admitted", drop("links refused fragmented-put-with-short-attachment ")),
+        ("a fragmented alias scope of 0 admitted", drop("links refused fragmented-put-alias-scope-zero ")),
+        ("a fragmented alias scope of 65536 admitted", drop("links refused fragmented-put-alias-scope-65536 ")),
+        ("a fragmented alias scope of 65536 refused with the wrong class", swap("links refused fragmented-put-alias-scope-65536 ", "links refused fragmented-put-alias-scope-65536 invalid-keyexpr")),
         ("a dropped session-sequence line", drop("links advance fullkey-5000-2048 ")),
         ("a session sequence that did not advance", swap("links advance fullkey-5000-2048 ", "links advance fullkey-5000-2048 1000 3 1000")),
         ("a session sequence that advanced by one for three fragments", swap("links advance fullkey-5000-2048 ", "links advance fullkey-5000-2048 1000 3 1001")),
@@ -502,6 +546,20 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def with_scope(scope: bytes) -> bytes:
+        whole = zenoh_fragment.message(1)
+        return bytes([0x1D]) + scope + whole[2:]
+
+    def no_attachment(payload: int) -> bytes:
+        return bytes([0x1D, 0x01, zenoh_wire.ID_PUT]) + zenoh_wire.leb128(payload) + zenoh_fragment.payload_bytes(payload)
+
+    def short_attachment(payload: int) -> bytes:
+        att = zenoh_fragment.attachment()[:32]
+        return (
+            bytes([0x1D, 0x01, zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])
+            + zenoh_wire.leb128(len(att)) + att + zenoh_wire.leb128(payload) + zenoh_fragment.payload_bytes(payload)
+        )
+
     cases: list[tuple[str, Callable[[], object]]] = [
         ("a gap in the sequence numbers", lambda: zenoh_fragment.reassemble([bodies[0], bodies[2]])),
         ("fragments out of order", lambda: zenoh_fragment.reassemble([bodies[1], bodies[0], bodies[2]])),
@@ -514,6 +572,13 @@ def reference_controls() -> int:
         ("a fragment with no data", lambda: zenoh_fragment.decode_fragment(bodies[0][:5])),
         ("a message whose payload length is wrong", lambda: zenoh_fragment.decode_message(zenoh_fragment.message(size)[:-1])),
         ("a batch too small for a fragment", lambda: zenoh_fragment.reference_split(b"x" * 10, 8, 0)),
+        ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
+        ("an alias scope of 65536", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x04])))),
+        ("an alias scope of four bytes", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0xFF, 0x7F])))),
+        ("a noncanonical alias scope of 1", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x81, 0x00])))),
+        ("two messages joined in one run", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(zenoh_fragment.message(1000) + zenoh_fragment.message(1000), 512, sn)))),
+        ("a fragmented Put without the attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(no_attachment(3000), 512, sn)))),
+        ("a fragmented Put with a 32-byte attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(short_attachment(3000), 512, sn)))),
         ("a run replayed from before the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn + 1000)),
         ("a run that skips ahead of the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn - 1)),
         ("a run one past the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn + 1)),
@@ -532,6 +597,10 @@ def reference_controls() -> int:
             refused += 1
             continue
         raise LinksError(f"control: the fragment reference accepted {label}")
+    # The largest and the smallest valid alias scope are read, so the scope refusals are not a blanket one.
+    for good_scope in (bytes([0x01]), bytes([0xFF, 0xFF, 0x03])):
+        if zenoh_fragment.decode_message(with_scope(good_scope))["payload"] != zenoh_fragment.payload_bytes(1):
+            raise LinksError("control: a valid alias scope was not read")
     # A run starting exactly at the session's next sequence number is taken, also across the 32-bit wrap.
     if zenoh_fragment.reassemble(bodies, sn) != zenoh_fragment.message(size):
         raise LinksError("control: a run at the session's next sequence number was not taken")

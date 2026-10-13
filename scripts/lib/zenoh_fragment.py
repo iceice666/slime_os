@@ -41,25 +41,26 @@ class FragmentError(ValueError):
     """Input the reference refuses to encode or decode."""
 
 
-def read_leb32(data: bytes, at: int) -> tuple[int, int]:
-    """A canonical LEB128 that fits 32 bits, read the way the Rust reader reads it.
+def read_leb32(data: bytes, at: int, bits: int = 32) -> tuple[int, int]:
+    """A canonical LEB128 that fits `bits` bits, read the way the Rust reader reads it.
 
-    At most five bytes; a value above 32 bits is an overflow; a multi-byte value whose last byte is
-    zero is not canonical. `zenoh_wire.read_leb128` accepts all three, so the fragment reference
-    does not use it for a sequence number, a scope or a length."""
+    At most `ceil(bits / 7)` bytes; a value above `bits` bits is an overflow; a multi-byte value
+    whose last byte is zero is not canonical. `zenoh_wire.read_leb128` accepts all three, so the
+    fragment reference does not use it for a sequence number, a scope or a length. A key-expression
+    scope is read with 16 bits, as the Rust decoder reads it (`LEB128_SHORT_BITS`)."""
     value = 0
-    for count in range(5):
+    for count in range((bits + 6) // 7):
         if at + count >= len(data):
             raise FragmentError("truncated LEB128")
         byte = data[at + count]
         value |= (byte & 0x7F) << (7 * count)
         if not byte & 0x80:
-            if value >> 32:
-                raise FragmentError("LEB128 over 32 bits")
+            if value >> bits:
+                raise FragmentError(f"LEB128 over {bits} bits")
             if count > 0 and byte & 0x7F == 0:
                 raise FragmentError("noncanonical LEB128")
             return value, at + count + 1
-    raise FragmentError("LEB128 over 32 bits")
+    raise FragmentError(f"LEB128 over {bits} bits")
 
 
 def payload_bytes(size: int) -> bytes:
@@ -165,7 +166,9 @@ def decode_message(msg: bytes) -> dict:
     """Decode the reassembled PUSH with a Put: the alias, the attachment and the payload."""
     if not msg or msg[0] != 0x1D:
         raise FragmentError("not a PUSH in the alias form")
-    scope, at = read_leb32(msg, 1)
+    scope, at = read_leb32(msg, 1, 16)
+    if scope == 0:
+        raise FragmentError("alias scope 0 is the global scope and names no alias")
     if at + 2 > len(msg) or msg[at] != zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z or msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
         raise FragmentError("a Put without the attachment extension")
     at += 2
