@@ -47,12 +47,12 @@ def venv_python() -> Path:
 
 
 def ensure_venv() -> Path:
-    """The pinned peer's interpreter, built from the hash-pinned wheel when absent."""
+    """The pinned peer's interpreter, built fresh from the hash-pinned wheel on every call.
+
+    An existing environment is never reused: its metadata says nothing about the files installed,
+    and only the hash-constrained install proves they are the pinned wheel's.
+    """
     interpreter = venv_python()
-    if interpreter.is_file():
-        probe = subprocess.run([str(interpreter), "-m", "pip", "show", "eclipse-zenoh"], capture_output=True, text=True, check=False)
-        if probe.returncode == 0 and f"Version: {VERSION}" in probe.stdout:
-            return interpreter
     SCRATCH.mkdir(parents=True, exist_ok=True)
     REQUIREMENTS.write_text(f"eclipse-zenoh=={VERSION} --hash=sha256:{WHEEL_SHA256}\n", encoding="utf-8")
     steps = (
@@ -130,14 +130,21 @@ def serve(port: int, receipt: Path) -> int:
     config.insert_json5("scouting/gossip/enabled", "false")
     session = zenoh.open(config)
     received: list[tuple[str, bytes, bytes]] = []
+    # A sample is delivered by a remote peer, so the peers the session holds when one arrives are
+    # the peers that sent it. A peer that connects, publishes and leaves between two polls is
+    # still counted, because the delivery itself records it.
+    most = 0
+    seen = False
 
     def on_sample(sample: zenoh.Sample) -> None:
+        nonlocal most, seen
         attachment = sample.attachment
         received.append((str(sample.key_expr), bytes(sample.payload), b"" if attachment is None else bytes(attachment)))
+        most, seen = max(most, len(session.info.peers_zid())), True
 
     session.declare_subscriber(KEY, on_sample)
     print(READY, flush=True)
-    most, seen, quiet_since = 0, False, None
+    quiet_since = None
     deadline = time.monotonic() + DEADLINE_SECONDS
     while time.monotonic() < deadline:
         peers = len(session.info.peers_zid())

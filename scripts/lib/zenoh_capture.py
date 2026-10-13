@@ -71,6 +71,23 @@ class Segment:
 # ------------------------------------------------------------------------------ capture
 
 
+def _check_arp(frame: bytes) -> None:
+    """An ARP request or reply between the guest and the declared peer, and nothing else.
+
+    The sender and target protocol addresses must be the two endpoints, one each, and the sender's
+    hardware address must be the Ethernet source; the guest's is the MAC the composition declares.
+    """
+    _need(len(frame) >= 42, "short ARP frame")
+    htype, ptype, hlen, plen, operation = struct.unpack_from("!HHBBH", frame, 14)
+    _need((htype, ptype, hlen, plen) == (1, 0x0800, 6, 4), "ARP that is not Ethernet and IPv4")
+    _need(operation in (1, 2), f"ARP operation {operation} is neither a request nor a reply")
+    sender_mac = frame[22:28]
+    sender, target = (".".join(str(b) for b in frame[at : at + 4]) for at in (28, 38))
+    _need({sender, target} == {GUEST, PEER}, f"ARP from {sender} for {target}: only {GUEST} and {PEER} may speak")
+    _need(sender_mac == frame[6:12], "the ARP sender hardware address is not the Ethernet source")
+    _need((sender == GUEST) == (sender_mac == GUEST_MAC), f"the ARP sender {sender} has hardware address {sender_mac.hex()}")
+
+
 def segments(data: bytes) -> tuple[list[Segment], int]:
     """Every TCP segment in the capture, and the number of ARP frames. Anything else is refused."""
     found: list[Segment] = []
@@ -82,7 +99,7 @@ def segments(data: bytes) -> tuple[list[Segment], int]:
     for _, frame in frames:
         ethertype = int.from_bytes(frame[12:14], "big")
         if ethertype == 0x0806:
-            _need(len(frame) >= 42, "short ARP frame")
+            _check_arp(frame)
             arp += 1
             continue
         _need(ethertype == 0x0800, f"Ethernet protocol {ethertype:#06x} is neither ARP nor IPv4")
@@ -295,12 +312,13 @@ def judge_guest_lines(lines: list[str], contract: dict) -> dict[int, str]:
     position = {line: i for i, line in enumerate(lines)}
     opened = next(i for i, line in enumerate(lines) if re.fullmatch(patterns["session"], line))
     matched = next(i for i, line in enumerate(lines) if re.fullmatch(patterns["match"], line))
-    first = next(i for i, line in enumerate(lines) if " wire sent sample=0 " in line)
+    where = [next(i for i, line in enumerate(lines) if f" wire sent sample={n} " in line) for n in range(SAMPLES)]
     closed = position[f"[{PUBLISHER}] session closed samples={SAMPLES}"]
     for cls in DENIALS:
         _need(position[f"[{PUBLISHER}] denial class={cls} refused=1"] < opened, f"the {cls} denial came after the session opened")
-    _need(opened < matched < first, "the order is not session open, declaration matched, first sample")
-    _need(closed == len(lines) - 1 and closed > max(i for i, line in enumerate(lines) if " wire sent " in line), "the session did not close last")
+    _need(opened < matched < where[0], "the order is not session open, declaration matched, first sample")
+    _need(where == sorted(where), f"the sent batches are reported in the order of samples {where}, not 0 to {SAMPLES - 1}")
+    _need(closed == len(lines) - 1 and closed > where[-1], "the session did not close last")
     return sent
 
 
@@ -537,7 +555,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 102
+PINNED_CONTROLS = 112
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -601,8 +619,13 @@ def _ethernet(packet: bytes, outgoing: bool, ethertype: int = 0x0800) -> bytes:
 
 
 def _arp() -> bytes:
-    body = struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1) + GUEST_MAC + bytes((10, 0, 2, 15)) + bytes(6) + bytes((10, 0, 2, 2))
-    return _ethernet(body, True, 0x0806)
+    return _arp_frame()
+
+
+def _arp_frame(sender: tuple = (10, 0, 2, 15), target: tuple = (10, 0, 2, 2), mac: bytes = GUEST_MAC, operation: int = 1, ptype: int = 0x0800) -> bytes:
+    body = struct.pack("!HHBBH", 1, ptype, 6, 4, operation) + mac + bytes(sender) + bytes(6) + bytes(target)
+    destination = GUEST_MAC if mac == PEER_MAC else PEER_MAC
+    return destination + mac + (0x0806).to_bytes(2, "big") + body
 
 
 def pcap(frames: list[bytes]) -> bytes:
@@ -713,6 +736,9 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
     def extra(*frames: bytes) -> Callable[[dict], dict]:
         return edit(lambda s: s.setdefault("extra", []).extend(_ethernet(f, True) for f in frames))
 
+    def raw(*frames: bytes) -> Callable[[dict], dict]:
+        return edit(lambda s: s.setdefault("extra", []).extend(frames))
+
     def flip(batch: bytes) -> bytes:
         return batch[:-1] + bytes([batch[-1] ^ 1])
 
@@ -751,6 +777,12 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a DNS query", extra(_udp(GUEST, "10.0.2.3", 49300, 53, b"\x00\x01\x01\x00\x00\x01"))),
         ("a scouting datagram", extra(_udp(GUEST, "224.0.0.224", 49301, 7446, b"\x01"))),
         ("an ICMP echo", extra(_icmp())),
+        ("an ARP request for another address", raw(_arp_frame(target=(10, 0, 2, 99)))),
+        ("an ARP request for the next address up, 10.0.2.3", raw(_arp_frame(target=(10, 0, 2, 3)))),
+        ("an ARP request claiming another sender address", raw(_arp_frame(sender=(10, 0, 2, 16)))),
+        ("an ARP request from another hardware address", raw(_arp_frame(mac=bytes.fromhex("525400000001")))),
+        ("an ARP operation that is neither request nor reply", raw(_arp_frame(operation=3))),
+        ("an ARP request that is not Ethernet and IPv4", raw(_arp_frame(ptype=0x86DD))),
         ("a reset after the data", extra(_tcp(GUEST, PEER, GUEST_PORT, PORT, 9999, 0, TCP_RST))),
         ("a connection the peer never accepts", edit(lambda s: s.update(no_synack=True))),
         ("a SYN-ACK acknowledging one number too many", edit(lambda s: s.update(synack_skew=1))),
@@ -788,6 +820,10 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a report that drops a sent batch", edit(lambda s: s.update(lines=[x for x in s["lines"] if "wire sent sample=3 " not in x]))),
         ("a report that duplicates a sent batch", edit(lambda s: s["lines"].insert(-1, next(x for x in s["lines"] if "wire sent sample=0 " in x)))),
         ("a report without the scouting denial", edit(lambda s: s.update(lines=[x for x in s["lines"] if "scouting" not in x]))),
+        ("a report with sample 1 before the session opens", edit(lambda s: s["lines"].insert(3, s["lines"].pop(next(n for n, x in enumerate(s["lines"]) if " wire sent sample=1 " in x))))),
+        ("a report with sample 1 between the session and the match", edit(lambda s: s["lines"].insert(4, s["lines"].pop(next(n for n, x in enumerate(s["lines"]) if " wire sent sample=1 " in x))))),
+        ("a report with samples 2 and 3 swapped", edit(lambda s: s["lines"].insert(8, s["lines"].pop(7)))),
+        ("a report with sample 0 last", edit(lambda s: s["lines"].insert(8, s["lines"].pop(5)))),
         ("a report with the listen denial twice", edit(lambda s: s["lines"].insert(0, f"[{PUBLISHER}] denial class=listen refused=1"))),
         ("a report with a denial the exam does not name", edit(lambda s: s["lines"].insert(0, f"[{PUBLISHER}] denial class=invented refused=1"))),
         ("a report from the subscriber", edit(lambda s: s["lines"].insert(0, f"[{SUBSCRIBER}] session open role=listener initial_sn=0 lease_ms=2000"))),
@@ -840,6 +876,7 @@ def honest_variants() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer sequence number about to wrap", update(peer_isn=0xFFFFFFF0)),
         ("keep-alives from the guest", lambda s: {**s, "guest": s["guest"][:2] + [bytes([ID_KEEP_ALIVE])] * 3 + s["guest"][2:]}),
         ("a guest that never sends CLOSE", lambda s: {**s, "guest": s["guest"][:-1]}),
+        ("an ARP reply from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2)]}),
     ]
 
 
