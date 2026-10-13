@@ -167,13 +167,47 @@ def next_sn(first_sn: int, count: int) -> int:
     return (first_sn + count) & 0xFFFFFFFF
 
 
-def decode_message(msg: bytes) -> dict:
-    """Decode the reassembled PUSH with a Put: the alias, the attachment and the payload."""
-    if not msg or msg[0] != 0x1D:
-        raise FragmentError("not a PUSH in the alias form")
+PUSH_ALIAS = 0x1D
+
+
+def full_key_for_exam(size: int, key: str = "0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_a82fd5ffcb96d0a197a5ad3680d1c4e6ba43a962928ecd592fb565eb8129595b") -> bytes:
+    """A Put naming the demo key in full, with the 33-byte attachment and `size` payload bytes."""
+    return zenoh_wire.push_put(key, attachment(), payload_bytes(size), True)
+
+PUSH_FULL_KEY = zenoh_wire.ID_PUSH | zenoh_wire.FLAG_N | zenoh_wire.FLAG_M
+
+
+def decode_message(
+    msg: bytes, alias: int | None = None, max_key: int | None = None, max_payload: int | None = None
+) -> dict:
+    """Decode the reassembled PUSH with a Put: the key, the attachment and the payload.
+
+    The key is either the alias a stock peer declared (header 0x1d, a nonzero 16-bit scope and no
+    key bytes) or the key in full (header 0x7d, scope 0, a 16-bit length and the bytes). Given the
+    session's declared alias, a scope that is another alias is refused: it was never declared. Given
+    the configuration's key and payload sizes, a longer key or payload is refused."""
+    if not msg or msg[0] not in (PUSH_ALIAS, PUSH_FULL_KEY):
+        raise FragmentError("not a PUSH in the alias or full-key form")
+    named = msg[0] == PUSH_FULL_KEY
     scope, at = read_leb32(msg, 1, 16)
-    if scope == 0:
-        raise FragmentError("alias scope 0 is the global scope and names no alias")
+    key = None
+    if named:
+        if scope != 0:
+            raise FragmentError("a full key in a nonzero scope")
+        length, at = read_leb32(msg, at, 16)
+        if length == 0:
+            raise FragmentError("an empty key")
+        if max_key is not None and length > max_key:
+            raise FragmentError("the key is longer than the configuration declares")
+        if at + length > len(msg):
+            raise FragmentError("a truncated key")
+        key = msg[at : at + length]
+        at += length
+    else:
+        if scope == 0:
+            raise FragmentError("alias scope 0 is the global scope and names no alias")
+        if alias is not None and scope != alias:
+            raise FragmentError("an alias the session never declared")
     if at + 2 > len(msg) or msg[at] != zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z or msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
         raise FragmentError("a Put without the attachment extension")
     at += 2
@@ -185,9 +219,11 @@ def decode_message(msg: bytes) -> dict:
         raise FragmentError("the attachment's GID length byte is not 16")
     at += att_len
     size, at = read_leb32(msg, at)
+    if max_payload is not None and size > max_payload:
+        raise FragmentError("the payload is longer than the configuration declares")
     if at + size != len(msg):
         raise FragmentError("the payload length disagrees with the message")
-    return {"scope": scope, "attachment": att, "payload": msg[at:]}
+    return {"scope": scope, "key": key, "attachment": att, "payload": msg[at:]}
 
 
 # Captured from the stock peer: (payload bytes, batch bytes, first sequence number, fragment

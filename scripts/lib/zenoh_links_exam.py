@@ -60,6 +60,7 @@ OK_SCENARIOS = (
     "two-messages-in-a-row",
     "reassembly-after-timeout-reuses-storage",
     "heap-declared-payload-boundary",
+    "heap-fills-notice-queue",
     "stack-covers-measured-sizes",
     "heap-storage-from-component",
     "put-roundtrip-5000-2048",
@@ -104,6 +105,15 @@ REFUSED_SCENARIOS = (
     # The declared payload is enforced as a limit of its own, not only through the heap: with storage
     # large enough for it, a payload one byte over what the configuration declares is refused.
     ("payload-over-declared-with-enough-storage", "over-bound"),
+    # The declared payload is a limit of its own in fixed mode too, on the configuration's side of the
+    # batch: both fixed configurations refuse one byte over what they declare although it would fit.
+    ("demo-refuses-payload-13-bytes", "over-bound"),
+    ("large-refuses-payload-1025-bytes", "over-bound"),
+    # The Put inside a fragmented message is held to the declared key: the demo key reassembles at 129
+    # bytes (the full-key positive), and a 130-byte one is refused whatever the storage; and to the
+    # session's aliases: only alias 1 is declared, so a canonical scope of 2 names nothing.
+    ("fragmented-put-key-130-bytes", "over-bound"),
+    ("fragmented-put-undeclared-alias", "invalid-keyexpr"),
     # The link announced its batch, so a fragment longer than the batch less the stream length is
     # refused, as a stream prefix longer than the batch is.
     ("fragment-over-the-announced-batch", "length-exceeds-batch"),
@@ -133,8 +143,17 @@ def reuse_capacity() -> int:
     return REUSE_SIZE + 129 + 33 + FRAMING
 
 
-PINNED_CASES = 79
-PINNED_CONTROLS = 166
+# The heap configuration queues two notices for each outstanding sample and every one holds a whole
+# message, so the owner that has drained none holds this many; a message in progress is one more.
+QUEUE_BASE = 3000
+
+
+def queue_held() -> int:
+    return NOTICES * CONFIGS[2][8]
+
+
+PINNED_CASES = 85
+PINNED_CONTROLS = 188
 
 
 class LinksError(ValueError):
@@ -215,6 +234,9 @@ def good_lines() -> list[str]:
             lines.append(f"links reuse {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}")
         if name == "heap-declared-payload-boundary":
             lines.append(f"links payload {HEAP_PAYLOAD} {heap_needed(pinned_configs()[2])} {sha(zenoh_fragment.payload_bytes(HEAP_PAYLOAD))}")
+        if name == "heap-fills-notice-queue":
+            earliest = sha(zenoh_fragment.payload_bytes(QUEUE_BASE))
+            lines.append(f"links queue {queue_held()} 1 {earliest} {earliest}")
         if name == "stack-covers-measured-sizes":
             lines += [f"links size {c['name']} {required_stack(c)} {c['stackBytes']}" for c in pinned_configs()]
         if name == "fragment-run-advances-session-sequence":
@@ -240,6 +262,7 @@ SHAPES = {
     ("links", "reuse"): 5,
     ("links", "payload"): 5,
     ("links", "size"): 5,
+    ("links", "queue"): 6,
 }
 
 
@@ -301,6 +324,12 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if payload != wanted_payload:
         raise LinksError(f"the declared payload of {HEAP_PAYLOAD} bytes must reassemble into the declared heap: {wanted_payload}, reported {payload}")
 
+    queue = [(int(f[2]), int(f[3]), f[4], f[5]) for f in only("queue")]
+    earliest = sha(zenoh_fragment.payload_bytes(QUEUE_BASE))
+    wanted_queue = [(queue_held(), 1, earliest, earliest)]
+    if queue != wanted_queue:
+        raise LinksError(f"with {queue_held()} notices held and one message in progress the earliest payload must read back as it was sent: {wanted_queue}, reported {queue}")
+
     sizes = [(f[2], int(f[3]), int(f[4])) for f in only("size")]
     if [name for name, _, _ in sizes] != [c["name"] for c in pinned_configs()]:
         raise LinksError(f"stack sizes reported for {[n for n, _, _ in sizes]}, the exam pins {[c['name'] for c in pinned_configs()]}")
@@ -329,7 +358,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue)
     return positive, len(refused)
 
 
@@ -536,6 +565,20 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a changed large configuration", swap("links config large", good[config_at].replace(" 2048 1024 ", " 2048 1025 ", 1))),
         ("a missing heap configuration", drop("links config heap")),
         ("the configurations in another order", swapped(0, 1)),
+        ("a dropped notice-queue line", drop("links queue ")),
+        ("a notice queue of two", swap("links queue ", f"links queue 2 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
+        ("a notice queue one short of capacity", swap("links queue ", f"links queue {queue_held() - 1} 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
+        ("a notice queue one past capacity", swap("links queue ", f"links queue {queue_held() + 1} 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
+        ("a queue with no message in progress", swap("links queue ", f"links queue {queue_held()} 0 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
+        ("the earliest payload overwritten by a later reassembly", swap("links queue ", corrupt_last(good[first("links queue ")]))),
+        ("a queue whose earliest payload was not the one sent", swap("links queue ", f"links queue {queue_held()} 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE + 1))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE + 1))}")),
+        ("a demo payload of 13 bytes admitted", drop("links refused demo-refuses-payload-13-bytes ")),
+        ("a large payload of 1025 bytes admitted", drop("links refused large-refuses-payload-1025-bytes ")),
+        ("a large payload of 1025 bytes refused as out-of-memory", swap("links refused large-refuses-payload-1025-bytes ", "links refused large-refuses-payload-1025-bytes out-of-memory")),
+        ("a fragmented 130-byte key admitted", drop("links refused fragmented-put-key-130-bytes ")),
+        ("a fragmented 130-byte key refused as invalid-keyexpr", swap("links refused fragmented-put-key-130-bytes ", "links refused fragmented-put-key-130-bytes invalid-keyexpr")),
+        ("a fragmented Put for an undeclared alias admitted", drop("links refused fragmented-put-undeclared-alias ")),
+        ("a fragmented Put for an undeclared alias refused as over-bound", swap("links refused fragmented-put-undeclared-alias ", "links refused fragmented-put-undeclared-alias over-bound")),
         ("a dropped declared-payload line", drop("links payload ")),
         ("the declared payload reported as 5000 bytes", swap("links payload ", good[first("links payload ")].replace(f" {HEAP_PAYLOAD} ", " 5000 ", 1))),
         ("the declared payload reassembled to another payload", swap("links payload ", corrupt_last(good[first("links payload ")]))),
@@ -621,6 +664,15 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def full_key(length: int, payload: int, scope: int = 0) -> bytes:
+        key = "k" * length
+        message = bytearray(zenoh_wire.push_put(key, zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(payload), True))
+        if length == 0:
+            message[1:3] = bytes([0x00, 0x00])
+        if scope:
+            message[1] = scope
+        return bytes(message)
+
     def with_scope(scope: bytes) -> bytes:
         whole = zenoh_fragment.message(1)
         return bytes([0x1D]) + scope + whole[2:]
@@ -661,6 +713,14 @@ def reference_controls() -> int:
         ("a batch too small for a fragment", lambda: zenoh_fragment.reference_split(b"x" * 10, 8, 0)),
         ("a fragment one byte over the announced batch", lambda: zenoh_fragment.decode_fragment(bodies[0] + b"x", batch)),
         ("a run holding a fragment over the announced batch", lambda: zenoh_fragment.reassemble([bodies[0] + b"x", *bodies[1:]], sn, batch)),
+        ("a fragmented full-key Put with a 130-byte key", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(full_key(130, 3000), 512, sn)), max_key=129)),
+        ("a full-key Put in a nonzero scope", lambda: zenoh_fragment.decode_message(full_key(10, 20, scope=1), max_key=129)),
+        ("a full-key Put with an empty key", lambda: zenoh_fragment.decode_message(full_key(0, 20), max_key=129)),
+        ("a full-key Put with a truncated key", lambda: zenoh_fragment.decode_message(full_key(10, 20)[:8], max_key=129)),
+        ("an alias the session never declared", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x02])), alias=1)),
+        ("an alias the session never declared, a larger one", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0x03])), alias=1)),
+        ("one payload byte over the large configuration", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1025), max_key=129, max_payload=1024)),
+        ("13 payload bytes over the demo configuration", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(13), max_key=129, max_payload=12)),
         ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
         ("an alias scope of 65536", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x04])))),
         ("an alias scope of four bytes", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0xFF, 0x7F])))),
@@ -694,6 +754,15 @@ def reference_controls() -> int:
         raise LinksError("control: a fragment at the announced batch was not taken")
     if zenoh_fragment.reassemble(bodies, sn, batch) != zenoh_fragment.message(size):
         raise LinksError("control: a run within the announced batch was not taken")
+    # The edges are taken: the demo key at exactly 129 bytes, the declared alias, and a payload exactly at
+    # the declared size, so the refusals above are not blanket ones.
+    if zenoh_fragment.decode_message(full_key(129, 3000), max_key=129)["key"] != b"k" * 129:
+        raise LinksError("control: a 129-byte full key was not read")
+    if zenoh_fragment.decode_message(with_scope(bytes([0x01])), alias=1)["scope"] != 1:
+        raise LinksError("control: the declared alias was not read")
+    for declared, payload_size in ((1024, 1024), (12, 12)):
+        if len(zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(payload_size), max_key=129, max_payload=declared)["payload"]) != payload_size:
+            raise LinksError("control: a payload exactly at the declared size was not read")
     # The largest and the smallest valid alias scope are read, so the scope refusals are not a blanket one.
     for good_scope in (bytes([0x01]), bytes([0xFF, 0xFF, 0x03])):
         if zenoh_fragment.decode_message(with_scope(good_scope))["payload"] != zenoh_fragment.payload_bytes(1):
