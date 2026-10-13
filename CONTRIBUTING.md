@@ -236,7 +236,15 @@ These guides own the tutorials; this document owns the contribution workflow.
 
 `scripts/check/check-pr-scope.py` classifies every path a pull request
 changes, from lists the repository already maintains rather than a third
-table, and CI runs it on every pull request:
+table, and CI runs it on every pull request. Classification uses the union of
+`codePaths` from the compared base and head commits, not the checkout policy.
+Removing protection in the same diff does not exempt the changed path. Renames
+and detected copies retain source and destination classification; destinations
+introducing a new work-item UUID count as new items even without an `A` status.
+The Git comparison explicitly detects copies from unchanged sources, so a
+copied schema does not qualify as an added interface merely because its source
+was unchanged. Missing or malformed revision policies refuse classification.
+
 
 | Class | Paths | Rule |
 |---|---|---|

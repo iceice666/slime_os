@@ -431,6 +431,19 @@
       ]
     },
     {
+      "id": "pr-scope-boundary-review",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [
+        { "id": "baseAndHeadProtected", "kind": "bool" },
+        { "id": "renameSourcesProtected", "kind": "bool" },
+        { "id": "invalidPoliciesRefused", "kind": "bool" },
+        { "id": "regressionsPreserved", "kind": "bool" },
+        { "id": "revisionBoundCasesRecorded", "kind": "bool" }
+      ]
+    },
+    {
       "id": "ci-cache-retention",
       "mode": "human",
       "argv": [],
