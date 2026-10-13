@@ -159,13 +159,20 @@ fixedOk :: Config -> Bool
   = c => messageBytes c <= c.batchBytes
     && c.reassemblyTimeoutMs == 0 && c.heapBytes == 0;
 
+-- The heap a heap link needs: a sample is handed out as a slice of the buffer it was reassembled
+-- into, so every outstanding sample holds a whole message until it is consumed, and one more
+-- message is being reassembled. A heap that holds fewer would have to refuse an admitted sample or
+-- overwrite one the component still holds.
+heapNeeded :: Config -> Int
+  = c => (c.outstandingSamples + 1) * messageBytes c;
+
 -- A heap link: the batch must carry more than a fragment's own framing, so a message makes
--- progress, a stalled reassembly must expire, and one message is held in a buffer the component's
--- allocator provides.
+-- progress, a stalled reassembly must expire, and the heap the component's allocator provides holds
+-- every outstanding sample and the message being reassembled.
 heapOk :: Config -> Bool
   = c => c.batchBytes > fragmentFramingBytes
     && c.reassemblyTimeoutMs >= 1
-    && c.heapBytes >= messageBytes c;
+    && c.heapBytes >= heapNeeded c;
 
 configOk :: Config -> Bool
   = c => commonOk c
@@ -225,5 +232,6 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   noticeOverheadBytes =;
   noticesPerSample =;
   messageBytes =;
+  heapNeeded =;
   requiredStack =;
 }

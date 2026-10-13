@@ -1,7 +1,7 @@
 # Zenoh Profile 0 links declared by a named configuration
 
 **Status:** Proposed
-**Related work items:** `01a1350b-e5a2-7098-9277-456d1747f0b0` (this decision's exam and
+**Related work items:** `01a13523-e01a-7168-86df-463965c120a3` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer item
 `01a12f13-a343-7924-af20-18148fc1b0d9` (merged), whose exam this one extends.
 
@@ -50,9 +50,11 @@ declaration before a link is built from it.
    arrays.
 2. **`heap` mode.** The owning component supplies the storage a fragmented message is reassembled into,
    from its own allocator. A message may be larger than a batch. One message is reassembled at a time,
-   a gap in the sequence numbers, a whole `FRAME` in the middle, an oversize message and a reassembly
-   that outlives its declared timeout are each refused by name, and a storage that cannot hold a message
-   is refused without ending the session.
+   a gap in the sequence numbers, a run whose first fragment is not the session's next expected sequence
+   number, a whole `FRAME` in the middle, an oversize message and a reassembly that outlives its declared
+   timeout are each refused by name, and a storage that cannot hold a message is refused without ending
+   the session. A whole run advances the session's expected sequence number by its fragment count, and a
+   refused run leaves it where it was.
 3. **No allocator in the library.** `components/lib` is `no_std` and has no `alloc`. The runtime's
    `private-heap` is a build feature of a component, and Cargo unifies features across one build, so a
    heap feature on the shared library would switch the heap code on for every component in that build.
@@ -63,7 +65,7 @@ declaration before a link is built from it.
    also declares. The limits it keeps each have a source: a batch plus its two-byte length must fit the
    4096 bytes the network service moves in one operation (`DATA_BYTES`); a key count is at most 65535
    because the alias id is 16 bits; the stack must cover the link's arrays, its key and subscriber slots
-   and its queued sample notices; the heap must hold one whole message. It sets no ceiling on keys,
+   and its queued sample notices; the heap must hold every outstanding sample and the message being reassembled, because a sample is handed out as a slice of the buffer it was reassembled into. It sets no ceiling on keys,
    subscribers, samples, payload or heap.
 5. **The corpus row may go.** Once the decoder reads a `FRAGMENT` the row cannot stay refused, and it
    cannot become an accepted row, because the encoder gate and the cross-check harness read every
@@ -81,7 +83,7 @@ The three pinned configurations:
 | key / attachment | 129 / 33 | 129 / 33 | 129 / 33 |
 | keys / subscribers / samples | 1 / 1 / 4 | 4 / 4 / 4 | 4 / 4 / 4 |
 | stack | 16384 | 32768 | 32768 |
-| reassembly timeout / heap | 0 / 0 | 0 / 0 | 5000 ms / 20480 |
+| reassembly timeout / heap | 0 / 0 | 0 / 0 | 5000 ms / 82890 |
 
 `large` and `heap` are examples of what the contract admits. Their numbers are mine and no workload backs
 them; the exam pins them so the host tests have something exact to build, and changing one means

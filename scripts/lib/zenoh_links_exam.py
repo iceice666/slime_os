@@ -39,7 +39,7 @@ CONFIG_FIELDS = (
 CONFIGS = (
     ("demo", "fixed", 512, 12, 129, 33, 1, 1, 4, 16384, 0, 0),
     ("large", "fixed", 2048, 1024, 129, 33, 4, 4, 4, 32768, 0, 0),
-    ("heap", "heap", 2048, 16384, 129, 33, 4, 4, 4, 32768, 5000, 20480),
+    ("heap", "heap", 2048, 16384, 129, 33, 4, 4, 4, 32768, 5000, 82890),
 )
 
 # The edge scenarios: our own first frame on the link carries this sequence number, and the Put
@@ -60,17 +60,28 @@ OK_SCENARIOS = (
     "two-messages-in-a-row",
     "heap-storage-from-component",
     "put-roundtrip-5000-2048",
+    "fragment-run-advances-session-sequence",
+    "refused-fragment-run-leaves-session-unchanged",
     "demo-config-unchanged",
     "large-delivers-1024-whole",
     "four-keys-and-subscribers",
 )
 REFUSED_SCENARIOS = (
     ("fixed-refuses-fragment", "unsupported-message"),
+    # A fixed link refuses every fragment as unsupported-message whatever its form, so the malformed
+    # forms are exercised in fixed mode too and cannot be satisfied by a heap-mode refusal.
+    ("fixed-refuses-best-effort-fragment", "unsupported-message"),
+    ("fixed-refuses-fragment-with-extension", "unsupported-message"),
+    ("fixed-refuses-empty-fragment", "unsupported-message"),
     ("fragment-best-effort", "unsupported-message"),
     ("fragment-extension", "unsupported-extension"),
     ("empty-fragment", "malformed-message"),
     ("fragment-before-open", "unexpected-message"),
     ("fragment-sequence-gap", "fragment-sequence"),
+    # A run is bound to the session: its first fragment must be the next expected sequence number,
+    # as a FRAME's must, and the session's expectation advances only when the whole run is accepted.
+    ("fragment-stale-first-sequence", "sequence-mismatch"),
+    ("fragment-skipped-first-sequence", "sequence-mismatch"),
     ("frame-during-reassembly", "unexpected-message"),
     ("message-over-declared-heap", "over-bound"),
     ("reassembly-timeout", "reassembly-timeout"),
@@ -81,8 +92,14 @@ REFUSED_SCENARIOS = (
 # 3 configurations, 13 scenarios, 15 stock fragments, 3 reassemblies, 3 fragments of our own Put and
 # 2 edge lines make 39 positive cases; 12 refusals make 51. The control floor is the number the
 # judge, the host reference and the limits contract refuse today.
-PINNED_CASES = 51
-PINNED_CONTROLS = 88
+# The session's next expected sequence number after a whole run, for our own 5000-byte Put at a
+# 2048-byte batch: (label, the number before the run). Each line reports before, count and after.
+ADVANCE = (
+    ("fullkey-5000-2048", 1000),
+    ("fullkey-wraps-32-bits", 0xFFFFFFFE),
+)
+PINNED_CASES = 60
+PINNED_CONTROLS = 108
 
 
 class LinksError(ValueError):
@@ -159,6 +176,12 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
+        if name == "fragment-run-advances-session-sequence":
+            count = len(full_key_bodies())
+            lines += [
+                f"links advance {label} {before} {count} {zenoh_fragment.next_sn(before, count)}"
+                for label, before in ADVANCE
+            ]
         lines.append(f"links ok {name}")
     lines += [f"links refused {name} {cls}" for name, cls in REFUSED_SCENARIOS]
     return lines
@@ -172,6 +195,7 @@ SHAPES = {
     ("links", "reassembled"): 5,
     ("links", "fullkey"): 6,
     ("links", "boundary"): 5,
+    ("links", "advance"): 6,
 }
 
 
@@ -228,13 +252,19 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if boundary != [(edge, "whole", 1), (edge + 1, "fragmented", 2)]:
         raise LinksError(f"the edge between whole and fragmented is at {edge} payload bytes, reported {boundary}")
 
+    count = len(full_key_bodies())
+    advance = [(f[2], int(f[3]), int(f[4]), int(f[5])) for f in only("advance")]
+    wanted_advance = [(label, before, count, zenoh_fragment.next_sn(before, count)) for label, before in ADVANCE]
+    if advance != wanted_advance:
+        raise LinksError(f"the session sequence after a whole fragment run is {wanted_advance}, reported {advance}")
+
     refused = [(f[2], f[3]) for f in only("refused")]
     if [name for name, _ in refused] != [name for name, _ in REFUSED_SCENARIOS]:
         raise LinksError(f"refusals reported {[n for n, _ in refused]}, the exam names {[n for n, _ in REFUSED_SCENARIOS]}")
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance)
     return positive, len(refused)
 
 
@@ -290,6 +320,12 @@ def message_bytes(c: dict) -> int:
     return c["payloadBytes"] + c["keyBytes"] + c["attachmentBytes"] + FRAMING
 
 
+def heap_needed(c: dict) -> int:
+    """A heap link hands each sample out as a slice of the buffer it was reassembled into, so every
+    outstanding sample holds a whole message until it is consumed, and one more is being reassembled."""
+    return (c["outstandingSamples"] + 1) * message_bytes(c)
+
+
 def limits_cases() -> list[tuple[str, list[dict], bool]]:
     """(label, configs, whether the contract must accept), each sitting on a boundary."""
     demo, large, heap = pinned_configs()
@@ -326,11 +362,14 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a fixed link with a heap", trio(large=dict(large, heapBytes=1)), False),
         ("a heap link with a timeout of 0", trio(heap=dict(heap, reassemblyTimeoutMs=0)), False),
         ("a heap link with a negative timeout", trio(heap=dict(heap, reassemblyTimeoutMs=-1)), False),
-        ("a heap exactly the message", trio(heap=dict(heap, heapBytes=message_bytes(heap))), True),
-        ("a heap one byte under the message", trio(heap=dict(heap, heapBytes=message_bytes(heap) - 1)), False),
+        ("a heap exactly every outstanding sample and the message being reassembled", trio(heap=dict(heap, heapBytes=heap_needed(heap))), True),
+        ("a heap one byte under that", trio(heap=dict(heap, heapBytes=heap_needed(heap) - 1)), False),
+        ("a heap of exactly one message with four outstanding samples", trio(heap=dict(heap, heapBytes=message_bytes(heap))), False),
+        ("one outstanding sample needs two messages of heap", trio(heap=dict(heap, outstandingSamples=1, heapBytes=2 * message_bytes(heap))), True),
+        ("one outstanding sample with one message of heap", trio(heap=dict(heap, outstandingSamples=1, heapBytes=message_bytes(heap))), False),
         ("no heap declared", trio(heap=dict(heap, heapBytes=0)), False),
         ("a heap link with one byte too little stack", trio(heap=dict(heap, stackBytes=required_stack(heap) - 1)), False),
-        ("a 1 MiB heap payload with its heap", trio(heap=exact(heap, payloadBytes=1 << 20, heapBytes=message_bytes(dict(heap, payloadBytes=1 << 20)))), True),
+        ("a 1 MiB heap payload with its heap", trio(heap=exact(heap, payloadBytes=1 << 20, heapBytes=heap_needed(dict(heap, payloadBytes=1 << 20)))), True),
         ("a heap payload larger than its heap", trio(heap=exact(heap, payloadBytes=1 << 20)), False),
         ("a heap batch that cannot hold a fragment's framing", trio(heap=exact(heap, batchBytes=8)), False),
         ("a heap batch of 9", trio(heap=exact(heap, batchBytes=9)), True),
@@ -338,7 +377,7 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("an attachment of 32 bytes, one byte short", trio(large=exact(large, attachmentBytes=32)), False),
         ("an attachment of 34 bytes, one byte over", trio(large=exact(large, attachmentBytes=34)), False),
         ("an attachment of 1 byte", trio(large=exact(large, attachmentBytes=1)), False),
-        ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=message_bytes(dict(heap, attachmentBytes=1)))), False),
+        ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=heap_needed(dict(heap, attachmentBytes=1)))), False),
         ("a field the contract does not name", [dict(demo, note="x")] + [large, heap], False),
         ("a removed field", [{k: v for k, v in demo.items() if k != "heapBytes"}, large, heap], False),
     ]
@@ -415,6 +454,21 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a changed large configuration", swap("links config large", good[config_at].replace(" 2048 1024 ", " 2048 1025 ", 1))),
         ("a missing heap configuration", drop("links config heap")),
         ("the configurations in another order", swapped(0, 1)),
+        ("a dropped session-sequence line", drop("links advance fullkey-5000-2048 ")),
+        ("a session sequence that did not advance", swap("links advance fullkey-5000-2048 ", "links advance fullkey-5000-2048 1000 3 1000")),
+        ("a session sequence that advanced by one for three fragments", swap("links advance fullkey-5000-2048 ", "links advance fullkey-5000-2048 1000 3 1001")),
+        ("a session sequence that did not wrap at 32 bits", swap("links advance fullkey-wraps-32-bits ", "links advance fullkey-wraps-32-bits 4294967294 3 4294967297")),
+        ("a session sequence that wrapped to the wrong number", swap("links advance fullkey-wraps-32-bits ", "links advance fullkey-wraps-32-bits 4294967294 3 0")),
+        ("the wrap scenario dropped", drop("links advance fullkey-wraps-32-bits ")),
+        ("a stale first sequence admitted instead of refused", drop("links refused fragment-stale-first-sequence ")),
+        ("a skipped first sequence admitted instead of refused", drop("links refused fragment-skipped-first-sequence ")),
+        ("a stale first sequence refused with the wrong class", swap("links refused fragment-stale-first-sequence ", "links refused fragment-stale-first-sequence fragment-sequence")),
+        ("a fixed link that took a best-effort fragment", drop("links refused fixed-refuses-best-effort-fragment ")),
+        ("a fixed link that took a fragment with an extension", drop("links refused fixed-refuses-fragment-with-extension ")),
+        ("a fixed link that took an empty fragment", drop("links refused fixed-refuses-empty-fragment ")),
+        ("a fixed link that refused an extension fragment as unsupported-extension", swap("links refused fixed-refuses-fragment-with-extension ", "links refused fixed-refuses-fragment-with-extension unsupported-extension")),
+        ("a fixed link that refused an empty fragment as malformed-message", swap("links refused fixed-refuses-empty-fragment ", "links refused fixed-refuses-empty-fragment malformed-message")),
+        ("a refused run that changed the session", drop("links ok refused-fragment-run-leaves-session-unchanged")),
         ("every refusal removed", drop("links refused ")),
         ("a dropped refusal", drop("links refused fixed-refuses-fragment ")),
         ("a duplicated refusal", good + ["links refused fixed-refuses-fragment unsupported-message"]),
@@ -460,6 +514,9 @@ def reference_controls() -> int:
         ("a fragment with no data", lambda: zenoh_fragment.decode_fragment(bodies[0][:5])),
         ("a message whose payload length is wrong", lambda: zenoh_fragment.decode_message(zenoh_fragment.message(size)[:-1])),
         ("a batch too small for a fragment", lambda: zenoh_fragment.reference_split(b"x" * 10, 8, 0)),
+        ("a run replayed from before the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn + 1000)),
+        ("a run that skips ahead of the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn - 1)),
+        ("a run one past the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn + 1)),
         ("a noncanonical sequence number (26 80 00 aa)", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("268000aa"))),
         ("a sequence number over 32 bits (26 ff ff ff ff 10 aa)", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("26ffffffff10aa"))),
         ("a sequence number of six bytes", lambda: zenoh_fragment.decode_fragment(bytes.fromhex("26ffffffffff0faa"))),
@@ -475,6 +532,12 @@ def reference_controls() -> int:
             refused += 1
             continue
         raise LinksError(f"control: the fragment reference accepted {label}")
+    # A run starting exactly at the session's next sequence number is taken, also across the 32-bit wrap.
+    if zenoh_fragment.reassemble(bodies, sn) != zenoh_fragment.message(size):
+        raise LinksError("control: a run at the session's next sequence number was not taken")
+    wrapped = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, 0xFFFFFFFE)
+    if zenoh_fragment.reassemble(wrapped, 0xFFFFFFFE) != zenoh_fragment.message(size):
+        raise LinksError("control: a run across the 32-bit wrap was not taken")
     # The largest canonical sequence number is accepted, so the refusals above are not a blanket one.
     if zenoh_fragment.decode_fragment(bytes.fromhex("26ffffffff0faa")).sn != 0xFFFFFFFF:
         raise LinksError("control: the largest canonical sequence number was not read")

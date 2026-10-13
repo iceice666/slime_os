@@ -1439,9 +1439,21 @@ def stock_main(controls_only: bool) -> int:
 
 
 LINKS_FILTER = "zenoh_links::"
+# The stock-peer exam's own Rust tests, by name. They print the stock transcript the stock judge
+# grades, so a link implementation that deletes or renames one, or lets it emit incomplete evidence,
+# fails this gate and not only `zenoh_stock_check`.
+LINKS_STOCK_TESTS = tuple(f"zenoh_stock::{name}" for name in (
+    "alias_id_zero_is_refused_at_its_declaration",
+    "an_alias_id_wider_than_a_reference_is_refused_at_its_declaration",
+    "an_alias_in_the_receiver_mapping_is_not_resolved",
+    "the_constants_are_the_handed_off_record",
+    "the_cookie_is_the_captured_one",
+    "the_stock_peer_exam",
+))
 # Everything the stock-peer exam already requires to keep passing, plus its own tests: a fragment
 # change edits the decoder, session and link, and the fixed decoder must keep refusing a fragment.
 LINKS_RETAINED_TESTS = (*STOCK_RETAINED_TESTS,)
+# A mutation of the list above proves the gate would notice a stock test going missing: see links_main.
 
 
 def links_item_pins() -> tuple[int, int]:
@@ -1466,14 +1478,22 @@ def run_links() -> list[str]:
         fail(f"{STOCK_CORPUS.relative_to(ROOT)} is missing")
     judge_stock_corpus(STOCK_CORPUS.read_text())
     environment = dict(_os.environ)
+    stock_environment = {**environment, "ZENOH_STOCK_FIXTURES": str(STOCK_FIXTURES)}
     _stdout, retained = cargo_tests(
-        (STOCK_DECODER_FILTER, STOCK_SESSION_FILTER, STOCK_ENCODE_FILTER, STOCK_LINK_FILTER, STOCK_FILTER),
-        {**environment, "ZENOH_STOCK_FIXTURES": str(STOCK_FIXTURES)},
+        (STOCK_DECODER_FILTER, STOCK_SESSION_FILTER, STOCK_ENCODE_FILTER, STOCK_LINK_FILTER), stock_environment
     )
     passed = tests_passed(retained)
     missing = [name for name in LINKS_RETAINED_TESTS if name not in passed]
     if missing:
         fail(f"links: retained tests did not run and pass ({len(missing)} of {len(LINKS_RETAINED_TESTS)}): {', '.join(missing[:4])}")
+    # The stock-peer exam's tests run alone, as `run_stock` runs them, and their transcript is
+    # judged by the stock judge: all six are required by name and the lines must be the stock exam's.
+    stock_stdout, stock_output = cargo_tests((STOCK_FILTER,), stock_environment)
+    stock_passed = tests_passed(stock_output)
+    stock_missing = [name for name in LINKS_STOCK_TESTS if name not in stock_passed]
+    if stock_missing:
+        fail(f"links: the stock-peer exam's tests did not run and pass ({len(stock_missing)} of {len(LINKS_STOCK_TESTS)}): {', '.join(stock_missing[:4])}")
+    judge_stock(exam_lines(stock_stdout))
     # The links tests run alone, and their evidence is all the links judge sees.
     links_stdout, _output = cargo_tests((LINKS_FILTER,), environment)
     return exam_lines(links_stdout)
@@ -1484,6 +1504,9 @@ def links_main(controls_only: bool) -> int:
     # the 100 pinned refused vectors where they are. Their refusals belong to the stock gate's count,
     # so they are not added to this one's.
     stock_controls()
+    sample = "\n".join(f"test {name} ... ok" for name in LINKS_STOCK_TESTS[1:])
+    if all(name in tests_passed(sample) for name in LINKS_STOCK_TESTS):
+        fail("control: a run with a stock-peer exam test missing was read as complete")
     try:
         refused_controls = zenoh_links_exam.all_controls()
         item_cases, item_floor = links_item_pins()

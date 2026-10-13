@@ -17,7 +17,7 @@ memory it also declares. The limits it keeps each have a source:
 - the stack must cover the link's arrays, its key and subscriber slots and its queued sample notices.
   That is arithmetic from the code's own arrays, not a measured high-water mark;
 - in `fixed` mode the whole message (payload, key, attachment and framing) must fit one batch and
-  there is no reassembly timeout or heap; in `heap` mode the heap must hold one whole message, the
+  there is no reassembly timeout or heap; in `heap` mode the heap must hold every outstanding sample and the message being reassembled, the
   timeout is positive, and the batch must be larger than a fragment's own framing.
 
 The record is closed: the derived `decode` ignores a field it does not know, so the contract refuses one.
@@ -25,6 +25,6 @@ The names `demo`, `large` and `heap` are the three configurations the exam pins;
 accepts any set of one or more distinctly named configurations that satisfy the rules.
 
 The decision is [`docs/decisions/zenoh-link-limits.md`](../../docs/decisions/zenoh-link-limits.md); the
-scope is `01a1350b-e5a2-7098-9277-456d1747f0b0`, judged by
+scope is `01a13523-e01a-7168-86df-463965c120a3`, judged by
 `scripts/check/check-zenoh-profile0.py --slice links`. The Rust side is the implementation's, not this
 planning contract.

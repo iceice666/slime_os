@@ -132,14 +132,19 @@ def decode_fragment(body: bytes) -> Fragment:
     return Fragment(more=bool(header & FLAG_M), sn=sn, data=body[at:])
 
 
-def reassemble(bodies: list[bytes]) -> bytes:
+def reassemble(bodies: list[bytes], expected_sn: int | None = None) -> bytes:
     """Join a run of FRAGMENT bodies into the message, refusing a run that is not a whole message.
 
     The run must be consecutive sequence numbers, every fragment but the last marked "more", and
-    the last not. The sequence number wraps at 32 bits, as the transport's does."""
+    the last not. The sequence number wraps at 32 bits, as the transport's does. When the session's
+    next expected sequence number is given, the first fragment must carry exactly it: a run replayed
+    from an earlier point, or one that skips ahead, is refused, as a FRAME with the wrong sequence
+    number is."""
     if not bodies:
         raise FragmentError("no fragments")
     parts = [decode_fragment(body) for body in bodies]
+    if expected_sn is not None and parts[0].sn != expected_sn & 0xFFFFFFFF:
+        raise FragmentError("the first fragment is not the session's next sequence number")
     for earlier, later in zip(parts, parts[1:], strict=False):
         if later.sn != (earlier.sn + 1) & 0xFFFFFFFF:
             raise FragmentError("fragment sequence numbers are not consecutive")
@@ -148,6 +153,12 @@ def reassemble(bodies: list[bytes]) -> bytes:
     if parts[-1].more:
         raise FragmentError("the last fragment still says more follows")
     return b"".join(part.data for part in parts)
+
+
+def next_sn(first_sn: int, count: int) -> int:
+    """The session's next expected sequence number after a run of `count` fragments: each fragment
+    uses one, and the number wraps at 32 bits."""
+    return (first_sn + count) & 0xFFFFFFFF
 
 
 def decode_message(msg: bytes) -> dict:
