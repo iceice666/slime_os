@@ -454,6 +454,15 @@ then fetches both pinned toolchains' locked dependencies before the deliberately
 offline product build. Jobs that need neither the seL4 prefix nor Nix use a
 plain pinned toolchain and `Swatinem/rust-cache`.
 
+Work-item CI uses `nix develop .#projection`, including its trusted retirement
+verifier. It shares the architecture-qualified `projection-*` Nix cache with
+projection, closeout and retirement; all four keys include the flake and local
+devloop/Zutai derivations. Main push CI can populate the shared tool cache even
+when another consumer's trigger only permits restores. Legacy `myque-*` entries
+are not deleted by the workflows: retirement requires a measured replacement,
+successful restore and separate operator authorization. A shared key alone does
+not establish cold/warm qualification or byte savings.
+
 Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the
 seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in
 `sel4/pins.toml` and enforced by `sel4_pin_check`. QEMU runs without
