@@ -73,14 +73,14 @@ def attachment() -> bytes:
     return struct.pack("<qq", 0, 1000) + bytes([16]) + GID
 
 
-def message(size: int) -> bytes:
+def message(size: int, header: int = 0x1D) -> bytes:
     """The serialized network message the captures split: a PUSH with a Put, the alias form.
 
     Header 0x1d, scope 1 (the alias the stock peer declared), then the Put with the attachment
     extension, its length, the attachment, the payload length and the payload."""
     att = attachment()
     return (
-        bytes([0x1D])
+        bytes([header])
         + zenoh_wire.leb128(1)
         + bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])
         + zenoh_wire.leb128(len(att))
@@ -197,18 +197,26 @@ def decode_message(
     max_key: int | None = None,
     max_payload: int | None = None,
     subscribed: str | None = None,
+    alias_key: str | None = None,
 ) -> dict:
     """Decode the reassembled PUSH with a Put: the key, the attachment and the payload.
 
     The key is either the alias a stock peer declared (header 0x1d, a nonzero 16-bit scope and no
     key bytes) or the key in full (header 0x7d, scope 0, a 16-bit length and the bytes). Given the
-    session's declared alias, a scope that is another alias is refused: it was never declared. Given
+    session's declared alias (a peer-declared alias is sender-mapped), a scope that is another alias, or
+    the alias in the receiver mapping, is refused: it was never declared. Given the key that alias
+    stands for and the subscriber's key, a Put for an alias that stands for another key is refused. Given
     the configuration's key and payload sizes, a longer key or payload is refused. A full key must be a
     valid key expression, and given the key the session's subscriber declared, a Put for another key
     is refused as the whole-frame session refuses it."""
-    if not msg or msg[0] not in (PUSH_ALIAS, PUSH_FULL_KEY):
+    # The header is the PUSH id with the named flag (0x20) and the sender-mapping flag (0x40); the
+    # extension flag (0x80) is not accepted. A stock publisher addressing a stock listener's alias
+    # uses the receiver mapping (0x1d), as the captures do; a peer that declared the alias to this
+    # side uses the sender mapping (0x5d), as the whole-frame stock push does.
+    if not msg or msg[0] & 0x9F != PUSH_ALIAS:
         raise FragmentError("not a PUSH in the alias or full-key form")
-    named = msg[0] == PUSH_FULL_KEY
+    named = bool(msg[0] & 0x20)
+    sender = bool(msg[0] & 0x40)
     scope, at = read_leb32(msg, 1, 16)
     key = None
     if named:
@@ -229,8 +237,12 @@ def decode_message(
     else:
         if scope == 0:
             raise FragmentError("alias scope 0 is the global scope and names no alias")
+        if alias is not None and not sender:
+            raise FragmentError("invalid-keyexpr: a receiver-mapped alias names one this side declared, and it declares none")
         if alias is not None and scope != alias:
             raise FragmentError("an alias the session never declared")
+        if alias_key is not None and subscribed is not None and alias_key != subscribed:
+            raise FragmentError("undeclared-key: the alias stands for a key the subscriber did not declare")
     if at + 2 > len(msg) or msg[at] != zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z or msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
         raise FragmentError("a Put without the attachment extension")
     at += 2

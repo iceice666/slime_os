@@ -64,6 +64,7 @@ OK_SCENARIOS = (
     "stack-covers-measured-sizes",
     "heap-storage-from-component",
     "put-roundtrip-5000-2048",
+    "reassemble-sender-mapped-alias",
     "fragment-run-advances-session-sequence",
     "refused-fragment-run-leaves-session-unchanged",
     "demo-config-unchanged",
@@ -77,6 +78,10 @@ REFUSED_SCENARIOS = (
     ("fixed-refuses-best-effort-fragment", "unsupported-message"),
     ("fixed-refuses-fragment-with-extension", "unsupported-message"),
     ("fixed-refuses-empty-fragment", "unsupported-message"),
+    # The sequence number is read before the mode is consulted nowhere: a fixed link classifies a
+    # fragment with a malformed sequence number as unsupported-message too, not as the LEB class.
+    ("fixed-refuses-fragment-sequence-noncanonical", "unsupported-message"),
+    ("fixed-refuses-fragment-sequence-over-32-bits", "unsupported-message"),
     ("fragment-best-effort", "unsupported-message"),
     ("fragment-extension", "unsupported-extension"),
     ("empty-fragment", "malformed-message"),
@@ -120,6 +125,16 @@ REFUSED_SCENARIOS = (
     ("fragmented-put-key-double-slash", "invalid-keyexpr"),
     ("fragmented-put-key-invalid-utf8", "invalid-keyexpr"),
     ("fragmented-put-key-not-subscribed", "undeclared-key"),
+    # An alias resolves to the key it was declared for, and that key is then held to the subscription;
+    # and a peer that declared an alias addresses it sender-mapped, so the receiver mapping, which
+    # names an alias this side declared, is refused where the stock captures use it only because a
+    # stock publisher was addressing a stock listener's alias.
+    ("fragmented-put-alias-for-another-key", "undeclared-key"),
+    ("fragmented-put-receiver-mapped-alias", "invalid-keyexpr"),
+    # The widths: a key length is 16 bits and an attachment length 32, and each is refused as an
+    # overflow of its own width, not later as a bound or a malformed attachment.
+    ("fragmented-put-key-length-over-16-bits", "leb128-overflow"),
+    ("fragmented-put-attachment-length-over-32-bits", "leb128-overflow"),
     # Every variable-length integer in a fragment run is read the way the Rust reader reads it: at most
     # the field's width, and canonically. The fragment's own sequence number and the four lengths and
     # scope inside the reassembled Put are each graded on the link, not only in the host oracle.
@@ -162,15 +177,26 @@ def reuse_capacity() -> int:
 
 # The heap configuration queues two notices for each outstanding sample and every one holds a whole
 # message, so the owner that has drained none holds this many; a message in progress is one more.
-QUEUE_BASE = 3000
-
-
 def queue_held() -> int:
     return NOTICES * CONFIGS[2][8]
 
 
-PINNED_CASES = 97
-PINNED_CONTROLS = 223
+def distinct_payload(size: int, index: int) -> bytes:
+    """A payload of `size` bytes that differs from every other `index`, so an overwrite is noticed."""
+    return bytes((i * 7 + 1 + index * 13) % 251 for i in range(size))
+
+
+def queue_digest() -> str:
+    """The digest of the held payloads and the one in progress, each at the declared size."""
+    return sha("\n".join(sha(distinct_payload(HEAP_PAYLOAD, i)) for i in range(queue_held() + 1)).encode())
+
+
+def queue_line(held: int, in_progress: int, size: int, sent: str, back: str) -> str:
+    return f"links queue {held} {in_progress} {size} {sent} {back}"
+
+
+PINNED_CASES = 105
+PINNED_CONTROLS = 246
 
 
 class LinksError(ValueError):
@@ -249,11 +275,12 @@ def good_lines() -> list[str]:
             ]
         if name == "reassembly-after-timeout-reuses-storage":
             lines.append(f"links reuse {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}")
+        if name == "reassemble-sender-mapped-alias":
+            lines.append(f"links aliased 5d 5000 {sha(zenoh_fragment.payload_bytes(5000))}")
         if name == "heap-declared-payload-boundary":
             lines.append(f"links payload {HEAP_PAYLOAD} {heap_needed(pinned_configs()[2])} {sha(zenoh_fragment.payload_bytes(HEAP_PAYLOAD))}")
         if name == "heap-fills-notice-queue":
-            earliest = sha(zenoh_fragment.payload_bytes(QUEUE_BASE))
-            lines.append(f"links queue {queue_held()} 1 {earliest} {earliest}")
+            lines.append(queue_line(queue_held(), 1, HEAP_PAYLOAD, queue_digest(), queue_digest()))
         if name == "stack-covers-measured-sizes":
             lines += [f"links size {c['name']} {required_stack(c)} {c['stackBytes']}" for c in pinned_configs()]
         if name == "fragment-run-advances-session-sequence":
@@ -279,7 +306,8 @@ SHAPES = {
     ("links", "reuse"): 5,
     ("links", "payload"): 5,
     ("links", "size"): 5,
-    ("links", "queue"): 6,
+    ("links", "queue"): 7,
+    ("links", "aliased"): 5,
 }
 
 
@@ -341,11 +369,15 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if payload != wanted_payload:
         raise LinksError(f"the declared payload of {HEAP_PAYLOAD} bytes must reassemble into the declared heap: {wanted_payload}, reported {payload}")
 
-    queue = [(int(f[2]), int(f[3]), f[4], f[5]) for f in only("queue")]
-    earliest = sha(zenoh_fragment.payload_bytes(QUEUE_BASE))
-    wanted_queue = [(queue_held(), 1, earliest, earliest)]
+    queue = [(int(f[2]), int(f[3]), int(f[4]), f[5], f[6]) for f in only("queue")]
+    wanted_queue = [(queue_held(), 1, HEAP_PAYLOAD, queue_digest(), queue_digest())]
     if queue != wanted_queue:
-        raise LinksError(f"with {queue_held()} notices held and one message in progress the earliest payload must read back as it was sent: {wanted_queue}, reported {queue}")
+        raise LinksError(f"with {queue_held()} notices held and one message in progress, each of the declared {HEAP_PAYLOAD} bytes, every payload must read back as it was sent: {wanted_queue}, reported {queue}")
+
+    aliased = [(f[2], int(f[3]), f[4]) for f in only("aliased")]
+    wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
+    if aliased != wanted_aliased:
+        raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
 
     sizes = [(f[2], int(f[3]), int(f[4])) for f in only("size")]
     if [name for name, _, _ in sizes] != [c["name"] for c in pinned_configs()]:
@@ -375,7 +407,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased)
     return positive, len(refused)
 
 
@@ -583,12 +615,19 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a missing heap configuration", drop("links config heap")),
         ("the configurations in another order", swapped(0, 1)),
         ("a dropped notice-queue line", drop("links queue ")),
-        ("a notice queue of two", swap("links queue ", f"links queue 2 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
-        ("a notice queue one short of capacity", swap("links queue ", f"links queue {queue_held() - 1} 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
-        ("a notice queue one past capacity", swap("links queue ", f"links queue {queue_held() + 1} 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
-        ("a queue with no message in progress", swap("links queue ", f"links queue {queue_held()} 0 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE))}")),
-        ("the earliest payload overwritten by a later reassembly", swap("links queue ", corrupt_last(good[first("links queue ")]))),
-        ("a queue whose earliest payload was not the one sent", swap("links queue ", f"links queue {queue_held()} 1 {sha(zenoh_fragment.payload_bytes(QUEUE_BASE + 1))} {sha(zenoh_fragment.payload_bytes(QUEUE_BASE + 1))}")),
+        ("a notice queue of two", swap("links queue ", queue_line(2, 1, HEAP_PAYLOAD, queue_digest(), queue_digest()))),
+        ("a notice queue one short of capacity", swap("links queue ", queue_line(queue_held() - 1, 1, HEAP_PAYLOAD, queue_digest(), queue_digest()))),
+        ("a notice queue one past capacity", swap("links queue ", queue_line(queue_held() + 1, 1, HEAP_PAYLOAD, queue_digest(), queue_digest()))),
+        ("a queue with no message in progress", swap("links queue ", queue_line(queue_held(), 0, HEAP_PAYLOAD, queue_digest(), queue_digest()))),
+        ("a queue of small messages", swap("links queue ", queue_line(queue_held(), 1, 3000, queue_digest(), queue_digest()))),
+        ("a queue of messages one byte under the declared size", swap("links queue ", queue_line(queue_held(), 1, HEAP_PAYLOAD - 1, queue_digest(), queue_digest()))),
+        ("an earlier payload overwritten by a later reassembly", swap("links queue ", queue_line(queue_held(), 1, HEAP_PAYLOAD, queue_digest(), sha(b"overwritten")))),
+        ("a queue whose payloads were not the ones sent", swap("links queue ", queue_line(queue_held(), 1, HEAP_PAYLOAD, sha(b"other"), sha(b"other")))),
+        ("a dropped aliased-Put line", drop("links aliased ")),
+        ("an aliased Put reported receiver-mapped", swap("links aliased ", good[first("links aliased ")].replace(" 5d ", " 1d ", 1))),
+        ("an aliased Put of another size", swap("links aliased ", good[first("links aliased ")].replace(" 5000 ", " 4999 ", 1))),
+        ("an aliased Put that reassembled to another payload", swap("links aliased ", corrupt_last(good[first("links aliased ")]))),
+        ("the sender-mapped alias scenario dropped", [line for line in good if line != "links ok reassemble-sender-mapped-alias"]),
         ("a demo payload of 13 bytes admitted", drop("links refused demo-refuses-payload-13-bytes ")),
         ("a large payload of 1025 bytes admitted", drop("links refused large-refuses-payload-1025-bytes ")),
         ("a large payload of 1025 bytes refused as out-of-memory", swap("links refused large-refuses-payload-1025-bytes ", "links refused large-refuses-payload-1025-bytes out-of-memory")),
@@ -606,6 +645,18 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
           ("fragmented-put-payload-length-noncanonical refused with the wrong class", swap("links refused fragmented-put-payload-length-noncanonical ", "links refused fragmented-put-payload-length-noncanonical unsupported-message"))],
         *[("fragmented-put-payload-length-over-32-bits admitted instead of refused", drop("links refused fragmented-put-payload-length-over-32-bits ")),
           ("fragmented-put-payload-length-over-32-bits refused with the wrong class", swap("links refused fragmented-put-payload-length-over-32-bits ", "links refused fragmented-put-payload-length-over-32-bits unsupported-message"))],
+        ("fixed-refuses-fragment-sequence-noncanonical admitted instead of refused", drop("links refused fixed-refuses-fragment-sequence-noncanonical ")),
+        ("fixed-refuses-fragment-sequence-noncanonical refused with the wrong class", swap("links refused fixed-refuses-fragment-sequence-noncanonical ", "links refused fixed-refuses-fragment-sequence-noncanonical over-bound")),
+        ("fixed-refuses-fragment-sequence-over-32-bits admitted instead of refused", drop("links refused fixed-refuses-fragment-sequence-over-32-bits ")),
+        ("fixed-refuses-fragment-sequence-over-32-bits refused with the wrong class", swap("links refused fixed-refuses-fragment-sequence-over-32-bits ", "links refused fixed-refuses-fragment-sequence-over-32-bits over-bound")),
+        ("fragmented-put-alias-for-another-key admitted instead of refused", drop("links refused fragmented-put-alias-for-another-key ")),
+        ("fragmented-put-alias-for-another-key refused with the wrong class", swap("links refused fragmented-put-alias-for-another-key ", "links refused fragmented-put-alias-for-another-key over-bound")),
+        ("fragmented-put-receiver-mapped-alias admitted instead of refused", drop("links refused fragmented-put-receiver-mapped-alias ")),
+        ("fragmented-put-receiver-mapped-alias refused with the wrong class", swap("links refused fragmented-put-receiver-mapped-alias ", "links refused fragmented-put-receiver-mapped-alias over-bound")),
+        ("fragmented-put-key-length-over-16-bits admitted instead of refused", drop("links refused fragmented-put-key-length-over-16-bits ")),
+        ("fragmented-put-key-length-over-16-bits refused with the wrong class", swap("links refused fragmented-put-key-length-over-16-bits ", "links refused fragmented-put-key-length-over-16-bits over-bound")),
+        ("fragmented-put-attachment-length-over-32-bits admitted instead of refused", drop("links refused fragmented-put-attachment-length-over-32-bits ")),
+        ("fragmented-put-attachment-length-over-32-bits refused with the wrong class", swap("links refused fragmented-put-attachment-length-over-32-bits ", "links refused fragmented-put-attachment-length-over-32-bits over-bound")),
         ("a fragmented wildcard key admitted", drop("links refused fragmented-put-key-wildcard ")),
         ("a fragmented wildcard key refused as invalid-keyexpr", swap("links refused fragmented-put-key-wildcard ", "links refused fragmented-put-key-wildcard invalid-keyexpr")),
         ("a fragmented leading-slash key admitted", drop("links refused fragmented-put-key-leading-slash ")),
@@ -704,13 +755,22 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def key_length_over() -> bytes:
+        whole = bytearray(full_key(10, 20))
+        return bytes(whole[:2]) + bytes([0x80, 0x80, 0x04]) + bytes(whole[3:])
+
+    def attachment_length_over() -> bytes:
+        whole = bytearray(zenoh_fragment.full_key_for_exam(5))
+        at = whole.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])) + 2
+        return bytes(whole[:at]) + bytes([0x80, 0x80, 0x80, 0x80, 0x10]) + bytes(whole[at + 1 :])
+
     def noncanonical_key_length() -> bytes:
         whole = bytearray(full_key(10, 20))
         return bytes(whole[:2]) + bytes([0x8A, 0x00]) + bytes(whole[3:])
 
     def noncanonical_attachment_length() -> bytes:
         whole = bytearray(zenoh_fragment.full_key_for_exam(5))
-        at = whole.index(bytes([zenoh_wire.EXT_ATTACHMENT])) + 1
+        at = whole.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])) + 2
         return bytes(whole[:at]) + bytes([0xA1, 0x00]) + bytes(whole[at + 1 :])
 
     def invalid_utf8_key() -> bytes:
@@ -727,16 +787,16 @@ def reference_controls() -> int:
             message[1] = scope
         return bytes(message)
 
-    def with_scope(scope: bytes) -> bytes:
+    def with_scope(scope: bytes, header: int = 0x5D) -> bytes:
         whole = zenoh_fragment.message(1)
-        return bytes([0x1D]) + scope + whole[2:]
+        return bytes([header]) + scope + whole[2:]
 
     def no_attachment(payload: int) -> bytes:
         return bytes([0x1D, 0x01, zenoh_wire.ID_PUT]) + zenoh_wire.leb128(payload) + zenoh_fragment.payload_bytes(payload)
 
     def bad_gid(payload: int, length: int) -> bytes:
         whole = bytearray(zenoh_fragment.message(payload))
-        whole[whole.index(bytes([zenoh_wire.EXT_ATTACHMENT])) + 2 + 16] = length
+        whole[whole.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])) + 2 + 1 + 16] = length
         return bytes(whole)
 
     def long_attachment(payload: int) -> bytes:
@@ -785,6 +845,10 @@ def reference_controls() -> int:
         ("an alias the session never declared, a larger one", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0x03])), alias=1)),
         ("one payload byte over the large configuration", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1025), max_key=129, max_payload=1024)),
         ("13 payload bytes over the demo configuration", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(13), max_key=129, max_payload=12)),
+        ("a receiver-mapped alias where the peer declared it", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x01]), 0x1D), alias=1)),
+        ("an alias that stands for another key than the subscriber's", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x01])), alias=1, alias_key="slime_demo/other", subscribed=key())),
+        ("a key length above 16 bits", lambda: zenoh_fragment.decode_message(key_length_over(), max_key=129)),
+        ("an attachment length above 32 bits", lambda: zenoh_fragment.decode_message(attachment_length_over(), max_key=129)),
         ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
         ("an alias scope of 65536", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x04])))),
         ("an alias scope of four bytes", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0xFF, 0x7F])))),
@@ -807,11 +871,22 @@ def reference_controls() -> int:
         ("a noncanonical scope in the message", lambda: zenoh_fragment.decode_message(bytes.fromhex("1d8000") + zenoh_fragment.message(size)[2:])),
         ("a noncanonical payload length in the message", lambda: zenoh_fragment.decode_message(zenoh_fragment.message(size)[: -size - 2] + bytes.fromhex("a8a700") + zenoh_fragment.payload_bytes(size))),
     ]
+    # A control that is refused for another reason proves nothing: these name what the refusal says.
+    reasons = {
+        "a noncanonical key length": "noncanonical",
+        "a noncanonical attachment length": "noncanonical",
+        "a key length above 16 bits": "over 16 bits",
+        "an attachment length above 32 bits": "over 32 bits",
+        "a receiver-mapped alias where the peer declared it": "receiver-mapped",
+        "an alias that stands for another key than the subscriber's": "stands for a key",
+    }
     refused = 0
     for label, action in cases:
         try:
             action()
-        except zenoh_fragment.FragmentError:
+        except zenoh_fragment.FragmentError as error:
+            if label in reasons and reasons[label] not in str(error):
+                raise LinksError(f"control: {label} was refused for another reason: {error}") from None
             refused += 1
             continue
         raise LinksError(f"control: the fragment reference accepted {label}")
@@ -820,6 +895,16 @@ def reference_controls() -> int:
         raise LinksError("control: a fragment at the announced batch was not taken")
     if zenoh_fragment.reassemble(bodies, sn, batch) != zenoh_fragment.message(size):
         raise LinksError("control: a run within the announced batch was not taken")
+    # A peer that declared the alias addresses it sender-mapped, and that is read, also when it comes
+    # from real fragments; the receiver mapping is read as a bare wire form and refused only where the
+    # peer declared the alias.
+    if zenoh_fragment.decode_message(with_scope(bytes([0x01]), 0x5D), alias=1)["scope"] != 1:
+        raise LinksError("control: a sender-mapped declared alias was not read")
+    if zenoh_fragment.decode_message(with_scope(bytes([0x01]), 0x1D))["scope"] != 1:
+        raise LinksError("control: the receiver-mapped wire form was not read as a bare wire form")
+    aliased_run = zenoh_fragment.reference_split(zenoh_fragment.message(5000, 0x5D), 2048, sn)
+    if zenoh_fragment.decode_message(zenoh_fragment.reassemble(aliased_run, sn, 2048), alias=1)["payload"] != zenoh_fragment.payload_bytes(5000):
+        raise LinksError("control: a sender-mapped aliased Put did not reassemble")
     # The demo key is a valid key expression and the subscriber's own, so these refusals are not blanket.
     if zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1), max_key=129, subscribed=key())["key"] != key().encode():
         raise LinksError("control: the subscriber's own key was not read")
