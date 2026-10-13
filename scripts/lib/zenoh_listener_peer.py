@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -35,6 +36,7 @@ READY = "[zenoh-listener] ready"
 # The guest's session is judged by the capture; the listener only has to stay up until the
 # guest's four samples have arrived and the link has closed, or this bound passes.
 DEADLINE_SECONDS = 150
+READY_SECONDS = 30
 SETTLE_SECONDS = 3
 
 
@@ -81,15 +83,22 @@ class Listener:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         assert self.process.stdout is not None
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            line = self.process.stdout.readline()
-            if line.strip() == READY:
-                return self
-            if not line and self.process.poll() is not None:
-                break
+        # readline() blocks until a newline, so a child that stays alive and silent would hold the
+        # deadline hostage. A reader thread reports the first line and the wait on it is bounded.
+        ready = threading.Event()
+        stream = self.process.stdout
+
+        def watch() -> None:
+            for line in stream:
+                if line.strip() == READY:
+                    ready.set()
+                    return
+
+        threading.Thread(target=watch, daemon=True).start()
+        if ready.wait(READY_SECONDS):
+            return self
         self.__exit__(None, None, None)
-        raise ListenerError("the stock listener never reported ready")
+        raise ListenerError(f"the stock listener did not report ready within {READY_SECONDS} s")
 
     def finish(self, timeout: float) -> str:
         """Wait for the peer to write its record; returns what it printed."""
@@ -140,7 +149,7 @@ def serve(port: int, receipt: Path) -> int:
         nonlocal most, seen
         attachment = sample.attachment
         received.append((str(sample.key_expr), bytes(sample.payload), b"" if attachment is None else bytes(attachment)))
-        most, seen = max(most, len(session.info.peers_zid())), True
+        most, seen = max(most, len(session.info.peers_zid()), 1), True
 
     session.declare_subscriber(KEY, on_sample)
     print(READY, flush=True)

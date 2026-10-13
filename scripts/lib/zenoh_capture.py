@@ -29,6 +29,7 @@ from pathlib import Path
 
 import http_capture
 import zenoh_exchange
+import zenoh_listener_peer
 import zenoh_wire
 import zutai_cli
 from harness import ROOT
@@ -172,7 +173,9 @@ def streams(data: bytes) -> tuple[bytes, bytes, int]:
         _need(ports == ((syn.source_port, PORT) if s.outgoing else (PORT, syn.source_port)), "a segment outside the one connection")
     synacks = [s for s in segs if not s.outgoing and s.flags & TCP_SYN and s.flags & TCP_ACK]
     _need(len({s.seq for s in synacks}) == 1, "the peer never accepted: no single SYN-ACK")
-    _need(synacks[0].ack == (syn.seq + 1) & 0xFFFFFFFF, "the SYN-ACK acknowledges another sequence number")
+    expected_ack = (syn.seq + 1) & 0xFFFFFFFF
+    for synack in synacks:
+        _need(synack.ack == expected_ack, "a SYN-ACK acknowledges another sequence number")
     guest = _reassemble([s for s in segs if s.outgoing], syn.seq, "guest stream")
     peer = _reassemble([s for s in segs if not s.outgoing], synacks[0].seq, "peer stream")
     return guest, peer, arp
@@ -308,7 +311,15 @@ def judge_guest_lines(lines: list[str], contract: dict) -> dict[int, str]:
     for m in wire:
         sent[int(m.group(1))] = m.group(2)
     _need(sorted(sent) == list(range(SAMPLES)), "the reported samples are not 0 to 3 once each")
-    _need(len([1 for line in lines if line.startswith(f"[{PUBLISHER}] ") and not re.search(r" (denial|wire sent|session|declaration matched) ", line)]) == 0, "a connector line the exam does not name")
+    named = [
+        re.compile(rf"\[{PUBLISHER}\] denial class=(?:{'|'.join(DENIALS)}) refused=1"),
+        re.compile(patterns["session"]),
+        re.compile(patterns["match"]),
+        re.compile(rf"\[{PUBLISHER}\] wire sent sample=[0-3] hex=[0-9a-f]+"),
+        re.compile(patterns["close"]),
+    ]
+    for line in lines:
+        _need(any(pattern.fullmatch(line) for pattern in named), f"a connector line the exam does not name: {line[:80]!r}")
     position = {line: i for i, line in enumerate(lines)}
     opened = next(i for i, line in enumerate(lines) if re.fullmatch(patterns["session"], line))
     matched = next(i for i, line in enumerate(lines) if re.fullmatch(patterns["match"], line))
@@ -499,7 +510,13 @@ def receipt_cases(contract: dict) -> list[tuple[str, str, bool]]:
     def with_first(first: str) -> list[str]:
         return [first] + [sample() for _ in range(SAMPLES - 1)]
 
+    # The listener writes its record with its own writer. Decoding that output, rather than text
+    # written here, is what makes the producer and the contract unable to drift unseen.
+    written = zenoh_listener_peer.receipt_text(
+        LISTEN, 1, [(key, bytes.fromhex(payload), bytes.fromhex(att)) for _ in range(SAMPLES)]
+    )
     return [
+        ("a record written by the listener's own writer", written, True),
         ("an honest record", record(), True),
         ("the shortest key, 1 byte", record(rows=with_first(sample(k="k"))), True),
         ("a key of 128 bytes, one under the longest", record(rows=with_first(sample(k="k" * 128))), True),
@@ -555,7 +572,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 112
+PINNED_CONTROLS = 116
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -667,6 +684,8 @@ def build(scenario: dict) -> bytes:
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1, TCP_ACK, payload), True))
     for at, payload in pieces(peer_stream):
         frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + len(guest_stream), TCP_ACK, payload), False))
+    if "synack_again" in scenario:
+        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK), False))
     frames.extend(scenario.get("extra", []))
     guest_fin = gisn + 1 + len(guest_stream) + scenario.get("fin_skew", 0)
     if scenario.get("guest_fin", True):
@@ -787,6 +806,8 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a connection the peer never accepts", edit(lambda s: s.update(no_synack=True))),
         ("a SYN-ACK acknowledging one number too many", edit(lambda s: s.update(synack_skew=1))),
         ("a SYN-ACK acknowledging one number too few", edit(lambda s: s.update(synack_skew=-1))),
+        ("a SYN-ACK retransmitted with the acknowledgement one too many", edit(lambda s: s.update(synack_again=1))),
+        ("a SYN-ACK retransmitted with the acknowledgement one too few", edit(lambda s: s.update(synack_again=-1))),
         ("a stream that never closes", edit(lambda s: s.update(guest_fin=False))),
         ("a FIN one byte past the data", edit(lambda s: s.update(fin_skew=1))),
         ("a FIN one byte short of the data", edit(lambda s: s.update(fin_skew=-1))),
@@ -824,6 +845,8 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a report with sample 1 between the session and the match", edit(lambda s: s["lines"].insert(4, s["lines"].pop(next(n for n, x in enumerate(s["lines"]) if " wire sent sample=1 " in x))))),
         ("a report with samples 2 and 3 swapped", edit(lambda s: s["lines"].insert(8, s["lines"].pop(7)))),
         ("a report with sample 0 last", edit(lambda s: s["lines"].insert(8, s["lines"].pop(5)))),
+        ("a report with a line that only contains a keyword", edit(lambda s: s["lines"].insert(-1, f"[{PUBLISHER}] unexpected session diagnostic"))),
+        ("a report with a close line that has an extra field", edit(lambda s: s["lines"].__setitem__(-1, s["lines"][-1] + " extra=1"))),
         ("a report with the listen denial twice", edit(lambda s: s["lines"].insert(0, f"[{PUBLISHER}] denial class=listen refused=1"))),
         ("a report with a denial the exam does not name", edit(lambda s: s["lines"].insert(0, f"[{PUBLISHER}] denial class=invented refused=1"))),
         ("a report from the subscriber", edit(lambda s: s["lines"].insert(0, f"[{SUBSCRIBER}] session open role=listener initial_sn=0 lease_ms=2000"))),
@@ -876,6 +899,7 @@ def honest_variants() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer sequence number about to wrap", update(peer_isn=0xFFFFFFF0)),
         ("keep-alives from the guest", lambda s: {**s, "guest": s["guest"][:2] + [bytes([ID_KEEP_ALIVE])] * 3 + s["guest"][2:]}),
         ("a guest that never sends CLOSE", lambda s: {**s, "guest": s["guest"][:-1]}),
+        ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("an ARP reply from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2)]}),
     ]
 
