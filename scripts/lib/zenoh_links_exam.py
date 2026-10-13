@@ -79,6 +79,9 @@ OK_SCENARIOS = (
     "subscriber-ids-use-all-32-bits",
     "reassemble-short-key",
     "reassemble-high-aliases",
+    "edge-batch-89",
+    "edge-batch-4096",
+    "edge-key-2028",
 )
 REFUSED_SCENARIOS = (
     ("fixed-refuses-fragment", "unsupported-message"),
@@ -256,6 +259,57 @@ DEADLINE_FIRST = 7_000_000
 SUBSCRIBER_IDS = (0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
 
 
+# Configurations at the edges the contract admits, driven through the link: a handshake that fills the
+# smallest batch exactly and a declaration of the longest key it holds, a Put fragmented at the
+# largest batch, and a key far past the 129 bytes the demo configuration uses, declared, used and
+# undeclared. (name, batch, key, payload). The key is a valid key expression and is the subscriber's.
+EDGE_SN = 1000
+EDGES = (
+    ("edge-batch-89", 89, "k" * 70, 300),
+    ("edge-batch-4096", 4096, "k" * 4076, 16384),
+    ("edge-key-2028", 2048, "k" * 2028, 5000),
+)
+
+
+def edge_config(batch: int, key: str, payload: int) -> dict:
+    c = dict(
+        name="edge", mode="heap", batchBytes=batch, payloadBytes=payload, keyBytes=len(key),
+        attachmentBytes=33, maxKeys=1, maxSubscribers=1, outstandingSamples=1,
+        stackBytes=0, reassemblyTimeoutMs=5000, heapBytes=0,
+    )
+    c["stackBytes"] = required_stack(c)
+    c["heapBytes"] = heap_needed(c)
+    return c
+
+
+@lru_cache(maxsize=None)
+def edge_lines() -> tuple[str, ...]:
+    """What the link must report at each edge, computed from the host reference, after the limits
+    contract has accepted the configuration the edge instantiates."""
+    demo, large = pinned_configs()[:2]
+    out = []
+    for name, batch, key, payload in EDGES:
+        if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload)])):
+            raise LinksError(f"the limits contract refuses the configuration of {name}")
+        handshake = len(zenoh_wire.init(bytes(range(1, 17)), batch=batch, cookie=bytes(range(1, 65)))) + 2
+        declare = len(zenoh_wire.frame(0xFFFFFFFF, zenoh_wire.declare_subscriber(0xFFFFFFFF, key, True))) + 2
+        undeclare = len(zenoh_wire.frame(0xFFFFFFFF, zenoh_wire.undeclare_subscriber(0xFFFFFFFF, key, True))) + 2
+        if max(handshake, declare, undeclare) > batch:
+            raise LinksError(f"{name}: a handshake or a declaration does not fit its batch")
+        message = zenoh_wire.push_put(key, zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(payload), True)
+        bodies = zenoh_fragment.reference_split(message, batch, EDGE_SN)
+        joined = zenoh_fragment.reassemble(bodies, EDGE_SN, batch)
+        decoded = zenoh_fragment.decode_message(joined, max_key=len(key), subscribed=key)
+        if decoded["payload"] != zenoh_fragment.payload_bytes(payload) or decoded["key"] != key.encode():
+            raise LinksError(f"{name}: the host reference does not reassemble its own Put")
+        digest = sha("\n".join(sha(body) for body in bodies).encode())
+        out.append(
+            f"links edge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
+            f"{len(bodies)} {digest} {sha(zenoh_fragment.payload_bytes(payload))}"
+        )
+    return tuple(out)
+
+
 # `keyBytes` is a maximum, so a valid key shorter than it reassembles, and an alias id is 16 bits, so
 # an id with bit 15 set is declared and a sender-mapped Put resolves through it.
 SHORT_KEY = "a/b"
@@ -346,8 +400,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 187
-PINNED_CONTROLS = 420
+PINNED_CASES = 193
+PINNED_CONTROLS = 438
 
 
 class LinksError(ValueError):
@@ -426,6 +480,8 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
+        if name.startswith("edge-"):
+            lines.append(next(line for line in edge_lines() if line.split()[2] == name))
         if name == "reassemble-short-key":
             lines.append(short_key_line())
         if name == "reassemble-high-aliases":
@@ -490,6 +546,7 @@ SHAPES = {
     ("links", "deadline"): 8,
     ("links", "subid"): 7,
     ("links", "shortkey"): 5,
+    ("links", "edge"): 12,
     ("links", "highalias"): 5,
     ("links", "reuseafter"): 6,
     ("links", "heapfrag"): 6,
@@ -565,6 +622,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    edges = [" ".join(f) for f in only("edge")]
+    if edges != list(edge_lines()):
+        raise LinksError(f"the admitted edges must open, declare, send and reassemble through the link: {list(edge_lines())}, reported {edges}")
 
     shortkey = [" ".join(f) for f in only("shortkey")]
     if shortkey != [short_key_line()]:
@@ -650,7 +711,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges)
     return positive, len(refused)
 
 
@@ -772,10 +833,16 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("an attachment of 1 byte", trio(large=exact(large, attachmentBytes=1)), False),
         ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=heap_needed(dict(heap, attachmentBytes=1)))), False),
         ("a 65535-byte key, more than any batch carries a declaration for", trio(heap=exact(heap, keyBytes=65535, heapBytes=heap_needed(dict(heap, keyBytes=65535)))), False),
-        ("a key that fits a declaration exactly in the largest batch", trio(heap=exact(heap, batchBytes=4096, keyBytes=4075, heapBytes=heap_needed(dict(heap, keyBytes=4075)))), True),
-        ("a key one byte over what a declaration fits in the largest batch", trio(heap=exact(heap, batchBytes=4096, keyBytes=4076, heapBytes=heap_needed(dict(heap, keyBytes=4076)))), False),
-        ("a key that fits a declaration exactly in a batch of 2048", trio(heap=exact(heap, keyBytes=2027, heapBytes=heap_needed(dict(heap, keyBytes=2027)))), True),
-        ("a key one byte over what a declaration fits in a batch of 2048", trio(heap=exact(heap, keyBytes=2028, heapBytes=heap_needed(dict(heap, keyBytes=2028)))), False),
+        ("a key that fits a declaration exactly in the largest batch", trio(heap=exact(heap, batchBytes=4096, keyBytes=4076, heapBytes=heap_needed(dict(heap, keyBytes=4076)))), True),
+        ("a key one byte over what a declaration fits in the largest batch", trio(heap=exact(heap, batchBytes=4096, keyBytes=4077, heapBytes=heap_needed(dict(heap, keyBytes=4077)))), False),
+        ("a key that fits a declaration exactly in a batch of 2048", trio(heap=exact(heap, keyBytes=2028, heapBytes=heap_needed(dict(heap, keyBytes=2028)))), True),
+        ("a key one byte over what a declaration fits in a batch of 2048", trio(heap=exact(heap, keyBytes=2029, heapBytes=heap_needed(dict(heap, keyBytes=2029)))), False),
+        ("a key of 125 bytes, the last whose declaration length is one byte, in a batch of 144", trio(heap=exact(heap, batchBytes=144, keyBytes=125, heapBytes=heap_needed(dict(heap, keyBytes=125)))), True),
+        ("a key of 125 bytes in a batch of 143", trio(heap=exact(heap, batchBytes=143, keyBytes=125, heapBytes=heap_needed(dict(heap, keyBytes=125)))), False),
+        ("a key of 126 bytes, whose declaration length takes two bytes, in a batch of 145", trio(heap=exact(heap, batchBytes=145, keyBytes=126, heapBytes=heap_needed(dict(heap, keyBytes=126)))), False),
+        ("a key of 126 bytes in a batch of 146", trio(heap=exact(heap, batchBytes=146, keyBytes=126, heapBytes=heap_needed(dict(heap, keyBytes=126)))), True),
+        ("the smallest batch with the longest key it holds a declaration for", trio(heap=exact(heap, batchBytes=89, keyBytes=70, heapBytes=heap_needed(dict(heap, keyBytes=70)))), True),
+        ("the smallest batch with a key a byte too long", trio(heap=exact(heap, batchBytes=89, keyBytes=71, heapBytes=heap_needed(dict(heap, keyBytes=71)))), False),
         ("a 65536-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65536, heapBytes=heap_needed(dict(heap, keyBytes=65536)))), False),
         ("a payload of 4294967295 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967295, heapBytes=heap_needed(dict(heap, payloadBytes=4294967295)))), True),
         ("a payload of 4294967296 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967296, heapBytes=heap_needed(dict(heap, payloadBytes=4294967296)))), False),
@@ -828,6 +895,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out = list(good)
         out[a], out[b] = out[b], out[a]
         return out
+
+    def edge_swap(name: str, index: int, value: str) -> list[str]:
+        at = first(f"links edge {name} ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
 
     def with_deadline(a: str, b: str) -> list[str]:
         out, seen = [], 0
@@ -998,6 +1071,21 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fragmented-put-key-dollar refused with the wrong class", swap("links refused fragmented-put-key-dollar ", "links refused fragmented-put-key-dollar over-bound")),
         ("fragmented-put-key-truncated admitted instead of refused", drop("links refused fragmented-put-key-truncated ")),
         ("fragmented-put-key-truncated refused with the wrong class", swap("links refused fragmented-put-key-truncated ", "links refused fragmented-put-key-truncated over-bound")),
+        ("the batch-edge lines dropped", drop("links edge ")),
+        ("the smallest-batch edge dropped", drop("links edge edge-batch-89 ")),
+        ("the largest-batch edge dropped", drop("links edge edge-batch-4096 ")),
+        ("the long-key edge dropped", drop("links edge edge-key-2028 ")),
+        ("a handshake reported larger than the smallest batch", edge_swap("edge-batch-89", 6, "90")),
+        ("a handshake reported one byte short", edge_swap("edge-batch-89", 6, "88")),
+        ("a declaration reported one byte short at the long key", edge_swap("edge-key-2028", 7, str(int(good[first("links edge edge-key-2028 ")].split()[7]) - 1))),
+        ("an undeclaration reported one byte long at the largest batch", edge_swap("edge-batch-4096", 8, str(int(good[first("links edge edge-batch-4096 ")].split()[8]) + 1))),
+        ("a different fragment count at the largest batch", edge_swap("edge-batch-4096", 9, str(int(good[first("links edge edge-batch-4096 ")].split()[9]) + 1))),
+        ("different fragment bodies at the smallest batch", edge_swap("edge-batch-89", 10, sha(b"other"))),
+        ("a payload that reassembled differently at the long key", edge_swap("edge-key-2028", 11, sha(b"other"))),
+        ("the long key cut to 129 bytes", edge_swap("edge-key-2028", 4, "129")),
+        ("the largest batch reported as 2048", edge_swap("edge-batch-4096", 3, "2048")),
+        ("the smallest batch reported as 512", edge_swap("edge-batch-89", 3, "512")),
+        ("the batch-edge scenarios dropped", [line for line in good if not line.startswith("links ok edge-")]),
         ("the short-key line dropped", drop("links shortkey ")),
         ("a short key reported as the 129-byte demo key", swap("links shortkey ", good[first("links shortkey ")].replace(f" {len(SHORT_KEY)} ", " 129 ", 1))),
         ("a short key that reassembled to another payload", swap("links shortkey ", corrupt_last(good[first("links shortkey ")]))),

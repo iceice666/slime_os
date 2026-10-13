@@ -67,11 +67,12 @@ streamLengthBytes :: Int = 2;
 handshakeBytes :: Int = 87;
 
 -- A link sends a key declaration whole, in one FRAME, and does not fragment it. The longest
--- declaration the host encoder writes is an UNDECLARE_SUBSCRIBER: 13 bytes around the key (header,
--- a four-byte id, the extension, the length, the scope and the mapping), and the FRAME before it
--- adds a header byte and a sequence number of up to five. So a key plus these 19 bytes, with the
--- stream length, must fit the batch, or the subscription could not be established.
-declarationBytes :: Int = 19;
+-- declaration the host encoder writes is an UNDECLARE_SUBSCRIBER whose extension body is the key
+-- behind two bytes. Around that body it adds a header, a four-byte id, the extension tag and the
+-- body's length; the FRAME before it adds a header byte and a sequence number of up to five; and the
+-- stream length adds two. That is 18 bytes and the width of the body's length field, which grows with
+-- the key: one byte below 128, two below 16384, three above.
+declarationFixedBytes :: Int = 18;
 
 -- Source: the key-expression alias id and the scope every reference to it carries are 16 bits
 -- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
@@ -166,6 +167,15 @@ count :: List Config -> Int
 messageBytes :: Config -> Int
   = c => c.payloadBytes + c.keyBytes + c.attachmentBytes + framingBytes;
 
+-- The width of a variable-length integer.
+declarationLengthBytes :: Int -> Int
+  = n => if n < 128 then 1 else (if n < 16384 then 2 else 3);
+
+-- The bytes a key declaration takes on the wire, stream length included: the key, the fixed bytes
+-- around it and the width of the length of its two-byte-longer extension body.
+declarationBytes :: Config -> Int
+  = c => c.keyBytes + declarationFixedBytes + declarationLengthBytes (c.keyBytes + 2);
+
 -- The key and subscriber slots a configuration declares.
 slotBytes :: Config -> Int
   = c => (c.maxKeys + c.maxSubscribers) * (c.keyBytes + slotOverheadBytes);
@@ -184,7 +194,7 @@ commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
     && c.batchBytes >= handshakeBytes + streamLengthBytes && c.batchBytes <= dataBytes
     && c.payloadBytes >= 1 && c.payloadBytes <= maxPayloadLengthBytes && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
-    && c.keyBytes + declarationBytes + streamLengthBytes <= c.batchBytes
+    && declarationBytes c <= c.batchBytes
     && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
     && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
@@ -263,6 +273,8 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   dataBytes =;
   streamLengthBytes =;
   handshakeBytes =;
+  declarationFixedBytes =;
+  declarationLengthBytes =;
   declarationBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
