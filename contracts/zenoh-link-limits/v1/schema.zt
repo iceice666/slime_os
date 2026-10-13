@@ -66,6 +66,13 @@ streamLengthBytes :: Int = 2;
 -- sequence number and a 64-byte cookie is 76.
 handshakeBytes :: Int = 87;
 
+-- A link sends a key declaration whole, in one FRAME, and does not fragment it. The longest
+-- declaration the host encoder writes is an UNDECLARE_SUBSCRIBER: 13 bytes around the key (header,
+-- a four-byte id, the extension, the length, the scope and the mapping), and the FRAME before it
+-- adds a header byte and a sequence number of up to five. So a key plus these 19 bytes, with the
+-- stream length, must fit the batch, or the subscription could not be established.
+declarationBytes :: Int = 19;
+
 -- Source: the key-expression alias id and the scope every reference to it carries are 16 bits
 -- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
 aliasIds :: Int = 65535;
@@ -177,6 +184,7 @@ commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
     && c.batchBytes >= handshakeBytes + streamLengthBytes && c.batchBytes <= dataBytes
     && c.payloadBytes >= 1 && c.payloadBytes <= maxPayloadLengthBytes && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
+    && c.keyBytes + declarationBytes + streamLengthBytes <= c.batchBytes
     && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
     && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
@@ -255,6 +263,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   dataBytes =;
   streamLengthBytes =;
   handshakeBytes =;
+  declarationBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
   maxKeyLengthBytes =;

@@ -77,6 +77,8 @@ OK_SCENARIOS = (
     "large-delivers-1024-whole",
     "four-keys-and-subscribers",
     "subscriber-ids-use-all-32-bits",
+    "reassemble-short-key",
+    "reassemble-high-aliases",
 )
 REFUSED_SCENARIOS = (
     ("fixed-refuses-fragment", "unsupported-message"),
@@ -150,6 +152,14 @@ REFUSED_SCENARIOS = (
     # as the whole-frame decoder refuses it, not delivered as if it were global.
     ("fragmented-put-full-key-nonzero-scope", "invalid-keyexpr"),
     ("fragmented-put-empty-key", "invalid-keyexpr"),
+    # Every invalid key form the whole-frame `key_expression` refuses is refused after reassembly, a
+    # trailing slash, `?` and `#` as invalid-keyexpr and `$` as a wildcard, and a message that ends
+    # inside the bytes the key length declares is truncated.
+    ("fragmented-put-key-trailing-slash", "invalid-keyexpr"),
+    ("fragmented-put-key-question-mark", "invalid-keyexpr"),
+    ("fragmented-put-key-hash", "invalid-keyexpr"),
+    ("fragmented-put-key-dollar", "wildcard-keyexpr"),
+    ("fragmented-put-key-truncated", "truncated"),
     # A PUSH whose body is not a Put is unsupported, one that ends before its body is truncated, and a
     # message that ends in the middle of any variable-length field of the reconstructed Put is
     # truncated, not defaulted, not malformed and not an overflow.
@@ -246,6 +256,20 @@ DEADLINE_FIRST = 7_000_000
 SUBSCRIBER_IDS = (0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
 
 
+# `keyBytes` is a maximum, so a valid key shorter than it reassembles, and an alias id is 16 bits, so
+# an id with bit 15 set is declared and a sender-mapped Put resolves through it.
+SHORT_KEY = "a/b"
+HIGH_ALIASES = (0x8000, 0xFFFF)
+
+
+def short_key_line() -> str:
+    return f"links shortkey {len(SHORT_KEY)} 5000 {sha(zenoh_fragment.payload_bytes(5000))}"
+
+
+def high_alias_line(alias: int) -> str:
+    return f"links highalias {alias} 5000 {sha(zenoh_fragment.payload_bytes(5000))}"
+
+
 def subscriber_id_line(sub_id: int) -> str:
     declare = zenoh_wire.declare_subscriber(sub_id, key(), True)
     undeclare = zenoh_wire.undeclare_subscriber(sub_id, key(), True)
@@ -322,8 +346,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 177
-PINNED_CONTROLS = 396
+PINNED_CASES = 187
+PINNED_CONTROLS = 420
 
 
 class LinksError(ValueError):
@@ -402,6 +426,10 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
+        if name == "reassemble-short-key":
+            lines.append(short_key_line())
+        if name == "reassemble-high-aliases":
+            lines += [high_alias_line(alias) for alias in HIGH_ALIASES]
         if name == "subscriber-ids-use-all-32-bits":
             lines += [subscriber_id_line(sub_id) for sub_id in SUBSCRIBER_IDS]
         if name == "reassembly-completes-at-the-timeout-edge":
@@ -461,6 +489,8 @@ SHAPES = {
     ("links", "aliased"): 5,
     ("links", "deadline"): 8,
     ("links", "subid"): 7,
+    ("links", "shortkey"): 5,
+    ("links", "highalias"): 5,
     ("links", "reuseafter"): 6,
     ("links", "heapfrag"): 6,
     ("links", "drained"): 5,
@@ -535,6 +565,14 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    shortkey = [" ".join(f) for f in only("shortkey")]
+    if shortkey != [short_key_line()]:
+        raise LinksError(f"a fragmented Put for the valid {len(SHORT_KEY)}-byte key {SHORT_KEY!r} must reassemble: {short_key_line()}, reported {shortkey}")
+
+    highalias = [" ".join(f) for f in only("highalias")]
+    if highalias != [high_alias_line(alias) for alias in HIGH_ALIASES]:
+        raise LinksError(f"aliases {[hex(a) for a in HIGH_ALIASES]} must be declared and resolve a sender-mapped fragmented Put: {[high_alias_line(a) for a in HIGH_ALIASES]}, reported {highalias}")
 
     subid = [" ".join(f) for f in only("subid")]
     if subid != [subscriber_id_line(sub_id) for sub_id in SUBSCRIBER_IDS]:
@@ -612,7 +650,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias)
     return positive, len(refused)
 
 
@@ -724,8 +762,8 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a 1 MiB heap payload with its heap", trio(heap=exact(heap, payloadBytes=1 << 20, heapBytes=heap_needed(dict(heap, payloadBytes=1 << 20)))), True),
         ("a heap payload larger than its heap", trio(heap=exact(heap, payloadBytes=1 << 20)), False),
         ("a heap batch that cannot hold a fragment's framing", trio(heap=exact(heap, batchBytes=8)), False),
-        ("a heap batch one byte under the largest handshake message", trio(heap=exact(heap, batchBytes=88)), False),
-        ("a heap batch that holds the largest handshake message exactly", trio(heap=exact(heap, batchBytes=89)), True),
+        ("a heap batch one byte under the largest handshake message", trio(heap=exact(heap, batchBytes=88, keyBytes=1, heapBytes=heap_needed(dict(heap, keyBytes=1)))), False),
+        ("a heap batch that holds the largest handshake message exactly", trio(heap=exact(heap, batchBytes=89, keyBytes=1, heapBytes=heap_needed(dict(heap, keyBytes=1)))), True),
         ("a fixed batch one byte under the largest handshake message", trio(large=exact(large, batchBytes=88, payloadBytes=1, keyBytes=1)), False),
         ("a fixed batch that holds the largest handshake message exactly", trio(large=exact(large, batchBytes=89, payloadBytes=1, keyBytes=1)), True),
         ("an attachment of 33 bytes, the wire size", trio(large=exact(large, attachmentBytes=33)), True),
@@ -733,7 +771,11 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("an attachment of 34 bytes, one byte over", trio(large=exact(large, attachmentBytes=34)), False),
         ("an attachment of 1 byte", trio(large=exact(large, attachmentBytes=1)), False),
         ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=heap_needed(dict(heap, attachmentBytes=1)))), False),
-        ("a 65535-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65535, heapBytes=heap_needed(dict(heap, keyBytes=65535)))), True),
+        ("a 65535-byte key, more than any batch carries a declaration for", trio(heap=exact(heap, keyBytes=65535, heapBytes=heap_needed(dict(heap, keyBytes=65535)))), False),
+        ("a key that fits a declaration exactly in the largest batch", trio(heap=exact(heap, batchBytes=4096, keyBytes=4075, heapBytes=heap_needed(dict(heap, keyBytes=4075)))), True),
+        ("a key one byte over what a declaration fits in the largest batch", trio(heap=exact(heap, batchBytes=4096, keyBytes=4076, heapBytes=heap_needed(dict(heap, keyBytes=4076)))), False),
+        ("a key that fits a declaration exactly in a batch of 2048", trio(heap=exact(heap, keyBytes=2027, heapBytes=heap_needed(dict(heap, keyBytes=2027)))), True),
+        ("a key one byte over what a declaration fits in a batch of 2048", trio(heap=exact(heap, keyBytes=2028, heapBytes=heap_needed(dict(heap, keyBytes=2028)))), False),
         ("a 65536-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65536, heapBytes=heap_needed(dict(heap, keyBytes=65536)))), False),
         ("a payload of 4294967295 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967295, heapBytes=heap_needed(dict(heap, payloadBytes=4294967295)))), True),
         ("a payload of 4294967296 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967296, heapBytes=heap_needed(dict(heap, payloadBytes=4294967296)))), False),
@@ -946,6 +988,27 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fragmented-put-attachment-length-unterminated refused with the wrong class", swap("links refused fragmented-put-attachment-length-unterminated ", "links refused fragmented-put-attachment-length-unterminated over-bound")),
         ("fragmented-put-payload-length-unterminated admitted instead of refused", drop("links refused fragmented-put-payload-length-unterminated ")),
         ("fragmented-put-payload-length-unterminated refused with the wrong class", swap("links refused fragmented-put-payload-length-unterminated ", "links refused fragmented-put-payload-length-unterminated over-bound")),
+        ("fragmented-put-key-trailing-slash admitted instead of refused", drop("links refused fragmented-put-key-trailing-slash ")),
+        ("fragmented-put-key-trailing-slash refused with the wrong class", swap("links refused fragmented-put-key-trailing-slash ", "links refused fragmented-put-key-trailing-slash over-bound")),
+        ("fragmented-put-key-question-mark admitted instead of refused", drop("links refused fragmented-put-key-question-mark ")),
+        ("fragmented-put-key-question-mark refused with the wrong class", swap("links refused fragmented-put-key-question-mark ", "links refused fragmented-put-key-question-mark over-bound")),
+        ("fragmented-put-key-hash admitted instead of refused", drop("links refused fragmented-put-key-hash ")),
+        ("fragmented-put-key-hash refused with the wrong class", swap("links refused fragmented-put-key-hash ", "links refused fragmented-put-key-hash over-bound")),
+        ("fragmented-put-key-dollar admitted instead of refused", drop("links refused fragmented-put-key-dollar ")),
+        ("fragmented-put-key-dollar refused with the wrong class", swap("links refused fragmented-put-key-dollar ", "links refused fragmented-put-key-dollar over-bound")),
+        ("fragmented-put-key-truncated admitted instead of refused", drop("links refused fragmented-put-key-truncated ")),
+        ("fragmented-put-key-truncated refused with the wrong class", swap("links refused fragmented-put-key-truncated ", "links refused fragmented-put-key-truncated over-bound")),
+        ("the short-key line dropped", drop("links shortkey ")),
+        ("a short key reported as the 129-byte demo key", swap("links shortkey ", good[first("links shortkey ")].replace(f" {len(SHORT_KEY)} ", " 129 ", 1))),
+        ("a short key that reassembled to another payload", swap("links shortkey ", corrupt_last(good[first("links shortkey ")]))),
+        ("the short-key scenario dropped", [line for line in good if line != "links ok reassemble-short-key"]),
+        ("the high-alias lines dropped", drop("links highalias ")),
+        ("alias 0x8000 dropped", drop("links highalias 32768 ")),
+        ("alias 0xffff dropped", drop("links highalias 65535 ")),
+        ("alias 0x8000 reported as alias 0", swap("links highalias 32768 ", high_alias_line(0))),
+        ("alias 0xffff stored in 15 bits", swap("links highalias 65535 ", high_alias_line(0x7FFF))),
+        ("a high alias that resolved to another payload", swap("links highalias 32768 ", corrupt_last(good[first("links highalias 32768 ")]))),
+        ("the high-alias scenario dropped", [line for line in good if line != "links ok reassemble-high-aliases"]),
         ("the subscriber-id lines dropped", drop("links subid ")),
         ("the top-bit subscriber id dropped", drop("links subid 2147483648 ")),
         ("the largest subscriber id dropped", drop("links subid 4294967295 ")),
@@ -1349,6 +1412,11 @@ def reference_controls() -> int:
         "a Put with an unknown extension": "unsupported-extension",
         "a Put with a chained attachment extension": "unsupported-extension",
         "a full-key Put with an empty key": "empty key",
+        "a full-key Put with a truncated key": "truncated",
+        "a fragmented full key with a trailing slash": "invalid-keyexpr",
+        "a fragmented full key with a question mark": "invalid-keyexpr",
+        "a fragmented full key with a hash": "invalid-keyexpr",
+        "a fragmented full key with a $ wildcard": "wildcard-keyexpr",
         "a truncated sequence number": "truncated",
         "a PUSH whose body is a delete": "unsupported-message",
         "a PUSH that ends before its body": "truncated",
@@ -1414,6 +1482,14 @@ def reference_controls() -> int:
     for last in (TIMEOUT_MS - 1, TIMEOUT_MS):
         zenoh_fragment.check_deadline(0, last, TIMEOUT_MS)
         zenoh_fragment.check_deadline(DEADLINE_FIRST, DEADLINE_FIRST + last, TIMEOUT_MS)
+    # A valid key shorter than the maximum and an alias with bit 15 set are read, so none of the key and
+    # alias refusals is a blanket one.
+    short_run = zenoh_fragment.reference_split(zenoh_fragment.full_key_for_exam(5000, SHORT_KEY), 2048, sn)
+    if zenoh_fragment.decode_message(zenoh_fragment.reassemble(short_run, sn, 2048), max_key=129, subscribed=SHORT_KEY)["key"] != SHORT_KEY.encode():
+        raise LinksError("control: a fragmented Put for a short valid key was not read")
+    for high in (0x8000, 0xFFFF):
+        if zenoh_fragment.decode_message(with_scope(zenoh_wire.leb128(high)), alias=high)["scope"] != high:
+            raise LinksError(f"control: alias {high:#x} was not read")
     # The demo key is a valid key expression and the subscriber's own, so these refusals are not blanket.
     if zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1), max_key=129, subscribed=key())["key"] != key().encode():
         raise LinksError("control: the subscriber's own key was not read")

@@ -242,7 +242,7 @@ def decode_message(
         if max_key is not None and length > max_key:
             raise FragmentError("the key is longer than the configuration declares")
         if at + length > len(msg):
-            raise FragmentError("a truncated key")
+            raise FragmentError("truncated: the message ends inside the key")
         key = msg[at : at + length]
         at += length
         text = key_expression(key)
