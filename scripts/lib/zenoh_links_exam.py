@@ -93,6 +93,12 @@ REFUSED_SCENARIOS = (
     ("empty-fragment", "malformed-message"),
     ("fragment-before-open", "unexpected-message"),
     ("fragment-sequence-gap", "fragment-sequence"),
+    # The more flag decides where a message ends, not the payload length: an interior fragment that
+    # says no more follows ends the message early, so what was joined is cut off inside its payload;
+    # a last fragment that still says more follows leaves the run open, and with nothing further it
+    # is refused once the declared timeout has passed, without a sample having been delivered.
+    ("fragment-interior-marked-final", "truncated"),
+    ("fragment-final-marked-more", "reassembly-timeout"),
     # A run is bound to the session: its first fragment must be the next expected sequence number,
     # as a FRAME's must, and the session's expectation advances only when the whole run is accepted.
     ("fragment-stale-first-sequence", "sequence-mismatch"),
@@ -260,8 +266,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 153
-PINNED_CONTROLS = 321
+PINNED_CASES = 155
+PINNED_CONTROLS = 332
 
 
 class LinksError(ValueError):
@@ -578,6 +584,7 @@ def contract_accepts(text: str) -> bool:
 
 # The arithmetic the contract also holds; kept here so a control can sit exactly on a boundary.
 FRAMING, FRAGMENT_FRAMING, STACK_FACTOR, SLOT, NOTICE, NOTICES, SESSION = 32, 8, 8, 16, 40, 2, 640
+STREAM = 2
 
 
 def required_stack(c: dict) -> int:
@@ -627,8 +634,9 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("more keys than the exact stack covers", trio(large=dict(exact(large), maxKeys=8, maxSubscribers=4)), False),
         ("a longer key than the exact stack covers", trio(large=dict(exact(large), keyBytes=200)), False),
         ("demo with one byte too little stack", trio(demo=dict(demo, stackBytes=required_stack(demo) - 1)), False),
-        ("a fixed payload that fits its batch exactly", trio(large=exact(large, payloadBytes=2048 - 129 - 33 - FRAMING)), True),
-        ("a fixed payload one byte over its batch", trio(large=exact(large, payloadBytes=2048 - 129 - 33 - FRAMING + 1)), False),
+        ("a fixed payload that fits its batch less the stream length exactly", trio(large=exact(large, payloadBytes=2048 - STREAM - 129 - 33 - FRAMING)), True),
+        ("a fixed payload one byte over its batch less the stream length", trio(large=exact(large, payloadBytes=2048 - STREAM - 129 - 33 - FRAMING + 1)), False),
+        ("a fixed payload that fills the whole batch, the stream length not reserved", trio(large=exact(large, payloadBytes=2048 - 129 - 33 - FRAMING)), False),
         ("a fixed link with a reassembly timeout", trio(large=dict(large, reassemblyTimeoutMs=1000)), False),
         ("a fixed link with a heap", trio(large=dict(large, heapBytes=1)), False),
         ("a heap link with a timeout of 0", trio(heap=dict(heap, reassemblyTimeoutMs=0)), False),
@@ -809,6 +817,14 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a second fragment sized from the first header at the one-byte step", swap("links widthsplit 127 1 ", good[first("links widthsplit 127 1 ")].replace(f" {len(width_split(127)[1])} ", f" {len(width_split(127)[1]) + 1} ", 1))),
         ("a second fragment sized from the first header at the two-byte step", swap("links widthsplit 16383 1 ", good[first("links widthsplit 16383 1 ")].replace(f" {len(width_split(16383)[1])} ", f" {len(width_split(16383)[1]) + 1} ", 1))),
         ("a split across a width step with another body", swap("links widthsplit 2097151 2 ", corrupt_last(good[first("links widthsplit 2097151 2 ")]))),
+        ("fragment-interior-marked-final admitted instead of refused", drop("links refused fragment-interior-marked-final ")),
+        ("fragment-interior-marked-final refused with the wrong class", swap("links refused fragment-interior-marked-final ", "links refused fragment-interior-marked-final over-bound")),
+        ("fragment-final-marked-more admitted instead of refused", drop("links refused fragment-final-marked-more ")),
+        ("fragment-final-marked-more refused with the wrong class", swap("links refused fragment-final-marked-more ", "links refused fragment-final-marked-more over-bound")),
+        ("an interior fragment marked final taken as a complete message", drop("links refused fragment-interior-marked-final ")),
+        ("a last fragment still saying more taken as complete", drop("links refused fragment-final-marked-more ")),
+        ("an interior fragment marked final refused as reassembly-timeout", swap("links refused fragment-interior-marked-final ", "links refused fragment-interior-marked-final reassembly-timeout")),
+        ("a last fragment still saying more refused as truncated", swap("links refused fragment-final-marked-more ", "links refused fragment-final-marked-more truncated")),
         ("a dropped aliased-Put line", drop("links aliased ")),
         ("an aliased Put reported receiver-mapped", swap("links aliased ", good[first("links aliased ")].replace(" 5d ", " 1d ", 1))),
         ("an aliased Put of another size", swap("links aliased ", good[first("links aliased ")].replace(" 5000 ", " 4999 ", 1))),
@@ -941,6 +957,12 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def clear_more(body: bytes) -> bytes:
+        return bytes([body[0] & ~zenoh_fragment.FLAG_M]) + body[1:]
+
+    def set_more(body: bytes) -> bytes:
+        return bytes([body[0] | zenoh_fragment.FLAG_M]) + body[1:]
+
     def attachment_length_65536() -> bytes:
         whole = bytearray(zenoh_fragment.full_key_for_exam(5))
         at = whole.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])) + 2
@@ -1042,7 +1064,9 @@ def reference_controls() -> int:
         ("a gap in the sequence numbers", lambda: zenoh_fragment.reassemble([bodies[0], bodies[2]])),
         ("fragments out of order", lambda: zenoh_fragment.reassemble([bodies[1], bodies[0], bodies[2]])),
         ("a run that never ends", lambda: zenoh_fragment.reassemble(bodies[:2])),
-        ("a final fragment followed by another", lambda: zenoh_fragment.reassemble([bodies[2], bodies[2]])),
+        ("a final fragment followed by another", lambda: zenoh_fragment.reassemble([clear_more(bodies[0]), *bodies[1:]])),
+        ("a last fragment that still says more follows", lambda: zenoh_fragment.reassemble([*bodies[:2], set_more(bodies[2])])),
+        ("a repeated final fragment", lambda: zenoh_fragment.reassemble([bodies[2], bodies[2]])),
         ("no fragments", lambda: zenoh_fragment.reassemble([])),
         ("an unreliable fragment", lambda: zenoh_fragment.decode_fragment(bytes([bodies[0][0] & ~zenoh_fragment.FLAG_R]) + bodies[0][1:])),
         ("a fragment with extensions", lambda: zenoh_fragment.decode_fragment(bytes([bodies[0][0] | zenoh_fragment.FLAG_Z]) + bodies[0][1:])),
@@ -1132,6 +1156,10 @@ def reference_controls() -> int:
         "a canonical payload length of 2147483648 against 16384": "longer than the configuration declares",
         "a message cut off inside the attachment": "truncated",
         "a run that emits 4294967296 instead of wrapping": "over 32 bits",
+        "a run that never ends": "still says more",
+        "a final fragment followed by another": "marked final is followed",
+        "a last fragment that still says more follows": "still says more",
+        "a repeated final fragment": "not consecutive",
         "a run sized from its first fragment's header across a width step": "announced batch",
         "two messages joined in one run": "trailing-bytes",
         "a last fragment one millisecond past the timeout": "reassembly-timeout",

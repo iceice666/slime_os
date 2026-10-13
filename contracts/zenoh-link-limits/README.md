@@ -18,7 +18,7 @@ memory it also declares. The limits it keeps each have a source:
   payload at most 4294967295 bytes, because its length is a 32-bit field;
 - the stack must cover the link's arrays, its key and subscriber slots and its queued sample notices.
   That is arithmetic from the code's own arrays, not a measured high-water mark;
-- in `fixed` mode the whole message (payload, key, attachment and framing) must fit one batch and
+- in `fixed` mode the whole message (payload, key, attachment and framing) must fit one batch less its two-byte stream length and
   there is no reassembly timeout or heap; in `heap` mode the heap must hold every queued sample notice, two per outstanding sample, and the message being reassembled, the
   timeout is positive, and the batch must be larger than a fragment's own framing.
 
@@ -27,6 +27,6 @@ The names `demo`, `large` and `heap` are the three configurations the exam pins;
 accepts any set of one or more distinctly named configurations that satisfy the rules.
 
 The decision is [`docs/decisions/zenoh-link-limits.md`](../../docs/decisions/zenoh-link-limits.md); the
-scope is `01a13633-fbb1-7a29-99de-a55b8e135c1f`, judged by
+scope is `01a13649-dd84-72a6-9055-e5376e2318a5`, judged by
 `scripts/check/check-zenoh-profile0.py --slice links`. The Rust side is the implementation's, not this
 planning contract.

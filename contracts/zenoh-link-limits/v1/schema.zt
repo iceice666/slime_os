@@ -55,6 +55,10 @@ modeHeap :: Text = "heap";
 -- `dataBytes` is exactly one operation.
 dataBytes :: Int = 4096;
 
+-- The length every stream operation carries ahead of its body: a message in a fixed link must fit
+-- the batch less this.
+streamLengthBytes :: Int = 2;
+
 -- Source: the key-expression alias id and the scope every reference to it carries are 16 bits
 -- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
 aliasIds :: Int = 65535;
@@ -174,7 +178,7 @@ commonOk :: Config -> Bool
 
 -- No heap: the message is one batch, so there is nothing to reassemble.
 fixedOk :: Config -> Bool
-  = c => messageBytes c <= c.batchBytes
+  = c => messageBytes c <= c.batchBytes - streamLengthBytes
     && c.reassemblyTimeoutMs == 0 && c.heapBytes == 0;
 
 -- The heap a heap link needs: a sample is handed out as a slice of the buffer it was reassembled
@@ -242,6 +246,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   modeFixed =;
   modeHeap =;
   dataBytes =;
+  streamLengthBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
   maxKeyLengthBytes =;
