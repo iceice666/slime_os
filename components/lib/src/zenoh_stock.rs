@@ -1014,6 +1014,41 @@ fn an_alias_in_the_receiver_mapping_is_not_resolved() {
     );
 }
 
+/// An alias id is the 16-bit scope every reference to it carries. One the references cannot
+/// express is refused when it is declared, so it never takes the only alias slot.
+#[test]
+fn an_alias_id_wider_than_a_reference_is_refused_at_its_declaration() {
+    let declare = captured("connects-04-declare-keyexpr-declare-subscriber");
+    // After the outer QoS extension the batch holds the DeclareKeyExpr header `20`, id `01`,
+    // scope `00`, the key length `81 01` and the 129 key bytes, then the subscriber declaration.
+    let head = [0x20, 0x01, 0x00, 0x81, 0x01];
+    let at = declare
+        .windows(head.len())
+        .position(|window| window == head)
+        .expect("the captured declaration");
+    let end = at + head.len() + 129;
+    // The declaration alone, with the id the capture used replaced by `id`.
+    let alone = |id: &[u8]| {
+        let mut batch = declare[..at + 1].to_vec();
+        batch.extend_from_slice(id);
+        batch.extend_from_slice(&declare[at + 2..end]);
+        batch
+    };
+    // 65535 is the largest id a reference can name and is accepted.
+    let (mut ours, now) = opened_listener();
+    feed_next(&mut ours, &alone(&[0xff, 0xff, 0x03]), now).expect("alias 65535");
+    // 65536 is not: it is refused at its declaration and leaves the one alias slot free.
+    let (mut ours, now) = opened_listener();
+    let refused =
+        feed_next(&mut ours, &alone(&[0x80, 0x80, 0x04]), now).expect_err("an alias id of 65536");
+    assert_eq!(
+        refused,
+        SessionError::Decode(crate::zenoh_profile0::Refusal::Leb128Overflow)
+    );
+    feed_next(&mut ours, &declare, now).expect("the slot was not consumed");
+    assert_eq!(ours.peer_subscriber_key(), Some(KEY));
+}
+
 /// When the exam hands over its validated record, the generated constants are exactly that record:
 /// the same cookie, the same groups, the same names and bytes in the same order. A constant that
 /// drifted from the checker's captured bytes fails here instead of replaying stale bytes. Without
