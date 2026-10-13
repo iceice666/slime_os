@@ -82,6 +82,9 @@ OK_SCENARIOS = (
     "edge-batch-89",
     "edge-batch-4096",
     "edge-key-2028",
+    "edge-payload-1mib",
+    "nine-keys-subscribers-and-samples",
+    "boundary-at-sequence-width-changes",
 )
 REFUSED_SCENARIOS = (
     ("fixed-refuses-fragment", "unsupported-message"),
@@ -225,6 +228,10 @@ REFUSED_SCENARIOS = (
     ("storage-refused", "out-of-memory"),
     ("fifth-subscriber", "subscriber-limit"),
     ("fifth-alias", "over-bound"),
+    # In a configuration of nine keys and nine subscribers the limit is nine, not four: the ninth is
+    # taken, so a table sized for four cannot pass, and the tenth is refused as the fifth is.
+    ("tenth-subscriber-in-nine", "subscriber-limit"),
+    ("tenth-alias-in-nine", "over-bound"),
 )
 # 3 configurations, 13 scenarios, 15 stock fragments, 3 reassemblies, 3 fragments of our own Put and
 # 2 edge lines make 39 positive cases; 12 refusals make 51. The control floor is the number the
@@ -268,6 +275,8 @@ EDGES = (
     ("edge-batch-89", 89, "k" * 70, 300),
     ("edge-batch-4096", 4096, "k" * 4076, 16384),
     ("edge-key-2028", 2048, "k" * 2028, 5000),
+    # A payload far above the 16384 of the heap configuration, sent and reassembled whole.
+    ("edge-payload-1mib", 4096, "k" * 129, 1 << 20),
 )
 
 
@@ -307,6 +316,57 @@ def edge_lines() -> tuple[str, ...]:
             f"links edge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
             f"{len(bodies)} {digest} {sha(zenoh_fragment.payload_bytes(payload))}"
         )
+    return tuple(out)
+
+
+# A configuration with more than four of each resource, filled to its limits: nine keys and nine
+# subscribers declared, and the notice queue of nine outstanding samples (two notices each) held, each
+# a distinct payload, with one more message in progress. A link whose tables or queue are sized for
+# four cannot build it.
+COUNTS = (9, 9, 9, 1024)
+
+
+def counts_config() -> dict:
+    keys, subscribers, samples, payload = COUNTS
+    c = dict(
+        name="counts", mode="heap", batchBytes=2048, payloadBytes=payload, keyBytes=129,
+        attachmentBytes=33, maxKeys=keys, maxSubscribers=subscribers, outstandingSamples=samples,
+        stackBytes=0, reassemblyTimeoutMs=5000, heapBytes=0,
+    )
+    c["stackBytes"] = required_stack(c)
+    c["heapBytes"] = heap_needed(c)
+    return c
+
+
+@lru_cache(maxsize=None)
+def counts_lines() -> tuple[str, ...]:
+    demo, large = pinned_configs()[:2]
+    c = counts_config()
+    if not contract_accepts(limits_record([demo, large, c])):
+        raise LinksError("the limits contract refuses the nine-slot configuration")
+    held = NOTICES * c["outstandingSamples"]
+    digest = sha("\n".join(sha(distinct_payload(c["payloadBytes"], i)) for i in range(held + 1)).encode())
+    return (
+        f"links counts {c['maxKeys']} {c['maxSubscribers']} {c['outstandingSamples']} {held} {c['payloadBytes']} {c['heapBytes']} {digest}",
+    )
+
+
+# Sequence numbers either side of each step in the width of the encoded number. The largest payload
+# that travels whole is one byte smaller at the larger width, so a link that sizes the frame from a
+# cached width puts a whole batch one byte over the announced one.
+BOUNDARY_SNS = (127, 128, 16383, 16384)
+
+
+@lru_cache(maxsize=None)
+def boundarysn_lines() -> tuple[str, ...]:
+    out = []
+    for sn in BOUNDARY_SNS:
+        edge = whole_edge(EDGE_BATCH, sn)
+        out.append(f"links boundarysn {sn} {edge} whole 1")
+        out.append(f"links boundarysn {sn} {edge + 1} fragmented 2")
+    for narrow, wide in ((127, 128), (16383, 16384)):
+        if whole_edge(EDGE_BATCH, narrow) != whole_edge(EDGE_BATCH, wide) + 1:
+            raise LinksError(f"the whole-message edge does not move by a byte between sequence numbers {narrow} and {wide}")
     return tuple(out)
 
 
@@ -400,8 +460,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 193
-PINNED_CONTROLS = 438
+PINNED_CASES = 208
+PINNED_CONTROLS = 461
 
 
 class LinksError(ValueError):
@@ -482,6 +542,10 @@ def good_lines() -> list[str]:
             ]
         if name.startswith("edge-"):
             lines.append(next(line for line in edge_lines() if line.split()[2] == name))
+        if name == "nine-keys-subscribers-and-samples":
+            lines += list(counts_lines())
+        if name == "boundary-at-sequence-width-changes":
+            lines += list(boundarysn_lines())
         if name == "reassemble-short-key":
             lines.append(short_key_line())
         if name == "reassemble-high-aliases":
@@ -547,6 +611,8 @@ SHAPES = {
     ("links", "subid"): 7,
     ("links", "shortkey"): 5,
     ("links", "edge"): 12,
+    ("links", "counts"): 9,
+    ("links", "boundarysn"): 6,
     ("links", "highalias"): 5,
     ("links", "reuseafter"): 6,
     ("links", "heapfrag"): 6,
@@ -626,6 +692,14 @@ def judge(lines: list[str]) -> tuple[int, int]:
     edges = [" ".join(f) for f in only("edge")]
     if edges != list(edge_lines()):
         raise LinksError(f"the admitted edges must open, declare, send and reassemble through the link: {list(edge_lines())}, reported {edges}")
+
+    counts = [" ".join(f) for f in only("counts")]
+    if counts != list(counts_lines()):
+        raise LinksError(f"a configuration of nine keys, subscribers and samples must be built and filled: {list(counts_lines())}, reported {counts}")
+
+    boundarysn = [" ".join(f) for f in only("boundarysn")]
+    if boundarysn != list(boundarysn_lines()):
+        raise LinksError(f"the edge between a whole and a fragmented message must hold at each sequence-number width: {list(boundarysn_lines())}, reported {boundarysn}")
 
     shortkey = [" ".join(f) for f in only("shortkey")]
     if shortkey != [short_key_line()]:
@@ -711,7 +785,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn)
     return positive, len(refused)
 
 
@@ -896,6 +970,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out[a], out[b] = out[b], out[a]
         return out
 
+    def counts_swap(index: int, value: str) -> list[str]:
+        at = first("links counts ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
     def edge_swap(name: str, index: int, value: str) -> list[str]:
         at = first(f"links edge {name} ")
         fields = good[at].split()
@@ -1071,6 +1151,29 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fragmented-put-key-dollar refused with the wrong class", swap("links refused fragmented-put-key-dollar ", "links refused fragmented-put-key-dollar over-bound")),
         ("fragmented-put-key-truncated admitted instead of refused", drop("links refused fragmented-put-key-truncated ")),
         ("fragmented-put-key-truncated refused with the wrong class", swap("links refused fragmented-put-key-truncated ", "links refused fragmented-put-key-truncated over-bound")),
+        ("tenth-subscriber-in-nine admitted instead of refused", drop("links refused tenth-subscriber-in-nine ")),
+        ("tenth-subscriber-in-nine refused with the wrong class", swap("links refused tenth-subscriber-in-nine ", "links refused tenth-subscriber-in-nine over-bound")),
+        ("tenth-alias-in-nine admitted instead of refused", drop("links refused tenth-alias-in-nine ")),
+        ("tenth-alias-in-nine refused with the wrong class", swap("links refused tenth-alias-in-nine ", "links refused tenth-alias-in-nine unsupported-message")),
+        ("the nine-slot line dropped", drop("links counts ")),
+        ("a link of four keys reported for nine", counts_swap(2, "4")),
+        ("a link of four subscribers reported for nine", counts_swap(3, "4")),
+        ("a link of four samples reported for nine", counts_swap(4, "4")),
+        ("a notice queue of eight reported for eighteen", counts_swap(5, "8")),
+        ("a nine-slot queue of small messages", counts_swap(6, "512")),
+        ("a nine-slot queue whose payloads were overwritten", counts_swap(8, sha(b"overwritten"))),
+        ("the nine-slot scenario dropped", [line for line in good if line != "links ok nine-keys-subscribers-and-samples"]),
+        ("the sequence-width boundary lines dropped", drop("links boundarysn ")),
+        ("the boundary at 127 dropped", drop("links boundarysn 127 ")),
+        ("the boundary at 16383 dropped", drop("links boundarysn 16383 ")),
+        ("a cached one-byte width at 128", swap("links boundarysn 128 " + str(whole_edge(EDGE_BATCH, 128)) + " whole", f"links boundarysn 128 {whole_edge(EDGE_BATCH, 127)} whole 1")),
+        ("a cached two-byte width at 16384", swap("links boundarysn 16384 " + str(whole_edge(EDGE_BATCH, 16384)) + " whole", f"links boundarysn 16384 {whole_edge(EDGE_BATCH, 16383)} whole 1")),
+        ("a message one byte over the edge reported whole at 128", swap("links boundarysn 128 " + str(whole_edge(EDGE_BATCH, 128) + 1) + " fragmented", f"links boundarysn 128 {whole_edge(EDGE_BATCH, 128) + 1} whole 1")),
+        ("the sequence-width scenario dropped", [line for line in good if line != "links ok boundary-at-sequence-width-changes"]),
+        ("the 1 MiB edge dropped", drop("links edge edge-payload-1mib ")),
+        ("the 1 MiB payload reported as 16384", edge_swap("edge-payload-1mib", 5, "16384")),
+        ("a 1 MiB send with another number of fragments", edge_swap("edge-payload-1mib", 9, str(int(good[first("links edge edge-payload-1mib ")].split()[9]) - 1))),
+        ("a 1 MiB payload that reassembled differently", edge_swap("edge-payload-1mib", 11, sha(b"other"))),
         ("the batch-edge lines dropped", drop("links edge ")),
         ("the smallest-batch edge dropped", drop("links edge edge-batch-89 ")),
         ("the largest-batch edge dropped", drop("links edge edge-batch-4096 ")),
