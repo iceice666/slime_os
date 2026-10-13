@@ -337,7 +337,7 @@ fn lease_expiry_closes() {
     let mut out = [0u8; MAX_BATCH_BYTES];
     assert_eq!(b.lease_deadline(), Some(3 + LEASE_MS));
 
-    let quiet = b.tick(3 + LEASE_MS, &mut out).expect("tick");
+    let quiet = b.tick_lease(3 + LEASE_MS, &mut out).expect("tick");
     assert_eq!(quiet.sent, 0);
     assert!(quiet.events.is_empty());
     assert!(b.is_open());
@@ -349,10 +349,15 @@ fn lease_expiry_closes() {
     let (_, events) = expect_recv(&mut b, &frame, 1500);
     assert_eq!(events, [Ev::Declared(1)]);
     assert_eq!(b.lease_deadline(), Some(1500 + LEASE_MS));
-    assert!(b.tick(3500, &mut out).expect("tick").events.is_empty());
+    assert!(
+        b.tick_lease(3500, &mut out)
+            .expect("tick")
+            .events
+            .is_empty()
+    );
     assert!(b.is_open());
 
-    let outcome = b.tick(3501, &mut out).expect("tick");
+    let outcome = b.tick_lease(3501, &mut out).expect("tick");
     let (close, events) = owned(&outcome, &out);
     assert_eq!(events, [Ev::Closed(p::CLOSE_EXPIRED as u8)]);
     assert_eq!(b.state(), State::Closed);
@@ -367,7 +372,12 @@ fn lease_expiry_closes() {
     let (_, events) = expect_recv(&mut a, &close, 3502);
     assert_eq!(events, [Ev::Closed(p::CLOSE_EXPIRED as u8)]);
     assert_eq!(a.state(), State::Closed);
-    assert!(b.tick(9999, &mut out).expect("tick").events.is_empty());
+    assert!(
+        b.tick_lease(9999, &mut out)
+            .expect("tick")
+            .events
+            .is_empty()
+    );
     println!("[zenoh-exam] session ok lease-expiry-closes");
 }
 
@@ -566,22 +576,29 @@ fn frames_the_session_sends_use_the_sender_key_mapping() {
                 Network::DeclareSubscriber { mapping, .. }
                 | Network::UndeclareSubscriber { mapping, .. }
                 | Network::PushPut { mapping, .. } => mapping,
+                other => panic!("{name} carried {other:?}, which this side never sends"),
             };
             assert_eq!(mapping, Mapping::Sender, "{name} used the receiver mapping");
         }
     }
 }
 
-/// Profile 0 admits no KEEP_ALIVE (the decoder refuses message id 4), so the lease is renewed only
-/// by traffic. A link that stays quiet for longer than the peer's lease is closed by `tick`, and a
-/// received batch inside the lease moves the deadline.
+/// The lease is renewed by anything received, a KEEP_ALIVE included. A session that stays silent
+/// past the peer's lease is closed by the lease check, and a received batch inside the lease moves
+/// the deadline. The lease check alone is used here: a full `tick` would keep the session alive by
+/// sending, which is the point of a keep-alive and is asserted elsewhere.
 #[test]
 fn a_quiet_link_closes_at_the_lease_and_traffic_renews_it() {
     let (mut a, mut b) = handshake();
     let mut out = [0u8; MAX_BATCH_BYTES];
     let deadline = b.lease_deadline().expect("open session has a deadline");
     // Silence up to the deadline keeps the session open.
-    assert!(b.tick(deadline, &mut out).expect("tick").events.is_empty());
+    assert!(
+        b.tick_lease(deadline, &mut out)
+            .expect("tick")
+            .events
+            .is_empty()
+    );
     assert!(b.is_open());
     // Traffic inside the lease moves the deadline by the peer's lease.
     let mut sent = [0u8; MAX_BATCH_BYTES];
@@ -593,7 +610,7 @@ fn a_quiet_link_closes_at_the_lease_and_traffic_renews_it() {
     assert_eq!(b.lease_deadline(), Some(deadline - 1 + LEASE_MS));
     // Silence past the renewed deadline closes it, with the expiry reason.
     let closed = b
-        .tick(deadline + LEASE_MS, &mut out)
+        .tick_lease(deadline + LEASE_MS, &mut out)
         .expect("tick past the renewed deadline");
     assert_eq!(b.state(), State::Closed);
     assert_eq!(closed.events.len(), 1);
@@ -604,6 +621,106 @@ fn a_quiet_link_closes_at_the_lease_and_traffic_renews_it() {
             session: true
         })
     );
-    // The decoder refuses KEEP_ALIVE, so there is no message that could renew a quiet link.
-    assert_eq!(decode_batch(&[0x04]), Err(Refusal::UnsupportedMessage));
+    // A KEEP_ALIVE is what renews a link with nothing else to say.
+    assert_eq!(decode_batch(&[0x04]), Ok(Message::KeepAlive));
+}
+
+/// A session whose own lease is under four milliseconds must not make the cadence zero: after a
+/// KEEP_ALIVE the next one is due a millisecond later, not in the same instant.
+#[test]
+fn a_tiny_own_lease_still_spaces_keep_alives() {
+    let (mut a, _b) = handshake_with_leases(3, LEASE_MS);
+    let mut out = [0u8; MAX_BATCH_BYTES];
+    assert_eq!(a.peer_lease_ms(), LEASE_MS);
+    let first = a.tick(5, &mut out).expect("tick");
+    assert_eq!(decode_batch(first.batch(&out)), Ok(Message::KeepAlive));
+    assert!(
+        a.keep_alive_due() > 5,
+        "due {} after a send at 5",
+        a.keep_alive_due()
+    );
+    let second = a.tick(5, &mut out).expect("tick");
+    assert!(
+        second.batch(&out).is_empty(),
+        "a second KEEP_ALIVE in the same millisecond"
+    );
+    let third = a.tick(6, &mut out).expect("tick");
+    assert_eq!(decode_batch(third.batch(&out)), Ok(Message::KeepAlive));
+}
+
+/// The peer expires a link on the lease announced to it, so the cadence follows the lease this
+/// side announced, whatever the peer announced. A stock peer announces 10 s by default and was
+/// observed closing a link that had heard nothing for the 2 s lease announced to it.
+#[test]
+fn keep_alives_follow_the_lease_this_side_announced() {
+    let (mut a, b) = handshake_with_leases(2_000, 10_000);
+    assert_eq!(a.peer_lease_ms(), 10_000);
+    assert_eq!(b.peer_lease_ms(), 2_000);
+    let mut out = [0u8; MAX_BATCH_BYTES];
+    // `a` last sent at 2, with its OPEN_SYN: due a quarter of its own 2000 ms after that, not of
+    // the peer's 10000 ms.
+    assert_eq!(a.keep_alive_due(), 2 + 500);
+    assert_eq!(a.tick(2 + 499, &mut out).expect("tick").sent, 0);
+    let due = a.tick(2 + 500, &mut out).expect("tick");
+    assert_eq!(decode_batch(due.batch(&out)), Ok(Message::KeepAlive));
+    assert_eq!(a.keep_alive_due(), 2 + 500 + 500);
+    // The silence it tolerates from the peer is still the peer's lease.
+    let heard = a.lease_deadline().expect("open");
+    assert_eq!(heard, 4 + 10_000);
+    // `b` announced 10 s, so a quarter of that is its cadence, from its OPEN_ACK at 3. It would
+    // expire the link on 2 s of silence from `a`, so only the due time is read here.
+    assert_eq!(b.keep_alive_due(), 3 + 2_500);
+    assert_eq!(b.lease_deadline(), Some(3 + 2_000));
+}
+
+/// A connector announcing `connector_ms` and a listener announcing `listener_ms`, open.
+fn handshake_with_leases(connector_ms: u64, listener_ms: u64) -> (Session, Session) {
+    let cookie = cookie();
+    let mut a = Session::new(
+        Role::Connector,
+        &Config {
+            zid: &ZID_CONNECTOR,
+            lease_ms: connector_ms,
+            initial_sn: CONNECTOR_SN,
+            cookie: &[],
+        },
+    )
+    .expect("connector");
+    let mut b = Session::new(
+        Role::Listener,
+        &Config {
+            zid: &ZID_LISTENER,
+            lease_ms: listener_ms,
+            initial_sn: LISTENER_SN,
+            cookie: &cookie,
+        },
+    )
+    .expect("listener");
+    let mut out = [0u8; MAX_BATCH_BYTES];
+    let outcome = a.connect(0, &mut out).expect("connect");
+    let (init_syn, _) = owned(&outcome, &out);
+    let (init_ack, _) = expect_recv(&mut b, &init_syn, 1);
+    let (open_syn, _) = expect_recv(&mut a, &init_ack, 2);
+    let (open_ack, _) = expect_recv(&mut b, &open_syn, 3);
+    expect_recv(&mut a, &open_ack, 4);
+    assert!(a.is_open() && b.is_open());
+    (a, b)
+}
+
+/// A tick refused for want of output storage leaves the session as it was, the clock included: a
+/// later send must not be stamped from a call that did not succeed.
+#[test]
+fn a_refused_tick_does_not_advance_the_clock() {
+    let (mut a, _b) = handshake_with_leases(2_000, 2_000);
+    let before = a.now_ms;
+    let due = a.keep_alive_due();
+    assert!(a.tick(due, &mut []).is_err(), "no room for the KEEP_ALIVE");
+    assert_eq!(a.now_ms, before, "keep-alive refused");
+    assert_eq!(a.keep_alive_due(), due);
+    let expired = a.lease_deadline().expect("open") + 1;
+    assert!(a.tick(expired, &mut []).is_err(), "no room for the CLOSE");
+    assert_eq!(a.now_ms, before, "expiry refused");
+    assert!(a.tick_lease(expired, &mut []).is_err());
+    assert_eq!(a.now_ms, before, "expiry refused through tick_lease");
+    assert!(a.is_open());
 }

@@ -31,17 +31,23 @@ Profile :: type {
   idInit : Int;
   idOpen : Int;
   idClose : Int;
+  idKeepAlive : Int;
   idFrame : Int;
   idPush : Int;
   idDeclare : Int;
+  idOam : Int;
+  idDeclareKeyExpr : Int;
   idDeclareSubscriber : Int;
   idUndeclareSubscriber : Int;
+  idDeclareFinal : Int;
   idPut : Int;
   flagBit5 : Int;
   flagBit6 : Int;
   flagExtensions : Int;
   extWireExpr : Int;
   extAttachment : Int;
+  extQosUnit : Int;
+  extQosNetwork : Int;
   closeGeneric : Int;
   closeUnsupported : Int;
   closeInvalid : Int;
@@ -109,6 +115,13 @@ valid :: Profile -> Bool
       && p.idOpen != p.idClose
       && p.idClose != p.idFrame
       && p.idPush != p.idDeclare
+      && p.idKeepAlive != p.idClose
+      && p.idOam != p.idPush
+      && p.idOam != p.idDeclare
+      && p.idDeclareKeyExpr != p.idDeclareSubscriber
+      && p.idDeclareFinal != p.idDeclareSubscriber
+      && p.extQosUnit == 1
+      && p.extQosNetwork == 33
       && p.idDeclareSubscriber != p.idUndeclareSubscriber
       && p.flagBit5 == 32
       && p.flagBit6 == 64
@@ -142,11 +155,15 @@ rustBindings :: Profile -> Text
     w.u32Const "ID_INIT" p.idInit;
     w.u32Const "ID_OPEN" p.idOpen;
     w.u32Const "ID_CLOSE" p.idClose;
+    w.u32Const "ID_KEEP_ALIVE" p.idKeepAlive;
     w.u32Const "ID_FRAME" p.idFrame;
     w.u32Const "ID_PUSH" p.idPush;
     w.u32Const "ID_DECLARE" p.idDeclare;
+    w.u32Const "ID_OAM" p.idOam;
+    w.u32Const "ID_DECLARE_KEYEXPR" p.idDeclareKeyExpr;
     w.u32Const "ID_DECLARE_SUBSCRIBER" p.idDeclareSubscriber;
     w.u32Const "ID_UNDECLARE_SUBSCRIBER" p.idUndeclareSubscriber;
+    w.u32Const "ID_DECLARE_FINAL" p.idDeclareFinal;
     w.u32Const "ID_PUT" p.idPut;
     "\n";
     w.u32Const "FLAG_BIT5" p.flagBit5;
@@ -154,6 +171,8 @@ rustBindings :: Profile -> Text
     w.u32Const "FLAG_EXTENSIONS" p.flagExtensions;
     w.u32Const "EXT_WIRE_EXPR" p.extWireExpr;
     w.u32Const "EXT_ATTACHMENT" p.extAttachment;
+    w.u32Const "EXT_QOS_UNIT" p.extQosUnit;
+    w.u32Const "EXT_QOS_NETWORK" p.extQosNetwork;
     "\n";
     w.u32Const "CLOSE_GENERIC" p.closeGeneric;
     w.u32Const "CLOSE_UNSUPPORTED" p.closeUnsupported;

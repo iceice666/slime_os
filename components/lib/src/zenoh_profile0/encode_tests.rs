@@ -170,6 +170,22 @@ fn network_summary(message: &Network<'_>) -> String {
             hex(attachment.raw),
             hex(payload)
         ),
+        Network::DeclareKeyExpr { id, key } => format!("DECLARE_KEYEXPR:id={id},key={key}"),
+        Network::DeclareSubscriberAlias { id, alias, .. } => {
+            format!("DECLARE_SUBSCRIBER_ALIAS:id={id},alias={alias}")
+        }
+        Network::PushPutAlias {
+            alias,
+            attachment,
+            payload,
+            ..
+        } => format!(
+            "PUSH_PUT_ALIAS:alias={alias},att={},payload={}",
+            hex(attachment.raw),
+            hex(payload)
+        ),
+        Network::Oam => "OAM".into(),
+        Network::DeclareFinal => "DECLARE_FINAL".into(),
     }
 }
 
@@ -202,6 +218,7 @@ fn decoded_summary(batch: &[u8]) -> String {
         Message::Close { reason, session } => {
             format!("CLOSE;reason={reason};session={}", u8::from(session))
         }
+        Message::KeepAlive => "KEEP_ALIVE".into(),
         Message::Frame(frame) => {
             let parts: Vec<String> = frame.messages().map(|m| network_summary(&m)).collect();
             format!("FRAME;sn={};{}", frame.sn, parts.join("|"))

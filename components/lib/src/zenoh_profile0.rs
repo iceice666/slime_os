@@ -1,9 +1,12 @@
 //! Zenoh Profile 0: the bounded wire subset of one static peer link.
 //!
-//! The decoder admits exactly the messages `contracts/rpi5-ros2-demo/v2` lists:
+//! The decoder admits the messages `contracts/rpi5-ros2-demo/v2` lists:
 //! INIT and OPEN handshakes for wire version 0x09 in peer mode, reliable FRAME
 //! batches carrying DECLARE_SUBSCRIBER, UNDECLARE_SUBSCRIBER and PUSH with a Put
-//! body, and CLOSE. Everything else is refused with a class from
+//! body, and CLOSE. A stock eclipse-zenoh 1.0 peer adds, and only for the plain demo topic:
+//! the optional QoS extension where one was seen on the wire, KEEP_ALIVE, an OAM and a
+//! DeclareFinal that are accepted and ignored, and one key-expression alias declared once with
+//! DeclareKeyExpr. Everything else is refused with a class from
 //! `contracts/zenoh-profile/v1`, never tolerated. Every length is checked
 //! against its bound before any byte is taken, nothing allocates, and decoded
 //! values borrow from the input batch.
@@ -24,9 +27,13 @@ use slime_proto::zenoh_profile as p;
 const ID_INIT: u8 = p::ID_INIT as u8;
 const ID_OPEN: u8 = p::ID_OPEN as u8;
 const ID_CLOSE: u8 = p::ID_CLOSE as u8;
+const ID_KEEP_ALIVE: u8 = p::ID_KEEP_ALIVE as u8;
 const ID_FRAME: u8 = p::ID_FRAME as u8;
 const ID_PUSH: u8 = p::ID_PUSH as u8;
 const ID_DECLARE: u8 = p::ID_DECLARE as u8;
+const ID_OAM: u8 = p::ID_OAM as u8;
+const ID_D_KEYEXPR: u8 = p::ID_DECLARE_KEYEXPR as u8;
+const ID_D_FINAL: u8 = p::ID_DECLARE_FINAL as u8;
 const ID_D_SUBSCRIBER: u8 = p::ID_DECLARE_SUBSCRIBER as u8;
 const ID_U_SUBSCRIBER: u8 = p::ID_UNDECLARE_SUBSCRIBER as u8;
 const ID_PUT: u8 = p::ID_PUT as u8;
@@ -36,6 +43,14 @@ const FLAG_Z: u8 = p::FLAG_EXTENSIONS as u8;
 const ID_MASK: u8 = 0x1F;
 const EXT_WIRE_EXPR: u8 = p::EXT_WIRE_EXPR as u8;
 const EXT_ATTACHMENT: u8 = p::EXT_ATTACHMENT as u8;
+const EXT_QOS_UNIT: u8 = p::EXT_QOS_UNIT as u8;
+const EXT_QOS_NETWORK: u8 = p::EXT_QOS_NETWORK as u8;
+/// An OAM as a stock peer sends it: a ZBuf body behind a QoS extension.
+const OAM_HEADER: u8 = FLAG_Z | FLAG_BIT6 | ID_OAM;
+/// The only OAM id seen on the wire, the link-state one.
+const OAM_LINK_STATE: u32 = 1;
+/// The largest value the network QoS extension carries: priority, congestion and express.
+const QOS_NETWORK_MAX: u32 = 0x1F;
 const RESOLUTION_RESERVED: u8 = 0xF0;
 const PACKED_RESERVED: u8 = 0x0C;
 const U_SUBSCRIBER_HEADER: u8 = FLAG_Z | ID_U_SUBSCRIBER;
@@ -126,7 +141,8 @@ pub struct Attachment<'a> {
     pub gid: &'a [u8],
 }
 
-/// One network message inside a FRAME.
+/// One network message inside a FRAME. The alias, OAM and DeclareFinal variants are what a stock
+/// peer adds; the session resolves the first and ignores the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Network<'a> {
     DeclareSubscriber {
@@ -145,6 +161,25 @@ pub enum Network<'a> {
         attachment: Attachment<'a>,
         payload: &'a [u8],
     },
+    /// A numeric alias for a key, declared once; the session resolves messages that name it.
+    DeclareKeyExpr { id: u32, key: &'a str },
+    /// A subscriber declaration whose key is the alias `alias`, with no suffix.
+    DeclareSubscriberAlias {
+        id: u32,
+        mapping: Mapping,
+        alias: u32,
+    },
+    /// A Put whose key is the alias `alias`, with no suffix.
+    PushPutAlias {
+        mapping: Mapping,
+        alias: u32,
+        attachment: Attachment<'a>,
+        payload: &'a [u8],
+    },
+    /// An OAM a stock peer announces itself with; accepted and ignored.
+    Oam,
+    /// The end of a declaration sequence; accepted and ignored.
+    DeclareFinal,
 }
 
 /// A validated reliable FRAME. Its network messages parse without failing.
@@ -211,6 +246,8 @@ pub enum Message<'a> {
         reason: u8,
         session: bool,
     },
+    /// The single byte `0x04`: traffic that renews the lease and carries nothing else.
+    KeepAlive,
     Frame(Frame<'a>),
 }
 
@@ -286,6 +323,29 @@ const fn no_extension(header: u8) -> Result<(), Refusal> {
     }
 }
 
+/// The unit QoS extension on a stock peer's INIT_SYN: optional, id 1, the only extension in its
+/// chain. Any other extension byte, a mandatory QoS and a chain that goes on are all refused.
+fn init_qos_extension(reader: &mut Reader<'_>) -> Result<(), Refusal> {
+    if reader.u8()? == EXT_QOS_UNIT {
+        Ok(())
+    } else {
+        Err(Refusal::UnsupportedExtension)
+    }
+}
+
+/// The QoS extension on an OAM and on the DECLARE that wraps a DeclareKeyExpr or DeclareSubscriber:
+/// optional, id 1, a Z64 value (priority, congestion and express in the low five bits), and the only
+/// extension in its chain.
+fn network_qos_extension(reader: &mut Reader<'_>) -> Result<(), Refusal> {
+    if reader.u8()? != EXT_QOS_NETWORK {
+        return Err(Refusal::UnsupportedExtension);
+    }
+    if reader.leb(p::LEB128_MAX_BITS)? > QOS_NETWORK_MAX {
+        return Err(Refusal::MalformedMessage);
+    }
+    Ok(())
+}
+
 fn cookie<'a>(reader: &mut Reader<'a>) -> Result<&'a [u8], Refusal> {
     let length = reader.leb(p::LEB128_SHORT_BITS)? as usize;
     if length > MAX_COOKIE_BYTES {
@@ -298,7 +358,11 @@ fn cookie<'a>(reader: &mut Reader<'a>) -> Result<&'a [u8], Refusal> {
 }
 
 fn init<'a>(mut reader: Reader<'a>, header: u8) -> Result<Message<'a>, Refusal> {
-    no_extension(header)?;
+    // An extension is refused before anything else is read, as it always was, except the QoS unit
+    // extension a stock peer puts on an INIT_SYN that states its resolution and batch size.
+    if header & FLAG_Z != 0 && (header & FLAG_BIT5 != 0 || header & FLAG_BIT6 == 0) {
+        return Err(Refusal::UnsupportedExtension);
+    }
     if u32::from(reader.u8()?) != p::PROTOCOL_VERSION {
         return Err(Refusal::UnsupportedVersion);
     }
@@ -341,6 +405,9 @@ fn init<'a>(mut reader: Reader<'a>, header: u8) -> Result<Message<'a>, Refusal> 
             cookie,
         })
     } else {
+        if header & FLAG_Z != 0 {
+            init_qos_extension(&mut reader)?;
+        }
         reader.finish()?;
         Ok(Message::InitSyn { zid, batch_size })
     }
@@ -391,6 +458,16 @@ fn close<'a>(mut reader: Reader<'a>, header: u8) -> Result<Message<'a>, Refusal>
     })
 }
 
+/// KEEP_ALIVE is the single byte `04`: no flag, no extension and no body.
+fn keep_alive(reader: Reader<'_>, header: u8) -> Result<Message<'_>, Refusal> {
+    no_extension(header)?;
+    if header & (FLAG_BIT5 | FLAG_BIT6) != 0 {
+        return Err(Refusal::MalformedMessage);
+    }
+    reader.finish()?;
+    Ok(Message::KeepAlive)
+}
+
 fn key_expression(bytes: &[u8]) -> Result<&str, Refusal> {
     let key = core::str::from_utf8(bytes).map_err(|_| Refusal::InvalidKeyexpr)?;
     if key.bytes().any(|byte| byte == b'*' || byte == b'$') {
@@ -406,10 +483,24 @@ fn key_expression(bytes: &[u8]) -> Result<&str, Refusal> {
     Ok(key)
 }
 
-/// A named wire expression in the global scope: `<scope:z16>[<suffix:<u8;z16>>]`.
-fn scope_and_suffix<'a>(reader: &mut Reader<'a>, named: bool) -> Result<&'a str, Refusal> {
-    if reader.leb(p::LEB128_SHORT_BITS)? != 0 || !named {
-        return Err(Refusal::InvalidKeyexpr);
+/// What a wire expression names: a key in full, or the alias a stock peer declared for it.
+enum KeyRef<'a> {
+    Full(&'a str),
+    Alias(u32),
+}
+
+/// A wire expression, `<scope:z16>[<suffix:<u8;z16>>]`. A suffix in the global scope is a key in
+/// full. A nonzero scope with no suffix is an alias reference. A suffix after a nonzero scope would
+/// extend the declared key, and the alias resolves to that key and no other, so it is refused; the
+/// suffix is judged first, so a wildcard or an oversized key keeps its own class.
+fn key_reference<'a>(reader: &mut Reader<'a>, named: bool) -> Result<KeyRef<'a>, Refusal> {
+    let scope = reader.leb(p::LEB128_SHORT_BITS)?;
+    if !named {
+        return if scope == 0 {
+            Err(Refusal::InvalidKeyexpr)
+        } else {
+            Ok(KeyRef::Alias(scope))
+        };
     }
     let length = reader.leb(p::LEB128_SHORT_BITS)? as usize;
     if length > MAX_KEY_BYTES {
@@ -418,32 +509,68 @@ fn scope_and_suffix<'a>(reader: &mut Reader<'a>, named: bool) -> Result<&'a str,
     if length == 0 {
         return Err(Refusal::InvalidKeyexpr);
     }
-    key_expression(reader.take(length)?)
+    let key = key_expression(reader.take(length)?)?;
+    if scope != 0 {
+        return Err(Refusal::InvalidKeyexpr);
+    }
+    Ok(KeyRef::Full(key))
 }
 
 fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> {
+    // The interest flag carries an interest id before the declaration. Every declaration with it
+    // was refused as an unsupported message; the one a stock peer ends its declarations with, a
+    // DeclareFinal, is now accepted and ignored, and anything else with the flag stays that way.
     if header & FLAG_BIT5 != 0 {
-        return Err(Refusal::UnsupportedMessage);
+        return declare_final(reader, header);
     }
     if header & FLAG_BIT6 != 0 {
         return Err(Refusal::MalformedMessage);
     }
-    no_extension(header)?;
+    let qos = header & FLAG_Z != 0;
+    if qos {
+        network_qos_extension(reader)?;
+    }
     let sub = reader.u8()?;
     match sub & ID_MASK {
+        ID_D_KEYEXPR => {
+            // Only the form that names its key in full: an alias for a key the peer states.
+            if sub & FLAG_BIT5 == 0 {
+                return Err(Refusal::UnsupportedMessage);
+            }
+            if sub & FLAG_BIT6 != 0 {
+                return Err(Refusal::MalformedMessage);
+            }
+            if sub & FLAG_Z != 0 {
+                return Err(Refusal::UnsupportedExtension);
+            }
+            // The id is the scope every reference to the alias carries, so it has the same 16 bits;
+            // a wider one could never be named and would only take the single alias slot.
+            let id = reader.leb(p::LEB128_SHORT_BITS)?;
+            // Scope 0 is the global scope, so no reference can name an alias with id 0.
+            if id == 0 {
+                return Err(Refusal::InvalidKeyexpr);
+            }
+            match key_reference(reader, true)? {
+                KeyRef::Full(key) => Ok(Network::DeclareKeyExpr { id, key }),
+                KeyRef::Alias(_) => Err(Refusal::InvalidKeyexpr),
+            }
+        }
         ID_D_SUBSCRIBER => {
             if sub & FLAG_Z != 0 {
                 return Err(Refusal::UnsupportedExtension);
             }
             let id = reader.leb(p::LEB128_MAX_BITS)?;
-            let key = scope_and_suffix(reader, sub & FLAG_BIT5 != 0)?;
-            Ok(Network::DeclareSubscriber {
-                id,
-                mapping: Mapping::from_flag(sub & FLAG_BIT6 != 0),
-                key,
-            })
+            let mapping = Mapping::from_flag(sub & FLAG_BIT6 != 0);
+            match key_reference(reader, sub & FLAG_BIT5 != 0)? {
+                KeyRef::Full(key) => Ok(Network::DeclareSubscriber { id, mapping, key }),
+                KeyRef::Alias(alias) => Ok(Network::DeclareSubscriberAlias { id, mapping, alias }),
+            }
         }
         ID_U_SUBSCRIBER => {
+            // The extension the QoS was seen on is a declaration of a key or a subscriber, not this.
+            if qos {
+                return Err(Refusal::UnsupportedExtension);
+            }
             if sub != U_SUBSCRIBER_HEADER {
                 return Err(Refusal::MalformedMessage);
             }
@@ -478,9 +605,43 @@ fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refus
     }
 }
 
+/// A DECLARE with the interest flag: `<interest id>` and a DeclareFinal. The DECLARE around a
+/// DeclareFinal carried no extension on the wire, so an extension on it is refused.
+fn declare_final<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> {
+    if header & FLAG_BIT6 != 0 {
+        return Err(Refusal::UnsupportedMessage);
+    }
+    reader
+        .leb(p::LEB128_MAX_BITS)
+        .map_err(|_| Refusal::UnsupportedMessage)?;
+    if header & FLAG_Z != 0 {
+        return Err(Refusal::UnsupportedExtension);
+    }
+    match reader.u8().map_err(|_| Refusal::UnsupportedMessage)? {
+        ID_D_FINAL => Ok(Network::DeclareFinal),
+        other if other & ID_MASK == ID_D_FINAL => Err(Refusal::MalformedMessage),
+        _ => Err(Refusal::UnsupportedMessage),
+    }
+}
+
+/// An OAM as a stock peer announces itself: the link-state id behind a QoS extension, with a ZBuf
+/// body that is bounded by the batch and ignored.
+fn oam<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> {
+    if header != OAM_HEADER {
+        return Err(Refusal::UnsupportedMessage);
+    }
+    if reader.leb(p::LEB128_SHORT_BITS)? != OAM_LINK_STATE {
+        return Err(Refusal::UnsupportedMessage);
+    }
+    network_qos_extension(reader)?;
+    let length = reader.leb(p::LEB128_SHORT_BITS)? as usize;
+    reader.take(length)?;
+    Ok(Network::Oam)
+}
+
 fn push<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> {
     no_extension(header)?;
-    let key = scope_and_suffix(reader, header & FLAG_BIT5 != 0)?;
+    let key = key_reference(reader, header & FLAG_BIT5 != 0)?;
     let body = reader.u8()?;
     if body & ID_MASK != ID_PUT || body & (FLAG_BIT5 | FLAG_BIT6) != 0 {
         return Err(Refusal::UnsupportedMessage);
@@ -512,11 +673,21 @@ fn push<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal>
     if size > MAX_PAYLOAD_BYTES {
         return Err(Refusal::OverBound);
     }
-    Ok(Network::PushPut {
-        mapping: Mapping::from_flag(header & FLAG_BIT6 != 0),
-        key,
-        attachment,
-        payload: reader.take(size)?,
+    let mapping = Mapping::from_flag(header & FLAG_BIT6 != 0);
+    let payload = reader.take(size)?;
+    Ok(match key {
+        KeyRef::Full(key) => Network::PushPut {
+            mapping,
+            key,
+            attachment,
+            payload,
+        },
+        KeyRef::Alias(alias) => Network::PushPutAlias {
+            mapping,
+            alias,
+            attachment,
+            payload,
+        },
     })
 }
 
@@ -531,6 +702,7 @@ fn parse_network<'a>(reader: &mut Reader<'a>) -> Result<Network<'a>, Refusal> {
     match header & ID_MASK {
         ID_DECLARE => declare(reader, header),
         ID_PUSH => push(reader, header),
+        ID_OAM => oam(reader, header),
         _ => Err(Refusal::UnsupportedMessage),
     }
 }
@@ -572,6 +744,7 @@ pub fn decode_batch(batch: &[u8]) -> Result<Message<'_>, Refusal> {
         ID_INIT => init(reader, header),
         ID_OPEN => open(reader, header),
         ID_CLOSE => close(reader, header),
+        ID_KEEP_ALIVE => keep_alive(reader, header),
         ID_FRAME => frame(reader, header),
         _ => Err(Refusal::UnsupportedMessage),
     }

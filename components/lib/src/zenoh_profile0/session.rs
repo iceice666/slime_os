@@ -8,7 +8,8 @@
 //! A refused call leaves the session as it was, so a caller that wants the link
 //! gone after a refusal must say so with [`Session::close`]. The only
 //! transitions into [`State::Closed`] are a received CLOSE, a local close and
-//! lease expiry. The machine tracks two subscriber slots: the subscription this
+//! lease expiry. A KEEP_ALIVE is traffic on an open session and is sent every quarter of the
+//! lease this side announced when nothing else was. The machine tracks two subscriber slots: the subscription this
 //! side declared, which a received PUSH must match to be delivered, and the one
 //! the peer declared, which a Put this side sends must match.
 
@@ -211,6 +212,37 @@ struct Subscriber {
 
 impl Subscriber {
     fn new(id: u32, key: &str) -> Result<Self, SessionError> {
+        Self::from_bytes(id, key.as_bytes())
+    }
+
+    fn from_bytes(id: u32, bytes: &[u8]) -> Result<Self, SessionError> {
+        let mut buffer = [0u8; MAX_KEY_BYTES];
+        buffer
+            .get_mut(..bytes.len())
+            .ok_or(SessionError::Decode(Refusal::OverBound))?
+            .copy_from_slice(bytes);
+        Ok(Self {
+            id,
+            key: buffer,
+            len: bytes.len(),
+        })
+    }
+
+    fn key(&self) -> &[u8] {
+        self.key.get(..self.len).unwrap_or(&[])
+    }
+}
+
+/// The key-expression alias a stock peer declares: its numeric id and the key it stands for.
+#[derive(Clone, Copy, Debug)]
+struct Alias {
+    id: u32,
+    key: [u8; MAX_KEY_BYTES],
+    len: usize,
+}
+
+impl Alias {
+    fn new(id: u32, key: &str) -> Result<Self, SessionError> {
         let bytes = key.as_bytes();
         let mut buffer = [0u8; MAX_KEY_BYTES];
         buffer
@@ -242,10 +274,47 @@ pub struct Session {
     cookie: [u8; MAX_COOKIE_BYTES],
     cookie_len: usize,
     last_rx_ms: u64,
+    /// When this side last sent a batch, or entered the handshake; keep-alives are due a quarter
+    /// of this side's announced lease after it.
+    last_tx_ms: u64,
+    /// The latest time an accepted call gave the session. A send that has no clock of its own is
+    /// stamped with it, and the link ticks the session on every pump.
+    now_ms: u64,
+    /// The one alias a stock peer declared with DeclareKeyExpr, and the key it stands for.
+    alias: Option<Alias>,
     /// The subscription this side declared; received PUSH messages are delivered only to its key.
     local: Option<Subscriber>,
     /// The subscription the peer declared; a Put this side sends must name its key.
     remote: Option<Subscriber>,
+}
+
+/// The alias a reference names, or the refusal a reference to an alias nobody declared draws. The
+/// alias resolves to the declared key and no other. The peer declared it, so it lives in the
+/// sender's mapping; a reference in the receiver's mapping names an alias this side declared, and
+/// this side declares none.
+fn resolve(alias: Option<Alias>, named: u32, mapping: Mapping) -> Result<Alias, SessionError> {
+    match alias {
+        Some(held) if held.id == named && mapping == Mapping::Sender => Ok(held),
+        _ => Err(SessionError::Decode(Refusal::InvalidKeyexpr)),
+    }
+}
+
+/// Delivers a Put to this side's subscriber when it names the subscriber's key.
+fn deliver<'a>(
+    local: Option<Subscriber>,
+    key: &[u8],
+    attachment: crate::zenoh_profile0::Attachment<'a>,
+    payload: &'a [u8],
+    events: &mut Events<'a>,
+) -> Result<(), SessionError> {
+    match local {
+        Some(held) if held.key() == key => events.push(Event::SampleDelivered {
+            sequence: attachment.sequence,
+            timestamp: attachment.timestamp,
+            payload,
+        }),
+        _ => Err(SessionError::UndeclaredKey),
+    }
 }
 
 fn same(left: &[u8], right: &[u8]) -> bool {
@@ -293,6 +362,9 @@ impl Session {
             cookie,
             cookie_len,
             last_rx_ms: 0,
+            last_tx_ms: 0,
+            now_ms: 0,
+            alias: None,
             local: None,
             remote: None,
         })
@@ -382,6 +454,21 @@ impl Session {
         self.state = State::Closed;
         self.local = None;
         self.remote = None;
+        self.alias = None;
+    }
+
+    /// Stamps a batch this side sent, which restarts the keep-alive cadence.
+    fn sent_now(&mut self, now_ms: u64) {
+        self.last_tx_ms = now_ms;
+    }
+
+    /// Tells the session a batch reached the wire at `now_ms`, which restarts the keep-alive
+    /// cadence from that moment. A call that builds a frame has no clock and stamps the latest time
+    /// the session was given, which can be earlier than the flush; the link that owns the send slot
+    /// knows the real time.
+    pub fn note_sent(&mut self, now_ms: u64) {
+        self.now_ms = self.now_ms.max(now_ms);
+        self.last_tx_ms = self.last_tx_ms.max(now_ms);
     }
 
     /// Connector only: writes INIT_SYN and starts waiting for INIT_ACK.
@@ -396,6 +483,8 @@ impl Session {
         let sent = encode::init_syn(out, self.own_zid()?, OUR_BATCH_SIZE)?;
         self.state = State::AwaitInitAck;
         self.last_rx_ms = now_ms;
+        self.last_tx_ms = now_ms;
+        self.now_ms = now_ms;
         Ok(Outcome::sending(sent))
     }
 
@@ -433,9 +522,14 @@ impl Session {
                 initial_sn,
             } => self.on_open_ack(lease_ms, initial_sn)?,
             Message::Close { reason, .. } => self.on_close(reason)?,
+            Message::KeepAlive => self.on_keep_alive()?,
             Message::Frame(frame) => self.on_frame(frame)?,
         };
         self.last_rx_ms = now_ms;
+        self.now_ms = now_ms;
+        if outcome.sent != 0 {
+            self.sent_now(now_ms);
+        }
         Ok(outcome)
     }
 
@@ -501,6 +595,15 @@ impl Session {
         Ok(Outcome::nothing().with(Event::HandshakeComplete))
     }
 
+    /// Traffic that renews the lease, and nothing else. Before OPEN it would refresh a handshake
+    /// that has not finished, so it is refused there and the session is left as it was.
+    fn on_keep_alive<'a>(&mut self) -> Result<Outcome<'a>, SessionError> {
+        if self.state != State::Open {
+            return Err(SessionError::UnexpectedMessage);
+        }
+        Ok(Outcome::nothing())
+    }
+
     fn on_close<'a>(&mut self, reason: u8) -> Result<Outcome<'a>, SessionError> {
         if self.state == State::Idle {
             return Err(SessionError::UnexpectedMessage);
@@ -519,15 +622,25 @@ impl Session {
             return Err(SessionError::SequenceMismatch);
         }
         let mut remote = self.remote;
+        let mut alias = self.alias;
         let local = self.local;
         let mut events = Events::empty();
         for network in frame.messages() {
             match network {
                 Network::DeclareSubscriber { id, key, .. } => {
+                    remote = Some(self.declared_remotely(remote, id, key)?);
+                    events.push(Event::SubscriberDeclared { id })?;
+                }
+                Network::DeclareSubscriberAlias {
+                    id,
+                    mapping,
+                    alias: named,
+                } => {
+                    let held = resolve(alias, named, mapping)?;
                     if remote.is_some() {
                         return Err(SessionError::SubscriberLimit);
                     }
-                    remote = Some(Subscriber::new(id, key)?);
+                    remote = Some(Subscriber::from_bytes(id, held.key())?);
                     events.push(Event::SubscriberDeclared { id })?;
                 }
                 Network::UndeclareSubscriber { id, key, .. } => match remote {
@@ -542,26 +655,83 @@ impl Session {
                     attachment,
                     payload,
                     ..
-                } => match local {
-                    Some(held) if held.key() == key.as_bytes() => {
-                        events.push(Event::SampleDelivered {
-                            sequence: attachment.sequence,
-                            timestamp: attachment.timestamp,
-                            payload,
-                        })?;
+                } => deliver(local, key.as_bytes(), attachment, payload, &mut events)?,
+                Network::PushPutAlias {
+                    mapping,
+                    alias: named,
+                    attachment,
+                    payload,
+                } => {
+                    let held = resolve(alias, named, mapping)?;
+                    deliver(local, held.key(), attachment, payload, &mut events)?;
+                }
+                Network::DeclareKeyExpr { id, key } => {
+                    // One alias, declared once: a second id is over the bound, and the same id
+                    // again is a redeclaration whether or not it names the same key.
+                    match alias {
+                        Some(held) if held.id == id => {
+                            return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
+                        }
+                        Some(_) => return Err(SessionError::Decode(Refusal::OverBound)),
+                        None => alias = Some(Alias::new(id, key)?),
                     }
-                    _ => return Err(SessionError::UndeclaredKey),
-                },
+                }
+                Network::Oam | Network::DeclareFinal => {}
             }
         }
         self.remote = remote;
+        self.alias = alias;
         self.rx_sn = self.rx_sn.wrapping_add(1);
         Ok(Outcome { sent: 0, events })
     }
 
-    /// Closes the session with a CLOSE batch once `now_ms` is past the lease
-    /// deadline; otherwise accepts and does nothing.
+    fn declared_remotely(
+        &self,
+        remote: Option<Subscriber>,
+        id: u32,
+        key: &str,
+    ) -> Result<Subscriber, SessionError> {
+        if remote.is_some() {
+            return Err(SessionError::SubscriberLimit);
+        }
+        Subscriber::new(id, key)
+    }
+
+    /// Closes the session with a CLOSE batch once `now_ms` is past the lease deadline. An open
+    /// session that has sent nothing for a quarter of its own announced lease writes a KEEP_ALIVE; before
+    /// OPEN, or while the lent storage cannot take one, it only accepts and does nothing.
     pub fn tick<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+        let expired = self.expire(now_ms, out)?;
+        if expired.sent != 0 {
+            self.now_ms = self.now_ms.max(now_ms);
+            return Ok(expired);
+        }
+        if self.state == State::Open && now_ms >= self.keep_alive_due() {
+            let sent = encode::keep_alive(out)?;
+            self.now_ms = self.now_ms.max(now_ms);
+            self.sent_now(now_ms);
+            return Ok(Outcome::sending(sent));
+        }
+        self.now_ms = self.now_ms.max(now_ms);
+        Ok(Outcome::nothing())
+    }
+
+    /// The expiry half of [`tick`](Self::tick): closes the session once `now_ms` is past the
+    /// lease deadline and never writes a KEEP_ALIVE. A link whose single send slot is occupied
+    /// calls this, so a keep-alive cannot collide with the batch waiting there.
+    pub fn tick_lease<'a>(
+        &mut self,
+        now_ms: u64,
+        out: &mut [u8],
+    ) -> Result<Outcome<'a>, SessionError> {
+        let outcome = self.expire(now_ms, out)?;
+        self.now_ms = self.now_ms.max(now_ms);
+        Ok(outcome)
+    }
+
+    /// The expiry check without the clock: a refused call must leave the session as it was, so
+    /// the callers advance `now_ms` only after the whole operation has succeeded.
+    fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
         match self.lease_deadline() {
             Some(deadline) if now_ms > deadline => {
                 let sent = encode::close(out, CLOSE_EXPIRED, true)?;
@@ -572,6 +742,15 @@ impl Session {
             }
             _ => Ok(Outcome::nothing()),
         }
+    }
+
+    /// When the next KEEP_ALIVE is due: a quarter of the lease this side announced after it last
+    /// sent. The peer closes after one of that lease without hearing from us, so our own lease
+    /// sets the cadence, not the one the peer announced. A lease under four milliseconds still
+    /// spaces keep-alives a millisecond apart, so a pump never queues a second one in the instant
+    /// of the first.
+    pub fn keep_alive_due(&self) -> u64 {
+        self.last_tx_ms.saturating_add((self.lease_ms / 4).max(1))
     }
 
     /// Closes the session locally with a CLOSE batch carrying `reason`.
@@ -598,6 +777,7 @@ impl Session {
         build(&mut frame)?;
         let sent = frame.finish()?;
         self.tx_sn = self.tx_sn.wrapping_add(1);
+        self.sent_now(self.now_ms);
         Ok(Outcome::sending(sent))
     }
 

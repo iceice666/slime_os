@@ -70,6 +70,22 @@ fn network_summary(message: &Network<'_>) -> String {
             hex(attachment.raw),
             hex(payload)
         ),
+        Network::DeclareKeyExpr { id, key } => format!("DECLARE_KEYEXPR:id={id},key={key}"),
+        Network::DeclareSubscriberAlias { id, alias, .. } => {
+            format!("DECLARE_SUBSCRIBER_ALIAS:id={id},alias={alias}")
+        }
+        Network::PushPutAlias {
+            alias,
+            attachment,
+            payload,
+            ..
+        } => format!(
+            "PUSH_PUT_ALIAS:alias={alias},att={},payload={}",
+            hex(attachment.raw),
+            hex(payload)
+        ),
+        Network::Oam => "OAM".into(),
+        Network::DeclareFinal => "DECLARE_FINAL".into(),
     }
 }
 
@@ -102,6 +118,7 @@ fn summary(message: &Message<'_>) -> String {
         Message::Close { reason, session } => {
             format!("CLOSE;reason={reason};session={}", u8::from(*session))
         }
+        Message::KeepAlive => "KEEP_ALIVE".into(),
         Message::Frame(frame) => {
             let parts: Vec<String> = frame.messages().map(|m| network_summary(&m)).collect();
             format!("FRAME;sn={};{}", frame.sn, parts.join("|"))
@@ -203,7 +220,7 @@ fn run(vector: &Vector<'_>) -> String {
 #[test]
 fn corpus_agrees() {
     let all = vectors();
-    assert_eq!(all.len(), 133, "the corpus changed size");
+    assert_eq!(all.len(), 132, "the corpus changed size");
     let mut wrong = Vec::new();
     for vector in &all {
         let got = run(vector);
@@ -350,9 +367,22 @@ fn byte_flips_never_panic_and_stay_bounded() {
                     for message in frame.messages() {
                         match message {
                             Network::DeclareSubscriber { key, .. }
-                            | Network::UndeclareSubscriber { key, .. } => {
+                            | Network::UndeclareSubscriber { key, .. }
+                            | Network::DeclareKeyExpr { key, .. } => {
                                 assert!(key.len() <= MAX_KEY_BYTES);
                             }
+                            Network::PushPutAlias {
+                                attachment,
+                                payload,
+                                ..
+                            } => {
+                                assert_eq!(attachment.raw.len(), MAX_ATTACHMENT_BYTES);
+                                assert_eq!(attachment.gid.len(), GID_BYTES);
+                                assert!(payload.len() <= MAX_PAYLOAD_BYTES);
+                            }
+                            Network::DeclareSubscriberAlias { .. }
+                            | Network::Oam
+                            | Network::DeclareFinal => {}
                             Network::PushPut {
                                 key,
                                 attachment,

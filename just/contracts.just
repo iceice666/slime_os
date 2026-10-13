@@ -40,6 +40,8 @@ contracts_source_check: bootstate_model_check capability_rights_model_check io_q
     python3 scripts/generate/generate-link-device-bindings.py --check
     python3 scripts/generate/generate-network-service-bindings.py --check
     python3 scripts/generate/generate-zenoh-profile-bindings.py --check
+    python3 scripts/generate/generate-zenoh-stock-bindings.py --check
+    python3 scripts/generate/generate-zenoh-stock-bindings.py --controls
     python3 scripts/check/check-boot-layout-resource.py
     python3 scripts/check/check-lifecycle-identity.py
     python3 scripts/generate/generate-fabric-ring-bindings.py --check

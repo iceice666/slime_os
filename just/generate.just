@@ -13,6 +13,10 @@ network_service_gen:
 zenoh_profile_gen:
     python3 scripts/generate/generate-zenoh-profile-bindings.py
 
+[group('generate')]
+zenoh_stock_gen:
+    python3 scripts/generate/generate-zenoh-stock-bindings.py
+
 
 [group('generate')]
 block_gen:

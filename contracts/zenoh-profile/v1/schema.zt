@@ -62,13 +62,20 @@ leb128ShortBits :: Int = 16;
 idInit :: Int = 1;
 idOpen :: Int = 2;
 idClose :: Int = 3;
+-- KEEP_ALIVE is the single byte 0x04: a header with no flag set and no body.
+idKeepAlive :: Int = 4;
 idFrame :: Int = 5;
 -- Network messages, carried inside a FRAME.
 idPush :: Int = 29;
 idDeclare :: Int = 30;
+-- OAM is accepted only in the ZBuf-bodied form a stock peer announces itself with, and ignored.
+idOam :: Int = 31;
 -- Declaration sub-messages inside a DECLARE.
+idDeclareKeyExpr :: Int = 0;
 idDeclareSubscriber :: Int = 2;
 idUndeclareSubscriber :: Int = 3;
+-- DeclareFinal rides in a DECLARE whose interest flag is set; it is accepted and ignored.
+idDeclareFinal :: Int = 26;
 -- The data sub-message inside a PUSH.
 idPut :: Int = 1;
 
@@ -90,6 +97,11 @@ flagExtensions :: Int = 128;
 -- more-bit clear, encoding ZBuf, mandatory bit as declared, then the id.
 extWireExpr :: Int = 95;
 extAttachment :: Int = 67;
+-- The two optional QoS extensions a stock peer attaches, accepted and ignored where it was seen
+-- to attach them: the unit extension on INIT_SYN, and a Z64 one on OAM and on the DECLARE that
+-- wraps a DeclareKeyExpr or DeclareSubscriber. Both are id 1, optional, the last in their chain.
+extQosUnit :: Int = 1;
+extQosNetwork :: Int = 33;
 
 -- CLOSE reason codes the profile recognises; any other value is malformed.
 closeGeneric :: Int = 0;
@@ -145,17 +157,23 @@ profile ::= {
   idInit =;
   idOpen =;
   idClose =;
+  idKeepAlive =;
   idFrame =;
   idPush =;
   idDeclare =;
+  idOam =;
+  idDeclareKeyExpr =;
   idDeclareSubscriber =;
   idUndeclareSubscriber =;
+  idDeclareFinal =;
   idPut =;
   flagBit5 =;
   flagBit6 =;
   flagExtensions =;
   extWireExpr =;
   extAttachment =;
+  extQosUnit =;
+  extQosNetwork =;
   closeGeneric =;
   closeUnsupported =;
   closeInvalid =;

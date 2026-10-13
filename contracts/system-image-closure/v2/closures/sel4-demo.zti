@@ -219,7 +219,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "0e9f1f7e433ff1359589b6fa5909bdc873cbafd1ab7a2a1a40232a6944fd9b1a";
+        identity = "97683d79c727d9b104440ef413a1221ce0327cf1e4878a7f0d4dd49abf2db32d";
       };
     };
     {
@@ -227,7 +227,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "f3eb5f052fba9c9e3af57f593bc9a13d688f1c8f71db2ea04bd3a68406be7c73";
+        identity = "35b96178ed790e4720fa369bfb7d5c3bb6f30a62e1ddd43aaf200a8a408336fb";
       };
     };
     {
@@ -283,7 +283,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "8d1cac2e2043d64d852164787474531265e5ef36530866393261ede99f1c71bd";
+        identity = "6d668427898d6e342eedccf972eca545520a4ef9c466a2568385c9d6e64ca9f5";
       };
     };
     {
