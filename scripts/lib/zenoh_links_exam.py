@@ -113,6 +113,13 @@ REFUSED_SCENARIOS = (
     # bytes (the full-key positive), and a 130-byte one is refused whatever the storage; and to the
     # session's aliases: only alias 1 is declared, so a canonical scope of 2 names nothing.
     ("fragmented-put-key-130-bytes", "over-bound"),
+    # The key inside a reassembled Put is held to what a whole-frame key is held to: a valid key
+    # expression, with the class the corpus gives each form, and the subscriber's own key.
+    ("fragmented-put-key-wildcard", "wildcard-keyexpr"),
+    ("fragmented-put-key-leading-slash", "invalid-keyexpr"),
+    ("fragmented-put-key-double-slash", "invalid-keyexpr"),
+    ("fragmented-put-key-invalid-utf8", "invalid-keyexpr"),
+    ("fragmented-put-key-not-subscribed", "undeclared-key"),
     ("fragmented-put-undeclared-alias", "invalid-keyexpr"),
     # The link announced its batch, so a fragment longer than the batch less the stream length is
     # refused, as a stream prefix longer than the batch is.
@@ -152,8 +159,8 @@ def queue_held() -> int:
     return NOTICES * CONFIGS[2][8]
 
 
-PINNED_CASES = 85
-PINNED_CONTROLS = 188
+PINNED_CASES = 90
+PINNED_CONTROLS = 207
 
 
 class LinksError(ValueError):
@@ -575,6 +582,15 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a demo payload of 13 bytes admitted", drop("links refused demo-refuses-payload-13-bytes ")),
         ("a large payload of 1025 bytes admitted", drop("links refused large-refuses-payload-1025-bytes ")),
         ("a large payload of 1025 bytes refused as out-of-memory", swap("links refused large-refuses-payload-1025-bytes ", "links refused large-refuses-payload-1025-bytes out-of-memory")),
+        ("a fragmented wildcard key admitted", drop("links refused fragmented-put-key-wildcard ")),
+        ("a fragmented wildcard key refused as invalid-keyexpr", swap("links refused fragmented-put-key-wildcard ", "links refused fragmented-put-key-wildcard invalid-keyexpr")),
+        ("a fragmented leading-slash key admitted", drop("links refused fragmented-put-key-leading-slash ")),
+        ("a fragmented leading-slash key refused as wildcard-keyexpr", swap("links refused fragmented-put-key-leading-slash ", "links refused fragmented-put-key-leading-slash wildcard-keyexpr")),
+        ("a fragmented double-slash key admitted", drop("links refused fragmented-put-key-double-slash ")),
+        ("a fragmented key that is not UTF-8 admitted", drop("links refused fragmented-put-key-invalid-utf8 ")),
+        ("a fragmented key that is not UTF-8 refused as malformed-message", swap("links refused fragmented-put-key-invalid-utf8 ", "links refused fragmented-put-key-invalid-utf8 malformed-message")),
+        ("a fragmented Put for a key that was not subscribed admitted", drop("links refused fragmented-put-key-not-subscribed ")),
+        ("a fragmented Put for a key that was not subscribed refused as invalid-keyexpr", swap("links refused fragmented-put-key-not-subscribed ", "links refused fragmented-put-key-not-subscribed invalid-keyexpr")),
         ("a fragmented 130-byte key admitted", drop("links refused fragmented-put-key-130-bytes ")),
         ("a fragmented 130-byte key refused as invalid-keyexpr", swap("links refused fragmented-put-key-130-bytes ", "links refused fragmented-put-key-130-bytes invalid-keyexpr")),
         ("a fragmented Put for an undeclared alias admitted", drop("links refused fragmented-put-undeclared-alias ")),
@@ -664,6 +680,11 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def invalid_utf8_key() -> bytes:
+        whole = bytearray(zenoh_wire.push_put("abcd", zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(1), True))
+        whole[whole.index(b"abcd") + 1] = 0xFF
+        return bytes(whole)
+
     def full_key(length: int, payload: int, scope: int = 0) -> bytes:
         key = "k" * length
         message = bytearray(zenoh_wire.push_put(key, zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(payload), True))
@@ -714,6 +735,16 @@ def reference_controls() -> int:
         ("a fragment one byte over the announced batch", lambda: zenoh_fragment.decode_fragment(bodies[0] + b"x", batch)),
         ("a run holding a fragment over the announced batch", lambda: zenoh_fragment.reassemble([bodies[0] + b"x", *bodies[1:]], sn, batch)),
         ("a fragmented full-key Put with a 130-byte key", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(full_key(130, 3000), 512, sn)), max_key=129)),
+        ("a fragmented full key with a wildcard", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "a/*/b"), max_key=129)),
+        ("a fragmented full key that is a double wildcard", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "a/**"), max_key=129)),
+        ("a fragmented full key with a $ wildcard", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "a/b$*"), max_key=129)),
+        ("a fragmented full key with a leading slash", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "/bad"), max_key=129)),
+        ("a fragmented full key with a trailing slash", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "bad/"), max_key=129)),
+        ("a fragmented full key with a double slash", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "a//b"), max_key=129)),
+        ("a fragmented full key with a question mark", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "a?b"), max_key=129)),
+        ("a fragmented full key with a hash", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1, "a#b"), max_key=129)),
+        ("a fragmented full key that is not UTF-8", lambda: zenoh_fragment.decode_message(invalid_utf8_key(), max_key=129)),
+        ("a fragmented full key other than the subscriber's", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1), max_key=129, subscribed="slime_demo/other")),
         ("a full-key Put in a nonzero scope", lambda: zenoh_fragment.decode_message(full_key(10, 20, scope=1), max_key=129)),
         ("a full-key Put with an empty key", lambda: zenoh_fragment.decode_message(full_key(0, 20), max_key=129)),
         ("a full-key Put with a truncated key", lambda: zenoh_fragment.decode_message(full_key(10, 20)[:8], max_key=129)),
@@ -754,6 +785,9 @@ def reference_controls() -> int:
         raise LinksError("control: a fragment at the announced batch was not taken")
     if zenoh_fragment.reassemble(bodies, sn, batch) != zenoh_fragment.message(size):
         raise LinksError("control: a run within the announced batch was not taken")
+    # The demo key is a valid key expression and the subscriber's own, so these refusals are not blanket.
+    if zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1), max_key=129, subscribed=key())["key"] != key().encode():
+        raise LinksError("control: the subscriber's own key was not read")
     # The edges are taken: the demo key at exactly 129 bytes, the declared alias, and a payload exactly at
     # the declared size, so the refusals above are not blanket ones.
     if zenoh_fragment.decode_message(full_key(129, 3000), max_key=129)["key"] != b"k" * 129:

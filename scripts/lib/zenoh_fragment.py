@@ -177,15 +177,35 @@ def full_key_for_exam(size: int, key: str = "0/slime_demo/counter/slime_demo_msg
 PUSH_FULL_KEY = zenoh_wire.ID_PUSH | zenoh_wire.FLAG_N | zenoh_wire.FLAG_M
 
 
+def key_expression(raw: bytes) -> str:
+    """The Rust decoder's `key_expression`, written again: valid UTF-8, no wildcard, no `?` or `#`, no
+    leading or trailing `/` and no `//`. A wildcard is its own class; the rest are invalid."""
+    try:
+        key = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise FragmentError("invalid-keyexpr: the key is not UTF-8") from error
+    if "*" in key or "$" in key:
+        raise FragmentError("wildcard-keyexpr: the key holds a wildcard")
+    if "?" in key or "#" in key or key.startswith("/") or key.endswith("/") or "//" in key:
+        raise FragmentError("invalid-keyexpr: the key is not a valid key expression")
+    return key
+
+
 def decode_message(
-    msg: bytes, alias: int | None = None, max_key: int | None = None, max_payload: int | None = None
+    msg: bytes,
+    alias: int | None = None,
+    max_key: int | None = None,
+    max_payload: int | None = None,
+    subscribed: str | None = None,
 ) -> dict:
     """Decode the reassembled PUSH with a Put: the key, the attachment and the payload.
 
     The key is either the alias a stock peer declared (header 0x1d, a nonzero 16-bit scope and no
     key bytes) or the key in full (header 0x7d, scope 0, a 16-bit length and the bytes). Given the
     session's declared alias, a scope that is another alias is refused: it was never declared. Given
-    the configuration's key and payload sizes, a longer key or payload is refused."""
+    the configuration's key and payload sizes, a longer key or payload is refused. A full key must be a
+    valid key expression, and given the key the session's subscriber declared, a Put for another key
+    is refused as the whole-frame session refuses it."""
     if not msg or msg[0] not in (PUSH_ALIAS, PUSH_FULL_KEY):
         raise FragmentError("not a PUSH in the alias or full-key form")
     named = msg[0] == PUSH_FULL_KEY
@@ -203,6 +223,9 @@ def decode_message(
             raise FragmentError("a truncated key")
         key = msg[at : at + length]
         at += length
+        text = key_expression(key)
+        if subscribed is not None and text != subscribed:
+            raise FragmentError("undeclared-key: the Put names a key the subscriber did not declare")
     else:
         if scope == 0:
             raise FragmentError("alias scope 0 is the global scope and names no alias")
