@@ -191,6 +191,16 @@ def key_expression(raw: bytes) -> str:
     return key
 
 
+def check_deadline(first_ms: int, last_ms: int, timeout_ms: int) -> None:
+    """A reassembly is measured from its first fragment. The last fragment may arrive exactly
+    `timeout_ms` after it and one millisecond later is refused: the rule the session's lease uses,
+    which expires only when the time is past the deadline."""
+    if last_ms < first_ms:
+        raise FragmentError("the last fragment arrived before the first")
+    if last_ms - first_ms > timeout_ms:
+        raise FragmentError("reassembly-timeout: the run outlived its declared timeout")
+
+
 def decode_message(
     msg: bytes,
     alias: int | None = None,
@@ -256,8 +266,10 @@ def decode_message(
     size, at = read_leb32(msg, at)
     if max_payload is not None and size > max_payload:
         raise FragmentError("the payload is longer than the configuration declares")
-    if at + size != len(msg):
-        raise FragmentError("the payload length disagrees with the message")
+    if at + size > len(msg):
+        raise FragmentError("truncated: the payload is shorter than its length says")
+    if at + size < len(msg):
+        raise FragmentError("trailing-bytes: the message has data after its payload")
     return {"scope": scope, "key": key, "attachment": att, "payload": msg[at:]}
 
 

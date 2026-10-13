@@ -27,6 +27,6 @@ The names `demo`, `large` and `heap` are the three configurations the exam pins;
 accepts any set of one or more distinctly named configurations that satisfy the rules.
 
 The decision is [`docs/decisions/zenoh-link-limits.md`](../../docs/decisions/zenoh-link-limits.md); the
-scope is `01a135e1-3820-7dcd-9508-c42e5ae5a3e4`, judged by
+scope is `01a135f7-4a56-7faf-a14a-b6cf9cb1350c`, judged by
 `scripts/check/check-zenoh-profile0.py --slice links`. The Rust side is the implementation's, not this
 planning contract.

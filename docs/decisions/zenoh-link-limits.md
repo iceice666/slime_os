@@ -1,7 +1,7 @@
 # Zenoh Profile 0 links declared by a named configuration
 
 **Status:** Proposed
-**Related work items:** `01a135e1-3820-7dcd-9508-c42e5ae5a3e4` (this decision's exam and
+**Related work items:** `01a135f7-4a56-7faf-a14a-b6cf9cb1350c` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer item
 `01a12f13-a343-7924-af20-18148fc1b0d9` (merged), whose exam this one extends.
 
@@ -52,7 +52,7 @@ declaration before a link is built from it.
    from its own allocator. A message may be larger than a batch. One message is reassembled at a time,
    a gap in the sequence numbers, a run whose first fragment is not the session's next expected sequence
    number, a whole `FRAME` in the middle, an oversize message and a reassembly that outlives its declared
-   timeout are each refused by name, and a storage that cannot hold a message is refused without ending
+   timeout, measured from the first fragment, with the last allowed to arrive exactly at it and refused one millisecond later (the rule the session's lease uses), are each refused by name, and a storage that cannot hold a message is refused without ending
    the session. A whole run advances the session's expected sequence number by its fragment count, and a
    refused run leaves it where it was.
 3. **No allocator in the library.** `components/lib` is `no_std` and has no `alloc`. The runtime's
