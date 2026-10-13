@@ -120,6 +120,16 @@ REFUSED_SCENARIOS = (
     ("fragmented-put-key-double-slash", "invalid-keyexpr"),
     ("fragmented-put-key-invalid-utf8", "invalid-keyexpr"),
     ("fragmented-put-key-not-subscribed", "undeclared-key"),
+    # Every variable-length integer in a fragment run is read the way the Rust reader reads it: at most
+    # the field's width, and canonically. The fragment's own sequence number and the four lengths and
+    # scope inside the reassembled Put are each graded on the link, not only in the host oracle.
+    ("fragment-sequence-noncanonical", "leb128-noncanonical"),
+    ("fragment-sequence-over-32-bits", "leb128-overflow"),
+    ("fragmented-put-scope-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-key-length-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-attachment-length-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-payload-length-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-payload-length-over-32-bits", "leb128-overflow"),
     ("fragmented-put-undeclared-alias", "invalid-keyexpr"),
     # The link announced its batch, so a fragment longer than the batch less the stream length is
     # refused, as a stream prefix longer than the batch is.
@@ -159,8 +169,8 @@ def queue_held() -> int:
     return NOTICES * CONFIGS[2][8]
 
 
-PINNED_CASES = 90
-PINNED_CONTROLS = 207
+PINNED_CASES = 97
+PINNED_CONTROLS = 223
 
 
 class LinksError(ValueError):
@@ -582,6 +592,20 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a demo payload of 13 bytes admitted", drop("links refused demo-refuses-payload-13-bytes ")),
         ("a large payload of 1025 bytes admitted", drop("links refused large-refuses-payload-1025-bytes ")),
         ("a large payload of 1025 bytes refused as out-of-memory", swap("links refused large-refuses-payload-1025-bytes ", "links refused large-refuses-payload-1025-bytes out-of-memory")),
+        *[("fragment-sequence-noncanonical admitted instead of refused", drop("links refused fragment-sequence-noncanonical ")),
+          ("fragment-sequence-noncanonical refused with the wrong class", swap("links refused fragment-sequence-noncanonical ", "links refused fragment-sequence-noncanonical unsupported-message"))],
+        *[("fragment-sequence-over-32-bits admitted instead of refused", drop("links refused fragment-sequence-over-32-bits ")),
+          ("fragment-sequence-over-32-bits refused with the wrong class", swap("links refused fragment-sequence-over-32-bits ", "links refused fragment-sequence-over-32-bits unsupported-message"))],
+        *[("fragmented-put-scope-noncanonical admitted instead of refused", drop("links refused fragmented-put-scope-noncanonical ")),
+          ("fragmented-put-scope-noncanonical refused with the wrong class", swap("links refused fragmented-put-scope-noncanonical ", "links refused fragmented-put-scope-noncanonical unsupported-message"))],
+        *[("fragmented-put-key-length-noncanonical admitted instead of refused", drop("links refused fragmented-put-key-length-noncanonical ")),
+          ("fragmented-put-key-length-noncanonical refused with the wrong class", swap("links refused fragmented-put-key-length-noncanonical ", "links refused fragmented-put-key-length-noncanonical unsupported-message"))],
+        *[("fragmented-put-attachment-length-noncanonical admitted instead of refused", drop("links refused fragmented-put-attachment-length-noncanonical ")),
+          ("fragmented-put-attachment-length-noncanonical refused with the wrong class", swap("links refused fragmented-put-attachment-length-noncanonical ", "links refused fragmented-put-attachment-length-noncanonical unsupported-message"))],
+        *[("fragmented-put-payload-length-noncanonical admitted instead of refused", drop("links refused fragmented-put-payload-length-noncanonical ")),
+          ("fragmented-put-payload-length-noncanonical refused with the wrong class", swap("links refused fragmented-put-payload-length-noncanonical ", "links refused fragmented-put-payload-length-noncanonical unsupported-message"))],
+        *[("fragmented-put-payload-length-over-32-bits admitted instead of refused", drop("links refused fragmented-put-payload-length-over-32-bits ")),
+          ("fragmented-put-payload-length-over-32-bits refused with the wrong class", swap("links refused fragmented-put-payload-length-over-32-bits ", "links refused fragmented-put-payload-length-over-32-bits unsupported-message"))],
         ("a fragmented wildcard key admitted", drop("links refused fragmented-put-key-wildcard ")),
         ("a fragmented wildcard key refused as invalid-keyexpr", swap("links refused fragmented-put-key-wildcard ", "links refused fragmented-put-key-wildcard invalid-keyexpr")),
         ("a fragmented leading-slash key admitted", drop("links refused fragmented-put-key-leading-slash ")),
@@ -680,6 +704,15 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def noncanonical_key_length() -> bytes:
+        whole = bytearray(full_key(10, 20))
+        return bytes(whole[:2]) + bytes([0x8A, 0x00]) + bytes(whole[3:])
+
+    def noncanonical_attachment_length() -> bytes:
+        whole = bytearray(zenoh_fragment.full_key_for_exam(5))
+        at = whole.index(bytes([zenoh_wire.EXT_ATTACHMENT])) + 1
+        return bytes(whole[:at]) + bytes([0xA1, 0x00]) + bytes(whole[at + 1 :])
+
     def invalid_utf8_key() -> bytes:
         whole = bytearray(zenoh_wire.push_put("abcd", zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(1), True))
         whole[whole.index(b"abcd") + 1] = 0xFF
@@ -755,6 +788,8 @@ def reference_controls() -> int:
         ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
         ("an alias scope of 65536", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x04])))),
         ("an alias scope of four bytes", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0xFF, 0x7F])))),
+        ("a noncanonical key length", lambda: zenoh_fragment.decode_message(noncanonical_key_length(), max_key=129)),
+        ("a noncanonical attachment length", lambda: zenoh_fragment.decode_message(noncanonical_attachment_length(), max_key=129)),
         ("a noncanonical alias scope of 1", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x81, 0x00])))),
         ("two messages joined in one run", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(zenoh_fragment.message(1000) + zenoh_fragment.message(1000), 512, sn)))),
         ("a fragmented Put without the attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(no_attachment(3000), 512, sn)))),
