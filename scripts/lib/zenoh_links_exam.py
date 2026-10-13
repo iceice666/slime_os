@@ -93,6 +93,10 @@ REFUSED_SCENARIOS = (
     ("empty-fragment", "malformed-message"),
     ("fragment-before-open", "unexpected-message"),
     ("fragment-sequence-gap", "fragment-sequence"),
+    # A continuation must carry the next sequence number: one that repeats the number before it or goes
+    # back is refused as the gap is, so chunks are never joined out of order.
+    ("fragment-sequence-duplicate", "fragment-sequence"),
+    ("fragment-sequence-backward", "fragment-sequence"),
     # The more flag decides where a message ends, not the payload length: an interior fragment that
     # says no more follows ends the message early, so what was joined is cut off inside its payload;
     # a last fragment that still says more follows leaves the run open, and with nothing further it
@@ -137,6 +141,9 @@ REFUSED_SCENARIOS = (
     ("fragmented-put-key-double-slash", "invalid-keyexpr"),
     ("fragmented-put-key-invalid-utf8", "invalid-keyexpr"),
     ("fragmented-put-key-not-subscribed", "undeclared-key"),
+    # A key named in full is global: one carrying a nonzero scope is relative to an alias, and is refused
+    # as the whole-frame decoder refuses it, not delivered as if it were global.
+    ("fragmented-put-full-key-nonzero-scope", "invalid-keyexpr"),
     # An alias resolves to the key it was declared for, and that key is then held to the subscription;
     # and a peer that declared an alias addresses it sender-mapped, so the receiver mapping, which
     # names an alias this side declared, is refused where the stock captures use it only because a
@@ -266,8 +273,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 155
-PINNED_CONTROLS = 332
+PINNED_CASES = 158
+PINNED_CONTROLS = 340
 
 
 class LinksError(ValueError):
@@ -821,6 +828,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fragment-interior-marked-final refused with the wrong class", swap("links refused fragment-interior-marked-final ", "links refused fragment-interior-marked-final over-bound")),
         ("fragment-final-marked-more admitted instead of refused", drop("links refused fragment-final-marked-more ")),
         ("fragment-final-marked-more refused with the wrong class", swap("links refused fragment-final-marked-more ", "links refused fragment-final-marked-more over-bound")),
+        ("fragment-sequence-duplicate admitted instead of refused", drop("links refused fragment-sequence-duplicate ")),
+        ("fragment-sequence-duplicate refused with the wrong class", swap("links refused fragment-sequence-duplicate ", "links refused fragment-sequence-duplicate over-bound")),
+        ("fragment-sequence-backward admitted instead of refused", drop("links refused fragment-sequence-backward ")),
+        ("fragment-sequence-backward refused with the wrong class", swap("links refused fragment-sequence-backward ", "links refused fragment-sequence-backward over-bound")),
+        ("fragmented-put-full-key-nonzero-scope admitted instead of refused", drop("links refused fragmented-put-full-key-nonzero-scope ")),
+        ("fragmented-put-full-key-nonzero-scope refused with the wrong class", swap("links refused fragmented-put-full-key-nonzero-scope ", "links refused fragmented-put-full-key-nonzero-scope over-bound")),
         ("an interior fragment marked final taken as a complete message", drop("links refused fragment-interior-marked-final ")),
         ("a last fragment still saying more taken as complete", drop("links refused fragment-final-marked-more ")),
         ("an interior fragment marked final refused as reassembly-timeout", swap("links refused fragment-interior-marked-final ", "links refused fragment-interior-marked-final reassembly-timeout")),
@@ -1066,6 +1079,8 @@ def reference_controls() -> int:
         ("a run that never ends", lambda: zenoh_fragment.reassemble(bodies[:2])),
         ("a final fragment followed by another", lambda: zenoh_fragment.reassemble([clear_more(bodies[0]), *bodies[1:]])),
         ("a last fragment that still says more follows", lambda: zenoh_fragment.reassemble([*bodies[:2], set_more(bodies[2])])),
+        ("a duplicate continuation sequence number", lambda: zenoh_fragment.reassemble([bodies[0], bodies[0], bodies[2]])),
+        ("a backward continuation sequence number", lambda: zenoh_fragment.reassemble([bodies[0], bodies[1], bodies[0]])),
         ("a repeated final fragment", lambda: zenoh_fragment.reassemble([bodies[2], bodies[2]])),
         ("no fragments", lambda: zenoh_fragment.reassemble([])),
         ("an unreliable fragment", lambda: zenoh_fragment.decode_fragment(bytes([bodies[0][0] & ~zenoh_fragment.FLAG_R]) + bodies[0][1:])),
@@ -1160,6 +1175,9 @@ def reference_controls() -> int:
         "a final fragment followed by another": "marked final is followed",
         "a last fragment that still says more follows": "still says more",
         "a repeated final fragment": "not consecutive",
+        "a duplicate continuation sequence number": "not consecutive",
+        "a backward continuation sequence number": "not consecutive",
+        "a full-key Put in a nonzero scope": "nonzero scope",
         "a run sized from its first fragment's header across a width step": "announced batch",
         "two messages joined in one run": "trailing-bytes",
         "a last fragment one millisecond past the timeout": "reassembly-timeout",
