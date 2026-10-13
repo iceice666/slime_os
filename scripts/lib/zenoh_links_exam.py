@@ -21,6 +21,7 @@ import hashlib
 import shutil
 import tempfile
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 
 import zenoh_exchange
@@ -61,6 +62,8 @@ OK_SCENARIOS = (
     "reassembly-after-timeout-reuses-storage",
     "reassembly-after-refusals-reuses-storage",
     "put-roundtrip-across-sequence-width",
+    "put-roundtrip-at-the-declared-payload",
+    "heap-reassembles-after-queue-drained",
     "reassembly-completes-at-the-timeout-edge",
     "heap-declared-payload-boundary",
     "heap-fills-notice-queue",
@@ -224,19 +227,41 @@ def queue_line(held: int, in_progress: int, size: int, sent: str, back: str) -> 
 
 
 # Sequence numbers at which the width of the encoded number changes, one for each step from one byte to
-# five: a run that starts one short of the step has fragments whose headers differ in size, so a link
-# that sizes every slice from its first fragment's header overruns the announced batch.
-WIDTH_STARTS = (127, 16383, 2097151, 268435455)
-# Each way a reassembly ends early, after which the one-message storage must be free again.
-REUSE_CAUSES = ("sequence-gap", "whole-frame-during-reassembly", "best-effort-fragment-during-reassembly")
+# five and the step back from five bytes to one at the 32-bit wrap: a run that starts one short of the
+# step has fragments whose headers differ in size, so a link that sizes every slice from its first
+# fragment's header overruns the announced batch, and one that does not wrap emits 4294967296.
+WIDTH_STARTS = (127, 16383, 2097151, 268435455, 0xFFFFFFFE)
+# Each way a reassembly ends without delivering a sample, after which the one-message storage must be
+# free again: three that end before the message is complete and three that refuse the completed message.
+REUSE_CAUSES = (
+    "sequence-gap",
+    "whole-frame-during-reassembly",
+    "best-effort-fragment-during-reassembly",
+    "completed-malformed-put",
+    "completed-undeclared-key",
+    "completed-payload-over-declared",
+)
 
 
 def width_split(start: int) -> list[bytes]:
     return zenoh_fragment.reference_split(full_key_message(FULL_KEY_PAYLOAD), FULL_KEY_BATCH, start)
 
 
-PINNED_CASES = 135
-PINNED_CONTROLS = 303
+def heap_max_bodies() -> list[bytes]:
+    """Our own Put of the heap configuration's declared payload, as the sender splits it."""
+    return zenoh_fragment.reference_split(full_key_message(HEAP_PAYLOAD), FULL_KEY_BATCH, FULL_KEY_SN)
+
+
+def drained_line(held: int, size: int, digest: str) -> str:
+    return f"links drained {held} {size} {digest}"
+
+
+def drained_digest() -> str:
+    return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
+
+
+PINNED_CASES = 153
+PINNED_CONTROLS = 321
 
 
 class LinksError(ValueError):
@@ -251,6 +276,7 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+@lru_cache(maxsize=None)
 def key() -> str:
     return zenoh_exchange.demo()["key"]
 
@@ -264,6 +290,7 @@ def full_key_bodies() -> list[bytes]:
     return zenoh_fragment.reference_split(full_key_message(FULL_KEY_PAYLOAD), FULL_KEY_BATCH, FULL_KEY_SN)
 
 
+@lru_cache(maxsize=None)
 def whole_edge(batch: int, sn: int) -> int:
     """The largest payload whose full-key Put travels whole in one FRAME at this batch size."""
     limit = batch - zenoh_fragment.STREAM_LENGTH_BYTES
@@ -315,6 +342,13 @@ def good_lines() -> list[str]:
             ]
         if name == "reassembly-completes-at-the-timeout-edge":
             lines.append(deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))
+        if name == "put-roundtrip-at-the-declared-payload":
+            lines += [
+                f"links heapfrag {index} {len(body)} {body[0]:02x} {sha(body)}"
+                for index, body in enumerate(heap_max_bodies())
+            ]
+        if name == "heap-reassembles-after-queue-drained":
+            lines.append(drained_line(queue_held(), HEAP_PAYLOAD, drained_digest()))
         if name == "reassembly-after-refusals-reuses-storage":
             lines += [
                 f"links reuseafter {cause} {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}"
@@ -363,6 +397,8 @@ SHAPES = {
     ("links", "aliased"): 5,
     ("links", "deadline"): 6,
     ("links", "reuseafter"): 6,
+    ("links", "heapfrag"): 6,
+    ("links", "drained"): 5,
     ("links", "widthsplit"): 7,
 }
 
@@ -464,6 +500,16 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if advance != wanted_advance:
         raise LinksError(f"the session sequence after a whole fragment run is {wanted_advance}, reported {advance}")
 
+    heapfrag = [(int(f[2]), int(f[3]), f[4], f[5]) for f in only("heapfrag")]
+    wanted_heapfrag = [(i, len(b), f"{b[0]:02x}", sha(b)) for i, b in enumerate(heap_max_bodies())]
+    if heapfrag != wanted_heapfrag:
+        raise LinksError(f"our own Put of the declared {HEAP_PAYLOAD} bytes was fragmented differently from the host reference")
+
+    drained = [(int(f[2]), int(f[3]), f[4]) for f in only("drained")]
+    wanted_drained = [(queue_held(), HEAP_PAYLOAD, drained_digest())]
+    if drained != wanted_drained:
+        raise LinksError(f"after {queue_held()} held samples are consumed, another message of the declared {HEAP_PAYLOAD} bytes must reassemble into the same storage: {wanted_drained}, reported {drained}")
+
     reuseafter = [(f[2], int(f[3]), int(f[4]), f[5]) for f in only("reuseafter")]
     wanted_reuseafter = [(cause, reuse_capacity(), REUSE_SIZE, sha(zenoh_fragment.payload_bytes(REUSE_SIZE))) for cause in REUSE_CAUSES]
     if reuseafter != wanted_reuseafter:
@@ -488,7 +534,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained)
     return positive, len(refused)
 
 
@@ -569,8 +615,8 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a repeated name", [demo, dict(large, name="demo")], False),
         ("an unknown mode", trio(large=dict(large, mode="dynamic")), False),
         ("an empty name", trio(large=dict(large, name="")), False),
-        ("a batch of 4094, one service operation exactly", trio(large=exact(large, batchBytes=4094, payloadBytes=2048)), True),
-        ("a batch of 4095, one byte over an operation", trio(large=exact(large, batchBytes=4095, payloadBytes=2048)), False),
+        ("a batch of 4096, one service operation exactly", trio(large=exact(large, batchBytes=4096, payloadBytes=2048)), True),
+        ("a batch of 4097, one byte over an operation", trio(large=exact(large, batchBytes=4097, payloadBytes=2048)), False),
         ("a zero batch", trio(large=dict(large, batchBytes=0)), False),
         ("65535 keys", trio(large=exact(large, maxKeys=65535, maxSubscribers=1)), True),
         ("65536 keys", trio(large=exact(large, maxKeys=65536, maxSubscribers=1)), False),
@@ -734,6 +780,23 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fragmented-put-attachment-truncated admitted instead of refused", drop("links refused fragmented-put-attachment-truncated ")),
         ("fragmented-put-attachment-truncated refused with the wrong class", swap("links refused fragmented-put-attachment-truncated ", "links refused fragmented-put-attachment-truncated over-bound")),
         ("the early-end reuse lines dropped", drop("links reuseafter ")),
+        ("the reuse after a malformed completed Put dropped", drop("links reuseafter completed-malformed-put ")),
+        ("the reuse after a completed Put for an undeclared key dropped", drop("links reuseafter completed-undeclared-key ")),
+        ("the reuse after a completed Put over the declared payload dropped", drop("links reuseafter completed-payload-over-declared ")),
+        ("a reuse after a malformed completed Put into storage one byte short", swap("links reuseafter completed-malformed-put ", good[first("links reuseafter completed-malformed-put ")].replace(f" {reuse_capacity()} ", f" {reuse_capacity() - 1} ", 1))),
+        ("the drained-queue line dropped", drop("links drained ")),
+        ("a drained queue of seven", swap("links drained ", drained_line(queue_held() - 1, HEAP_PAYLOAD, drained_digest()))),
+        ("a drained queue that reassembled a small message", swap("links drained ", drained_line(queue_held(), 3000, drained_digest()))),
+        ("a drained queue that reassembled another payload", swap("links drained ", drained_line(queue_held(), HEAP_PAYLOAD, sha(b"other")))),
+        ("the drained-queue scenario dropped", [line for line in good if line != "links ok heap-reassembles-after-queue-drained"]),
+        ("the declared-payload send lines dropped", drop("links heapfrag ")),
+        ("one declared-payload send fragment dropped", drop("links heapfrag 4 ")),
+        ("a declared-payload send fragment with another body", swap("links heapfrag 3 ", corrupt_last(good[first("links heapfrag 3 ")]))),
+        ("a declared-payload send fragment one byte over the batch", swap("links heapfrag 0 ", good[first("links heapfrag 0 ")].replace(f" {len(heap_max_bodies()[0])} ", f" {len(heap_max_bodies()[0]) + 1} ", 1))),
+        ("a send capped at 5000 bytes", [line for line in good if not line.startswith("links heapfrag ")] + [f"links heapfrag {i} {len(b)} {b[0]:02x} {sha(b)}" for i, b in enumerate(zenoh_fragment.reference_split(full_key_message(5000), FULL_KEY_BATCH, FULL_KEY_SN))]),
+        ("the wrapping run dropped", drop("links widthsplit 4294967294 ")),
+        ("the wrapping run's last body sized from the five-byte header", swap("links widthsplit 4294967294 2 ", corrupt_last(good[first("links widthsplit 4294967294 2 ")]))),
+        ("the wrapping run reported as an unwrapped split", swap("links widthsplit 4294967294 2 ", good[first("links widthsplit 4294967294 2 ")].replace(f" {len(width_split(0xFFFFFFFE)[2])} ", f" {len(width_split(0xFFFFFFFE)[2]) - 4} ", 1))),
         ("the reuse after a sequence gap dropped", drop("links reuseafter sequence-gap ")),
         ("the reuse after a whole frame mid-run dropped", drop("links reuseafter whole-frame-during-reassembly ")),
         ("the reuse after a best-effort fragment mid-run dropped", drop("links reuseafter best-effort-fragment-during-reassembly ")),
@@ -1021,6 +1084,7 @@ def reference_controls() -> int:
         ("a canonical payload length of 2147483648 against 16384", lambda: zenoh_fragment.decode_message(payload_length_2_31(), max_key=129, max_payload=16384)),
         ("a message cut off inside the attachment", lambda: zenoh_fragment.decode_message(attachment_cut(), max_key=129)),
         ("a run sized from its first fragment's header across a width step", lambda: zenoh_fragment.reassemble(cached_width_split(full_key_message(FULL_KEY_PAYLOAD), FULL_KEY_BATCH, 127), 127, FULL_KEY_BATCH)),
+        ("a run that emits 4294967296 instead of wrapping", lambda: zenoh_fragment.reassemble(cached_width_split(full_key_message(FULL_KEY_PAYLOAD), FULL_KEY_BATCH, 0xFFFFFFFE), 0xFFFFFFFE, FULL_KEY_BATCH)),
         ("a payload shorter than its length says", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(100)[:-10], max_key=129)),
         ("a payload one byte short", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(100)[:-1], max_key=129)),
         ("a last fragment one millisecond past the timeout", lambda: zenoh_fragment.check_deadline(0, TIMEOUT_MS + 1, TIMEOUT_MS)),
@@ -1067,6 +1131,7 @@ def reference_controls() -> int:
         "a canonical attachment length of 2147483648": "not 33 bytes",
         "a canonical payload length of 2147483648 against 16384": "longer than the configuration declares",
         "a message cut off inside the attachment": "truncated",
+        "a run that emits 4294967296 instead of wrapping": "over 32 bits",
         "a run sized from its first fragment's header across a width step": "announced batch",
         "two messages joined in one run": "trailing-bytes",
         "a last fragment one millisecond past the timeout": "reassembly-timeout",

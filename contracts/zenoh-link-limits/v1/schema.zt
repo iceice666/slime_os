@@ -50,9 +50,10 @@ modeFixed :: Text = "fixed";
 modeHeap :: Text = "heap";
 
 -- Source: the network service moves at most one data page per operation (`DATA_BYTES` in
--- `components/proto/src/network_service.rs`), and every batch travels behind a two-byte length.
+-- `components/proto/src/network_service.rs`). A batch is the size of one stream operation, its
+-- two-byte length included, so a fragment body is the batch less those two bytes and a batch of
+-- `dataBytes` is exactly one operation.
 dataBytes :: Int = 4096;
-streamLengthBytes :: Int = 2;
 
 -- Source: the key-expression alias id and the scope every reference to it carries are 16 bits
 -- (`ExprId` is `u16` in `zenoh-protocol` 1.0.0), so a link cannot name more keys than this.
@@ -163,7 +164,7 @@ requiredStack :: Config -> Int
 
 commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
-    && c.batchBytes >= 1 && c.batchBytes + streamLengthBytes <= dataBytes
+    && c.batchBytes >= 1 && c.batchBytes <= dataBytes
     && c.payloadBytes >= 1 && c.payloadBytes <= maxPayloadLengthBytes && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
     && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
@@ -241,7 +242,6 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   modeFixed =;
   modeHeap =;
   dataBytes =;
-  streamLengthBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
   maxKeyLengthBytes =;

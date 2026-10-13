@@ -10,7 +10,7 @@ be: the protocol has no such cap, and the repository's `1` and `12` are the demo
 configuration declares what it needs and the contract checks the declaration is consistent with the
 memory it also declares. The limits it keeps each have a source:
 
-- a batch plus its two-byte stream length must fit one network-service operation, 4096 bytes
+- a batch, which includes its two-byte stream length, must fit one network-service operation, 4096 bytes
   (`DATA_BYTES`, `components/proto/src/network_service.rs`);
 - a key count is at most 65535, because the alias id and the scope every reference carries are 16 bits
   (`ExprId` is `u16` in `zenoh-protocol` 1.0.0);
@@ -27,6 +27,6 @@ The names `demo`, `large` and `heap` are the three configurations the exam pins;
 accepts any set of one or more distinctly named configurations that satisfy the rules.
 
 The decision is [`docs/decisions/zenoh-link-limits.md`](../../docs/decisions/zenoh-link-limits.md); the
-scope is `01a13615-77a9-7cc1-a387-0bad2f8b1f3b`, judged by
+scope is `01a13633-fbb1-7a29-99de-a55b8e135c1f`, judged by
 `scripts/check/check-zenoh-profile0.py --slice links`. The Rust side is the implementation's, not this
 planning contract.
