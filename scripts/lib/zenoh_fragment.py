@@ -223,8 +223,12 @@ def decode_message(
     # extension flag (0x80) is not accepted. A stock publisher addressing a stock listener's alias
     # uses the receiver mapping (0x1d), as the captures do; a peer that declared the alias to this
     # side uses the sender mapping (0x5d), as the whole-frame stock push does.
-    if not msg or msg[0] & 0x9F != PUSH_ALIAS:
-        raise FragmentError("not a PUSH in the alias or full-key form")
+    if not msg:
+        raise FragmentError("malformed-message: an empty message")
+    if msg[0] & 0x1F != PUSH_ALIAS & 0x1F:
+        raise FragmentError("unsupported-message: not a PUSH")
+    if msg[0] & 0x80:
+        raise FragmentError("unsupported-extension: the PUSH carries extensions")
     named = bool(msg[0] & 0x20)
     sender = bool(msg[0] & 0x40)
     scope, at = read_leb32(msg, 1, 16)
@@ -253,8 +257,17 @@ def decode_message(
             raise FragmentError("an alias the session never declared")
         if alias_key is not None and subscribed is not None and alias_key != subscribed:
             raise FragmentError("undeclared-key: the alias stands for a key the subscriber did not declare")
-    if at + 2 > len(msg) or msg[at] != zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z or msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
+    if at >= len(msg):
+        raise FragmentError("truncated: the message ends before the Put")
+    body = msg[at]
+    if body & 0x1F != zenoh_wire.ID_PUT or body & 0x60:
+        raise FragmentError("unsupported-message: not a Put, or a Put with a timestamp or an encoding")
+    if not body & zenoh_wire.FLAG_Z:
         raise FragmentError("a Put without the attachment extension")
+    if at + 1 >= len(msg):
+        raise FragmentError("truncated: the message ends before the Put's extension")
+    if msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
+        raise FragmentError("unsupported-extension: the Put's extension is not the attachment, or is chained")
     at += 2
     att_len, at = read_leb32(msg, at)
     if att_len != zenoh_wire.ATTACHMENT_BYTES:

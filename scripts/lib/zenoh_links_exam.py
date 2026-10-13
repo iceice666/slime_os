@@ -88,6 +88,9 @@ REFUSED_SCENARIOS = (
     # fragment with a malformed sequence number as unsupported-message too, not as the LEB class.
     ("fixed-refuses-fragment-sequence-noncanonical", "unsupported-message"),
     ("fixed-refuses-fragment-sequence-over-32-bits", "unsupported-message"),
+    # A sequence number that ends before it is complete is truncated on a heap link and, as every
+    # malformed sequence number is, unsupported-message on a fixed one.
+    ("fixed-refuses-fragment-sequence-truncated", "unsupported-message"),
     ("fragment-best-effort", "unsupported-message"),
     ("fragment-extension", "unsupported-extension"),
     ("empty-fragment", "malformed-message"),
@@ -95,6 +98,7 @@ REFUSED_SCENARIOS = (
     ("fragment-sequence-gap", "fragment-sequence"),
     # A continuation must carry the next sequence number: one that repeats the number before it or goes
     # back is refused as the gap is, so chunks are never joined out of order.
+    ("fragment-sequence-truncated", "truncated"),
     ("fragment-sequence-duplicate", "fragment-sequence"),
     ("fragment-sequence-backward", "fragment-sequence"),
     # The more flag decides where a message ends, not the payload length: an interior fragment that
@@ -144,6 +148,14 @@ REFUSED_SCENARIOS = (
     # A key named in full is global: one carrying a nonzero scope is relative to an alias, and is refused
     # as the whole-frame decoder refuses it, not delivered as if it were global.
     ("fragmented-put-full-key-nonzero-scope", "invalid-keyexpr"),
+    ("fragmented-put-empty-key", "invalid-keyexpr"),
+    # The PUSH and the Put inside a fragmented message carry what a whole-frame one carries and nothing
+    # more: each of these is refused with the class the corpus gives it.
+    ("fragmented-push-extension-flag", "unsupported-extension"),
+    ("fragmented-put-timestamp-flag", "unsupported-message"),
+    ("fragmented-put-encoding-flag", "unsupported-message"),
+    ("fragmented-put-unknown-extension", "unsupported-extension"),
+    ("fragmented-put-extension-chained", "unsupported-extension"),
     # An alias resolves to the key it was declared for, and that key is then held to the subscription;
     # and a peer that declared an alias addresses it sender-mapped, so the receiver mapping, which
     # names an alias this side declared, is refused where the stock captures use it only because a
@@ -211,8 +223,23 @@ TIMEOUT_MS = CONFIGS[2][10]
 DEADLINE_PAYLOAD = 5000
 
 
-def deadline_line(timeout: int, first: int, last: int, digest: str) -> str:
-    return f"links deadline {timeout} {first} {last} {digest}"
+# A session that has been up a while: the first fragment arrives long after the clock passed the
+# timeout, so a deadline compared with the absolute clock refuses it; a middle fragment arrives one
+# millisecond before the edge, so a deadline refreshed by each continuation accepts the run that is
+# one millisecond late, which it must not.
+DEADLINE_FIRST = 7_000_000
+
+
+def deadline_line(timeout: int, first: int, middle: int, last: int, outcome: str, digest: str) -> str:
+    return f"links deadline {timeout} {first} {middle} {last} {outcome} {digest}"
+
+
+def deadline_lines() -> list[str]:
+    edge, digest = DEADLINE_FIRST + TIMEOUT_MS, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))
+    return [
+        deadline_line(TIMEOUT_MS, DEADLINE_FIRST, edge - 1, edge, "reassembled", digest),
+        deadline_line(TIMEOUT_MS, DEADLINE_FIRST, edge - 1, edge + 1, "reassembly-timeout", "-"),
+    ]
 
 
 def reuse_capacity() -> int:
@@ -273,8 +300,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 158
-PINNED_CONTROLS = 340
+PINNED_CASES = 167
+PINNED_CONTROLS = 368
 
 
 class LinksError(ValueError):
@@ -354,7 +381,7 @@ def good_lines() -> list[str]:
                 for index, body in enumerate(full_key_bodies())
             ]
         if name == "reassembly-completes-at-the-timeout-edge":
-            lines.append(deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))
+            lines += deadline_lines()
         if name == "put-roundtrip-at-the-declared-payload":
             lines += [
                 f"links heapfrag {index} {len(body)} {body[0]:02x} {sha(body)}"
@@ -408,7 +435,7 @@ SHAPES = {
     ("links", "size"): 5,
     ("links", "queue"): 7,
     ("links", "aliased"): 5,
-    ("links", "deadline"): 6,
+    ("links", "deadline"): 8,
     ("links", "reuseafter"): 6,
     ("links", "heapfrag"): 6,
     ("links", "drained"): 5,
@@ -484,12 +511,21 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
 
-    deadline = [(int(f[2]), int(f[3]), int(f[4]), f[5]) for f in only("deadline")]
-    wanted_deadline = [(TIMEOUT_MS, 0, TIMEOUT_MS, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD)))]
-    if deadline != wanted_deadline:
-        raise LinksError(f"a run whose last fragment arrives exactly the declared timeout after the first must reassemble: {wanted_deadline}, reported {deadline}")
-    for _timeout, first, last, _digest in deadline:
-        zenoh_fragment.check_deadline(first, last, TIMEOUT_MS)
+    deadline = [" ".join(f) for f in only("deadline")]
+    if deadline != deadline_lines():
+        raise LinksError(f"a run whose last fragment arrives exactly the declared timeout after the first, which started after the clock had passed it, must reassemble and the same run a millisecond later must not: {deadline_lines()}, reported {deadline}")
+    for line in deadline:
+        _, _, timeout, first, middle, last, outcome, _digest = line.split()
+        if not int(first) <= int(middle) <= int(last):
+            raise LinksError("the fragments of a deadline run arrive out of order")
+        try:
+            zenoh_fragment.check_deadline(int(first), int(last), int(timeout))
+        except zenoh_fragment.FragmentError:
+            if outcome == "reassembled":
+                raise LinksError("a run reported as reassembled outlived its declared timeout") from None
+        else:
+            if outcome != "reassembled":
+                raise LinksError("a run within its declared timeout was reported as refused")
 
     sizes = [(f[2], int(f[3]), int(f[4])) for f in only("size")]
     if [name for name, _, _ in sizes] != [c["name"] for c in pinned_configs()]:
@@ -719,6 +755,16 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out[a], out[b] = out[b], out[a]
         return out
 
+    def with_deadline(a: str, b: str) -> list[str]:
+        out, seen = [], 0
+        for line in good:
+            if line.startswith("links deadline "):
+                out.append((a, b)[seen])
+                seen += 1
+            else:
+                out.append(line)
+        return out
+
     fragment_at = first("links fragment ")
     reassembled_at = first("links reassembled ")
     fullkey_at = first("links fullkey ")
@@ -778,11 +824,15 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("reassembly-one-ms-after-the-timeout admitted instead of refused", drop("links refused reassembly-one-ms-after-the-timeout ")),
         ("reassembly-one-ms-after-the-timeout refused with the wrong class", swap("links refused reassembly-one-ms-after-the-timeout ", "links refused reassembly-one-ms-after-the-timeout over-bound")),
         ("a dropped deadline line", drop("links deadline ")),
-        ("a deadline run with a timeout of one millisecond", swap("links deadline ", deadline_line(1, 0, 1, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))),
-        ("a deadline run that completed one millisecond past the timeout", swap("links deadline ", deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS + 1, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))),
-        ("a deadline run that completed a millisecond before the edge", swap("links deadline ", deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS - 1, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))),
-        ("a deadline run that reassembled to another payload", swap("links deadline ", corrupt_last(good[first("links deadline ")]))),
-        ("a deadline run of another timeout", swap("links deadline ", deadline_line(TIMEOUT_MS + 1, 0, TIMEOUT_MS + 1, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))),
+        ("the late deadline run dropped", [line for line in good if line != deadline_lines()[1]]),
+        ("the deadline run at the edge dropped", [line for line in good if line != deadline_lines()[0]]),
+        ("a deadline measured from time zero", with_deadline(deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS - 1, TIMEOUT_MS, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))), deadline_lines()[1])),
+        ("a late run accepted by a deadline that each continuation refreshes", with_deadline(deadline_lines()[0], deadline_line(TIMEOUT_MS, DEADLINE_FIRST, DEADLINE_FIRST + TIMEOUT_MS - 1, DEADLINE_FIRST + TIMEOUT_MS + 1, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))))),
+        ("a run refused at the edge", with_deadline(deadline_line(TIMEOUT_MS, DEADLINE_FIRST, DEADLINE_FIRST + TIMEOUT_MS - 1, DEADLINE_FIRST + TIMEOUT_MS, "reassembly-timeout", "-"), deadline_lines()[1])),
+        ("a deadline run with a timeout of one millisecond", with_deadline(deadline_line(1, DEADLINE_FIRST, DEADLINE_FIRST, DEADLINE_FIRST + 1, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))), deadline_lines()[1])),
+        ("a deadline run that reassembled to another payload", with_deadline(deadline_lines()[0].rsplit(" ", 1)[0] + " " + sha(b"other"), deadline_lines()[1])),
+        ("a deadline run of another timeout", with_deadline(deadline_line(TIMEOUT_MS + 1, DEADLINE_FIRST, DEADLINE_FIRST + TIMEOUT_MS, DEADLINE_FIRST + TIMEOUT_MS + 1, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))), deadline_lines()[1])),
+        ("a deadline run whose fragments arrive out of order", with_deadline(deadline_line(TIMEOUT_MS, DEADLINE_FIRST, DEADLINE_FIRST + TIMEOUT_MS + 1, DEADLINE_FIRST + TIMEOUT_MS, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))), deadline_lines()[1])),
         ("the timeout-edge scenario dropped", [line for line in good if line != "links ok reassembly-completes-at-the-timeout-edge"]),
         ("fragmented-put-scope-32768 admitted instead of refused", drop("links refused fragmented-put-scope-32768 ")),
         ("fragmented-put-scope-32768 refused with the wrong class", swap("links refused fragmented-put-scope-32768 ", "links refused fragmented-put-scope-32768 over-bound")),
@@ -834,6 +884,24 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("fragment-sequence-backward refused with the wrong class", swap("links refused fragment-sequence-backward ", "links refused fragment-sequence-backward over-bound")),
         ("fragmented-put-full-key-nonzero-scope admitted instead of refused", drop("links refused fragmented-put-full-key-nonzero-scope ")),
         ("fragmented-put-full-key-nonzero-scope refused with the wrong class", swap("links refused fragmented-put-full-key-nonzero-scope ", "links refused fragmented-put-full-key-nonzero-scope over-bound")),
+        ("fragmented-push-extension-flag admitted instead of refused", drop("links refused fragmented-push-extension-flag ")),
+        ("fragmented-push-extension-flag refused with the wrong class", swap("links refused fragmented-push-extension-flag ", "links refused fragmented-push-extension-flag over-bound")),
+        ("fragmented-put-timestamp-flag admitted instead of refused", drop("links refused fragmented-put-timestamp-flag ")),
+        ("fragmented-put-timestamp-flag refused with the wrong class", swap("links refused fragmented-put-timestamp-flag ", "links refused fragmented-put-timestamp-flag over-bound")),
+        ("fragmented-put-encoding-flag admitted instead of refused", drop("links refused fragmented-put-encoding-flag ")),
+        ("fragmented-put-encoding-flag refused with the wrong class", swap("links refused fragmented-put-encoding-flag ", "links refused fragmented-put-encoding-flag over-bound")),
+        ("fragmented-put-unknown-extension admitted instead of refused", drop("links refused fragmented-put-unknown-extension ")),
+        ("fragmented-put-unknown-extension refused with the wrong class", swap("links refused fragmented-put-unknown-extension ", "links refused fragmented-put-unknown-extension over-bound")),
+        ("fragmented-put-extension-chained admitted instead of refused", drop("links refused fragmented-put-extension-chained ")),
+        ("fragmented-put-extension-chained refused with the wrong class", swap("links refused fragmented-put-extension-chained ", "links refused fragmented-put-extension-chained over-bound")),
+        ("fragmented-put-empty-key admitted instead of refused", drop("links refused fragmented-put-empty-key ")),
+        ("fragmented-put-empty-key refused with the wrong class", swap("links refused fragmented-put-empty-key ", "links refused fragmented-put-empty-key over-bound")),
+        ("fragment-sequence-truncated admitted instead of refused", drop("links refused fragment-sequence-truncated ")),
+        ("fragment-sequence-truncated refused with the wrong class", swap("links refused fragment-sequence-truncated ", "links refused fragment-sequence-truncated over-bound")),
+        ("fixed-refuses-fragment-sequence-truncated admitted instead of refused", drop("links refused fixed-refuses-fragment-sequence-truncated ")),
+        ("fixed-refuses-fragment-sequence-truncated refused with the wrong class", swap("links refused fixed-refuses-fragment-sequence-truncated ", "links refused fixed-refuses-fragment-sequence-truncated over-bound")),
+        ("a truncated sequence number refused as malformed-message on a heap link", swap("links refused fragment-sequence-truncated ", "links refused fragment-sequence-truncated malformed-message")),
+        ("a truncated sequence number refused as truncated on a fixed link", swap("links refused fixed-refuses-fragment-sequence-truncated ", "links refused fixed-refuses-fragment-sequence-truncated truncated")),
         ("an interior fragment marked final taken as a complete message", drop("links refused fragment-interior-marked-final ")),
         ("a last fragment still saying more taken as complete", drop("links refused fragment-final-marked-more ")),
         ("an interior fragment marked final refused as reassembly-timeout", swap("links refused fragment-interior-marked-final ", "links refused fragment-interior-marked-final reassembly-timeout")),
@@ -970,6 +1038,24 @@ def reference_controls() -> int:
     stock_references()
     size, batch, sn, *_ = zenoh_fragment.CAPTURES[0]
     bodies = zenoh_fragment.reference_split(zenoh_fragment.message(size), batch, sn)
+    def put_at(message: bytes) -> int:
+        return message.index(bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT]))
+
+    def push_flag(flag: int) -> bytes:
+        whole = bytearray(zenoh_fragment.full_key_for_exam(5))
+        whole[0] |= flag
+        return bytes(whole)
+
+    def put_flag(flag: int) -> bytes:
+        whole = bytearray(zenoh_fragment.full_key_for_exam(5))
+        whole[put_at(bytes(whole))] |= flag
+        return bytes(whole)
+
+    def put_extension(value: int) -> bytes:
+        whole = bytearray(zenoh_fragment.full_key_for_exam(5))
+        whole[put_at(bytes(whole)) + 1] = value
+        return bytes(whole)
+
     def clear_more(body: bytes) -> bytes:
         return bytes([body[0] & ~zenoh_fragment.FLAG_M]) + body[1:]
 
@@ -1127,6 +1213,12 @@ def reference_controls() -> int:
         ("a payload shorter than its length says", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(100)[:-10], max_key=129)),
         ("a payload one byte short", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(100)[:-1], max_key=129)),
         ("a last fragment one millisecond past the timeout", lambda: zenoh_fragment.check_deadline(0, TIMEOUT_MS + 1, TIMEOUT_MS)),
+        ("a last fragment one millisecond past the timeout from a nonzero first timestamp", lambda: zenoh_fragment.check_deadline(DEADLINE_FIRST, DEADLINE_FIRST + TIMEOUT_MS + 1, TIMEOUT_MS)),
+        ("a PUSH with the extension flag", lambda: zenoh_fragment.decode_message(push_flag(0x80), max_key=129)),
+        ("a Put with a timestamp", lambda: zenoh_fragment.decode_message(put_flag(0x20), max_key=129)),
+        ("a Put with an encoding", lambda: zenoh_fragment.decode_message(put_flag(0x40), max_key=129)),
+        ("a Put with an unknown extension", lambda: zenoh_fragment.decode_message(put_extension(0x41), max_key=129)),
+        ("a Put with a chained attachment extension", lambda: zenoh_fragment.decode_message(put_extension(0xC3), max_key=129)),
         ("a last fragment before the first", lambda: zenoh_fragment.check_deadline(10, 9, TIMEOUT_MS)),
         ("a timeout of one millisecond with a last fragment at two", lambda: zenoh_fragment.check_deadline(0, 2, 1)),
         ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
@@ -1176,6 +1268,14 @@ def reference_controls() -> int:
         "a last fragment that still says more follows": "still says more",
         "a repeated final fragment": "not consecutive",
         "a duplicate continuation sequence number": "not consecutive",
+        "a last fragment one millisecond past the timeout from a nonzero first timestamp": "reassembly-timeout",
+        "a PUSH with the extension flag": "unsupported-extension",
+        "a Put with a timestamp": "unsupported-message",
+        "a Put with an encoding": "unsupported-message",
+        "a Put with an unknown extension": "unsupported-extension",
+        "a Put with a chained attachment extension": "unsupported-extension",
+        "a full-key Put with an empty key": "empty key",
+        "a truncated sequence number": "truncated",
         "a backward continuation sequence number": "not consecutive",
         "a full-key Put in a nonzero scope": "nonzero scope",
         "a run sized from its first fragment's header across a width step": "announced batch",
@@ -1233,6 +1333,7 @@ def reference_controls() -> int:
             raise LinksError(f"control: a run across the width step at {start} was not taken")
     for last in (TIMEOUT_MS - 1, TIMEOUT_MS):
         zenoh_fragment.check_deadline(0, last, TIMEOUT_MS)
+        zenoh_fragment.check_deadline(DEADLINE_FIRST, DEADLINE_FIRST + last, TIMEOUT_MS)
     # The demo key is a valid key expression and the subscriber's own, so these refusals are not blanket.
     if zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(1), max_key=129, subscribed=key())["key"] != key().encode():
         raise LinksError("control: the subscriber's own key was not read")
