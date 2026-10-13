@@ -84,7 +84,13 @@ fragmentFramingBytes :: Int = 8;
 -- implementation's host tests hold these to `size_of` of the real types.
 stackFactor :: Int = 8;
 slotOverheadBytes :: Int = 16;
-noticeOverheadBytes :: Int = 24;
+noticeOverheadBytes :: Int = 40;
+
+-- The session machine's own fixed storage: its two subscriber slots, its alias, its cookie and
+-- identity. Measured once on the current types as 608 bytes with a `size_of` test, and held here
+-- with a margin; the slot term below counts the key and subscriber slots a configuration declares
+-- beyond those, so the two overlap and the sum is conservative.
+sessionFixedBytes :: Int = 640;
 noticesPerSample :: Int = 2;
 
 d ::= import stdlib.data;
@@ -143,7 +149,7 @@ noticeBytes :: Config -> Int
 
 -- The memory the owning component declares for the link's fixed storage.
 requiredStack :: Config -> Int
-  = c => stackFactor * c.batchBytes + slotBytes c + noticeBytes c;
+  = c => stackFactor * c.batchBytes + sessionFixedBytes + slotBytes c + noticeBytes c;
 
 commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
@@ -160,11 +166,13 @@ fixedOk :: Config -> Bool
     && c.reassemblyTimeoutMs == 0 && c.heapBytes == 0;
 
 -- The heap a heap link needs: a sample is handed out as a slice of the buffer it was reassembled
--- into, so every outstanding sample holds a whole message until it is consumed, and one more
--- message is being reassembled. A heap that holds fewer would have to refuse an admitted sample or
--- overwrite one the component still holds.
+-- into, so every queued sample notice holds a whole message until it is consumed, and one more
+-- message is being reassembled. The link queues `noticesPerSample` notices for each outstanding
+-- sample (`NOTICES = 2 * MAX_EVENTS` in `zenoh_link.rs`), so that many messages can be held at
+-- once. A heap that holds fewer would have to refuse an admitted sample or overwrite one the
+-- component still holds.
 heapNeeded :: Config -> Int
-  = c => (c.outstandingSamples + 1) * messageBytes c;
+  = c => (noticesPerSample * c.outstandingSamples + 1) * messageBytes c;
 
 -- A heap link: the batch must carry more than a fragment's own framing, so a message makes
 -- progress, a stalled reassembly must expire, and the heap the component's allocator provides holds
@@ -230,6 +238,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   stackFactor =;
   slotOverheadBytes =;
   noticeOverheadBytes =;
+  sessionFixedBytes =;
   noticesPerSample =;
   messageBytes =;
   heapNeeded =;

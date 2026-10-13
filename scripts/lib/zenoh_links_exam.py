@@ -39,7 +39,7 @@ CONFIG_FIELDS = (
 CONFIGS = (
     ("demo", "fixed", 512, 12, 129, 33, 1, 1, 4, 16384, 0, 0),
     ("large", "fixed", 2048, 1024, 129, 33, 4, 4, 4, 32768, 0, 0),
-    ("heap", "heap", 2048, 16384, 129, 33, 4, 4, 4, 32768, 5000, 82890),
+    ("heap", "heap", 2048, 16384, 129, 33, 4, 4, 4, 32768, 5000, 149202),
 )
 
 # The edge scenarios: our own first frame on the link carries this sequence number, and the Put
@@ -59,6 +59,8 @@ OK_SCENARIOS = (
     "boundary-whole-then-fragmented",
     "two-messages-in-a-row",
     "reassembly-after-timeout-reuses-storage",
+    "heap-declared-payload-boundary",
+    "stack-covers-measured-sizes",
     "heap-storage-from-component",
     "put-roundtrip-5000-2048",
     "fragment-run-advances-session-sequence",
@@ -96,6 +98,12 @@ REFUSED_SCENARIOS = (
     ("fragmented-put-alias-scope-zero", "invalid-keyexpr"),
     ("fragmented-put-alias-scope-65536", "leb128-overflow"),
     ("message-over-declared-heap", "over-bound"),
+    # The declared payload is enforced as a limit of its own, not only through the heap: with storage
+    # large enough for it, a payload one byte over what the configuration declares is refused.
+    ("payload-over-declared-with-enough-storage", "over-bound"),
+    # The link announced its batch, so a fragment longer than the batch less the stream length is
+    # refused, as a stream prefix longer than the batch is.
+    ("fragment-over-the-announced-batch", "length-exceeds-batch"),
     ("reassembly-timeout", "reassembly-timeout"),
     ("storage-refused", "out-of-memory"),
     ("fifth-subscriber", "subscriber-limit"),
@@ -113,14 +121,17 @@ ADVANCE = (
 # Storage of exactly one message of this payload: a timed-out reassembly that kept its buffer leased
 # leaves no room for the next, so a successful reassembly into it proves the storage was released.
 REUSE_SIZE = 5000
+# The heap configuration's declared payload: a Put of exactly this size reassembles, and one byte
+# more is refused whatever storage it is given.
+HEAP_PAYLOAD = CONFIGS[2][3]
 
 
 def reuse_capacity() -> int:
     return REUSE_SIZE + 129 + 33 + FRAMING
 
 
-PINNED_CASES = 68
-PINNED_CONTROLS = 130
+PINNED_CASES = 76
+PINNED_CONTROLS = 147
 
 
 class LinksError(ValueError):
@@ -199,6 +210,10 @@ def good_lines() -> list[str]:
             ]
         if name == "reassembly-after-timeout-reuses-storage":
             lines.append(f"links reuse {reuse_capacity()} {REUSE_SIZE} {sha(zenoh_fragment.payload_bytes(REUSE_SIZE))}")
+        if name == "heap-declared-payload-boundary":
+            lines.append(f"links payload {HEAP_PAYLOAD} {heap_needed(pinned_configs()[2])} {sha(zenoh_fragment.payload_bytes(HEAP_PAYLOAD))}")
+        if name == "stack-covers-measured-sizes":
+            lines += [f"links size {c['name']} {required_stack(c)} {c['stackBytes']}" for c in pinned_configs()]
         if name == "fragment-run-advances-session-sequence":
             count = len(full_key_bodies())
             lines += [
@@ -220,6 +235,8 @@ SHAPES = {
     ("links", "boundary"): 5,
     ("links", "advance"): 6,
     ("links", "reuse"): 5,
+    ("links", "payload"): 5,
+    ("links", "size"): 5,
 }
 
 
@@ -276,6 +293,20 @@ def judge(lines: list[str]) -> tuple[int, int]:
     if boundary != [(edge, "whole", 1), (edge + 1, "fragmented", 2)]:
         raise LinksError(f"the edge between whole and fragmented is at {edge} payload bytes, reported {boundary}")
 
+    payload = [(int(f[2]), int(f[3]), f[4]) for f in only("payload")]
+    wanted_payload = [(HEAP_PAYLOAD, heap_needed(pinned_configs()[2]), sha(zenoh_fragment.payload_bytes(HEAP_PAYLOAD)))]
+    if payload != wanted_payload:
+        raise LinksError(f"the declared payload of {HEAP_PAYLOAD} bytes must reassemble into the declared heap: {wanted_payload}, reported {payload}")
+
+    sizes = [(f[2], int(f[3]), int(f[4])) for f in only("size")]
+    if [name for name, _, _ in sizes] != [c["name"] for c in pinned_configs()]:
+        raise LinksError(f"stack sizes reported for {[n for n, _, _ in sizes]}, the exam pins {[c['name'] for c in pinned_configs()]}")
+    for (name, measured, declared), config in zip(sizes, pinned_configs(), strict=True):
+        if declared != config["stackBytes"]:
+            raise LinksError(f"{name}: the stack declared is {declared}, the exam pins {config['stackBytes']}")
+        if not 0 < measured <= declared:
+            raise LinksError(f"{name}: the link's arrays, slots, notices and session measure {measured} bytes with size_of, past the {declared} declared")
+
     reuse = [(int(f[2]), int(f[3]), f[4]) for f in only("reuse")]
     wanted_reuse = [(reuse_capacity(), REUSE_SIZE, sha(zenoh_fragment.payload_bytes(REUSE_SIZE)))]
     if reuse != wanted_reuse:
@@ -293,7 +324,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes)
     return positive, len(refused)
 
 
@@ -336,13 +367,13 @@ def contract_accepts(text: str) -> bool:
 
 
 # The arithmetic the contract also holds; kept here so a control can sit exactly on a boundary.
-FRAMING, FRAGMENT_FRAMING, STACK_FACTOR, SLOT, NOTICE, NOTICES = 32, 8, 8, 16, 24, 2
+FRAMING, FRAGMENT_FRAMING, STACK_FACTOR, SLOT, NOTICE, NOTICES, SESSION = 32, 8, 8, 16, 40, 2, 640
 
 
 def required_stack(c: dict) -> int:
     slots = (c["maxKeys"] + c["maxSubscribers"]) * (c["keyBytes"] + SLOT)
     payload = c["payloadBytes"] if c["mode"] == "fixed" else 0
-    return STACK_FACTOR * c["batchBytes"] + slots + NOTICES * c["outstandingSamples"] * (NOTICE + payload)
+    return STACK_FACTOR * c["batchBytes"] + SESSION + slots + NOTICES * c["outstandingSamples"] * (NOTICE + payload)
 
 
 def message_bytes(c: dict) -> int:
@@ -351,8 +382,9 @@ def message_bytes(c: dict) -> int:
 
 def heap_needed(c: dict) -> int:
     """A heap link hands each sample out as a slice of the buffer it was reassembled into, so every
-    outstanding sample holds a whole message until it is consumed, and one more is being reassembled."""
-    return (c["outstandingSamples"] + 1) * message_bytes(c)
+    queued notice holds a whole message until it is consumed (two notices per outstanding sample), and one
+    more is being reassembled."""
+    return (NOTICES * c["outstandingSamples"] + 1) * message_bytes(c)
 
 
 def limits_cases() -> list[tuple[str, list[dict], bool]]:
@@ -394,7 +426,8 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a heap exactly every outstanding sample and the message being reassembled", trio(heap=dict(heap, heapBytes=heap_needed(heap))), True),
         ("a heap one byte under that", trio(heap=dict(heap, heapBytes=heap_needed(heap) - 1)), False),
         ("a heap of exactly one message with four outstanding samples", trio(heap=dict(heap, heapBytes=message_bytes(heap))), False),
-        ("one outstanding sample needs two messages of heap", trio(heap=dict(heap, outstandingSamples=1, heapBytes=2 * message_bytes(heap))), True),
+        ("one outstanding sample needs three messages of heap (two queued notices and one in progress)", trio(heap=dict(heap, outstandingSamples=1, heapBytes=3 * message_bytes(heap))), True),
+        ("one outstanding sample with two messages of heap", trio(heap=dict(heap, outstandingSamples=1, heapBytes=2 * message_bytes(heap))), False),
         ("one outstanding sample with one message of heap", trio(heap=dict(heap, outstandingSamples=1, heapBytes=message_bytes(heap))), False),
         ("no heap declared", trio(heap=dict(heap, heapBytes=0)), False),
         ("a heap link with one byte too little stack", trio(heap=dict(heap, stackBytes=required_stack(heap) - 1)), False),
@@ -483,6 +516,20 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a changed large configuration", swap("links config large", good[config_at].replace(" 2048 1024 ", " 2048 1025 ", 1))),
         ("a missing heap configuration", drop("links config heap")),
         ("the configurations in another order", swapped(0, 1)),
+        ("a dropped declared-payload line", drop("links payload ")),
+        ("the declared payload reported as 5000 bytes", swap("links payload ", good[first("links payload ")].replace(f" {HEAP_PAYLOAD} ", " 5000 ", 1))),
+        ("the declared payload reassembled to another payload", swap("links payload ", corrupt_last(good[first("links payload ")]))),
+        ("the declared payload into storage of one message", swap("links payload ", good[first("links payload ")].replace(f" {heap_needed(pinned_configs()[2])} ", f" {message_bytes(pinned_configs()[2])} ", 1))),
+        ("the stack sizes dropped", drop("links size ")),
+        ("one stack size dropped", drop("links size large ")),
+        ("a measured size one byte over the declared stack", swap("links size large ", f"links size large {pinned_configs()[1]['stackBytes'] + 1} {pinned_configs()[1]['stackBytes']}")),
+        ("a measured size of zero", swap("links size demo ", f"links size demo 0 {pinned_configs()[0]['stackBytes']}")),
+        ("a declared stack that differs from the pinned one", swap("links size heap ", f"links size heap 17736 {pinned_configs()[2]['stackBytes'] - 1}")),
+        ("a size reported for a configuration that is not pinned", good + ["links size invented 1 1"]),
+        ("a payload one byte over the declared one admitted", drop("links refused payload-over-declared-with-enough-storage ")),
+        ("a payload over the declared one refused as out-of-memory", swap("links refused payload-over-declared-with-enough-storage ", "links refused payload-over-declared-with-enough-storage out-of-memory")),
+        ("a fragment over the announced batch admitted", drop("links refused fragment-over-the-announced-batch ")),
+        ("a fragment over the announced batch refused as over-bound", swap("links refused fragment-over-the-announced-batch ", "links refused fragment-over-the-announced-batch over-bound")),
         ("a dropped storage-reuse line", drop("links reuse ")),
         ("reuse reported into storage larger than one message", swap("links reuse ", good[first("links reuse ")].replace(f" {reuse_capacity()} ", f" {reuse_capacity() * 2} ", 1))),
         ("reuse reported into storage one byte short of the message", swap("links reuse ", good[first("links reuse ")].replace(f" {reuse_capacity()} ", f" {reuse_capacity() - 1} ", 1))),
@@ -572,6 +619,8 @@ def reference_controls() -> int:
         ("a fragment with no data", lambda: zenoh_fragment.decode_fragment(bodies[0][:5])),
         ("a message whose payload length is wrong", lambda: zenoh_fragment.decode_message(zenoh_fragment.message(size)[:-1])),
         ("a batch too small for a fragment", lambda: zenoh_fragment.reference_split(b"x" * 10, 8, 0)),
+        ("a fragment one byte over the announced batch", lambda: zenoh_fragment.decode_fragment(bodies[0] + b"x", batch)),
+        ("a run holding a fragment over the announced batch", lambda: zenoh_fragment.reassemble([bodies[0] + b"x", *bodies[1:]], sn, batch)),
         ("an alias scope of 0", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x00])))),
         ("an alias scope of 65536", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x80, 0x80, 0x04])))),
         ("an alias scope of four bytes", lambda: zenoh_fragment.decode_message(with_scope(bytes([0xFF, 0xFF, 0xFF, 0x7F])))),
@@ -597,6 +646,11 @@ def reference_controls() -> int:
             refused += 1
             continue
         raise LinksError(f"control: the fragment reference accepted {label}")
+    # A fragment exactly at the announced batch less the stream length is taken.
+    if len(bodies[0]) != batch - 2 or zenoh_fragment.decode_fragment(bodies[0], batch).sn != sn:
+        raise LinksError("control: a fragment at the announced batch was not taken")
+    if zenoh_fragment.reassemble(bodies, sn, batch) != zenoh_fragment.message(size):
+        raise LinksError("control: a run within the announced batch was not taken")
     # The largest and the smallest valid alias scope are read, so the scope refusals are not a blanket one.
     for good_scope in (bytes([0x01]), bytes([0xFF, 0xFF, 0x03])):
         if zenoh_fragment.decode_message(with_scope(good_scope))["payload"] != zenoh_fragment.payload_bytes(1):

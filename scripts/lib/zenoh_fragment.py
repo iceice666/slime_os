@@ -116,10 +116,15 @@ class Fragment:
     data: bytes
 
 
-def decode_fragment(body: bytes) -> Fragment:
-    """Decode one FRAGMENT body; refuse anything that is not exactly the reliable form."""
+def decode_fragment(body: bytes, batch: int | None = None) -> Fragment:
+    """Decode one FRAGMENT body; refuse anything that is not exactly the reliable form.
+
+    When the batch the link announced is given, a body longer than the batch less the two-byte
+    stream length is refused: the peer was told that size and must not send more."""
     if not body:
         raise FragmentError("empty fragment")
+    if batch is not None and len(body) > batch - STREAM_LENGTH_BYTES:
+        raise FragmentError("a fragment longer than the announced batch")
     header = body[0]
     if header & 0x1F != ID_FRAGMENT:
         raise FragmentError("not a FRAGMENT")
@@ -133,7 +138,7 @@ def decode_fragment(body: bytes) -> Fragment:
     return Fragment(more=bool(header & FLAG_M), sn=sn, data=body[at:])
 
 
-def reassemble(bodies: list[bytes], expected_sn: int | None = None) -> bytes:
+def reassemble(bodies: list[bytes], expected_sn: int | None = None, batch: int | None = None) -> bytes:
     """Join a run of FRAGMENT bodies into the message, refusing a run that is not a whole message.
 
     The run must be consecutive sequence numbers, every fragment but the last marked "more", and
@@ -143,7 +148,7 @@ def reassemble(bodies: list[bytes], expected_sn: int | None = None) -> bytes:
     number is."""
     if not bodies:
         raise FragmentError("no fragments")
-    parts = [decode_fragment(body) for body in bodies]
+    parts = [decode_fragment(body, batch) for body in bodies]
     if expected_sn is not None and parts[0].sn != expected_sn & 0xFFFFFFFF:
         raise FragmentError("the first fragment is not the session's next sequence number")
     for earlier, later in zip(parts, parts[1:], strict=False):
