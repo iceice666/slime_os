@@ -118,10 +118,12 @@ failure-marker mutations to them.
   halves. The corrected exam checks causal order only and landed as its own
   planning change; the bytes, values, teardown order and health census were never
   in question.
-- **No keep-alive.** The decoder refuses message id 4, so only traffic renews the
-  lease; a link quiet for longer than the peer's lease is closed. The demo is well
-  inside the 2 s lease, and the behaviour is tested, not exercised on a quiet
-  link under QEMU.
+- **Keep-alive is host-tested, not exercised under QEMU.** The decoder takes message
+  id 4 and an open session sends one every quarter of the lease it announced when it
+  has sent nothing else ([`../decisions/zenoh-stock-peer.md`](../decisions/zenoh-stock-peer.md));
+  a link quiet for longer than the peer's lease is closed. The demo is well inside
+  the 2 s lease, so the behaviour is tested on the host and against a stock peer,
+  and not exercised on a quiet link under QEMU.
 - The nodes' reported batches are judged against an independent reference, but
   the guest chooses what it prints, and the loopback backend gives no packet
   capture.
