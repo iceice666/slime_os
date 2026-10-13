@@ -96,6 +96,8 @@ REFUSED_SCENARIOS = (
     ("fragmented-put-without-attachment", "malformed-message"),
     ("fragmented-put-with-short-attachment", "malformed-message"),
     ("fragmented-put-gid-length-15", "malformed-message"),
+    ("fragmented-put-gid-length-17", "malformed-message"),
+    ("fragmented-put-attachment-34-bytes", "over-bound"),
     ("fragmented-put-alias-scope-zero", "invalid-keyexpr"),
     ("fragmented-put-alias-scope-65536", "leb128-overflow"),
     ("message-over-declared-heap", "over-bound"),
@@ -131,8 +133,8 @@ def reuse_capacity() -> int:
     return REUSE_SIZE + 129 + 33 + FRAMING
 
 
-PINNED_CASES = 77
-PINNED_CONTROLS = 158
+PINNED_CASES = 79
+PINNED_CONTROLS = 166
 
 
 class LinksError(ValueError):
@@ -307,6 +309,8 @@ def judge(lines: list[str]) -> tuple[int, int]:
             raise LinksError(f"{name}: the stack declared is {declared}, the exam pins {config['stackBytes']}")
         if not 0 < measured <= declared:
             raise LinksError(f"{name}: the link's arrays, slots, notices and session measure {measured} bytes with size_of, past the {declared} declared")
+        if measured > required_stack(config):
+            raise LinksError(f"{name}: the link measures {measured} bytes with size_of, past the {required_stack(config)} the contract's formula certifies for it")
 
     reuse = [(int(f[2]), int(f[3]), f[4]) for f in only("reuse")]
     wanted_reuse = [(reuse_capacity(), REUSE_SIZE, sha(zenoh_fragment.payload_bytes(REUSE_SIZE)))]
@@ -443,6 +447,8 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=heap_needed(dict(heap, attachmentBytes=1)))), False),
         ("a 65535-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65535, heapBytes=heap_needed(dict(heap, keyBytes=65535)))), True),
         ("a 65536-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65536, heapBytes=heap_needed(dict(heap, keyBytes=65536)))), False),
+        ("a payload of 4294967295 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967295, heapBytes=heap_needed(dict(heap, payloadBytes=4294967295)))), True),
+        ("a payload of 4294967296 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967296, heapBytes=heap_needed(dict(heap, payloadBytes=4294967296)))), False),
         ("no keys", trio(large=dict(large, maxKeys=0)), False),
         ("one key and one subscriber", trio(large=exact(large, maxKeys=1, maxSubscribers=1)), True),
         ("no subscribers", trio(large=dict(large, maxSubscribers=0)), False),
@@ -537,6 +543,8 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("the stack sizes dropped", drop("links size ")),
         ("one stack size dropped", drop("links size large ")),
         ("a measured size one byte over the declared stack", swap("links size large ", f"links size large {pinned_configs()[1]['stackBytes'] + 1} {pinned_configs()[1]['stackBytes']}")),
+        ("a measured size one byte over the contract's formula but under the declared stack", swap("links size large ", f"links size large {required_stack(pinned_configs()[1]) + 1} {pinned_configs()[1]['stackBytes']}")),
+        ("a measured size well over the formula and under the declared stack", swap("links size heap ", f"links size heap {pinned_configs()[2]['stackBytes'] - 1} {pinned_configs()[2]['stackBytes']}")),
         ("a measured size of zero", swap("links size demo ", f"links size demo 0 {pinned_configs()[0]['stackBytes']}")),
         ("a declared stack that differs from the pinned one", swap("links size heap ", f"links size heap 17736 {pinned_configs()[2]['stackBytes'] - 1}")),
         ("a size reported for a configuration that is not pinned", good + ["links size invented 1 1"]),
@@ -557,6 +565,10 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a fragmented Put without the attachment refused with the wrong class", swap("links refused fragmented-put-without-attachment ", "links refused fragmented-put-without-attachment unsupported-extension")),
         ("a fragmented Put with a short attachment admitted", drop("links refused fragmented-put-with-short-attachment ")),
         ("a fragmented Put with a wrong GID length admitted", drop("links refused fragmented-put-gid-length-15 ")),
+        ("a fragmented Put with a GID length of 17 admitted", drop("links refused fragmented-put-gid-length-17 ")),
+        ("a fragmented Put with a GID length of 17 refused with the wrong class", swap("links refused fragmented-put-gid-length-17 ", "links refused fragmented-put-gid-length-17 over-bound")),
+        ("a fragmented Put with a 34-byte attachment admitted", drop("links refused fragmented-put-attachment-34-bytes ")),
+        ("a fragmented Put with a 34-byte attachment refused as malformed-message", swap("links refused fragmented-put-attachment-34-bytes ", "links refused fragmented-put-attachment-34-bytes malformed-message")),
         ("a fragmented Put with a wrong GID length refused with the wrong class", swap("links refused fragmented-put-gid-length-15 ", "links refused fragmented-put-gid-length-15 unsupported-extension")),
         ("a fragmented alias scope of 0 admitted", drop("links refused fragmented-put-alias-scope-zero ")),
         ("a fragmented alias scope of 65536 admitted", drop("links refused fragmented-put-alias-scope-65536 ")),
@@ -621,6 +633,13 @@ def reference_controls() -> int:
         whole[whole.index(bytes([zenoh_wire.EXT_ATTACHMENT])) + 2 + 16] = length
         return bytes(whole)
 
+    def long_attachment(payload: int) -> bytes:
+        att = zenoh_fragment.attachment() + b"\x00"
+        return (
+            bytes([0x1D, 0x01, zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])
+            + zenoh_wire.leb128(len(att)) + att + zenoh_wire.leb128(payload) + zenoh_fragment.payload_bytes(payload)
+        )
+
     def short_attachment(payload: int) -> bytes:
         att = zenoh_fragment.attachment()[:32]
         return (
@@ -650,6 +669,7 @@ def reference_controls() -> int:
         ("a fragmented Put without the attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(no_attachment(3000), 512, sn)))),
         ("a fragmented Put whose GID length byte is 15", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(bad_gid(3000, 15), 512, sn)))),
         ("a fragmented Put whose GID length byte is 17", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(bad_gid(3000, 17), 512, sn)))),
+        ("a fragmented Put with a 34-byte attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(long_attachment(3000), 512, sn)))),
         ("a fragmented Put with a 32-byte attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(short_attachment(3000), 512, sn)))),
         ("a run replayed from before the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn + 1000)),
         ("a run that skips ahead of the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn - 1)),

@@ -70,6 +70,11 @@ requiredAttachmentBytes :: Int = 33;
 -- a key longer than this can be neither encoded nor decoded.
 maxKeyLengthBytes :: Int = 65535;
 
+-- Source: a payload's length travels as a 32-bit variable-length field (`LEB128_MAX_BITS` in
+-- `contracts/zenoh-profile/v1`), which `push` reads with that width, and the encoder converts a
+-- slice length to `u32`, so a payload longer than this can be neither encoded nor decoded.
+maxPayloadLengthBytes :: Int = 4294967295;
+
 -- The bytes a PUSH and a Put add around their key, attachment and payload, and the frame header
 -- before them: the frame header and a five-byte sequence number, the push header, the scope, a
 -- two-byte key length, the Put header, the attachment extension and its length, and a two-byte
@@ -159,7 +164,7 @@ requiredStack :: Config -> Int
 commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
     && c.batchBytes >= 1 && c.batchBytes + streamLengthBytes <= dataBytes
-    && c.payloadBytes >= 1 && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
+    && c.payloadBytes >= 1 && c.payloadBytes <= maxPayloadLengthBytes && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
     && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
     && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
@@ -240,6 +245,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   aliasIds =;
   requiredAttachmentBytes =;
   maxKeyLengthBytes =;
+  maxPayloadLengthBytes =;
   framingBytes =;
   fragmentFramingBytes =;
   stackFactor =;
