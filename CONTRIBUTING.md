@@ -13,7 +13,7 @@ combine a new item and its implementation, or stack implementation on
 unmerged planning; CI refuses a pull request that does both. A work-item
 proposal PR is the bootstrap exception: it needs no existing item. A pull
 request that touches neither the product tree nor the grader closure — CI
-workflows, this file, `AGENTS.md`, `docs/` — needs no work item at all; see
+workflows outside `codePaths`, this file, `AGENTS.md`, `docs/` — needs no work item at all; see
 [Pull request scope](#pull-request-scope).
 
 **PR merged != work item done.** Completion requires the item's exit conditions
@@ -252,7 +252,12 @@ was unchanged. Missing or malformed revision policies refuse classification.
 | **product** | every other `codePaths` entry in `.devloop/policy.json`: `slime-root/`, `components/`, `contracts/`, `boot-contracts/`, `sel4/`, build inputs, pins, toolchain configuration | needs a landed work item; **never** in a PR that adds one |
 | **interface** | an **added** `contracts/<name>/v<N>/schema.zt`, or a contract's `README.md` — the boundary a grader binds to | needs a landed work item; may land with the item as part of its exam. `gen_rust.zt`, generated bindings, system specs, and a modified or renamed schema are product |
 | **derived** | regenerated closure records under `contracts/system-image-closure/v2/{closures,negative}/` and `contracts/system-test-run/v1/runs/` | mirrors whatever else changed; never decides |
-| **other** | `.github/`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
+| **other** | `.github/` paths outside `codePaths`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
+
+The CI, MyQue projection, closeout and retirement workflow files are explicitly
+in `codePaths`: their contents affect shared-tool cache qualification, so edits
+stale evidence and follow the product-classified planning-first rule. Other
+workflow files remain process changes unless explicitly covered.
 
 Two rules follow. A pull request that **adds** a `.tasks/items/*.md` file may
 change grader, interface, derived and other paths — the exam and the schema it
