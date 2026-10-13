@@ -95,6 +95,7 @@ REFUSED_SCENARIOS = (
     # The Put inside a fragmented message is held to what a single-batch Put is held to, in heap mode.
     ("fragmented-put-without-attachment", "malformed-message"),
     ("fragmented-put-with-short-attachment", "malformed-message"),
+    ("fragmented-put-gid-length-15", "malformed-message"),
     ("fragmented-put-alias-scope-zero", "invalid-keyexpr"),
     ("fragmented-put-alias-scope-65536", "leb128-overflow"),
     ("message-over-declared-heap", "over-bound"),
@@ -130,8 +131,8 @@ def reuse_capacity() -> int:
     return REUSE_SIZE + 129 + 33 + FRAMING
 
 
-PINNED_CASES = 76
-PINNED_CONTROLS = 147
+PINNED_CASES = 77
+PINNED_CONTROLS = 158
 
 
 class LinksError(ValueError):
@@ -440,6 +441,19 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("an attachment of 34 bytes, one byte over", trio(large=exact(large, attachmentBytes=34)), False),
         ("an attachment of 1 byte", trio(large=exact(large, attachmentBytes=1)), False),
         ("a heap link certifying storage for a 1-byte attachment", trio(heap=exact(heap, attachmentBytes=1, heapBytes=heap_needed(dict(heap, attachmentBytes=1)))), False),
+        ("a 65535-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65535, heapBytes=heap_needed(dict(heap, keyBytes=65535)))), True),
+        ("a 65536-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65536, heapBytes=heap_needed(dict(heap, keyBytes=65536)))), False),
+        ("no keys", trio(large=dict(large, maxKeys=0)), False),
+        ("one key and one subscriber", trio(large=exact(large, maxKeys=1, maxSubscribers=1)), True),
+        ("no subscribers", trio(large=dict(large, maxSubscribers=0)), False),
+        ("a negative key count", trio(large=dict(large, maxKeys=-1)), False),
+        ("a zero-byte payload", trio(large=dict(large, payloadBytes=0)), False),
+        ("a one-byte payload", trio(large=exact(large, payloadBytes=1)), True),
+        ("a zero-byte key", trio(large=dict(large, keyBytes=0)), False),
+        ("a one-byte key", trio(large=exact(large, keyBytes=1)), True),
+        ("one outstanding sample", trio(large=exact(large, outstandingSamples=1)), True),
+        ("a name of 16 bytes", trio(large=dict(large, name="n" * 16)), True),
+        ("a name of 17 bytes", trio(large=dict(large, name="n" * 17)), False),
         ("a field the contract does not name", [dict(demo, note="x")] + [large, heap], False),
         ("a removed field", [{k: v for k, v in demo.items() if k != "heapBytes"}, large, heap], False),
     ]
@@ -542,6 +556,8 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a fragmented Put without the attachment admitted", drop("links refused fragmented-put-without-attachment ")),
         ("a fragmented Put without the attachment refused with the wrong class", swap("links refused fragmented-put-without-attachment ", "links refused fragmented-put-without-attachment unsupported-extension")),
         ("a fragmented Put with a short attachment admitted", drop("links refused fragmented-put-with-short-attachment ")),
+        ("a fragmented Put with a wrong GID length admitted", drop("links refused fragmented-put-gid-length-15 ")),
+        ("a fragmented Put with a wrong GID length refused with the wrong class", swap("links refused fragmented-put-gid-length-15 ", "links refused fragmented-put-gid-length-15 unsupported-extension")),
         ("a fragmented alias scope of 0 admitted", drop("links refused fragmented-put-alias-scope-zero ")),
         ("a fragmented alias scope of 65536 admitted", drop("links refused fragmented-put-alias-scope-65536 ")),
         ("a fragmented alias scope of 65536 refused with the wrong class", swap("links refused fragmented-put-alias-scope-65536 ", "links refused fragmented-put-alias-scope-65536 invalid-keyexpr")),
@@ -600,6 +616,11 @@ def reference_controls() -> int:
     def no_attachment(payload: int) -> bytes:
         return bytes([0x1D, 0x01, zenoh_wire.ID_PUT]) + zenoh_wire.leb128(payload) + zenoh_fragment.payload_bytes(payload)
 
+    def bad_gid(payload: int, length: int) -> bytes:
+        whole = bytearray(zenoh_fragment.message(payload))
+        whole[whole.index(bytes([zenoh_wire.EXT_ATTACHMENT])) + 2 + 16] = length
+        return bytes(whole)
+
     def short_attachment(payload: int) -> bytes:
         att = zenoh_fragment.attachment()[:32]
         return (
@@ -627,6 +648,8 @@ def reference_controls() -> int:
         ("a noncanonical alias scope of 1", lambda: zenoh_fragment.decode_message(with_scope(bytes([0x81, 0x00])))),
         ("two messages joined in one run", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(zenoh_fragment.message(1000) + zenoh_fragment.message(1000), 512, sn)))),
         ("a fragmented Put without the attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(no_attachment(3000), 512, sn)))),
+        ("a fragmented Put whose GID length byte is 15", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(bad_gid(3000, 15), 512, sn)))),
+        ("a fragmented Put whose GID length byte is 17", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(bad_gid(3000, 17), 512, sn)))),
         ("a fragmented Put with a 32-byte attachment", lambda: zenoh_fragment.decode_message(zenoh_fragment.reassemble(zenoh_fragment.reference_split(short_attachment(3000), 512, sn)))),
         ("a run replayed from before the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn + 1000)),
         ("a run that skips ahead of the session's next sequence number", lambda: zenoh_fragment.reassemble(bodies, sn - 1)),

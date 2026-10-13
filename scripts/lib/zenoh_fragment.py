@@ -181,6 +181,8 @@ def decode_message(msg: bytes) -> dict:
     if att_len != zenoh_wire.ATTACHMENT_BYTES or at + att_len > len(msg):
         raise FragmentError("the attachment is not 33 bytes")
     att = msg[at : at + att_len]
+    if att[16] != zenoh_wire.GID_BYTES:
+        raise FragmentError("the attachment's GID length byte is not 16")
     at += att_len
     size, at = read_leb32(msg, at)
     if at + size != len(msg):

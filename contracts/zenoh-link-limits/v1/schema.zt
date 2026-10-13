@@ -65,6 +65,11 @@ aliasIds :: Int = 65535;
 -- a later item.
 requiredAttachmentBytes :: Int = 33;
 
+-- Source: a key's length travels as a 16-bit variable-length field (`contracts/zenoh-profile/v1`:
+-- "key scope, key length, cookie length"), which `key_reference` reads with `LEB128_SHORT_BITS`, so
+-- a key longer than this can be neither encoded nor decoded.
+maxKeyLengthBytes :: Int = 65535;
+
 -- The bytes a PUSH and a Put add around their key, attachment and payload, and the frame header
 -- before them: the frame header and a five-byte sequence number, the push header, the scope, a
 -- two-byte key length, the Put header, the attachment extension and its length, and a two-byte
@@ -154,7 +159,8 @@ requiredStack :: Config -> Int
 commonOk :: Config -> Bool
   = c => t.length c.name >= 1 && t.length c.name <= 16
     && c.batchBytes >= 1 && c.batchBytes + streamLengthBytes <= dataBytes
-    && c.payloadBytes >= 1 && c.keyBytes >= 1 && c.attachmentBytes == requiredAttachmentBytes
+    && c.payloadBytes >= 1 && c.keyBytes >= 1 && c.keyBytes <= maxKeyLengthBytes
+    && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
     && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
     && c.outstandingSamples >= 1
@@ -233,6 +239,7 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   streamLengthBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
+  maxKeyLengthBytes =;
   framingBytes =;
   fragmentFramingBytes =;
   stackFactor =;

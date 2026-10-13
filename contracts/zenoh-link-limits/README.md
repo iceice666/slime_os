@@ -14,6 +14,7 @@ memory it also declares. The limits it keeps each have a source:
   (`DATA_BYTES`, `components/proto/src/network_service.rs`);
 - a key count is at most 65535, because the alias id and the scope every reference carries are 16 bits
   (`ExprId` is `u16` in `zenoh-protocol` 1.0.0);
+- a key is at most 65535 bytes, because its length travels as a 16-bit field in the profile;
 - the stack must cover the link's arrays, its key and subscriber slots and its queued sample notices.
   That is arithmetic from the code's own arrays, not a measured high-water mark;
 - in `fixed` mode the whole message (payload, key, attachment and framing) must fit one batch and
@@ -25,6 +26,6 @@ The names `demo`, `large` and `heap` are the three configurations the exam pins;
 accepts any set of one or more distinctly named configurations that satisfy the rules.
 
 The decision is [`docs/decisions/zenoh-link-limits.md`](../../docs/decisions/zenoh-link-limits.md); the
-scope is `01a13557-6f2c-79cd-9715-a23de0e9b19e`, judged by
+scope is `01a1356e-18a7-7ef2-8c36-97f1780c32fb`, judged by
 `scripts/check/check-zenoh-profile0.py --slice links`. The Rust side is the implementation's, not this
 planning contract.
