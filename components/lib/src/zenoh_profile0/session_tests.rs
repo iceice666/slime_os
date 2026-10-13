@@ -625,31 +625,13 @@ fn a_quiet_link_closes_at_the_lease_and_traffic_renews_it() {
     assert_eq!(decode_batch(&[0x04]), Ok(Message::KeepAlive));
 }
 
-/// A peer lease under four milliseconds must not make the cadence zero: after a KEEP_ALIVE the
-/// next one is due a millisecond later, not in the same instant.
+/// A session whose own lease is under four milliseconds must not make the cadence zero: after a
+/// KEEP_ALIVE the next one is due a millisecond later, not in the same instant.
 #[test]
-fn a_tiny_peer_lease_still_spaces_keep_alives() {
-    let mut a = connector();
-    let cookie = cookie();
-    let mut b = Session::new(
-        Role::Listener,
-        &Config {
-            zid: &ZID_LISTENER,
-            lease_ms: 3,
-            initial_sn: LISTENER_SN,
-            cookie: &cookie,
-        },
-    )
-    .expect("listener");
+fn a_tiny_own_lease_still_spaces_keep_alives() {
+    let (mut a, _b) = handshake_with_leases(3, LEASE_MS);
     let mut out = [0u8; MAX_BATCH_BYTES];
-    let outcome = a.connect(0, &mut out).expect("connect");
-    let (init_syn, _) = owned(&outcome, &out);
-    let (init_ack, _) = expect_recv(&mut b, &init_syn, 1);
-    let (open_syn, _) = expect_recv(&mut a, &init_ack, 2);
-    let (open_ack, _) = expect_recv(&mut b, &open_syn, 3);
-    expect_recv(&mut a, &open_ack, 4);
-    assert_eq!(a.peer_lease_ms(), 3);
-
+    assert_eq!(a.peer_lease_ms(), LEASE_MS);
     let first = a.tick(5, &mut out).expect("tick");
     assert_eq!(decode_batch(first.batch(&out)), Ok(Message::KeepAlive));
     assert!(
@@ -664,4 +646,63 @@ fn a_tiny_peer_lease_still_spaces_keep_alives() {
     );
     let third = a.tick(6, &mut out).expect("tick");
     assert_eq!(decode_batch(third.batch(&out)), Ok(Message::KeepAlive));
+}
+
+/// The peer expires a link on the lease announced to it, so the cadence follows the lease this
+/// side announced, whatever the peer announced. A stock peer announces 10 s by default and was
+/// observed closing a link that had heard nothing for the 2 s lease announced to it.
+#[test]
+fn keep_alives_follow_the_lease_this_side_announced() {
+    let (mut a, b) = handshake_with_leases(2_000, 10_000);
+    assert_eq!(a.peer_lease_ms(), 10_000);
+    assert_eq!(b.peer_lease_ms(), 2_000);
+    let mut out = [0u8; MAX_BATCH_BYTES];
+    // `a` last sent at 2, with its OPEN_SYN: due a quarter of its own 2000 ms after that, not of
+    // the peer's 10000 ms.
+    assert_eq!(a.keep_alive_due(), 2 + 500);
+    assert_eq!(a.tick(2 + 499, &mut out).expect("tick").sent, 0);
+    let due = a.tick(2 + 500, &mut out).expect("tick");
+    assert_eq!(decode_batch(due.batch(&out)), Ok(Message::KeepAlive));
+    assert_eq!(a.keep_alive_due(), 2 + 500 + 500);
+    // The silence it tolerates from the peer is still the peer's lease.
+    let heard = a.lease_deadline().expect("open");
+    assert_eq!(heard, 4 + 10_000);
+    // `b` announced 10 s, so a quarter of that is its cadence, from its OPEN_ACK at 3. It would
+    // expire the link on 2 s of silence from `a`, so only the due time is read here.
+    assert_eq!(b.keep_alive_due(), 3 + 2_500);
+    assert_eq!(b.lease_deadline(), Some(3 + 2_000));
+}
+
+/// A connector announcing `connector_ms` and a listener announcing `listener_ms`, open.
+fn handshake_with_leases(connector_ms: u64, listener_ms: u64) -> (Session, Session) {
+    let cookie = cookie();
+    let mut a = Session::new(
+        Role::Connector,
+        &Config {
+            zid: &ZID_CONNECTOR,
+            lease_ms: connector_ms,
+            initial_sn: CONNECTOR_SN,
+            cookie: &[],
+        },
+    )
+    .expect("connector");
+    let mut b = Session::new(
+        Role::Listener,
+        &Config {
+            zid: &ZID_LISTENER,
+            lease_ms: listener_ms,
+            initial_sn: LISTENER_SN,
+            cookie: &cookie,
+        },
+    )
+    .expect("listener");
+    let mut out = [0u8; MAX_BATCH_BYTES];
+    let outcome = a.connect(0, &mut out).expect("connect");
+    let (init_syn, _) = owned(&outcome, &out);
+    let (init_ack, _) = expect_recv(&mut b, &init_syn, 1);
+    let (open_syn, _) = expect_recv(&mut a, &init_ack, 2);
+    let (open_ack, _) = expect_recv(&mut b, &open_syn, 3);
+    expect_recv(&mut a, &open_ack, 4);
+    assert!(a.is_open() && b.is_open());
+    (a, b)
 }

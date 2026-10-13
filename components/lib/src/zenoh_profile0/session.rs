@@ -9,7 +9,7 @@
 //! gone after a refusal must say so with [`Session::close`]. The only
 //! transitions into [`State::Closed`] are a received CLOSE, a local close and
 //! lease expiry. A KEEP_ALIVE is traffic on an open session and is sent every quarter of the
-//! peer's lease when nothing else was. The machine tracks two subscriber slots: the subscription this
+//! lease this side announced when nothing else was. The machine tracks two subscriber slots: the subscription this
 //! side declared, which a received PUSH must match to be delivered, and the one
 //! the peer declared, which a Put this side sends must match.
 
@@ -275,7 +275,7 @@ pub struct Session {
     cookie_len: usize,
     last_rx_ms: u64,
     /// When this side last sent a batch, or entered the handshake; keep-alives are due a quarter
-    /// of the peer's lease after it.
+    /// of this side's announced lease after it.
     last_tx_ms: u64,
     /// The latest time an accepted call gave the session. A send that has no clock of its own is
     /// stamped with it, and the link ticks the session on every pump.
@@ -698,7 +698,7 @@ impl Session {
     }
 
     /// Closes the session with a CLOSE batch once `now_ms` is past the lease deadline. An open
-    /// session that has sent nothing for a quarter of the peer's lease writes a KEEP_ALIVE; before
+    /// session that has sent nothing for a quarter of its own announced lease writes a KEEP_ALIVE; before
     /// OPEN, or while the lent storage cannot take one, it only accepts and does nothing.
     pub fn tick<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
         let expired = self.tick_lease(now_ms, out)?;
@@ -734,13 +734,13 @@ impl Session {
         }
     }
 
-    /// When the next KEEP_ALIVE is due: a quarter of the peer's lease after this side last sent.
-    /// The announced lease is the one the peer closes on, so it sets the cadence. A lease under
-    /// four milliseconds still spaces keep-alives a millisecond apart, so a pump never queues a
-    /// second one in the instant of the first.
+    /// When the next KEEP_ALIVE is due: a quarter of the lease this side announced after it last
+    /// sent. The peer closes after one of that lease without hearing from us, so our own lease
+    /// sets the cadence, not the one the peer announced. A lease under four milliseconds still
+    /// spaces keep-alives a millisecond apart, so a pump never queues a second one in the instant
+    /// of the first.
     pub fn keep_alive_due(&self) -> u64 {
-        self.last_tx_ms
-            .saturating_add((self.peer_lease_ms / 4).max(1))
+        self.last_tx_ms.saturating_add((self.lease_ms / 4).max(1))
     }
 
     /// Closes the session locally with a CLOSE batch carrying `reason`.

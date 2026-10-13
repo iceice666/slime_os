@@ -80,9 +80,10 @@ and link, not the node components, change:
    `unknown-subscriber` and leaves it in place too. A FRAME yields at most four events
    (`MAX_EVENTS`): once an alias makes PUSHes small enough to coalesce, five in one FRAME is
    `too-many-messages`, not a dropped fifth.
-4. **Keep-alive.** An open session sends `KEEP_ALIVE` every quarter of the peer's
-   announced lease when it has sent nothing else, accepts the peer's as traffic, and
-   closes with the expiry reason after one lease of silence. Before `OPEN` nothing is
+4. **Keep-alive.** An open session sends `KEEP_ALIVE` every quarter of the lease it
+   announced itself when it has sent nothing else, because that is the lease the peer
+   expires it on, accepts the peer's as traffic, and
+   closes with the expiry reason after one lease of silence, the peer's announced lease. Before `OPEN` nothing is
    sent on a tick: in the idle state and while awaiting `INIT_ACK`, `OPEN_SYN` or
    `OPEN_ACK`, a tick between a quarter lease and the lease produces no output and changes
    nothing, because the link ticks the session in every state that is not closed. A `KEEP_ALIVE` is traffic only
@@ -168,9 +169,13 @@ Everything else the profile refuses stays refused with its class.
 - The exchange never leaves the machine: no QEMU, no NIC, no external listener. Reaching
   a service in the guest from outside needs the virtio-net backend, an external
   listener row and a host-reachable port, and is a separate item.
-- Whether a keep-alive cadence slower than 0.7 s on a 2 s lease also keeps the peer
-  connected was not measured; the item requires one every quarter of the lease, the
-  cadence the peer itself uses.
+- Which lease sets the cadence was measured once, on loopback, in a separate probe that is
+  not part of the exam: a session that announced 2 s to a stock peer announcing its default
+  10 s was closed by the peer at 2.004 s when it sent no keep-alive, and stayed connected for
+  a 9 s run when it sent one every 0.5 s. So the cadence is a quarter of the lease this side
+  announced, not of the peer's. The exam's cadence cases use equal leases and cannot tell the
+  two apart. Whether a cadence slower than 0.5 s on a 2 s lease also keeps the peer
+  connected was not measured.
 
 ## Revisit when
 

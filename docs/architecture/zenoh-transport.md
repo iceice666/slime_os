@@ -66,10 +66,12 @@ key it did not declare. Frames the session sends use the sender key mapping,
 as the upstream encoder writes them.
 
 An open session sends a one-byte `KEEP_ALIVE` (message id 4) every quarter of the
-peer's announced lease when it has sent nothing else, floored at one millisecond,
+lease this side announced when it has sent nothing else, floored at one millisecond,
 and takes the peer's as traffic that renews the lease. Before `OPEN` a `KEEP_ALIVE`
 is `unexpected-message` and changes nothing, and it is exactly the one byte: a
-trailing byte is `trailing-bytes`. A link quiet for longer than the peer's lease is
+trailing byte is `trailing-bytes`. The peer expires a link on the lease announced to it,
+so that lease sets the send cadence; the lease the peer announced bounds the silence
+tolerated from it. A link quiet for longer than the peer's lease is
 closed by `tick` with the expiry reason. The demo exchanges its samples well inside
 the 2 s lease. A link whose send slot is occupied runs only the expiry half
 (`tick_lease`), so a keep-alive never collides with a batch waiting there.
