@@ -71,6 +71,8 @@ class Segment:
     ack: int
     flags: int
     payload: bytes
+    window: int = 0
+    options: tuple = ()
 
 
 # ------------------------------------------------------------------------------ capture
@@ -100,6 +102,36 @@ def _check_arp(frame: bytes) -> None:
     else:
         _need(target_mac == destination, "the ARP reply's target hardware address is not its Ethernet destination")
         _need((target == GUEST) == (target_mac == GUEST_MAC), f"the ARP reply for {target} is addressed to hardware address {target_mac.hex()}")
+
+
+# TCP options whose value is a negotiation both ends keep, as (kind, value): the maximum segment size
+# (2) and the window scale (3), plus SACK-permitted (4). Timestamps (8) vary on every packet and are
+# the one option a retransmission may differ in.
+VARIABLE_OPTIONS = (8,)
+
+
+def _options(raw: bytes) -> tuple:
+    """The TCP options of a header as sorted (kind, value) pairs, padding and end-of-list dropped.
+
+    A malformed option list (a length that runs past the header, or under two) refuses the capture.
+    """
+    found, at = [], 0
+    while at < len(raw):
+        kind = raw[at]
+        if kind == 0:
+            _need(not any(raw[at:]), "bytes after the end-of-options marker")
+            break
+        if kind == 1:
+            at += 1
+            continue
+        _need(at + 1 < len(raw) and raw[at + 1] >= 2 and at + raw[at + 1] <= len(raw), f"a malformed TCP option of kind {kind}")
+        found.append((kind, bytes(raw[at + 2 : at + raw[at + 1]])))
+        at += raw[at + 1]
+    return tuple(sorted(found))
+
+
+def _negotiated(s: "Segment") -> tuple:
+    return (s.seq, s.ack, s.flags, s.window, tuple(o for o in s.options if o[0] not in VARIABLE_OPTIONS))
 
 
 def segments(data: bytes) -> tuple[list[Segment], int]:
@@ -134,7 +166,8 @@ def segments(data: bytes) -> tuple[list[Segment], int]:
         pseudo = ip[12:20] + bytes((0, 6)) + len(body).to_bytes(2, "big")
         _need(http_capture._checksum(pseudo + body) == 0, "TCP checksum")
         sport, dport, seq, ack = struct.unpack_from("!HHII", body)
-        found.append(Segment(position, source == GUEST, sport, dport, seq, ack, body[13], body[offset:]))
+        window = int.from_bytes(body[14:16], "big")
+        found.append(Segment(position, source == GUEST, sport, dport, seq, ack, body[13], body[offset:], window, _options(body[20:offset])))
     return found, arp
 
 
@@ -229,6 +262,8 @@ def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     expected_ack = (syn.seq + 1) & 0xFFFFFFFF
     for synack in synacks:
         _need(synack.ack == expected_ack, "a SYN-ACK acknowledges another sequence number")
+    _need(len({_negotiated(s) for s in syns}) == 1, "a guest SYN retransmitted with another window or option")
+    _need(len({_negotiated(s) for s in synacks}) == 1, "a peer SYN-ACK retransmitted with another window or option")
     guest, guest_time = _reassemble([s for s in segs if s.outgoing], syn.seq, "guest stream")
     peer, peer_time = _reassemble([s for s in segs if not s.outgoing], synacks[0].seq, "peer stream")
     return guest, peer, arp, guest_time, peer_time
@@ -906,7 +941,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 205
+PINNED_CONTROLS = 213
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -950,11 +985,25 @@ def _ip(source: str, destination: str, protocol: int, body: bytes) -> bytes:
     return header + body
 
 
-def _tcp(source: str, destination: str, sport: int, dport: int, seq: int, ack: int, flags: int, payload: bytes = b"") -> bytes:
-    body = struct.pack("!HHIIBBHHH", sport, dport, seq & 0xFFFFFFFF, ack & 0xFFFFFFFF, 5 << 4, flags, 65535, 0, 0) + payload
+def _tcp(source: str, destination: str, sport: int, dport: int, seq: int, ack: int, flags: int, payload: bytes = b"", window: int = 65535, options: bytes = b"") -> bytes:
+    options += bytes(-len(options) % 4)
+    body = struct.pack("!HHIIBBHHH", sport, dport, seq & 0xFFFFFFFF, ack & 0xFFFFFFFF, (5 + len(options) // 4) << 4, flags, window, 0, 0)
+    body += options + payload
     pseudo = bytes(int(x) for x in source.split(".")) + bytes(int(x) for x in destination.split(".")) + bytes((0, 6)) + len(body).to_bytes(2, "big")
     body = body[:16] + http_capture._checksum(pseudo + body).to_bytes(2, "big") + body[18:]
     return _ip(source, destination, 6, body)
+
+
+MSS, WSCALE, SACK, TIMESTAMP_OPTION = 2, 3, 4, 8
+
+
+def _option(kind: int, value: bytes = b"") -> bytes:
+    return bytes([kind, 2 + len(value)]) + value
+
+
+# What a guest and a peer negotiate honestly: the segment size, window scaling and SACK.
+GUEST_OPTIONS = _option(MSS, (1460).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x07")
+PEER_OPTIONS = _option(MSS, (1460).to_bytes(2, "big")) + _option(WSCALE, b"\x07")
 
 
 def _udp(source: str, destination: str, sport: int, dport: int, payload: bytes) -> bytes:
@@ -1070,14 +1119,14 @@ def build(scenario: dict) -> bytes:
 
     frames = [_arp()]
     if not scenario.get("no_syn"):
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0)), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0), b"", 65535, GUEST_OPTIONS), True))
         if not scenario.get("no_synack"):
-            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0)), False))
+            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0), b"", 65535, PEER_OPTIONS), False))
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1, TCP_ACK), True))
     if "synack_again" in scenario:
-        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK), False))
+        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK, b"", scenario.get("again_window", 65535), scenario.get("again_peer_options", PEER_OPTIONS)), False))
     if "syn_again" in scenario:
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + scenario["syn_again"], 0, TCP_SYN), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + scenario["syn_again"], 0, TCP_SYN, b"", scenario.get("again_window", 65535), scenario.get("again_guest_options", GUEST_OPTIONS)), True))
     if scenario.get("synack_first") and len(frames) >= 3:
         frames[1], frames[2] = frames[2], frames[1]
     sent_guest = sent_peer = 0
@@ -1313,6 +1362,14 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest CLOSE of the link only", guest_at(-1, lambda b: b"\x03\x00")),
         ("a guest CLOSE with reason 8, one over the last the profile names", guest_at(-1, lambda b: b"\x23\x08")),
         ("a guest CLOSE with reason 255", guest_at(-1, lambda b: b"\x23\xff")),
+        ("a guest SYN retransmitted with another window", edit(lambda s: s.update(syn_again=0, again_window=1000))),
+        ("a peer SYN-ACK retransmitted with another window", edit(lambda s: s.update(synack_again=0, again_window=1000))),
+        ("a guest SYN retransmitted with another segment size", edit(lambda s: s.update(syn_again=0, again_guest_options=_option(MSS, (1400).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x07")))),
+        ("a guest SYN retransmitted with another window scale", edit(lambda s: s.update(syn_again=0, again_guest_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x08")))),
+        ("a guest SYN retransmitted without SACK", edit(lambda s: s.update(syn_again=0, again_guest_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(WSCALE, b"\x07")))),
+        ("a peer SYN-ACK retransmitted with another segment size", edit(lambda s: s.update(synack_again=0, again_peer_options=_option(MSS, (1400).to_bytes(2, "big")) + _option(WSCALE, b"\x07")))),
+        ("a peer SYN-ACK retransmitted with another window scale", edit(lambda s: s.update(synack_again=0, again_peer_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(WSCALE, b"\x06")))),
+        ("a guest SYN with a malformed option", edit(lambda s: s.update(syn_again=0, again_guest_options=b"\x02\x09\x05\xb4"))),
         ("a guest SYN that also carries a FIN", edit(lambda s: s.update(syn_flags=TCP_FIN))),
         ("a peer SYN-ACK that also carries a FIN", edit(lambda s: s.update(synack_flags=TCP_FIN))),
         ("a guest SYN that also carries an URG flag", edit(lambda s: s.update(syn_flags=0x20))),
@@ -1465,6 +1522,8 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("segments of 100 bytes in every turn of the session", update(chunk=100)),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
+        ("a guest SYN retransmitted with only a timestamp option differing", update(syn_again=0, again_guest_options=GUEST_OPTIONS + _option(TIMESTAMP_OPTION, bytes(8)))),
+        ("a handshake that negotiates no options", update(syn_again=0, again_guest_options=GUEST_OPTIONS)),
         ("peer FRAME sequence numbers that wrap through 2**32", lambda s: {**s, "peer": [*s["peer"][:1], zenoh_wire.open_(10000, 0xFFFFFFFE, ack=True), *[_with_sn(b, 0xFFFFFFFE + i) for i, b in enumerate(s["peer"][2:5])], *s["peer"][5:]]}),
         ("a guest SYN retransmitted identically", update(syn_again=0)),
         ("a guest CLOSE with the last reason the profile names, 7", lambda s: {**s, "guest": [*s["guest"][:-1], zenoh_wire.close(7, True)]}),

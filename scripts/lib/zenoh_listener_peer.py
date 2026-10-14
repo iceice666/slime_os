@@ -15,6 +15,7 @@ local experiment, never part of CI.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -44,6 +45,11 @@ class ListenerError(RuntimeError):
     """The pinned peer could not be built or did not run."""
 
 
+def _clean_environment() -> dict[str, str]:
+    """The caller's environment without anything that steers Python's imports or its installer."""
+    return {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "PIP_"))}
+
+
 def venv_python() -> Path:
     return VENV / "bin" / "python"
 
@@ -58,11 +64,11 @@ def ensure_venv() -> Path:
     SCRATCH.mkdir(parents=True, exist_ok=True)
     REQUIREMENTS.write_text(f"eclipse-zenoh=={VERSION} --hash=sha256:{WHEEL_SHA256}\n", encoding="utf-8")
     steps = (
-        [sys.executable, "-m", "venv", "--clear", str(VENV)],
-        [str(interpreter), "-m", "pip", "install", "--quiet", "--require-hashes", "--no-deps", "--only-binary=:all:", "-r", str(REQUIREMENTS)],
+        [sys.executable, "-I", "-m", "venv", "--clear", str(VENV)],
+        [str(interpreter), "-I", "-m", "pip", "install", "--quiet", "--require-hashes", "--no-deps", "--only-binary=:all:", "-r", str(REQUIREMENTS)],
     )
     for command in steps:
-        done = subprocess.run(command, capture_output=True, text=True, check=False)
+        done = subprocess.run(command, capture_output=True, text=True, check=False, env=_clean_environment())
         if done.returncode != 0:
             raise ListenerError(f"{' '.join(command[:4])} failed: {done.stderr.strip()[-400:]}")
     return interpreter
@@ -80,7 +86,7 @@ class Listener:
         self.receipt.unlink(missing_ok=True)
         self.process = subprocess.Popen(
             [str(interpreter), "-E", str(Path(__file__).resolve()), str(self.port), str(self.receipt)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=_clean_environment(),
         )
         assert self.process.stdout is not None
         # readline() blocks until a newline, so a child that stays alive and silent would hold the
@@ -156,12 +162,22 @@ def serve(port: int, receipt: Path) -> int:
     # still counted, because the delivery itself records it.
     most = 0
     seen = False
+    # The delivery callback runs on Zenoh's thread while the loop below polls on this one, and each
+    # updates `most` from a value it read earlier, so an unlocked store from one could undo the
+    # other's. One lock covers every read-modify-write of the count.
+    lock = threading.Lock()
+
+    def note(peers: int) -> None:
+        nonlocal most, seen
+        with lock:
+            most, seen = max(most, peers), seen or peers > 0
 
     def on_sample(sample: zenoh.Sample) -> None:
-        nonlocal most, seen
         attachment = sample.attachment
-        received.append((str(sample.key_expr), bytes(sample.payload), b"" if attachment is None else bytes(attachment)))
-        most, seen = max(most, len(session.info.peers_zid()), 1), True
+        with lock:
+            received.append((str(sample.key_expr), bytes(sample.payload), b"" if attachment is None else bytes(attachment)))
+        # A delivery is evidence of a remote peer even when no snapshot shows one.
+        note(max(len(session.info.peers_zid()), 1))
 
     subscriber = session.declare_subscriber(KEY, on_sample)
     print(READY, flush=True)
@@ -169,16 +185,22 @@ def serve(port: int, receipt: Path) -> int:
     deadline = time.monotonic() + DEADLINE_SECONDS
     while time.monotonic() < deadline:
         peers = len(session.info.peers_zid())
-        most, seen = max(most, peers), seen or peers > 0
-        if seen and peers == 0 and len(received) >= SAMPLES:
+        note(peers)
+        with lock:
+            delivered, heard = len(received), seen
+        if heard and peers == 0 and delivered >= SAMPLES:
             quiet_since = quiet_since or time.monotonic()
             if time.monotonic() - quiet_since >= SETTLE_SECONDS:
                 break
         else:
             quiet_since = None
         time.sleep(0.2)
-    receipt.write_text(receipt_text(listen, most, received), encoding="utf-8")
-    print(f"[zenoh-listener] received={len(received)} remote-peers={most}", flush=True)
+    with lock:
+        # A record with samples and no peer cannot be honest: floor the count at one.
+        count = max(most, 1 if received else 0)
+        samples = list(received)
+    receipt.write_text(receipt_text(listen, count, samples), encoding="utf-8")
+    print(f"[zenoh-listener] received={len(samples)} remote-peers={count}", flush=True)
     # The handle is held to here so the subscriber stays declared for the whole collection.
     subscriber.undeclare()
     session.close()
