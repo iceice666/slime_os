@@ -45,11 +45,17 @@ PUBLISHER = "ros2-demo-publisher"
 SUBSCRIBER = "ros2-demo-subscriber"
 DENIALS = ("undeclared-endpoint", "listen", "scouting")
 MAX_STREAM = 1 << 20
+# The attachment the publisher builds for sample `n` (components/lib/src/zenoh_node.rs): sequence n + 1,
+# source timestamp 1000 + n, and one GID for every sample.
+ATTACHMENT_SEQUENCE_BASE = 1
+ATTACHMENT_TIMESTAMP_BASE = 1000
+DEMO_GID = bytes(range(0xE0, 0xF0))
 # contracts/zenoh-profile/v1 closeConnectionToSelf: the highest CLOSE reason the profile names.
 MAX_CLOSE_REASON = 7
 
 ID_KEEP_ALIVE = 4
 TCP_FIN, TCP_SYN, TCP_RST, TCP_ACK = 1, 2, 4, 16
+TCP_PSH, TCP_URG = 8, 0x20
 
 
 class CaptureError(ValueError):
@@ -159,6 +165,12 @@ def segments(data: bytes) -> tuple[list[Segment], int]:
         source = ".".join(str(b) for b in ip[12:16])
         destination = ".".join(str(b) for b in ip[16:20])
         _need((source, destination) in ((GUEST, PEER), (PEER, GUEST)), f"packet between {source} and {destination}")
+        # The capture is taken at the guest's device, so a frame the guest sent carries its declared MAC
+        # as source, and a frame for the guest is addressed to it. Anything else is not the guest's.
+        if source == GUEST:
+            _need(frame[6:12] == GUEST_MAC, f"a frame from {GUEST} sent from hardware address {frame[6:12].hex()}, not the guest's {GUEST_MAC.hex()}")
+        else:
+            _need(frame[0:6] == GUEST_MAC, f"a frame for {GUEST} addressed to hardware address {frame[0:6].hex()}, not the guest's {GUEST_MAC.hex()}")
         body = ip[header_len:total]
         _need(len(body) >= 20, "TCP header")
         offset = (body[12] >> 4) * 4
@@ -249,6 +261,12 @@ def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
         ports = (s.source_port, s.destination_port)
         _need(ports == ((syn.source_port, PORT) if s.outgoing else (PORT, syn.source_port)), "a segment outside the one connection")
     synacks = [s for s in segs if not s.outgoing and s.flags & TCP_SYN and s.flags & TCP_ACK]
+    for s in segs:
+        if not s.flags & TCP_SYN:
+            # An established endpoint discards a segment without ACK, so data or a FIN without it was
+            # never received. PSH rides on data; no other flag is admitted.
+            _need(s.flags & TCP_ACK, "a segment on the established connection without ACK")
+            _need(s.flags & ~(TCP_ACK | TCP_PSH | TCP_FIN) == 0, f"a segment with flags {s.flags:#04x}, only ACK, PSH and FIN are admitted")
     for s in segs:
         if s.flags & TCP_SYN:
             _need(s.outgoing != bool(s.flags & TCP_ACK), "a SYN that is not the guest's SYN or the peer's SYN-ACK")
@@ -535,6 +553,9 @@ def _frame_messages(batch: bytes, label: str, seen: "_Seen | None" = None) -> tu
         if kind == ID_DECLARE:
             kinds.append(_declare(reader, header, seen))
         elif kind == ID_PUSH:
+            # The connector declares no subscriber, so a PUSH to it names a key it never declared:
+            # `Session::on_frame` refuses it with UndeclaredKey and rolls back the whole frame.
+            _need(seen is None, f"{label}: a PUSH to a connector that declared no subscriber")
             kinds.append(_push(reader, header))
         elif kind == ID_OAM:
             kinds.append(_oam(reader, header))
@@ -583,6 +604,9 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         _need(decoded["key"] == contract["key"], f"sample {sequence}: key expression {decoded['key']!r} is not the demo's")
         _need(decoded["sn"] == initial_sn + index, f"sample {sequence}: frame sn {decoded['sn']} is not {initial_sn} + {index}")
         _need(decoded["payload"].hex() == cdr, f"sample {sequence}: the payload is not the contract's")
+        _need(decoded["sequence"] == sequence + ATTACHMENT_SEQUENCE_BASE, f"sample {sequence}: attachment sequence {decoded['sequence']}, the publisher sends {sequence + ATTACHMENT_SEQUENCE_BASE}")
+        _need(decoded["timestamp"] == ATTACHMENT_TIMESTAMP_BASE + sequence, f"sample {sequence}: attachment timestamp {decoded['timestamp']}, the publisher sends {ATTACHMENT_TIMESTAMP_BASE + sequence}")
+        _need(decoded["gid"] == DEMO_GID, f"sample {sequence}: attachment GID {decoded['gid'].hex()}, the publisher sends {DEMO_GID.hex()}")
         attachment = zenoh_wire.attachment(decoded["sequence"], decoded["timestamp"], decoded["gid"])
         again = zenoh_wire.frame(decoded["sn"], zenoh_wire.push_put(decoded["key"], attachment, decoded["payload"], True))
         _need(again == batch, f"sample {sequence}: not the canonical encoding of its own fields")
@@ -664,7 +688,7 @@ def guest_lines(contract: dict, initial_sn: int = 0) -> list[str]:
     lines = [f"[{PUBLISHER}] denial class={cls} refused=1" for cls in DENIALS]
     lines += [f"[{PUBLISHER}] session open role=connector initial_sn={initial_sn} lease_ms={LEASE_MS}", f"[{PUBLISHER}] declaration matched key={key}"]
     for sequence, _value, cdr in contract["samples"]:
-        att = zenoh_wire.attachment(sequence + 1, 1000, bytes(range(0xE0, 0xF0)))
+        att = zenoh_wire.attachment(sequence + ATTACHMENT_SEQUENCE_BASE, ATTACHMENT_TIMESTAMP_BASE + sequence, DEMO_GID)
         batch = zenoh_wire.frame(initial_sn + sequence, zenoh_wire.push_put(key, att, bytes.fromhex(cdr), True))
         lines.append(f"[{PUBLISHER}] wire sent sample={sequence} hex={batch.hex()}")
     lines.append(f"[{PUBLISHER}] session closed samples={SAMPLES}")
@@ -960,7 +984,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 221
+PINNED_CONTROLS = 244
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -990,7 +1014,7 @@ def check_pins(contract: dict) -> int:
 # ---------------------------------------------------------------------------- building
 
 
-GUEST_MAC = bytes.fromhex("525400534c01")
+GUEST_MAC = bytes.fromhex(INTERFACE["mac"].replace(":", ""))
 PEER_MAC = bytes.fromhex("52550a000202")
 BROADCAST = bytes.fromhex("ffffffffffff")
 OTHER_MAC = bytes.fromhex("020000000009")
@@ -1154,19 +1178,25 @@ def build(scenario: dict) -> bytes:
     if scenario.get("synack_first") and len(frames) >= 3:
         frames[1], frames[2] = frames[2], frames[1]
     sent_guest = sent_peer = 0
+    data_flags = TCP_ACK | (TCP_PSH if scenario.get("psh") else 0)
+    noack = set(scenario.get("noack", ()))
     for from_guest, at, payload in packets:
         if from_guest:
-            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1 + sent_peer, TCP_ACK, payload), True))
+            flags = (data_flags & ~TCP_ACK if "guest_data" in noack else data_flags) | (TCP_URG if "guest_urg" in noack else 0)
+            noack -= {"guest_data", "guest_urg"}
+            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1 + sent_peer, flags, payload), True))
             sent_guest = max(sent_guest, at + len(payload))
         else:
-            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + sent_guest, TCP_ACK, payload), False))
+            flags = data_flags & ~TCP_ACK if "peer_data" in noack else data_flags
+            noack -= {"peer_data"}
+            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + sent_guest, flags, payload), False))
             sent_peer = max(sent_peer, at + len(payload))
     frames.extend(scenario.get("extra", []))
     guest_fin = gisn + 1 + len(guest_stream) + scenario.get("fin_skew", 0)
     if scenario.get("guest_fin", True):
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin, pisn + 1 + len(peer_stream), TCP_FIN | TCP_ACK), True))
-    frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), guest_fin + 1, TCP_FIN | TCP_ACK), False))
-    frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin + 1, pisn + 2 + len(peer_stream), TCP_ACK), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin, pisn + 1 + len(peer_stream), TCP_FIN | (0 if "guest_fin_ack" in noack else TCP_ACK)), True))
+    frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), guest_fin + 1, TCP_FIN | (0 if "peer_fin_ack" in noack else TCP_ACK)), False))
+    frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin + 1, pisn + 2 + len(peer_stream), 0 if "last_ack" in noack else TCP_ACK), True))
     return pcap(frames)
 
 
@@ -1242,6 +1272,13 @@ def _other_key_subscriber(batch: bytes) -> bytes:
     return bytes([zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R]) + zenoh_wire.leb128(sn) + body
 
 
+def _push_body(scenario: dict) -> bytes:
+    """The network message of a guest sample frame: a PUSH, as a peer would have to send one."""
+    line = next(x for x in scenario["lines"] if " wire sent sample=0 " in x)
+    batch = bytes.fromhex(line.split("hex=")[1])
+    return batch[1 + len(zenoh_wire.leb128(_sn(batch))) :]
+
+
 def K() -> str:
     return zenoh_exchange.demo()["key"]
 
@@ -1285,6 +1322,26 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
     def peer_at(index: int, change: Callable[[bytes], bytes]) -> Callable[[dict], dict]:
         def run(s: dict) -> dict:
             s["peer"][index] = change(s["peer"][index])
+            return s
+
+        return run
+
+    def rebuild_attachments(sequence_of: Callable[[int], int], timestamp_of: Callable[[int], int], gid_of: Callable[[int], bytes]) -> Callable[[dict], dict]:
+        """Samples whose attachment differs, with the guest's report, the wire and the listener's record
+        all rebuilt to agree, so only the demo's own attachment values can refuse them."""
+
+        def run(s: dict) -> dict:
+            contract = zenoh_exchange.demo()
+            frames = []
+            for n, (_sequence, _value, cdr) in enumerate(contract["samples"]):
+                att = zenoh_wire.attachment(sequence_of(n), timestamp_of(n), gid_of(n))
+                frames.append(zenoh_wire.frame(n, zenoh_wire.push_put(contract["key"], att, bytes.fromhex(cdr), True)))
+            s["guest"][2 : 2 + SAMPLES] = frames
+            s["lines"] = [x for x in s["lines"] if " wire sent " not in x]
+            at = next(i for i, x in enumerate(s["lines"]) if "declaration matched" in x)
+            for n, frame in enumerate(frames):
+                s["lines"].insert(at + 1 + n, f"[{PUBLISHER}] wire sent sample={n} hex={frame.hex()}")
+            s["receipt"] = [(contract["key"], contract["samples"][n][2], _attachment_hex(frame)) for n, frame in enumerate(frames)]
             return s
 
         return run
@@ -1396,6 +1453,22 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest CLOSE of the link only", guest_at(-1, lambda b: b"\x03\x00")),
         ("a guest CLOSE with reason 8, one over the last the profile names", guest_at(-1, lambda b: b"\x23\x08")),
         ("a guest CLOSE with reason 255", guest_at(-1, lambda b: b"\x23\xff")),
+        ("a peer FRAME with a DeclareSubscriber and a PUSH", edit(lambda s: s["peer"].__setitem__(4, s["peer"][4] + _push_body(s)))),
+        ("a peer FRAME with a PUSH alone", edit(lambda s: s["peer"].append(zenoh_wire.frame(_sn(s["peer"][4]) + 1, _push_body(s))))),
+        ("a guest data segment without ACK", edit(lambda s: s.update(noack=["guest_data"]))),
+        ("a peer data segment without ACK", edit(lambda s: s.update(noack=["peer_data"]))),
+        ("a guest FIN without ACK", edit(lambda s: s.update(noack=["guest_fin_ack"]))),
+        ("a peer FIN without ACK", edit(lambda s: s.update(noack=["peer_fin_ack"]))),
+        ("the last guest segment without ACK", edit(lambda s: s.update(noack=["last_ack"]))),
+        ("a guest data segment with the URG flag", edit(lambda s: s.update(noack=["guest_urg"]))),
+        ("attachment sequences that are the sample number, one under", rebuild_attachments(lambda n: n, lambda n: 1000 + n, lambda n: DEMO_GID)),
+        ("attachment sequences two over the sample number, one over", rebuild_attachments(lambda n: n + 2, lambda n: 1000 + n, lambda n: DEMO_GID)),
+        ("attachment timestamps one over", rebuild_attachments(lambda n: n + 1, lambda n: 1001 + n, lambda n: DEMO_GID)),
+        ("attachment timestamps one under", rebuild_attachments(lambda n: n + 1, lambda n: 999 + n, lambda n: DEMO_GID)),
+        ("attachment timestamps that do not advance", rebuild_attachments(lambda n: n + 1, lambda n: 1000, lambda n: DEMO_GID)),
+        ("attachment timestamps that go backwards", rebuild_attachments(lambda n: n + 1, lambda n: 1000 - n, lambda n: DEMO_GID)),
+        ("an attachment GID with its last byte changed", rebuild_attachments(lambda n: n + 1, lambda n: 1000 + n, lambda n: DEMO_GID[:-1] + b"\xee")),
+        ("an attachment GID that changes between samples", rebuild_attachments(lambda n: n + 1, lambda n: 1000 + n, lambda n: bytes([n]) * 16)),
         ("a guest SYN retransmitted with another window", edit(lambda s: s.update(syn_again=0, again_window=1000))),
         ("a peer SYN-ACK retransmitted with another window", edit(lambda s: s.update(synack_again=0, again_window=1000))),
         ("a guest SYN retransmitted with another segment size", edit(lambda s: s.update(syn_again=0, again_guest_options=_option(MSS, (1400).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x07")))),
@@ -1439,7 +1512,7 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer FRAME whose message is one unsupported byte", edit(lambda s: s["peer"].append(b"\x25\x01\x00"))),
         ("a peer FRAME whose message header is 0xff", edit(lambda s: s["peer"].append(b"\x25\x01\xff\xff"))),
         ("a peer FRAME in the unreliable form", edit(lambda s: s["peer"].append(b"\x05\x01\x04"))),
-        ("a peer FRAME with a whole message and a byte after it", edit(lambda s: s["peer"].append(s["peer"][3] + b"\x00"))),
+        ("a peer FRAME with a whole message and a byte after it", edit(lambda s: s["peer"].append(_with_sn(s["peer"][2], _sn(s["peer"][4]) + 1) + b"\x00"))),
         ("a peer FRAME cut inside its last message", edit(lambda s: s["peer"].append(s["peer"][3][:-3]))),
         ("a peer OAM that is not the link-state one", edit(lambda s: s["peer"].__setitem__(2, s["peer"][2][:6] + b"\x02" + s["peer"][2][7:]))),
         ("a peer FRAME declaring a wildcard key", edit(lambda s: s["peer"].append(bytes.fromhex(next(h for n, h in zenoh_stock_peer.batches("refuse") if n == "refuse-wildcard")))))
@@ -1524,6 +1597,22 @@ def _flip(data: bytes, at: int) -> bytes:
     return data[:at] + bytes([data[at] ^ 1]) + data[at + 1 :]
 
 
+def _retarget(data: bytes, match: Callable[[bool, int, int], bool], at: int, mac: bytes) -> bytes:
+    """Replace six bytes of the first TCP frame `match(outgoing, flags, payload_bytes)` accepts: the
+    Ethernet destination (`at` 0) or source (`at` 6). No checksum covers them."""
+    for start in _frame_starts(data):
+        frame = data[start:]
+        if int.from_bytes(frame[12:14], "big") != 0x0800 or frame[14 + 9] != 6:
+            continue
+        header = (frame[14] & 15) * 4
+        total = int.from_bytes(frame[16:18], "big")
+        offset = (frame[14 + header + 12] >> 4) * 4
+        outgoing = ".".join(str(b) for b in frame[26:30]) == GUEST
+        if match(outgoing, frame[14 + header + 13], total - header - offset):
+            return data[: start + at] + mac + data[start + at + 6 :]
+    raise CaptureError("control: no frame matched")
+
+
 def byte_mutations() -> list[tuple[str, Callable[[bytes], bytes]]]:
     def first_data_frame(data: bytes) -> int:
         return next(s for s in _frame_starts(data) if int.from_bytes(data[s + 16 : s + 18], "big") > 40 and data[s + 14 + 9] == 6)
@@ -1532,6 +1621,13 @@ def byte_mutations() -> list[tuple[str, Callable[[bytes], bytes]]]:
         ("an empty capture", lambda data: b""),
         ("a capture that is not a pcap", lambda data: b"\x00" * 64),
         ("a capture cut inside a record", lambda data: data[:-5]),
+        ("a guest-bound data segment addressed to a third-party MAC", lambda data: _retarget(data, lambda o, f, n: not o and n > 0, 0, OTHER_MAC)),
+        ("a guest-bound data segment addressed to broadcast", lambda data: _retarget(data, lambda o, f, n: not o and n > 0, 0, BROADCAST)),
+        ("the peer's SYN-ACK addressed to a third-party MAC", lambda data: _retarget(data, lambda o, f, n: not o and f & TCP_SYN, 0, OTHER_MAC)),
+        ("the peer's FIN addressed to a third-party MAC", lambda data: _retarget(data, lambda o, f, n: not o and f & TCP_FIN, 0, OTHER_MAC)),
+        ("a guest SYN sent from a third-party MAC", lambda data: _retarget(data, lambda o, f, n: o and f & TCP_SYN, 6, OTHER_MAC)),
+        ("a guest data segment sent from a third-party MAC", lambda data: _retarget(data, lambda o, f, n: o and n > 0, 6, OTHER_MAC)),
+        ("a guest FIN sent from a third-party MAC", lambda data: _retarget(data, lambda o, f, n: o and f & TCP_FIN, 6, OTHER_MAC)),
         ("a flipped IPv4 header byte under a stale header checksum", lambda data: _flip(data, _frame_starts(data)[1] + 14 + 16)),
         ("a flipped TCP payload byte under a stale TCP checksum", lambda data: _flip(data, first_data_frame(data) + 14 + 20 + 20)),
     ]
@@ -1561,6 +1657,7 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("an INIT_SYN with a 16 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 17)), 512), *s["guest"][1:]]}),
         ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
+        ("PSH on every data segment", update(psh=True)),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("a guest SYN retransmitted with only a timestamp option differing", update(syn_again=0, again_guest_options=GUEST_OPTIONS + _option(TIMESTAMP_OPTION, bytes(8)))),
         ("a handshake that negotiates no options, retransmitted", update(guest_options=b"", peer_options=b"", syn_again=0, synack_again=0)),
