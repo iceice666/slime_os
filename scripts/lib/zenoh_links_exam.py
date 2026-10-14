@@ -95,6 +95,8 @@ OK_SCENARIOS = (
     "reassemble-single-final-fragment",
     "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
+    "nine-keys-subscribers-and-samples-fixed",
+    "reassemble-multibyte-key",
     "boundary-at-sequence-width-changes",
 )
 REFUSED_SCENARIOS = (
@@ -243,6 +245,11 @@ REFUSED_SCENARIOS = (
     # taken, so a table sized for four cannot pass, and the tenth is refused as the fifth is.
     ("tenth-subscriber-in-nine", "subscriber-limit"),
     ("tenth-alias-in-nine", "over-bound"),
+    # The same limit in fixed mode, where the tables are arrays and not storage the component supplies.
+    ("tenth-subscriber-in-nine-fixed", "subscriber-limit"),
+    ("tenth-alias-in-nine-fixed", "over-bound"),
+    # A key is counted in encoded bytes, not characters: five characters of 10 bytes against a declared 9.
+    ("fragmented-put-multibyte-key-over-declared", "over-bound"),
 )
 # 3 configurations, 13 scenarios, 15 stock fragments, 3 reassemblies, 3 fragments of our own Put and
 # 2 edge lines make 39 positive cases; 12 refusals make 51. The control floor is the number the
@@ -274,7 +281,7 @@ DEADLINE_FIRST = 7_000_000
 # A subscriber id is an `EntityId`, 32 bits: the largest that fits 31 bits, the top bit alone and the
 # largest of all, each declared and undeclared with the encodings pinned, so a reader or a slot of 16
 # or 31 bits fails on a valid declaration.
-SUBSCRIBER_IDS = (0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
+SUBSCRIBER_IDS = (0, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF)
 
 
 # Configurations at the edges the contract admits, driven through the link: a handshake that fills the
@@ -593,15 +600,15 @@ def underfilled_lines() -> tuple[str, ...]:
 COUNTS = (9, 9, 9, 1024)
 
 
-def counts_config() -> dict:
+def counts_config(mode: str = "heap") -> dict:
     keys, subscribers, samples, payload = COUNTS
     c = dict(
-        name="counts", mode="heap", batchBytes=2048, payloadBytes=payload, keyBytes=129,
+        name="counts", mode=mode, batchBytes=2048, payloadBytes=payload, keyBytes=129,
         attachmentBytes=33, maxKeys=keys, maxSubscribers=subscribers, outstandingSamples=samples,
-        stackBytes=0, reassemblyTimeoutMs=5000, heapBytes=0,
+        stackBytes=0, reassemblyTimeoutMs=5000 if mode == "heap" else 0, heapBytes=0,
     )
     c["stackBytes"] = required_stack(c)
-    c["heapBytes"] = heap_needed(c)
+    c["heapBytes"] = heap_needed(c) if mode == "heap" else 0
     return c
 
 
@@ -615,6 +622,23 @@ def counts_lines() -> tuple[str, ...]:
     digest = sha("\n".join(sha(distinct_payload(c["payloadBytes"], i)) for i in range(held + 1)).encode())
     return (
         f"links counts {c['maxKeys']} {c['maxSubscribers']} {c['outstandingSamples']} {held} {c['payloadBytes']} {c['heapBytes']} {digest}",
+    )
+
+
+# The same counts in fixed mode, where nothing is reassembled and each queued notice carries a copy of its
+# payload inline: nine keys and nine subscribers declared and the eighteen notices of nine samples held
+# undrained, each a distinct payload, so a link that keeps four-entry arrays for a fixed configuration
+# cannot build it. There is no message in progress and no heap.
+@lru_cache(maxsize=None)
+def counts_fixed_lines() -> tuple[str, ...]:
+    demo, large = pinned_configs()[:2]
+    c = counts_config("fixed")
+    if not contract_accepts(limits_record([demo, large, c])):
+        raise LinksError("the limits contract refuses the nine-slot fixed configuration")
+    held = NOTICES * c["outstandingSamples"]
+    digest = sha("\n".join(sha(distinct_payload(c["payloadBytes"], i)) for i in range(held)).encode())
+    return (
+        f"links countsfixed {c['maxKeys']} {c['maxSubscribers']} {c['outstandingSamples']} {held} {c['payloadBytes']} {c['stackBytes']} {digest}",
     )
 
 
@@ -641,6 +665,38 @@ def boundarysn_lines() -> tuple[str, ...]:
 # an id with bit 15 set is declared and a sender-mapped Put resolves through it.
 SHORT_KEY = "a/b"
 HIGH_ALIASES = (0x8000, 0xFFFF)
+
+
+# A key is a length in bytes: "\u00e9/\u65e5\u672c" is four characters and nine bytes, and its twin with an
+# `x` is five characters and ten. A link that counts characters, or assumes ASCII, takes the twin under a
+# declared 9 or mis-sizes the first.
+MULTIBYTE_KEY = "\u00e9/\u65e5\u672c"
+MULTIBYTE_OVER = MULTIBYTE_KEY + "x"
+MULTIBYTE_BATCH = 512
+MULTIBYTE_PAYLOAD = 1500
+
+
+@lru_cache(maxsize=None)
+def multibyte_lines() -> tuple[str, ...]:
+    demo, large = pinned_configs()[:2]
+    key = MULTIBYTE_KEY
+    key_bytes = len(key.encode())
+    if len(key) == key_bytes or len(MULTIBYTE_OVER) > key_bytes or len(MULTIBYTE_OVER.encode()) <= key_bytes:
+        raise LinksError("the multibyte key must differ in characters and bytes, and its twin must pass by characters only")
+    if not contract_accepts(limits_record([demo, large, edge_config(MULTIBYTE_BATCH, "k" * key_bytes, MULTIBYTE_PAYLOAD)])):
+        raise LinksError("the limits contract refuses the multibyte-key configuration")
+    _handshake, declare, undeclare = edge_sizes("multibyte", MULTIBYTE_BATCH, key)
+    message = edge_message(key, MULTIBYTE_PAYLOAD)
+    digests: list[str] = []
+    joined = zenoh_fragment.reassemble(list(tapped_bodies(message, MULTIBYTE_BATCH, digests)), EDGE_SN, MULTIBYTE_BATCH)
+    decoded = zenoh_fragment.decode_message(joined, max_key=key_bytes, subscribed=key)
+    if bytes(decoded["key"]) != key.encode() or bytes(decoded["payload"]) != zenoh_fragment.payload_bytes(MULTIBYTE_PAYLOAD):
+        raise LinksError("the host reference does not read its own multibyte Put back")
+    return (
+        f"links multibyte {len(key)} {key_bytes} {MULTIBYTE_BATCH} {MULTIBYTE_PAYLOAD} "
+        f"{declare} {sha(zenoh_wire.declare_subscriber(1, key, True))} {undeclare} {sha(zenoh_wire.undeclare_subscriber(1, key, True))} "
+        f"{len(digests)} {sha(chr(10).join(digests).encode())} {sha(message)}",
+    )
 
 
 def short_key_line() -> str:
@@ -749,8 +805,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 247
-PINNED_CONTROLS = 579
+PINNED_CASES = 255
+PINNED_CONTROLS = 607
 
 
 class LinksError(ValueError):
@@ -841,6 +897,10 @@ def good_lines() -> list[str]:
             lines += list(single_lines())
         if name == "reassemble-underfilled-interior":
             lines += list(underfilled_lines())
+        if name == "nine-keys-subscribers-and-samples-fixed":
+            lines += list(counts_fixed_lines())
+        if name == "reassemble-multibyte-key":
+            lines += list(multibyte_lines())
         if name == "nine-keys-subscribers-and-samples":
             lines += list(counts_lines())
         if name == "boundary-at-sequence-width-changes":
@@ -913,6 +973,8 @@ SHAPES = {
     ("links", "fixededge"): 15,
     ("links", "minimum"): 16,
     ("links", "aliaslong"): 14,
+    ("links", "countsfixed"): 9,
+    ("links", "multibyte"): 13,
     ("links", "single"): 7,
     ("links", "counts"): 9,
     ("links", "underfilled"): 7,
@@ -992,6 +1054,14 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    countsfixed = [" ".join(f) for f in only("countsfixed")]
+    if countsfixed != list(counts_fixed_lines()):
+        raise LinksError(f"a fixed configuration of nine keys, subscribers and samples must be built and filled: {list(counts_fixed_lines())}, reported {countsfixed}")
+
+    multibyte = [" ".join(f) for f in only("multibyte")]
+    if multibyte != list(multibyte_lines()):
+        raise LinksError(f"a valid multibyte key must be declared and carried, its length counted in bytes: {list(multibyte_lines())}, reported {multibyte}")
 
     aliaslong = [" ".join(f) for f in only("aliaslong")]
     if aliaslong != list(alias_long_lines()):
@@ -1109,7 +1179,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte)
     return positive, len(refused)
 
 
@@ -1349,6 +1419,18 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
 
     def under_swap(index: int, value: str) -> list[str]:
         at = first("links underfilled ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    def fixed_counts_swap(index: int, value: str) -> list[str]:
+        at = first("links countsfixed ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    def multibyte_swap(index: int, value: str) -> list[str]:
+        at = first("links multibyte ")
         fields = good[at].split()
         fields[index] = value
         return good[:at] + [" ".join(fields)] + good[at + 1 :]
@@ -1702,6 +1784,33 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("alias 0xffff stored in 15 bits", swap("links highalias 65535 ", high_alias_line(0x7FFF))),
         ("a high alias that resolved to another payload", swap("links highalias 32768 ", corrupt_last(good[first("links highalias 32768 ")]))),
         ("the high-alias scenario dropped", [line for line in good if line != "links ok reassemble-high-aliases"]),
+        ("tenth-subscriber-in-nine-fixed admitted instead of refused", drop("links refused tenth-subscriber-in-nine-fixed ")),
+        ("tenth-subscriber-in-nine-fixed refused with the wrong class", swap("links refused tenth-subscriber-in-nine-fixed ", "links refused tenth-subscriber-in-nine-fixed over-bound")),
+        ("tenth-alias-in-nine-fixed admitted instead of refused", drop("links refused tenth-alias-in-nine-fixed ")),
+        ("tenth-alias-in-nine-fixed refused with the wrong class", swap("links refused tenth-alias-in-nine-fixed ", "links refused tenth-alias-in-nine-fixed unsupported-message")),
+        ("fragmented-put-multibyte-key-over-declared admitted instead of refused", drop("links refused fragmented-put-multibyte-key-over-declared ")),
+        ("fragmented-put-multibyte-key-over-declared refused with the wrong class", swap("links refused fragmented-put-multibyte-key-over-declared ", "links refused fragmented-put-multibyte-key-over-declared unsupported-message")),
+        ("the fixed nine-slot line dropped", drop("links countsfixed ")),
+        ("a fixed link of four keys reported for nine", fixed_counts_swap(2, "4")),
+        ("a fixed link of four subscribers reported for nine", fixed_counts_swap(3, "4")),
+        ("a fixed link of four samples reported for nine", fixed_counts_swap(4, "4")),
+        ("a fixed notice queue of eight reported for eighteen", fixed_counts_swap(5, "8")),
+        ("a fixed nine-slot queue of small payloads", fixed_counts_swap(6, "512")),
+        ("a fixed nine-slot queue whose payloads were overwritten", fixed_counts_swap(8, sha(b"overwritten"))),
+        ("a fixed nine-slot stack smaller than the arithmetic needs", fixed_counts_swap(7, str(int(good[first("links countsfixed ")].split()[7]) - 1))),
+        ("the fixed nine-slot scenario dropped", [line for line in good if line != "links ok nine-keys-subscribers-and-samples-fixed"]),
+        ("the multibyte-key line dropped", drop("links multibyte ")),
+        ("a multibyte key counted in characters", multibyte_swap(3, str(len(MULTIBYTE_KEY)))),
+        ("a multibyte key reported as one character longer", multibyte_swap(2, str(len(MULTIBYTE_KEY) + 1))),
+        ("a multibyte declaration sized for the characters", multibyte_swap(6, str(int(good[first("links multibyte ")].split()[6]) - 5))),
+        ("a multibyte undeclaration with other bytes", multibyte_swap(9, sha(b"other"))),
+        ("a multibyte Put with other fragment bodies", multibyte_swap(11, sha(b"other"))),
+        ("a multibyte Put with another number of fragments", multibyte_swap(10, "2")),
+        ("a multibyte Put that reassembled to another message", multibyte_swap(12, sha(b"other"))),
+        ("the multibyte scenario dropped", [line for line in good if line != "links ok reassemble-multibyte-key"]),
+        ("the subscriber id zero dropped", drop("links subid 0 ")),
+        ("a subscriber id zero reported as one", swap("links subid 0 ", subscriber_id_line(1))),
+        ("a subscriber id zero declared with another encoding", swap("links subid 0 ", corrupt_last(good[first("links subid 0 ")]))),
         ("the subscriber-id lines dropped", drop("links subid ")),
         ("the top-bit subscriber id dropped", drop("links subid 2147483648 ")),
         ("the largest subscriber id dropped", drop("links subid 4294967295 ")),
@@ -1984,6 +2093,7 @@ def reference_controls() -> int:
         )
 
     cases: list[tuple[str, Callable[[], object]]] = [
+        ("a multibyte key longer in bytes than declared though not in characters", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(5, MULTIBYTE_OVER), max_key=len(MULTIBYTE_KEY.encode()))),
         ("a gap in the sequence numbers", lambda: zenoh_fragment.reassemble([bodies[0], bodies[2]])),
         ("fragments out of order", lambda: zenoh_fragment.reassemble([bodies[1], bodies[0], bodies[2]])),
         ("a run that never ends", lambda: zenoh_fragment.reassemble(bodies[:2])),
@@ -2111,6 +2221,7 @@ def reference_controls() -> int:
         "a fragmented full key with a hash": "invalid-keyexpr",
         "a fragmented full key with a $ wildcard": "wildcard-keyexpr",
         "a truncated sequence number": "truncated",
+        "a multibyte key longer in bytes than declared though not in characters": "longer than the configuration declares",
         "a PUSH whose body is a delete": "unsupported-message",
         "a PUSH that ends before its body": "truncated",
         "an unterminated scope": "truncated",
@@ -2192,6 +2303,10 @@ def reference_controls() -> int:
         pass
     else:
         raise LinksError("control: a run that does not follow its declaration was taken")
+    # The multibyte key itself is read where its byte length is declared, so the refusal above is not a
+    # blanket one.
+    if zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(5, MULTIBYTE_KEY), max_key=len(MULTIBYTE_KEY.encode()), subscribed=MULTIBYTE_KEY)["key"] != MULTIBYTE_KEY.encode():
+        raise LinksError("control: a valid multibyte key was not read")
     # A complete Put in one fragment with the more flag clear is taken.
     lone = zenoh_fragment.reference_split(zenoh_fragment.message(100), batch, sn)
     if len(lone) != 1 or zenoh_fragment.reassemble(lone, sn, batch) != zenoh_fragment.message(100):

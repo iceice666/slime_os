@@ -1,7 +1,7 @@
 # Zenoh Profile 0 links declared by a named configuration
 
 **Status:** Proposed
-**Related work items:** `01a138f0-0d89-77b4-8fa8-7d1e9ed726fd` (this decision's exam and
+**Related work items:** `01a13905-fb83-74de-b6ad-89da0aeaa577` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer item
 `01a12f13-a343-7924-af20-18148fc1b0d9` (merged), whose exam this one extends.
 
