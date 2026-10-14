@@ -219,6 +219,8 @@ def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     for s in segs:
         if s.flags & TCP_SYN:
             _need(s.outgoing != bool(s.flags & TCP_ACK), "a SYN that is not the guest's SYN or the peer's SYN-ACK")
+            _need(not s.flags & (TCP_FIN | TCP_RST), "a handshake packet that also carries a FIN or a reset")
+            _need(s.flags & ~(TCP_SYN | TCP_ACK) == 0, f"a handshake packet with flags {s.flags:#04x}, only SYN and ACK are admitted")
     last_syn = max(i for i, s in enumerate(segs) if s.flags & TCP_SYN)
     first_data = next((i for i, s in enumerate(segs) if s.payload), len(segs))
     _need(last_syn < first_data, "a SYN after the connection carried data")
@@ -378,7 +380,16 @@ def _qos(reader: _Reader, label: str) -> None:
     _need(reader.leb(LEB_LONG, f"{label} QoS value") <= QOS_NETWORK_MAX, f"{label}: a QoS value over {QOS_NETWORK_MAX}")
 
 
-def _declare(reader: _Reader, header: int) -> str:
+class _Seen:
+    """What a peer's frames declared: the one alias it announced and the subscriber's resolved key."""
+
+    def __init__(self) -> None:
+        self.alias: tuple[int, str] | None = None
+        self.subscriber: str | None = None
+        self.subscriber_batch: int | None = None
+
+
+def _declare(reader: _Reader, header: int, seen: "_Seen | None" = None) -> str:
     if header & FLAG_5:
         _need(not header & FLAG_6 and not header & FLAG_Z, "DECLARE with the interest flag: only the bare form is taken")
         reader.leb(LEB_LONG, "interest id")
@@ -393,13 +404,29 @@ def _declare(reader: _Reader, header: int) -> str:
     if kind == ID_D_KEYEXPR:
         _need(sub & FLAG_5, "DeclareKeyExpr that does not name its key")
         _need(not sub & FLAG_6 and not sub & FLAG_Z, "DeclareKeyExpr with a flag the exam does not name")
-        _need(reader.leb(LEB_SHORT, "alias id") != 0, "DeclareKeyExpr with alias id 0")
+        alias_id = reader.leb(LEB_SHORT, "alias id")
+        _need(alias_id != 0, "DeclareKeyExpr with alias id 0")
+        start = reader.at
         _need(_key_reference(reader, True, "DeclareKeyExpr") == "full", "DeclareKeyExpr naming an alias")
+        if seen is not None:
+            _need(seen.alias is None, "a second alias, the profile holds one")
+            seen.alias = (alias_id, _declared_key(reader.data, start))
         return "keyexpr"
     if kind == ID_D_SUBSCRIBER:
         _need(not sub & FLAG_Z, "DeclareSubscriber with an extension")
         reader.leb(LEB_LONG, "subscriber id")
-        _key_reference(reader, bool(sub & FLAG_5), "DeclareSubscriber")
+        start = reader.at
+        named = bool(sub & FLAG_5)
+        _key_reference(reader, named, "DeclareSubscriber")
+        if seen is not None:
+            _need(seen.subscriber is None, "a second subscriber, the profile holds one")
+            if named:
+                seen.subscriber = _declared_key(reader.data, start)
+            else:
+                scope = _Reader(reader.data, start).leb(LEB_SHORT, "subscriber alias")
+                _need(sub & FLAG_6, "a subscriber alias in the receiver's mapping, which this side never declared")
+                _need(seen.alias is not None and seen.alias[0] == scope, "a subscriber through an alias nobody declared")
+                seen.subscriber = seen.alias[1]
         return "subscriber"
     if kind == ID_U_SUBSCRIBER:
         _need(not qos, "UndeclareSubscriber with a QoS extension")
@@ -415,6 +442,13 @@ def _declare(reader: _Reader, header: int) -> str:
         _key(inner.take(inner.left(), "wire expression"), "UndeclareSubscriber")
         return "undeclare"
     raise CaptureError(f"a declaration of kind {kind} the exam does not name")
+
+
+def _declared_key(data: bytes, start: int) -> str:
+    """The key a wire expression at `start` names in full: scope, length, bytes."""
+    reader = _Reader(data, start)
+    reader.leb(LEB_SHORT, "scope")
+    return reader.take(reader.leb(LEB_SHORT, "key length"), "key").decode("utf-8")
 
 
 def _push(reader: _Reader, header: int) -> str:
@@ -442,28 +476,28 @@ def _oam(reader: _Reader, header: int) -> str:
     return "oam"
 
 
-def _frame_messages(batch: bytes, label: str) -> list[str]:
+def _frame_messages(batch: bytes, label: str, seen: "_Seen | None" = None) -> tuple[int, list[str]]:
     """A reliable FRAME: its sequence number, then whole network messages to the end of the batch.
 
     Returns the kinds in order. At least one message is required, and a trailing byte that is not
     the start of a message the profile names refuses the batch."""
     _need(batch[0] == zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R, f"{label}: a FRAME header {batch[0]:#04x}, the profile takes only the reliable form 0x25")
     reader = _Reader(batch, 1)
-    reader.leb(LEB_LONG, f"{label} sequence number")
+    sequence = reader.leb(LEB_LONG, f"{label} sequence number")
     _need(reader.left() != 0, f"{label}: a FRAME that carries no message")
     kinds = []
     while reader.left():
         header = reader.u8(label)
         kind = header & 0x1F
         if kind == ID_DECLARE:
-            kinds.append(_declare(reader, header))
+            kinds.append(_declare(reader, header, seen))
         elif kind == ID_PUSH:
             kinds.append(_push(reader, header))
         elif kind == ID_OAM:
             kinds.append(_oam(reader, header))
         else:
             raise CaptureError(f"{label}: a network message of kind {kind} the exam does not name")
-    return kinds
+    return sequence, kinds
 
 
 def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
@@ -515,14 +549,15 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
     }
 
 
-def judge_peer(batches: list[bytes]) -> dict:
+def judge_peer(batches: list[bytes], key: str) -> dict:
     """The peer's batches, each parsed to its fields: an INIT_ACK, an OPEN_ACK, then frames whose every
     message is parsed, keep-alives and at most one close, after which nothing."""
     _need(len(batches) >= 2, "the peer sent fewer than an INIT_ACK and an OPEN_ACK")
     _need(_kind(batches[0]) == zenoh_wire.ID_INIT and batches[0][0] & zenoh_wire.FLAG_A, "the first peer batch is not an INIT_ACK")
     cookie = _init_fields(batches[0], "INIT_ACK", True)
     _need(_kind(batches[1]) == zenoh_wire.ID_OPEN and batches[1][0] & zenoh_wire.FLAG_A, "the second peer batch is not an OPEN_ACK")
-    _open_fields(batches[1], "OPEN_ACK", True)
+    _, expected, _cookie_unused = _open_fields(batches[1], "OPEN_ACK", True)
+    seen = _Seen()
     closed = False
     subscriber = None
     for index, batch in enumerate(batches[2:], start=2):
@@ -534,11 +569,14 @@ def judge_peer(batches: list[bytes]) -> dict:
             _need(batch[1] <= MAX_CLOSE_REASON, f"a peer CLOSE with reason {batch[1]}, the profile names 0 to {MAX_CLOSE_REASON}")
             closed = True
         elif _kind(batch) == zenoh_wire.ID_FRAME:
-            kinds = _frame_messages(batch, "a peer FRAME")
+            sequence, kinds = _frame_messages(batch, "a peer FRAME", seen)
+            _need(sequence == expected, f"a peer FRAME with sequence number {sequence}, the OPEN_ACK announced {expected}")
+            expected = (expected + 1) & 0xFFFFFFFF
             if subscriber is None and "subscriber" in kinds:
                 subscriber = index
         else:
             raise CaptureError(f"a peer batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
+    _need(seen.subscriber is None or seen.subscriber == key, f"the peer's subscriber is on {seen.subscriber!r}, not the demo key")
     return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber}
 
 
@@ -547,7 +585,7 @@ def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
     guest_batches, guest_spans = split(guest, "guest stream")
     peer_batches, peer_spans = split(peer, "peer stream")
     result = judge_guest(guest_batches, reported, contract)
-    seen = judge_peer(peer_batches)
+    seen = judge_peer(peer_batches, contract["key"])
     _need(result["cookie"] == seen["cookie"], "the OPEN_SYN does not echo the INIT_ACK's cookie")
     _need(seen["subscriber"] is not None, "the peer never declared a subscriber for the connector to match")
     # Cross-direction order, from the packet each stream's bytes were carried in. A session is built in
@@ -868,7 +906,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 195
+PINNED_CONTROLS = 205
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -1032,9 +1070,9 @@ def build(scenario: dict) -> bytes:
 
     frames = [_arp()]
     if not scenario.get("no_syn"):
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0)), True))
         if not scenario.get("no_synack"):
-            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK), False))
+            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0)), False))
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1, TCP_ACK), True))
     if "synack_again" in scenario:
         frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK), False))
@@ -1106,6 +1144,31 @@ def judge(scenario: dict, contract: dict) -> dict:
 # ---------------------------------------------------------------------------- controls
 
 
+OTHER_KEY = b"0/other/key/that/is/valid"
+
+
+def _sn(batch: bytes) -> int:
+    return zenoh_wire.read_leb128(batch, 1)[0]
+
+
+def _with_sn(batch: bytes, sn: int) -> bytes:
+    return batch[:1] + zenoh_wire.leb128(sn & 0xFFFFFFFF) + batch[zenoh_wire.read_leb128(batch, 1)[1] :]
+
+
+def _other_key_alias(batch: bytes) -> bytes:
+    """The captured key-alias declaration with the demo key replaced by another valid key."""
+    key = zenoh_exchange.demo()["key"].encode()
+    at = batch.index(key) - 2
+    return batch[:at] + bytes([len(OTHER_KEY)]) + OTHER_KEY + batch[at + 2 + len(key) :]
+
+
+def _other_key_subscriber(batch: bytes) -> bytes:
+    """A DeclareSubscriber that names OTHER_KEY in full, in a FRAME with the same sequence number."""
+    sn = _sn(batch)
+    body = bytes([ID_DECLARE, 0x42 & ~FLAG_6 | FLAG_5 | 0x40 * 0]) + zenoh_wire.leb128(1) + zenoh_wire.leb128(0) + zenoh_wire.leb128(len(OTHER_KEY)) + OTHER_KEY
+    return bytes([zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R]) + zenoh_wire.leb128(sn) + body
+
+
 def _replace_sent(index: int, change: Callable[[bytes], bytes], both: bool) -> Callable[[dict], dict]:
     def run(s: dict) -> dict:
         at = 2 + index
@@ -1139,6 +1202,14 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
     def peer_at(index: int, change: Callable[[bytes], bytes]) -> Callable[[dict], dict]:
         def run(s: dict) -> dict:
             s["peer"][index] = change(s["peer"][index])
+            return s
+
+        return run
+
+    def peer_sn(by: int) -> Callable[[dict], dict]:
+        def run(s: dict) -> dict:
+            for i in (2, 3, 4):
+                s["peer"][i] = _with_sn(s["peer"][i], _sn(s["peer"][i]) + by)
             return s
 
         return run
@@ -1242,6 +1313,16 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest CLOSE of the link only", guest_at(-1, lambda b: b"\x03\x00")),
         ("a guest CLOSE with reason 8, one over the last the profile names", guest_at(-1, lambda b: b"\x23\x08")),
         ("a guest CLOSE with reason 255", guest_at(-1, lambda b: b"\x23\xff")),
+        ("a guest SYN that also carries a FIN", edit(lambda s: s.update(syn_flags=TCP_FIN))),
+        ("a peer SYN-ACK that also carries a FIN", edit(lambda s: s.update(synack_flags=TCP_FIN))),
+        ("a guest SYN that also carries an URG flag", edit(lambda s: s.update(syn_flags=0x20))),
+        ("a peer SYN-ACK that also carries a PSH flag", edit(lambda s: s.update(synack_flags=0x08))),
+        ("a peer alias for another valid key, the subscriber through it", peer_at(3, lambda b: _other_key_alias(b))),
+        ("a peer subscriber declared by name on another key", peer_at(4, lambda b: _other_key_subscriber(b))),
+        ("every peer FRAME sequence number one over the OPEN_ACK's", peer_sn(1)),
+        ("every peer FRAME sequence number one under the OPEN_ACK's", peer_sn(-1)),
+        ("a peer FRAME sequence number repeated", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][3]))))),
+        ("a peer FRAME sequence number skipped", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][4]) + 5)))),
         ("an OPEN_SYN echoing another cookie", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, b"another-cookie-99"))),
         ("an OPEN_SYN echoing the cookie one byte short", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie()[:-1]))),
         ("an OPEN_SYN echoing the cookie with a byte added", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie() + b"\x00"))),
@@ -1384,6 +1465,7 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("segments of 100 bytes in every turn of the session", update(chunk=100)),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
+        ("peer FRAME sequence numbers that wrap through 2**32", lambda s: {**s, "peer": [*s["peer"][:1], zenoh_wire.open_(10000, 0xFFFFFFFE, ack=True), *[_with_sn(b, 0xFFFFFFFE + i) for i, b in enumerate(s["peer"][2:5])], *s["peer"][5:]]}),
         ("a guest SYN retransmitted identically", update(syn_again=0)),
         ("a guest CLOSE with the last reason the profile names, 7", lambda s: {**s, "guest": [*s["guest"][:-1], zenoh_wire.close(7, True)]}),
         ("an ARP reply from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2)]}),
