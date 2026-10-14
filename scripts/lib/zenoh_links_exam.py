@@ -100,6 +100,10 @@ OK_SCENARIOS = (
     "wide-counts-256-fixed",
     "wide-counts-65535-heap",
     "wide-counts-65535-fixed",
+    "wide-counts-65536-samples-heap",
+    "wide-counts-65536-samples-fixed",
+    "wide-slots-65535-heap",
+    "wide-slots-65535-fixed",
     "reassemble-multibyte-key",
     "boundary-at-sequence-width-changes",
 )
@@ -663,6 +667,10 @@ WIDE = (
     ("wide-counts-256-fixed", "fixed", 256, 256, 256, 12),
     ("wide-counts-65535-heap", "heap", 65535, 65535, 1, 12),
     ("wide-counts-65535-fixed", "fixed", 65535, 65535, 1, 12),
+    # 65536 samples, one past what 16 bits hold: 131072 notices held undrained, each a distinct four-byte
+    # payload that is its own index, so a count or an index narrowed to 16 bits repeats a payload.
+    ("wide-counts-65536-samples-heap", "heap", 1, 1, 65536, 4),
+    ("wide-counts-65536-samples-fixed", "fixed", 1, 1, 65536, 4),
 )
 
 
@@ -693,6 +701,52 @@ def wide_lines() -> tuple[str, ...]:
         count = held + (1 if mode == "heap" else 0)
         digest = sha("\n".join(sha(wide_payload(payload, i)) for i in range(count)).encode())
         out.append(f"links wide {mode} {keys} {subscribers} {samples} {held} {payload} {c['stackBytes']} {c['heapBytes']} {digest}")
+    return tuple(out)
+
+
+# In a configuration of 65535 keys and 65535 subscribers every slot is declared, and the slots above index
+# 255, which a link that keeps its next or free index in a byte never reaches, are used and removed: all
+# 65535 subscribers and all 65535 aliases are declared (alias ids 1 to 65535), a Put is carried to the
+# subscriber and through the alias at slot 256 and at the last slot, and all 65535 subscribers are
+# undeclared. A key-expression alias has no undeclaration in the profile, so the aliases are declared
+# and used and the subscribers are declared, used and removed.
+SLOT_USED = (256, 65534)
+
+
+def slot_key(kind: str, index: int) -> str:
+    return f"{kind}/{index}"
+
+
+@lru_cache(maxsize=None)
+def slot_digests() -> tuple[str, str, str]:
+    """The sha256 of every declaration, of the Puts carried to the used slots, and of every
+    undeclaration, built in slot order. The bytes do not depend on the mode."""
+    declared, used, removed = hashlib.sha256(), hashlib.sha256(), hashlib.sha256()
+    for index in range(65535):
+        declared.update(zenoh_wire.declare_subscriber(index, slot_key("s", index), True))
+        declared.update(declare_keyexpr(index + 1, slot_key("a", index)))
+        removed.update(zenoh_wire.undeclare_subscriber(index, slot_key("s", index), True))
+    for index in SLOT_USED:
+        to_subscriber = zenoh_wire.push_put(slot_key("s", index), zenoh_fragment.attachment(), zenoh_fragment.payload_bytes(12), True)
+        through_alias = zenoh_fragment.message(12, 0x5D, index + 1)
+        read = zenoh_fragment.decode_message(to_subscriber, max_key=129, subscribed=slot_key("s", index))
+        resolved = zenoh_fragment.decode_message(through_alias, alias=index + 1, alias_key=slot_key("a", index), subscribed=slot_key("a", index))
+        if bytes(read["key"]) != slot_key("s", index).encode() or resolved["scope"] != index + 1:
+            raise LinksError(f"the host reference does not read its own Put to slot {index}")
+        used.update(to_subscriber)
+        used.update(through_alias)
+    return declared.hexdigest(), used.hexdigest(), removed.hexdigest()
+
+
+@lru_cache(maxsize=None)
+def slots_lines() -> tuple[str, ...]:
+    demo, large = pinned_configs()[:2]
+    declared, used, removed = slot_digests()
+    out = []
+    for mode in ("heap", "fixed"):
+        if not contract_accepts(limits_record([demo, large, wide_config(mode, 65535, 65535, 1, 12)])):
+            raise LinksError(f"the limits contract refuses the {mode} configuration of 65535 keys and subscribers")
+        out.append(f"links slots {mode} 65535 65535 {SLOT_USED[0]} {SLOT_USED[1]} {declared} {used} {removed}")
     return tuple(out)
 
 
@@ -859,8 +913,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 267
-PINNED_CONTROLS = 632
+PINNED_CASES = 275
+PINNED_CONTROLS = 651
 
 
 class LinksError(ValueError):
@@ -951,6 +1005,8 @@ def good_lines() -> list[str]:
             lines += list(single_lines())
         if name == "reassemble-underfilled-interior":
             lines += list(underfilled_lines())
+        if name.startswith("wide-slots-"):
+            lines.append(next(line for line in slots_lines() if line.split()[2] == name.rsplit("-", 1)[1]))
         if name.startswith("wide-counts-"):
             lines.append(next(line for line, spec in zip(wide_lines(), WIDE, strict=True) if spec[0] == name))
         if name == "nine-keys-subscribers-and-samples-fixed":
@@ -1031,6 +1087,7 @@ SHAPES = {
     ("links", "aliaslong"): 14,
     ("links", "countsfixed"): 9,
     ("links", "wide"): 11,
+    ("links", "slots"): 10,
     ("links", "multibyte"): 13,
     ("links", "single"): 7,
     ("links", "counts"): 9,
@@ -1111,6 +1168,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    slots = [" ".join(f) for f in only("slots")]
+    if slots != list(slots_lines()):
+        raise LinksError(f"the slots above index 255 of a 65535-slot link must be declared, used and removed in each mode: {list(slots_lines())}, reported {slots}")
 
     wide = [" ".join(f) for f in only("wide")]
     if wide != list(wide_lines()):
@@ -1240,7 +1301,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte) + len(wide)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte) + len(wide) + len(slots)
     return positive, len(refused)
 
 
@@ -1480,6 +1541,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
 
     def under_swap(index: int, value: str) -> list[str]:
         at = first("links underfilled ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    def slots_swap(mode: str, index: int, value: str) -> list[str]:
+        at = first(f"links slots {mode} ")
         fields = good[at].split()
         fields[index] = value
         return good[:at] + [" ".join(fields)] + good[at + 1 :]
@@ -1877,10 +1944,29 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a heap link of 65534 keys reported for 65535", wide_swap("heap", 65535, 3, "65534")),
         ("a fixed link of 255 subscribers reported for 65535", wide_swap("fixed", 65535, 4, "255")),
         ("a heap link of 256 keys reported for 65535", wide_swap("heap", 65535, 3, "256")),
-        ("a wide queue of payloads that repeat every 251 notices", wide_swap("heap", 256, 9, sha(chr(10).join(sha(distinct_payload(12, i)) for i in range(513)).encode()))),
-        ("a wide queue whose payloads were overwritten", wide_swap("fixed", 256, 9, sha(b"overwritten"))),
-        ("a wide heap link with a heap one message short", wide_swap("heap", 256, 8, str(int(good[first("links wide heap 256 ")].split()[8]) - 1))),
-        ("a wide stack smaller than the arithmetic needs", wide_swap("fixed", 65535, 7, str(int(good[first("links wide fixed 65535 ")].split()[7]) - 1))),
+        ("a wide queue of payloads that repeat every 251 notices", wide_swap("heap", 256, 10, sha(chr(10).join(sha(distinct_payload(12, i)) for i in range(513)).encode()))),
+        ("a wide queue whose payloads were overwritten", wide_swap("fixed", 256, 10, sha(b"overwritten"))),
+        ("a wide heap link with a heap one message short", wide_swap("heap", 256, 9, str(int(good[first("links wide heap 256 ")].split()[9]) - 1))),
+        ("a wide stack smaller than the arithmetic needs", wide_swap("fixed", 65535, 8, str(int(good[first("links wide fixed 65535 ")].split()[8]) - 1))),
+        ("the slot lines dropped", drop("links slots ")),
+        ("the heap slot line dropped", drop("links slots heap ")),
+        ("the fixed slot line dropped", drop("links slots fixed ")),
+        ("a heap link declaring 255 slots reported for 65535", slots_swap("heap", 3, "255")),
+        ("a fixed link of 256 subscribers reported for 65535", slots_swap("fixed", 4, "256")),
+        ("a slot link that never addressed slot 256", slots_swap("heap", 5, "255")),
+        ("a slot link whose last slot is 255", slots_swap("fixed", 6, "255")),
+        ("a slot link whose declarations stop at 256", slots_swap("heap", 7, sha(b"declarations stop at 256"))),
+        ("a slot link whose Puts to the high slots differ", slots_swap("fixed", 8, sha(b"other"))),
+        ("a slot link whose undeclarations stop at 255", slots_swap("heap", 9, sha(b"undeclarations stop at 255"))),
+        ("the slot scenarios dropped", [line for line in good if not line.startswith("links ok wide-slots-")]),
+        ("the 65536-sample heap line dropped", drop("links wide heap 1 ")),
+        ("the 65536-sample fixed line dropped", drop("links wide fixed 1 ")),
+        ("65535 samples reported for 65536 in a heap link", wide_swap("heap", 1, 5, "65535")),
+        ("a fixed notice queue of 131070 reported for 131072", wide_swap("fixed", 1, 6, "131070")),
+        ("a 65536-sample heap one message short", wide_swap("heap", 1, 9, str(int(good[first("links wide heap 1 ")].split()[9]) - 1))),
+        ("a 65536-sample queue whose payloads repeat every 65536 notices", wide_swap("heap", 1, 10, sha(chr(10).join(sha(wide_payload(4, i % 65536)) for i in range(131073)).encode()))),
+        ("a 65536-sample queue whose payloads repeat every 65536 notices, fixed", wide_swap("fixed", 1, 10, sha(chr(10).join(sha(wide_payload(4, i % 65536)) for i in range(131072)).encode()))),
+        ("the 65536-sample scenarios dropped", [line for line in good if not line.startswith("links ok wide-counts-65536-")]),
         ("the wide-count scenarios dropped", [line for line in good if not line.startswith("links ok wide-counts-")]),
         ("the fixed nine-slot line dropped", drop("links countsfixed ")),
         ("a fixed link of four keys reported for nine", fixed_counts_swap(2, "4")),
