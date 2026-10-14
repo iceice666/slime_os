@@ -45,6 +45,8 @@ PUBLISHER = "ros2-demo-publisher"
 SUBSCRIBER = "ros2-demo-subscriber"
 DENIALS = ("undeclared-endpoint", "listen", "scouting")
 MAX_STREAM = 1 << 20
+# contracts/zenoh-profile/v1 maxBatchBytes: no batch, in either direction, is longer.
+MAX_BATCH_BYTES = 512
 U32 = 0xFFFFFFFF
 # The attachment the publisher builds for sample `n` (components/lib/src/zenoh_node.rs): sequence n + 1,
 # source timestamp 1000 + n, and one GID for every sample.
@@ -116,6 +118,10 @@ def _check_arp(frame: bytes) -> None:
 # (2) and the window scale (3), plus SACK-permitted (4). Timestamps (8) vary on every packet and are
 # the one option a retransmission may differ in.
 VARIABLE_OPTIONS = (8,)
+# The total length (kind and length bytes included) each fixed-format option must have: MSS 4
+# (RFC 9293), window scale 3 and timestamps 10 (RFC 7323), SACK-permitted 2 (RFC 2018). SACK blocks
+# (kind 5) and kinds the exam does not name are variable and only bounds-checked.
+FIXED_OPTION_LENGTHS = {2: 4, 3: 3, 4: 2, 8: 10}
 
 
 def _options(raw: bytes) -> tuple:
@@ -133,6 +139,8 @@ def _options(raw: bytes) -> tuple:
             at += 1
             continue
         _need(at + 1 < len(raw) and raw[at + 1] >= 2 and at + raw[at + 1] <= len(raw), f"a malformed TCP option of kind {kind}")
+        _need(kind not in FIXED_OPTION_LENGTHS or raw[at + 1] == FIXED_OPTION_LENGTHS[kind],
+              f"a TCP option of kind {kind} with length {raw[at + 1]}, it is {FIXED_OPTION_LENGTHS.get(kind)}")
         found.append((kind, bytes(raw[at + 2 : at + raw[at + 1]])))
         at += raw[at + 1]
     return tuple(sorted(found))
@@ -368,6 +376,7 @@ def split(stream: bytes, label: str) -> tuple[list[bytes], list[tuple[int, int]]
         _need(at + 2 <= len(stream), f"{label}: a stream length cut short")
         length = int.from_bytes(stream[at : at + 2], "little")
         _need(length > 0, f"{label}: an empty batch")
+        _need(length <= MAX_BATCH_BYTES, f"{label}: a batch of {length} bytes, the profile bounds a batch at {MAX_BATCH_BYTES}")
         _need(at + 2 + length <= len(stream), f"{label}: a batch of {length} bytes with {len(stream) - at - 2} left")
         batches.append(stream[at + 2 : at + 2 + length])
         spans.append((at, at + 2 + length))
@@ -1079,10 +1088,10 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 262
+PINNED_CONTROLS = 274
 # The positive controls, pinned as the negative ones are: a judge that quietly loses an honest case
 # keeps refusing everything it refused, so only a count of what it accepts shows the loss.
-PINNED_HONEST_CAPTURES = 39
+PINNED_HONEST_CAPTURES = 42
 PINNED_ACCEPTED_RECEIPTS = 10
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
@@ -1431,6 +1440,15 @@ def _push_body(scenario: dict) -> bytes:
     return batch[1 + len(zenoh_wire.leb128(_sn(batch))) :]
 
 
+def _pad_peer_frame(frame: bytes, length: int) -> bytes:
+    """A peer FRAME grown to `length` bytes by a valid OAM, so only the batch bound can refuse it."""
+    extra = length - len(frame)
+    for size in range(extra):
+        if 4 + len(zenoh_wire.leb128(size)) + size == extra:
+            return frame + bytes([OAM_HEADER, 1, EXT_QOS_NETWORK, 8]) + zenoh_wire.leb128(size) + bytes(size)
+    raise CaptureError(f"control: no OAM body makes a frame of {length} bytes")
+
+
 def K() -> str:
     return zenoh_exchange.demo()["key"]
 
@@ -1654,6 +1672,18 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest SYN retransmitted without SACK", edit(lambda s: s.update(syn_again=0, again_guest_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(WSCALE, b"\x07")))),
         ("a peer SYN-ACK retransmitted with another segment size", edit(lambda s: s.update(synack_again=0, again_peer_options=_option(MSS, (1400).to_bytes(2, "big")) + _option(WSCALE, b"\x07")))),
         ("a peer SYN-ACK retransmitted with another window scale", edit(lambda s: s.update(synack_again=0, again_peer_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(WSCALE, b"\x06")))),
+        ("a peer subscriber FRAME of 513 bytes, one over the batch bound", edit(lambda s: s["peer"].__setitem__(4, _pad_peer_frame(s["peer"][4], 513)))),
+        ("a peer subscriber FRAME of 620 bytes", edit(lambda s: s["peer"].__setitem__(4, _pad_peer_frame(s["peer"][4], 620)))),
+        ("a guest batch of 513 bytes", edit(lambda s: s["guest"].insert(2, bytes([ID_KEEP_ALIVE]) + bytes(512)))),
+        ("a guest MSS option of length 3", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([2, 3, 5])))),
+        ("a guest MSS option of length 5", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([2, 5, 5, 0xB4, 0])))),
+        ("a guest window scale option of length 2", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([3, 2])))),
+        ("a guest window scale option of length 4", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([3, 4, 7, 0])))),
+        ("a guest SACK-permitted option of length 3", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([4, 3, 0])))),
+        ("a guest timestamps option of length 9", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([8, 9]) + bytes(7)))),
+        ("a guest timestamps option of length 11", edit(lambda s: s.update(syn_again=0, again_guest_options=bytes([8, 11]) + bytes(9)))),
+        ("a peer MSS option of length 3 on the SYN-ACK", edit(lambda s: s.update(peer_options=bytes([2, 3, 5])))),
+        ("a peer window scale option of length 4 on the SYN-ACK", edit(lambda s: s.update(peer_options=bytes([3, 4, 7, 0])))),
         ("a guest SYN with a malformed option", edit(lambda s: s.update(syn_again=0, again_guest_options=b"\x02\x09\x05\xb4"))),
         ("a guest SYN that also carries a FIN", edit(lambda s: s.update(syn_flags=TCP_FIN))),
         ("a peer SYN-ACK that also carries a FIN", edit(lambda s: s.update(synack_flags=TCP_FIN))),
@@ -1844,6 +1874,9 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("PSH on every data segment", update(psh=True)),
+        ("a peer subscriber FRAME of exactly 512 bytes, the batch bound", lambda s: {**s, "peer": [*s["peer"][:4], _pad_peer_frame(s["peer"][4], 512), *s["peer"][5:]]}),
+        ("a peer subscriber FRAME of 511 bytes, one under the bound", lambda s: {**s, "peer": [*s["peer"][:4], _pad_peer_frame(s["peer"][4], 511), *s["peer"][5:]]}),
+        ("a guest SYN with MSS 4, window scale 3, SACK-permitted 2 and timestamps 10 bytes long", update(guest_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x07") + _option(TIMESTAMP_OPTION, bytes(8)))),
         ("an initial sequence number of 0xFFFFFFFE, the frames wrapping through zero", lambda s: synthesize(contract, 0xFFFFFFFE)),
         ("an initial sequence number of 0xFFFFFFFF, the frames wrapping at once", lambda s: synthesize(contract, 0xFFFFFFFF)),
         ("a guest silent for exactly the 2000 ms lease before its first sample", update(silence_us=2_000_000)),

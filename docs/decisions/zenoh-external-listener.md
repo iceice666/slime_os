@@ -1,7 +1,7 @@
 # Zenoh Profile 0 guest connecting out to a stock listener
 
 **Status:** Proposed
-**Related work items:** `01a1391f-cae4-795e-bb07-313da2223630` (this decision's exam and
+**Related work items:** `01a13931-9e2b-76a2-9983-408bffda9279` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer
 session work `01a12f13-a343-7924-af20-18148fc1b0d9`; R0 `01a00b4d-2400-7987-93d6-19201c397dff`.
 
@@ -71,7 +71,7 @@ the Zenoh default so the demo's loopback 7447 stays distinct.
 
 - `just zenoh_external_check` fails until the composition and the guest land, with
   `sel4-zenoh-external.zti does not exist; the sel4-zenoh-external composition has not landed`.
-- The exam pins 4 cases and 262 corrupted records (217 + 15 + 30), exactly, and compares them
+- The exam pins 4 cases and 274 corrupted records (229 + 15 + 30), exactly, and compares them
   with the admitted item while it is active. A change to either is a re-admission.
 - Adding a recipe to `just/hardware.just` changes a closure input, so the system-image
   closures and test-run records must be regenerated before this lands. That is done as its
