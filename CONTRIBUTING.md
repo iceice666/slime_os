@@ -455,12 +455,18 @@ offline product build. Jobs that need neither the seL4 prefix nor Nix use a
 plain pinned toolchain and `Swatinem/rust-cache`.
 
 Work-item CI uses `nix develop .#projection`, including its trusted retirement
-verifier. It shares the architecture-qualified `projection-*` Nix cache with
+verifier. It shares the architecture-qualified `projection-v2-*` Nix cache with
 projection, closeout and retirement; all four keys include the flake and local
 devloop/Zutai derivations. Main push CI can populate the shared tool cache even
 when another consumer's trigger only permits restores. Legacy `myque-*` entries
 are not deleted by the workflows: retirement requires a measured replacement,
-successful restore and separate operator authorization. A shared key alone does
+successful restore and separate operator authorization. Each consumer roots the
+projection environment with a profile under `RUNNER_TEMP` before running its
+commands and retains that profile through the cache action's post-job GC/save.
+The v2 namespace excludes earlier archives whose unrooted tools could be
+collected before saving; it intentionally has no fallback to that namespace.
+A rooted closure can exceed the GC size target, so archive size still needs
+measurement. A shared key alone does
 not establish cold/warm qualification or byte savings.
 
 Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the

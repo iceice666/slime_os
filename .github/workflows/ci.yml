@@ -255,11 +255,15 @@ jobs:
       - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: >-
-            projection-${{ runner.os }}-${{ runner.arch }}-${{
+            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
               hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
             }}
-          restore-prefixes-first-match: projection-${{ runner.os }}-${{ runner.arch }}-
+          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 5G
+
+      # Keep the shell closure rooted through cache-nix-action's post-job GC/save.
+      - name: Root shared tool environment
+        run: nix develop .#projection --profile "$RUNNER_TEMP/projection-profile" --command true
 
       - run: nix develop .#projection --command just tasks_check
 
