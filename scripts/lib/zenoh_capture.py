@@ -268,6 +268,24 @@ def _check_acks(segs: list[Segment], guest_isn: int, peer_isn: int) -> None:
             sent[s.outgoing] = max(sent[s.outgoing], end)
 
 
+def _check_established(segs: list[Segment], peer_isn: int) -> None:
+    """The peer's SYN is acknowledged before any application byte moves.
+
+    The listener stays in SYN-RECEIVED until a segment acknowledges its SYN, and delivers no data and
+    sends none until then. The segment that does may itself carry data (a guest segment with the ACK
+    and a payload), but a guest payload before it, or a peer payload at or before it, never crossed.
+    """
+    mask = 0xFFFFFFFF
+    acknowledging = [s.index for s in segs if s.outgoing and not s.flags & TCP_SYN and s.flags & TCP_ACK
+                     and 1 <= ((s.ack - peer_isn) & mask) < 1 << 31]
+    _need(bool(acknowledging), "no segment acknowledges the peer's SYN")
+    first = min(acknowledging)
+    for s in segs:
+        if s.payload:
+            _need(s.index >= first if s.outgoing else s.index > first,
+                  f"a {'guest' if s.outgoing else 'peer'} payload recorded before the peer's SYN was acknowledged")
+
+
 def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     """The two streams of the capture's one connection, its ARP count, and where each was carried."""
     segs, arp = segments(data)
@@ -313,6 +331,7 @@ def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     _need(len({_negotiated(s) for s in syns}) == 1, "a guest SYN retransmitted with another window or option")
     _need(len({_negotiated(s) for s in synacks}) == 1, "a peer SYN-ACK retransmitted with another window or option")
     _check_acks(segs, syn.seq, synacks[0].seq)
+    _check_established(segs, synacks[0].seq)
     guest, guest_time = _reassemble([s for s in segs if s.outgoing], syn.seq, "guest stream")
     peer, peer_time = _reassemble([s for s in segs if not s.outgoing], synacks[0].seq, "peer stream")
     return guest, peer, arp, guest_time, peer_time
@@ -1015,10 +1034,10 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 251
+PINNED_CONTROLS = 254
 # The positive controls, pinned as the negative ones are: a judge that quietly loses an honest case
 # keeps refusing everything it refused, so only a count of what it accepts shows the loss.
-PINNED_HONEST_CAPTURES = 30
+PINNED_HONEST_CAPTURES = 32
 PINNED_ACCEPTED_RECEIPTS = 10
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
@@ -1211,7 +1230,8 @@ def build(scenario: dict) -> bytes:
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0), b"", 65535, scenario.get("guest_options", GUEST_OPTIONS)), True))
         if not scenario.get("no_synack"):
             frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0), b"", 65535, scenario.get("peer_options", PEER_OPTIONS)), False))
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1 + skew.pop("hs_ack", 0), TCP_ACK), True))
+        if not scenario.get("no_hs_ack"):
+            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1 + skew.pop("hs_ack", 0), TCP_ACK), True))
     if "synack_again" in scenario:
         frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK, b"", scenario.get("again_window", 65535), scenario.get("again_peer_options", scenario.get("peer_options", PEER_OPTIONS))), False))
     if "syn_again" in scenario:
@@ -1522,6 +1542,9 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("an attachment GID that changes between samples", rebuild_attachments(lambda n: n + 1, lambda n: 1000 + n, lambda n: bytes([n]) * 16)),
         ("both FINs and the last ACK recorded before the SYN", edit(lambda s: s.update(closing="before_syn"))),
         ("both FINs and the last ACK recorded between the SYN and the SYN-ACK", edit(lambda s: s.update(closing="between_syn_and_synack"))),
+        ("the handshake ACK and the INIT_SYN segment both acknowledging relative 0", edit(lambda s: s.update(ack_skew={"hs_ack": -1, "guest_data": -1}, ack_lag=True))),
+        ("no handshake ACK and the INIT_SYN segment acknowledging relative 0", edit(lambda s: s.update(no_hs_ack=True, ack_skew={"guest_data": -1}, ack_lag=True))),
+        ("the handshake ACK at relative 0 and the INIT_SYN segment at relative 0, lagging", edit(lambda s: s.update(ack_skew={"hs_ack": -1, "guest_data": -1}, ack_lag=True, chunk=100))),
         ("a peer data segment acknowledging 0x70000000", edit(lambda s: s.update(ack_skew={"peer_data": 0x70000000}))),
         ("a peer data segment acknowledging one byte the guest had not sent", edit(lambda s: s.update(ack_skew={"peer_data": 1}))),
         ("a guest data segment acknowledging one byte the peer had not sent", edit(lambda s: s.update(ack_skew={"guest_data": 1}))),
@@ -1717,6 +1740,8 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("PSH on every data segment", update(psh=True)),
         ("data segments that acknowledge less than the other side had sent", update(ack_lag=True)),
+        ("the handshake ACK carried by the first data segment", update(no_hs_ack=True)),
+        ("the handshake ACK at relative 0 and the first data segment acknowledging the SYN", update(ack_skew={"hs_ack": -1})),
         ("a peer data segment acknowledging one byte under what the guest had sent", update(ack_skew={"peer_data": -1})),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("a guest SYN retransmitted with only a timestamp option differing", update(syn_again=0, again_guest_options=GUEST_OPTIONS + _option(TIMESTAMP_OPTION, bytes(8)))),

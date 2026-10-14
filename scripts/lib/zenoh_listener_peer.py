@@ -65,7 +65,9 @@ def ensure_venv() -> Path:
     REQUIREMENTS.write_text(f"eclipse-zenoh=={VERSION} --hash=sha256:{WHEEL_SHA256}\n", encoding="utf-8")
     steps = (
         [sys.executable, "-I", "-m", "venv", "--clear", str(VENV)],
-        [str(interpreter), "-I", "-m", "pip", "install", "--quiet", "--require-hashes", "--no-deps", "--only-binary=:all:", "-r", str(REQUIREMENTS)],
+        # --isolated ignores environment variables and every pip configuration file, user and global,
+        # which -I does not: a `no-index` or a `target` in the caller's pip.conf would change the install.
+        [str(interpreter), "-I", "-m", "pip", "--isolated", "install", "--quiet", "--require-hashes", "--no-deps", "--only-binary=:all:", "-r", str(REQUIREMENTS)],
     )
     for command in steps:
         done = subprocess.run(command, capture_output=True, text=True, check=False, env=_clean_environment())
