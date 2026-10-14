@@ -63,6 +63,7 @@ def _need(condition: bool, reason: str) -> None:
 
 @dataclass(frozen=True)
 class Segment:
+    index: int
     outgoing: bool
     source_port: int
     destination_port: int
@@ -109,7 +110,7 @@ def segments(data: bytes) -> tuple[list[Segment], int]:
         frames = list(http_capture._frames(data))
     except ValueError as error:
         raise CaptureError(str(error)) from error
-    for _, frame in frames:
+    for position, (_, frame) in enumerate(frames):
         ethertype = int.from_bytes(frame[12:14], "big")
         if ethertype == 0x0806:
             _check_arp(frame)
@@ -133,17 +134,46 @@ def segments(data: bytes) -> tuple[list[Segment], int]:
         pseudo = ip[12:20] + bytes((0, 6)) + len(body).to_bytes(2, "big")
         _need(http_capture._checksum(pseudo + body) == 0, "TCP checksum")
         sport, dport, seq, ack = struct.unpack_from("!HHII", body)
-        found.append(Segment(source == GUEST, sport, dport, seq, ack, body[13], body[offset:]))
+        found.append(Segment(position, source == GUEST, sport, dport, seq, ack, body[13], body[offset:]))
     return found, arp
 
 
-def _reassemble(segs: list[Segment], isn: int, label: str) -> bytes:
+class _Timing:
+    """Where in the capture the bytes of one direction's stream were carried: (packet, start, end)."""
+
+    def __init__(self, parts: list[tuple[int, int, int]]) -> None:
+        self.parts = parts
+
+    def start(self, offset: int) -> int:
+        """The first packet that carried the byte at `offset`."""
+        found = [index for index, begin, end in self.parts if begin <= offset < end]
+        _need(bool(found), f"no packet carried stream byte {offset}")
+        return min(found)
+
+    def complete(self, end: int) -> int:
+        """The packet by which every byte below `end` had been carried, whatever the order."""
+        prefix, pending = 0, []
+        for index, begin, finish in self.parts:
+            pending.append((begin, finish))
+            moved = True
+            while moved:
+                moved = False
+                for low, high in pending:
+                    if low <= prefix < high:
+                        prefix, moved = high, True
+            if prefix >= end:
+                return index
+        raise CaptureError(f"the stream never reached byte {end}")
+
+
+def _reassemble(segs: list[Segment], isn: int, label: str) -> tuple[bytes, _Timing]:
     """One direction's byte stream, from the sender's own sequence numbers.
 
     Retransmission and reordering are allowed; a gap, a retransmission that differs, and a FIN
     that does not sit exactly at the end of the delivered bytes are refused.
     """
     pieces: list[tuple[int, bytes]] = []
+    parts: list[tuple[int, int, int]] = []
     fin: int | None = None
     for s in segs:
         if s.flags & TCP_SYN:
@@ -154,6 +184,7 @@ def _reassemble(segs: list[Segment], isn: int, label: str) -> bytes:
         _need(offset < 1 << 31, f"{label}: a segment before the connection's first byte")
         if s.payload:
             pieces.append((offset, s.payload))
+            parts.append((s.index, offset, offset + len(s.payload)))
         if s.flags & TCP_FIN:
             end = offset + len(s.payload)
             _need(fin is None or fin == end, f"{label}: two different FINs")
@@ -168,11 +199,11 @@ def _reassemble(segs: list[Segment], isn: int, label: str) -> bytes:
         _need(len(stream) <= MAX_STREAM, f"{label}: stream over {MAX_STREAM} bytes")
     _need(fin is not None, f"{label}: the stream was never closed with a FIN")
     _need(fin == len(stream), f"{label}: the FIN is at {fin} but {len(stream)} bytes were delivered")
-    return bytes(stream)
+    return bytes(stream), _Timing(parts)
 
 
-def streams(data: bytes) -> tuple[bytes, bytes, int]:
-    """The guest-to-peer and peer-to-guest streams of the capture's one connection, and its ARP count."""
+def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
+    """The two streams of the capture's one connection, its ARP count, and where each was carried."""
     segs, arp = segments(data)
     syns = [s for s in segs if s.outgoing and s.flags & TCP_SYN and not s.flags & TCP_ACK]
     _need(len(syns) >= 1, "no connection attempt: the capture holds no guest SYN")
@@ -192,28 +223,76 @@ def streams(data: bytes) -> tuple[bytes, bytes, int]:
     first_data = next((i for i, s in enumerate(segs) if s.payload), len(segs))
     _need(last_syn < first_data, "a SYN after the connection carried data")
     _need(len({s.seq for s in synacks}) == 1, "the peer never accepted: no single SYN-ACK")
+    _need(min(s.index for s in syns) < min(s.index for s in synacks), "the peer's SYN-ACK was recorded before the guest's SYN")
     expected_ack = (syn.seq + 1) & 0xFFFFFFFF
     for synack in synacks:
         _need(synack.ack == expected_ack, "a SYN-ACK acknowledges another sequence number")
-    guest = _reassemble([s for s in segs if s.outgoing], syn.seq, "guest stream")
-    peer = _reassemble([s for s in segs if not s.outgoing], synacks[0].seq, "peer stream")
-    return guest, peer, arp
+    guest, guest_time = _reassemble([s for s in segs if s.outgoing], syn.seq, "guest stream")
+    peer, peer_time = _reassemble([s for s in segs if not s.outgoing], synacks[0].seq, "peer stream")
+    return guest, peer, arp, guest_time, peer_time
 
 
-def split(stream: bytes, label: str) -> list[bytes]:
-    """Zenoh batches by their two-byte little-endian stream length."""
-    batches, at = [], 0
+def split(stream: bytes, label: str) -> tuple[list[bytes], list[tuple[int, int]]]:
+    """Zenoh batches by their two-byte little-endian stream length, and where each one sits in the stream."""
+    batches, spans, at = [], [], 0
     while at < len(stream):
         _need(at + 2 <= len(stream), f"{label}: a stream length cut short")
         length = int.from_bytes(stream[at : at + 2], "little")
         _need(length > 0, f"{label}: an empty batch")
         _need(at + 2 + length <= len(stream), f"{label}: a batch of {length} bytes with {len(stream) - at - 2} left")
         batches.append(stream[at + 2 : at + 2 + length])
+        spans.append((at, at + 2 + length))
         at += 2 + length
-    return batches
+    return batches, spans
 
 
 # -------------------------------------------------------------------------------- wire
+
+
+class _Reader:
+    """Reads a batch the way `components/lib/src/zenoh_profile0.rs` does: canonical LEB128 within the
+    bits a field allows, and every field present."""
+
+    def __init__(self, data: bytes, at: int = 0) -> None:
+        self.data, self.at = data, at
+
+    def left(self) -> int:
+        return len(self.data) - self.at
+
+    def u8(self, label: str) -> int:
+        _need(self.left() >= 1, f"{label}: truncated")
+        self.at += 1
+        return self.data[self.at - 1]
+
+    def take(self, size: int, label: str) -> bytes:
+        _need(0 <= size <= self.left(), f"{label}: {size} bytes with {self.left()} left")
+        self.at += size
+        return self.data[self.at - size : self.at]
+
+    def leb(self, bits: int, label: str) -> int:
+        maximum = -(-bits // 7)
+        value = count = last = 0
+        while True:
+            byte = self.u8(label)
+            last = byte & 0x7F
+            value |= last << (7 * count)
+            count += 1
+            if not byte & 0x80:
+                break
+            _need(count != maximum, f"{label}: LEB128 over {bits} bits")
+        _need(value >> bits == 0, f"{label}: LEB128 over {bits} bits")
+        _need(not (count > 1 and last == 0), f"{label}: noncanonical LEB128")
+        return value
+
+
+LEB_LONG, LEB_SHORT = 32, 16
+MAX_COOKIE, MAX_KEY, MAX_PAYLOAD_BYTES, MAX_ATTACHMENT = 64, 129, 12, 33
+QOS_NETWORK_MAX = 0x1F
+EXT_QOS_NETWORK, EXT_WIRE_EXPR, EXT_ATTACHMENT = 0x21, 0x5F, 0x43
+ID_PUSH, ID_DECLARE, ID_OAM = 29, 30, 31
+ID_D_KEYEXPR, ID_D_SUBSCRIBER, ID_U_SUBSCRIBER, ID_D_FINAL, ID_PUT = 0, 2, 3, 26, 1
+FLAG_5, FLAG_6, FLAG_Z = 0x20, 0x40, 0x80
+OAM_HEADER = FLAG_Z | FLAG_6 | ID_OAM
 
 
 def _close(batch: bytes, who: str) -> None:
@@ -228,6 +307,165 @@ def _kind(batch: bytes) -> int:
     return batch[0] & 0x1F
 
 
+def _cookie(reader: _Reader, label: str) -> bytes:
+    size = reader.leb(LEB_SHORT, f"{label} cookie length")
+    _need(size != 0, f"{label}: an empty cookie")
+    _need(size <= MAX_COOKIE, f"{label}: a cookie of {size} bytes, the profile bounds it at {MAX_COOKIE}")
+    return reader.take(size, f"{label} cookie")
+
+
+def _init_fields(batch: bytes, label: str, ack: bool) -> bytes:
+    """INIT: header, version 9, a peer, a canonical 1 to 16 byte ZID, optional size parameters (the
+    default resolution and a non-zero batch size), and in an ACK a cookie. It ends exactly at the batch
+    boundary. The header carries no extension flag: the exam names none. Returns the cookie, or b""."""
+    reader = _Reader(batch, 1)
+    _need(not batch[0] & zenoh_wire.FLAG_Z, f"{label}: an extension the exam does not name")
+    _need(reader.u8(label) == zenoh_wire.PROTOCOL_VERSION, f"{label}: not wire version {zenoh_wire.PROTOCOL_VERSION}")
+    packed = reader.u8(label)
+    _need(not packed & 0x0C, f"{label}: reserved bits set in the ZID byte")
+    _need(packed & 3 == zenoh_wire.WHATAMI_PEER, f"{label}: the peer is not in peer mode")
+    zid = reader.take((packed >> 4) + 1, f"{label} ZID")
+    _need(zid[-1] != 0, f"{label}: a ZID that ends in a zero byte is not canonical")
+    if batch[0] & zenoh_wire.FLAG_S:
+        resolution = reader.u8(f"{label} resolution")
+        _need(not resolution & 0xF0, f"{label}: reserved bits set in the resolution")
+        _need(resolution == zenoh_wire.DEFAULT_RESOLUTION, f"{label}: resolution {resolution}, the profile takes {zenoh_wire.DEFAULT_RESOLUTION}")
+        size = int.from_bytes(reader.take(2, f"{label} batch size"), "little")
+        _need(size != 0, f"{label}: a batch size of zero")
+    cookie = _cookie(reader, label) if ack else b""
+    _need(reader.left() == 0, f"{label}: {reader.left()} bytes after its fields")
+    return cookie
+
+
+def _open_fields(batch: bytes, label: str, ack: bool) -> tuple[int, int, bytes]:
+    """OPEN: no extension, a non-zero lease (seconds with bit 6) and an initial sequence number, and in
+    a SYN a cookie. Returns (lease_ms, initial_sn, cookie)."""
+    _need(not batch[0] & zenoh_wire.FLAG_Z, f"{label}: an extension the exam does not name")
+    reader = _Reader(batch, 1)
+    lease = reader.leb(LEB_LONG, f"{label} lease")
+    _need(lease > 0, f"{label}: a zero lease")
+    initial_sn = reader.leb(LEB_LONG, f"{label} initial sequence number")
+    cookie = b"" if ack else _cookie(reader, label)
+    _need(reader.left() == 0, f"{label}: {reader.left()} bytes after its fields")
+    return lease * (1000 if batch[0] & zenoh_wire.FLAG_T else 1), initial_sn, cookie
+
+
+def _key(data: bytes, label: str) -> str:
+    try:
+        key = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CaptureError(f"{label}: a key that is not UTF-8") from error
+    _need("*" not in key and "$" not in key, f"{label}: a wildcard key")
+    _need(not any(ch in key for ch in "?#") and not key.startswith("/") and not key.endswith("/") and "//" not in key, f"{label}: an invalid key expression")
+    return key
+
+
+def _key_reference(reader: _Reader, named: bool, label: str) -> str:
+    scope = reader.leb(LEB_SHORT, f"{label} scope")
+    if not named:
+        _need(scope != 0, f"{label}: an unnamed key in the global scope")
+        return "alias"
+    size = reader.leb(LEB_SHORT, f"{label} key length")
+    _need(size <= MAX_KEY, f"{label}: a key of {size} bytes, the profile bounds it at {MAX_KEY}")
+    _need(size != 0, f"{label}: an empty key")
+    _key(reader.take(size, f"{label} key"), label)
+    _need(scope == 0, f"{label}: a suffix after a non-zero scope")
+    return "full"
+
+
+def _qos(reader: _Reader, label: str) -> None:
+    _need(reader.u8(label) == EXT_QOS_NETWORK, f"{label}: an extension the exam does not name")
+    _need(reader.leb(LEB_LONG, f"{label} QoS value") <= QOS_NETWORK_MAX, f"{label}: a QoS value over {QOS_NETWORK_MAX}")
+
+
+def _declare(reader: _Reader, header: int) -> str:
+    if header & FLAG_5:
+        _need(not header & FLAG_6 and not header & FLAG_Z, "DECLARE with the interest flag: only the bare form is taken")
+        reader.leb(LEB_LONG, "interest id")
+        _need(reader.u8("declaration") == ID_D_FINAL, "DECLARE with the interest flag: not a DeclareFinal")
+        return "final"
+    _need(not header & FLAG_6, "DECLARE with bit 6 set")
+    qos = bool(header & FLAG_Z)
+    if qos:
+        _qos(reader, "DECLARE")
+    sub = reader.u8("declaration")
+    kind = sub & 0x1F
+    if kind == ID_D_KEYEXPR:
+        _need(sub & FLAG_5, "DeclareKeyExpr that does not name its key")
+        _need(not sub & FLAG_6 and not sub & FLAG_Z, "DeclareKeyExpr with a flag the exam does not name")
+        _need(reader.leb(LEB_SHORT, "alias id") != 0, "DeclareKeyExpr with alias id 0")
+        _need(_key_reference(reader, True, "DeclareKeyExpr") == "full", "DeclareKeyExpr naming an alias")
+        return "keyexpr"
+    if kind == ID_D_SUBSCRIBER:
+        _need(not sub & FLAG_Z, "DeclareSubscriber with an extension")
+        reader.leb(LEB_LONG, "subscriber id")
+        _key_reference(reader, bool(sub & FLAG_5), "DeclareSubscriber")
+        return "subscriber"
+    if kind == ID_U_SUBSCRIBER:
+        _need(not qos, "UndeclareSubscriber with a QoS extension")
+        _need(sub == FLAG_Z | ID_U_SUBSCRIBER, "UndeclareSubscriber with another header")
+        reader.leb(LEB_LONG, "subscriber id")
+        _need(reader.u8("UndeclareSubscriber") == EXT_WIRE_EXPR, "UndeclareSubscriber without its wire expression")
+        size = reader.leb(LEB_LONG, "wire expression length")
+        _need(size <= 2 + MAX_KEY, f"a wire expression of {size} bytes")
+        inner = _Reader(reader.take(size, "wire expression"))
+        flags = inner.u8("wire expression flags")
+        _need(not flags & ~3, "wire expression flags the exam does not name")
+        _need(inner.leb(LEB_SHORT, "wire expression scope") == 0 and flags & 1 and inner.left() != 0, "an invalid wire expression")
+        _key(inner.take(inner.left(), "wire expression"), "UndeclareSubscriber")
+        return "undeclare"
+    raise CaptureError(f"a declaration of kind {kind} the exam does not name")
+
+
+def _push(reader: _Reader, header: int) -> str:
+    _need(not header & FLAG_Z, "PUSH with an extension")
+    _key_reference(reader, bool(header & FLAG_5), "PUSH")
+    body = reader.u8("PUSH body")
+    _need(body & 0x1F == ID_PUT and not body & (FLAG_5 | FLAG_6), "PUSH that does not carry a plain Put")
+    _need(body & FLAG_Z, "a Put without its attachment")
+    _need(reader.u8("Put") == EXT_ATTACHMENT, "a Put extension the exam does not name")
+    size = reader.leb(LEB_LONG, "attachment length")
+    _need(size == MAX_ATTACHMENT, f"an attachment of {size} bytes, the profile takes {MAX_ATTACHMENT}")
+    attachment = reader.take(size, "attachment")
+    _need(attachment[16] == zenoh_wire.GID_BYTES, "an attachment whose GID length is not 16")
+    payload = reader.leb(LEB_LONG, "payload length")
+    _need(payload <= MAX_PAYLOAD_BYTES, f"a payload of {payload} bytes, the profile bounds it at {MAX_PAYLOAD_BYTES}")
+    reader.take(payload, "payload")
+    return "push"
+
+
+def _oam(reader: _Reader, header: int) -> str:
+    _need(header == OAM_HEADER, "an OAM with another header")
+    _need(reader.leb(LEB_SHORT, "OAM id") == 1, "an OAM that is not the link-state one")
+    _qos(reader, "OAM")
+    reader.take(reader.leb(LEB_SHORT, "OAM body length"), "OAM body")
+    return "oam"
+
+
+def _frame_messages(batch: bytes, label: str) -> list[str]:
+    """A reliable FRAME: its sequence number, then whole network messages to the end of the batch.
+
+    Returns the kinds in order. At least one message is required, and a trailing byte that is not
+    the start of a message the profile names refuses the batch."""
+    _need(batch[0] == zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R, f"{label}: a FRAME header {batch[0]:#04x}, the profile takes only the reliable form 0x25")
+    reader = _Reader(batch, 1)
+    reader.leb(LEB_LONG, f"{label} sequence number")
+    _need(reader.left() != 0, f"{label}: a FRAME that carries no message")
+    kinds = []
+    while reader.left():
+        header = reader.u8(label)
+        kind = header & 0x1F
+        if kind == ID_DECLARE:
+            kinds.append(_declare(reader, header))
+        elif kind == ID_PUSH:
+            kinds.append(_push(reader, header))
+        elif kind == ID_OAM:
+            kinds.append(_oam(reader, header))
+        else:
+            raise CaptureError(f"{label}: a network message of kind {kind} the exam does not name")
+    return kinds
+
+
 def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
     """The guest's batches: a connector's INIT_SYN and OPEN_SYN, the four samples, keep-alives, a close."""
     _need(len(batches) >= 2, "the guest sent fewer than an INIT_SYN and an OPEN_SYN")
@@ -235,20 +473,14 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
     _need(_kind(init) == zenoh_wire.ID_INIT and not init[0] & zenoh_wire.FLAG_A, "the first guest batch is not an INIT_SYN")
     _init_fields(init, "INIT_SYN", False)
     _need(_kind(opened) == zenoh_wire.ID_OPEN and not opened[0] & zenoh_wire.FLAG_A, "the second guest batch is not an OPEN_SYN")
-    try:
-        lease, at = zenoh_wire.read_leb128(opened, 1)
-        initial_sn, at = zenoh_wire.read_leb128(opened, at)
-        cookie, at = zenoh_wire.read_leb128(opened, at)
-    except zenoh_wire.WireError as error:
-        raise CaptureError(f"OPEN_SYN: {error}") from error
-    _need(at + cookie == len(opened), "the OPEN_SYN length disagrees with its cookie")
-    lease *= 1000 if opened[0] & zenoh_wire.FLAG_T else 1
+    lease, initial_sn, cookie = _open_fields(opened, "OPEN_SYN", False)
     _need(lease == LEASE_MS, f"the guest announced a {lease} ms lease, the exam declares {LEASE_MS}")
     _need(initial_sn == reported["initial_sn"], f"the OPEN_SYN announces initial sequence number {initial_sn}, the connector reported {reported['initial_sn']}")
     frames: list[bytes] = []
     keep_alives = 0
     closed = False
-    for batch in batches[2:]:
+    first_frame = None
+    for index, batch in enumerate(batches[2:], start=2):
         _need(not closed, "a batch after the guest's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
             keep_alives += 1
@@ -257,6 +489,7 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
             closed = True
         elif batch[0] == zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R:
             frames.append(batch)
+            first_frame = index if first_frame is None else first_frame
         else:
             raise CaptureError(f"a guest batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     _need(len(frames) == SAMPLES, f"the guest put {len(frames)} frames on the wire, the demo has {SAMPLES} samples")
@@ -276,61 +509,23 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         again = zenoh_wire.frame(decoded["sn"], zenoh_wire.push_put(decoded["key"], attachment, decoded["payload"], True))
         _need(again == batch, f"sample {sequence}: not the canonical encoding of its own fields")
         received.append((decoded["key"], decoded["payload"].hex(), attachment.hex()))
-    return {"frames": len(frames), "bytes": sum(len(f) for f in frames), "keep_alives": keep_alives, "closed": closed, "samples": received}
+    return {
+        "frames": len(frames), "bytes": sum(len(f) for f in frames), "keep_alives": keep_alives, "closed": closed,
+        "samples": received, "cookie": cookie, "first_frame": first_frame,
+    }
 
 
-def _leb(batch: bytes, at: int, label: str) -> tuple[int, int]:
-    try:
-        return zenoh_wire.read_leb128(batch, at)
-    except zenoh_wire.WireError as error:
-        raise CaptureError(f"{label}: {error}") from error
-
-
-def _init_fields(batch: bytes, label: str, cookie: bool) -> None:
-    """INIT: header, version 9, a peer, a 1 to 16 byte ZID, optional size parameters, and in an ACK a cookie.
-
-    The header carries no extension flag: the exam names none, and an extension it does not name is
-    not read past. The parse must end exactly at the batch boundary.
-    """
-    _need(len(batch) >= 3, f"{label}: truncated before the ZID")
-    _need(not batch[0] & zenoh_wire.FLAG_Z, f"{label}: an extension the exam does not name")
-    _need(batch[1] == zenoh_wire.PROTOCOL_VERSION, f"{label}: wire version {batch[1]}, not {zenoh_wire.PROTOCOL_VERSION}")
-    _need(batch[2] & 3 == zenoh_wire.WHATAMI_PEER, f"{label}: the peer is not in peer mode")
-    at = 3 + (batch[2] >> 4) + 1
-    _need(at <= len(batch), f"{label}: truncated inside the ZID")
-    if batch[0] & zenoh_wire.FLAG_S:
-        _need(at + 3 <= len(batch), f"{label}: truncated inside the size parameters")
-        at += 3
-    if cookie:
-        size, at = _leb(batch, at, f"{label} cookie")
-        _need(at + size == len(batch), f"{label}: a cookie of {size} bytes with {len(batch) - at} left")
-    else:
-        _need(at == len(batch), f"{label}: {len(batch) - at} bytes after its fields")
-
-
-def _init_ack(batch: bytes) -> None:
-    _init_fields(batch, "INIT_ACK", True)
-
-
-def _open_ack(batch: bytes) -> None:
-    """OPEN_ACK: header, a lease and an initial sequence number, and nothing after them."""
-    _need(not batch[0] & zenoh_wire.FLAG_Z, "OPEN_ACK: an extension the exam does not name")
-    lease, at = _leb(batch, 1, "OPEN_ACK lease")
-    _need(lease > 0, "OPEN_ACK: a zero lease")
-    _, at = _leb(batch, at, "OPEN_ACK initial sequence number")
-    _need(at == len(batch), f"OPEN_ACK: {len(batch) - at} bytes after the initial sequence number")
-
-
-def judge_peer(batches: list[bytes]) -> int:
-    """The peer's batches, each parsed to its fields: an INIT_ACK, an OPEN_ACK, then frames, keep-alives
-    and at most one close, after which nothing."""
+def judge_peer(batches: list[bytes]) -> dict:
+    """The peer's batches, each parsed to its fields: an INIT_ACK, an OPEN_ACK, then frames whose every
+    message is parsed, keep-alives and at most one close, after which nothing."""
     _need(len(batches) >= 2, "the peer sent fewer than an INIT_ACK and an OPEN_ACK")
     _need(_kind(batches[0]) == zenoh_wire.ID_INIT and batches[0][0] & zenoh_wire.FLAG_A, "the first peer batch is not an INIT_ACK")
-    _init_ack(batches[0])
+    cookie = _init_fields(batches[0], "INIT_ACK", True)
     _need(_kind(batches[1]) == zenoh_wire.ID_OPEN and batches[1][0] & zenoh_wire.FLAG_A, "the second peer batch is not an OPEN_ACK")
-    _open_ack(batches[1])
+    _open_fields(batches[1], "OPEN_ACK", True)
     closed = False
-    for batch in batches[2:]:
+    subscriber = None
+    for index, batch in enumerate(batches[2:], start=2):
         _need(not closed, "a peer batch after the peer's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
             continue
@@ -338,19 +533,33 @@ def judge_peer(batches: list[bytes]) -> int:
             _need(len(batch) == 2 and batch[0] in (zenoh_wire.ID_CLOSE, zenoh_wire.ID_CLOSE | zenoh_wire.FLAG_A), f"a peer CLOSE of {len(batch)} bytes with header {batch[0]:#04x}")
             _need(batch[1] <= MAX_CLOSE_REASON, f"a peer CLOSE with reason {batch[1]}, the profile names 0 to {MAX_CLOSE_REASON}")
             closed = True
-        elif batch[0] in (zenoh_wire.ID_FRAME, zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R):
-            _, at = _leb(batch, 1, "FRAME sequence number")
-            _need(at < len(batch), "a FRAME that carries no message")
+        elif _kind(batch) == zenoh_wire.ID_FRAME:
+            kinds = _frame_messages(batch, "a peer FRAME")
+            if subscriber is None and "subscriber" in kinds:
+                subscriber = index
         else:
             raise CaptureError(f"a peer batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
-    return len(batches)
+    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber}
 
 
 def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
-    guest, peer, arp = streams(data)
-    result = judge_guest(split(guest, "guest stream"), reported, contract)
-    result["peer_batches"] = judge_peer(split(peer, "peer stream"))
-    result.update(guest_stream=len(guest), peer_stream=len(peer), arp=arp)
+    guest, peer, arp, guest_time, peer_time = streams(data)
+    guest_batches, guest_spans = split(guest, "guest stream")
+    peer_batches, peer_spans = split(peer, "peer stream")
+    result = judge_guest(guest_batches, reported, contract)
+    seen = judge_peer(peer_batches)
+    _need(result["cookie"] == seen["cookie"], "the OPEN_SYN does not echo the INIT_ACK's cookie")
+    _need(seen["subscriber"] is not None, "the peer never declared a subscriber for the connector to match")
+    # Cross-direction order, from the packet each stream's bytes were carried in. A session is built in
+    # turns: INIT_SYN, INIT_ACK, OPEN_SYN, OPEN_ACK, the peer's declarations, and only then the samples.
+    def after(first: int, then: int, what: str) -> None:
+        _need(then > first, f"{what}: packet {then} does not follow packet {first}")
+
+    after(guest_time.complete(guest_spans[0][1]), peer_time.start(peer_spans[0][0]), "the INIT_ACK came before the INIT_SYN was complete")
+    after(peer_time.complete(peer_spans[0][1]), guest_time.start(guest_spans[1][0]), "the OPEN_SYN came before the INIT_ACK was complete")
+    after(guest_time.complete(guest_spans[1][1]), peer_time.start(peer_spans[1][0]), "the OPEN_ACK came before the OPEN_SYN was complete")
+    after(peer_time.complete(peer_spans[seen["subscriber"]][1]), guest_time.start(guest_spans[result["first_frame"]][0]), "the first sample was sent before the peer's subscriber declaration was complete")
+    result.update(peer_batches=seen["batches"], guest_stream=len(guest), peer_stream=len(peer), arp=arp)
     return result
 
 
@@ -659,7 +868,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 166
+PINNED_CONTROLS = 195
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -749,11 +958,46 @@ def pcap(frames: list[bytes]) -> bytes:
     return out
 
 
-def build(scenario: dict) -> bytes:
-    """A capture of one connection carrying the scenario's streams.
+def _turns(scenario: dict, guest_at: list[int], peer_at: list[int]) -> list[tuple[bool, int, int]]:
+    """The honest order of a Zenoh session as (from_guest, first_byte, last_byte) turns over the two
+    streams: INIT_SYN, INIT_ACK, OPEN_SYN, then the peer's OPEN_ACK and declarations, then the guest's
+    samples and close, then whatever the peer sends last. `guest_at` and `peer_at` are the offset of
+    each batch in its stream, with the stream's length as the last entry. A scenario may name another
+    layout to put one step out of turn."""
+    def span(offsets: list[int], first: int, last: int) -> tuple[int, int]:
+        top = len(offsets) - 1
+        return offsets[min(first, top)], offsets[min(last, top)]
 
-    `chunk` is the segment size, `reorder` swaps the first two guest segments, `retransmit`
-    repeats the first, and `extra` appends frames the scenario wants on the wire.
+    def g(first: int, last: int) -> tuple[bool, int, int]:
+        return (True, *span(guest_at, first, last))
+
+    def q(first: int, last: int) -> tuple[bool, int, int]:
+        return (False, *span(peer_at, first, last))
+
+    layout = scenario.get("layout", "honest")
+    if layout == "honest":
+        turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 5), g(2, 1 << 30), q(5, 1 << 30)]
+    elif layout == "frames_early":
+        turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 2), g(2, 1 << 30), q(2, 1 << 30)]
+    elif layout == "open_before_ack":
+        turns = [g(0, 2), q(0, 5), g(2, 1 << 30), q(5, 1 << 30)]
+    elif layout == "ack_before_init_done":
+        half = guest_at[0] + (guest_at[1] - guest_at[0]) // 2
+        turns = [(True, guest_at[0], half), q(0, 1), (True, half, guest_at[1]), g(1, 2), q(1, 5), g(2, 1 << 30), q(5, 1 << 30)]
+    elif layout == "open_ack_before_open_done":
+        mid = guest_at[1] + (guest_at[2] - guest_at[1]) // 2
+        turns = [g(0, 1), q(0, 1), (True, guest_at[1], mid), q(1, 5), (True, mid, guest_at[2]), g(2, 1 << 30), q(5, 1 << 30)]
+    else:
+        raise ValueError(layout)
+    return [turn for turn in turns if turn[2] > turn[1]]
+
+
+def build(scenario: dict) -> bytes:
+    """A capture of one connection carrying the scenario's streams, in the order a session runs.
+
+    `chunk` is the segment size, `reorder` swaps the first two segments of the guest's last turn,
+    `retransmit` repeats the first of them, `drop_segment` removes one of them, `layout` puts a step
+    of the session out of turn, and `extra` appends frames the scenario wants on the wire.
     """
     gisn, pisn, sport = scenario.get("guest_isn", 1000), scenario.get("peer_isn", 700000), scenario.get("guest_port", GUEST_PORT)
     dport = scenario.get("port", PORT)
@@ -761,16 +1005,31 @@ def build(scenario: dict) -> bytes:
     guest_stream = b"".join(zenoh_wire.stream(b) for b in scenario["guest"])
     peer_stream = b"".join(zenoh_wire.stream(b) for b in scenario["peer"])
 
-    def pieces(stream: bytes) -> list[tuple[int, bytes]]:
-        return [(at, stream[at : at + chunk]) for at in range(0, len(stream), chunk)]
+    def offsets(batches: list[bytes]) -> list[int]:
+        at, found = 0, []
+        for batch in batches:
+            found.append(at)
+            at += 2 + len(batch)
+        return [*found, at]
 
-    guest_pieces = pieces(guest_stream)
-    if scenario.get("reorder") and len(guest_pieces) > 1:
-        guest_pieces[0], guest_pieces[1] = guest_pieces[1], guest_pieces[0]
-    if scenario.get("retransmit"):
-        guest_pieces.insert(2, guest_pieces[0])
-    if "drop_segment" in scenario:
-        del guest_pieces[scenario["drop_segment"]]
+    packets: list[tuple[bool, int, bytes]] = []
+    last_guest_turn: list[int] = []
+    for from_guest, first, last in _turns(scenario, offsets(scenario["guest"]), offsets(scenario["peer"])):
+        data = guest_stream if from_guest else peer_stream
+        group = []
+        for at in range(first, last, chunk):
+            group.append(len(packets))
+            packets.append((from_guest, at, data[at : min(at + chunk, last)]))
+        if from_guest:
+            last_guest_turn = group
+    if scenario.get("reorder") and len(last_guest_turn) > 1:
+        i, j = last_guest_turn[0], last_guest_turn[1]
+        packets[i], packets[j] = packets[j], packets[i]
+    if scenario.get("retransmit") and len(last_guest_turn) > 1:
+        packets.insert(last_guest_turn[1] + 1, packets[last_guest_turn[0]])
+    if "drop_segment" in scenario and len(last_guest_turn) > scenario["drop_segment"]:
+        del packets[last_guest_turn[scenario["drop_segment"]]]
+
     frames = [_arp()]
     if not scenario.get("no_syn"):
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN), True))
@@ -781,10 +1040,16 @@ def build(scenario: dict) -> bytes:
         frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK), False))
     if "syn_again" in scenario:
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + scenario["syn_again"], 0, TCP_SYN), True))
-    for at, payload in guest_pieces:
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1, TCP_ACK, payload), True))
-    for at, payload in pieces(peer_stream):
-        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + len(guest_stream), TCP_ACK, payload), False))
+    if scenario.get("synack_first") and len(frames) >= 3:
+        frames[1], frames[2] = frames[2], frames[1]
+    sent_guest = sent_peer = 0
+    for from_guest, at, payload in packets:
+        if from_guest:
+            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1 + sent_peer, TCP_ACK, payload), True))
+            sent_guest = max(sent_guest, at + len(payload))
+        else:
+            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + sent_guest, TCP_ACK, payload), False))
+            sent_peer = max(sent_peer, at + len(payload))
     frames.extend(scenario.get("extra", []))
     guest_fin = gisn + 1 + len(guest_stream) + scenario.get("fin_skew", 0)
     if scenario.get("guest_fin", True):
@@ -794,14 +1059,24 @@ def build(scenario: dict) -> bytes:
     return pcap(frames)
 
 
+# What a stock eclipse-zenoh 1.0.0 listener sent after a connector reached it, as captured in
+# `zenoh_stock_peer`: its INIT_ACK and OPEN_ACK, an OAM, its key alias and its subscriber declaration.
+STOCK_LISTENER = [bytes.fromhex(hexed) for _name, hexed in zenoh_stock_peer.batches("listens")]
+
+
+def _peer_cookie() -> bytes:
+    """The cookie the stock listener's INIT_ACK carries, which the connector's OPEN_SYN must echo."""
+    return _init_fields(STOCK_LISTENER[0], "INIT_ACK", True)
+
+
 def synthesize(contract: dict, initial_sn: int = 0) -> dict:
     """The scenario an honest guest and a stock listener produce, from the host reference."""
     lines = guest_lines(contract, initial_sn)
     sent = judge_guest_lines(lines, contract)["sent"]
     frames = [bytes.fromhex(sent[i]) for i in range(SAMPLES)]
     zid = bytes(range(1, 9))
-    guest = [zenoh_wire.init(zid, 512), zenoh_wire.open_(LEASE_MS, initial_sn, b"slime-cookie-01"), *frames, zenoh_wire.close(0, True)]
-    peer = [zenoh_wire.init(bytes(range(0x40, 0x48)), 65535, b"stock-cookie-0001"), zenoh_wire.open_(10000, 4242, ack=True), bytes([ID_KEEP_ALIVE])]
+    peer = [*STOCK_LISTENER[:5], bytes([ID_KEEP_ALIVE])]
+    guest = [zenoh_wire.init(zid, 512), zenoh_wire.open_(LEASE_MS, initial_sn, _peer_cookie()), *frames, zenoh_wire.close(0, True)]
     wire = [(contract["key"], f.hex() and zenoh_wire.decode_push_frame(f)["payload"].hex(), _attachment_hex(f)) for f in frames]
     return {"guest": guest, "peer": peer, "lines": lines, "listen": LISTEN, "remote_peers": 1, "receipt": wire}
 
@@ -957,8 +1232,8 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("no INIT_SYN first", put_bytes(lambda g: g.__setitem__(slice(0, 2), [g[1], g[0]]))),
         ("a keep-alive of two bytes", put_bytes(lambda g: g.insert(2, b"\x04\x00"))),
         ("a batch after the close", put_bytes(lambda g: g.append(bytes([ID_KEEP_ALIVE])))),
-        ("a lease of 1999 ms", put_bytes(lambda g: g.__setitem__(1, zenoh_wire.open_(1999, 0, b"slime-cookie-01")))),
-        ("a lease of 2001 ms", put_bytes(lambda g: g.__setitem__(1, zenoh_wire.open_(2001, 0, b"slime-cookie-01")))),
+        ("a lease of 1999 ms", put_bytes(lambda g: g.__setitem__(1, zenoh_wire.open_(1999, 0, _peer_cookie())))),
+        ("a lease of 2001 ms", put_bytes(lambda g: g.__setitem__(1, zenoh_wire.open_(2001, 0, _peer_cookie())))),
         ("a batch the exam does not name", put_bytes(lambda g: g.insert(2, bytes([zenoh_wire.ID_DECLARE])))),
         ("a peer that sends no INIT_ACK", edit(lambda s: s.update(peer=[bytes([ID_KEEP_ALIVE])]))),
         ("a peer batch the exam does not name", edit(lambda s: s["peer"].append(bytes([0x0D])))),
@@ -967,6 +1242,36 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest CLOSE of the link only", guest_at(-1, lambda b: b"\x03\x00")),
         ("a guest CLOSE with reason 8, one over the last the profile names", guest_at(-1, lambda b: b"\x23\x08")),
         ("a guest CLOSE with reason 255", guest_at(-1, lambda b: b"\x23\xff")),
+        ("an OPEN_SYN echoing another cookie", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, b"another-cookie-99"))),
+        ("an OPEN_SYN echoing the cookie one byte short", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie()[:-1]))),
+        ("an OPEN_SYN echoing the cookie with a byte added", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie() + b"\x00"))),
+        ("an OPEN_SYN with an empty cookie", guest_at(1, lambda b: b[:1] + b[1:-len(_peer_cookie()) - 1] + b"\x00")),
+        ("an OPEN_SYN with the extension flag and no extension", guest_at(1, lambda b: bytes([b[0] | 0x80]) + b[1:])),
+        ("an OPEN_SYN with a zero lease", guest_at(1, lambda b: b[:1] + b"\x00" + b[2:])),
+        ("an INIT_SYN with a batch size of zero", guest_at(0, lambda b: b[:-2] + b"\x00\x00")),
+        ("an INIT_SYN with resolution 11, one over the default", guest_at(0, lambda b: b[:-3] + b"\x0b" + b[-2:])),
+        ("an INIT_SYN with resolution 9, one under the default", guest_at(0, lambda b: b[:-3] + b"\x09" + b[-2:])),
+        ("an INIT_SYN with reserved resolution bits", guest_at(0, lambda b: b[:-3] + b"\xfa" + b[-2:])),
+        ("an INIT_SYN whose ZID ends in a zero byte", guest_at(0, lambda b: zenoh_wire.init(bytes(range(1, 8)) + b"\x00", 512))),
+        ("an INIT_ACK with a batch size of zero", peer_at(0, lambda b: b[:-len(_peer_cookie()) - 1 - 2] + b"\x00\x00" + b[-len(_peer_cookie()) - 1:])),
+        ("an INIT_ACK with resolution 11", peer_at(0, lambda b: b[:-len(_peer_cookie()) - 1 - 3] + b"\x0b" + b[-len(_peer_cookie()) - 1 - 2:])),
+        ("an INIT_ACK with an empty cookie", peer_at(0, lambda b: b[: -len(_peer_cookie()) - 1] + b"\x00")),
+        ("an INIT_ACK with a cookie of 65 bytes, one over the bound", peer_at(0, lambda b: b[: -len(_peer_cookie()) - 1] + bytes([65]) + b"c" * 65)),
+        ("a peer FRAME whose message is one unsupported byte", edit(lambda s: s["peer"].append(b"\x25\x01\x00"))),
+        ("a peer FRAME whose message header is 0xff", edit(lambda s: s["peer"].append(b"\x25\x01\xff\xff"))),
+        ("a peer FRAME in the unreliable form", edit(lambda s: s["peer"].append(b"\x05\x01\x04"))),
+        ("a peer FRAME with a whole message and a byte after it", edit(lambda s: s["peer"].append(s["peer"][3] + b"\x00"))),
+        ("a peer FRAME cut inside its last message", edit(lambda s: s["peer"].append(s["peer"][3][:-3]))),
+        ("a peer OAM that is not the link-state one", edit(lambda s: s["peer"].__setitem__(2, s["peer"][2][:6] + b"\x02" + s["peer"][2][7:]))),
+        ("a peer FRAME declaring a wildcard key", edit(lambda s: s["peer"].append(bytes.fromhex(next(h for n, h in zenoh_stock_peer.batches("refuse") if n == "refuse-wildcard")))))
+        ,
+        ("a peer FRAME with a QoS extension on its header", edit(lambda s: s["peer"].append(bytes.fromhex(next(h for n, h in zenoh_stock_peer.batches("refuse") if n == "refuse-qos-on-frame"))))),
+        ("a peer that never declares a subscriber", edit(lambda s: s.update(peer=[*s["peer"][:3], s["peer"][5]]))),
+        ("the SYN-ACK recorded before the SYN", edit(lambda s: s.update(synack_first=True))),
+        ("the first sample sent before the peer's subscriber declaration", edit(lambda s: s.update(layout="frames_early"))),
+        ("the OPEN_SYN sent before the INIT_ACK", edit(lambda s: s.update(layout="open_before_ack"))),
+        ("the INIT_ACK sent before the INIT_SYN was complete", edit(lambda s: s.update(layout="ack_before_init_done", chunk=100))),
+        ("the OPEN_ACK sent before the OPEN_SYN was complete", edit(lambda s: s.update(layout="open_ack_before_open_done", chunk=100))),
         ("a guest INIT_SYN of three bytes", guest_at(0, lambda b: b[:3])),
         ("a guest INIT_SYN cut inside its ZID", guest_at(0, lambda b: b[:6])),
         ("a guest INIT_SYN cut inside its size parameters", guest_at(0, lambda b: b[:-1])),
@@ -976,7 +1281,7 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest INIT_SYN as a client", guest_at(0, lambda b: b[:2] + bytes([(b[2] & 0xF0) | 2]) + b[3:])),
         ("a report whose initial sequence number is 999 against a wire of 0", edit(lambda s: s.update(lines=[x.replace("initial_sn=0", "initial_sn=999") for x in s["lines"]]))),
         ("a report whose initial sequence number is 1 against a wire of 0", edit(lambda s: s.update(lines=[x.replace("initial_sn=0", "initial_sn=1") for x in s["lines"]]))),
-        ("a wire whose initial sequence number is 1 against a report of 0", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 1, b"slime-cookie-01"))),
+        ("a wire whose initial sequence number is 1 against a report of 0", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 1, _peer_cookie()))),
         ("a peer stream of three one-byte headers", edit(lambda s: s.update(peer=[b"\x21", b"\x22", b"\x03"]))),
         ("an INIT_ACK of another wire version", peer_at(0, lambda b: b[:1] + b"\x08" + b[2:])),
         ("an INIT_ACK from a client", peer_at(0, lambda b: b[:2] + bytes([(b[2] & 0xF0) | 2]) + b[3:])),
@@ -1072,6 +1377,12 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("the batches a stock peer sent when it listened, as captured", lambda s: {**s, "peer": [bytes.fromhex(h) for _n, h in zenoh_stock_peer.batches("listens")]}),
         ("a non-zero initial sequence number, reported and sent consistently", lambda s: synthesize(contract, 5)),
         ("an INIT_SYN without size parameters", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), zenoh_wire.DEFAULT_BATCH), *s["guest"][1:]]}),
+        ("an INIT_SYN with the smallest batch size, 1", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), 1), *s["guest"][1:]]}),
+        ("an INIT_SYN with the largest batch size, 65534", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), 65534), *s["guest"][1:]]}),
+        ("an INIT_SYN with a 16 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 17)), 512), *s["guest"][1:]]}),
+        ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
+        ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
+        ("segments of 100 bytes in every turn of the session", update(chunk=100)),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("a guest SYN retransmitted identically", update(syn_again=0)),
         ("a guest CLOSE with the last reason the profile names, 7", lambda s: {**s, "guest": [*s["guest"][:-1], zenoh_wire.close(7, True)]}),
