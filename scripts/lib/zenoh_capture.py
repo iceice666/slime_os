@@ -295,9 +295,16 @@ def _check_acks(segs: list[Segment], guest_isn: int, peer_isn: int) -> None:
             acknowledged = (s.ack - isn[not s.outgoing]) & mask
             _need(acknowledged < 1 << 31 and acknowledged <= sent[not s.outgoing],
                   f"a segment acknowledges {acknowledged} bytes of sequence space, the other side had sent {sent[not s.outgoing]}")
-        end = ((s.seq - isn[s.outgoing]) & mask) + len(s.payload) + (1 if s.flags & (TCP_SYN | TCP_FIN) else 0)
-        if end < 1 << 31:
-            sent[s.outgoing] = max(sent[s.outgoing], end)
+        relative = (s.seq - isn[s.outgoing]) & mask
+        consumed = len(s.payload) + (1 if s.flags & (TCP_SYN | TCP_FIN) else 0)
+        if consumed:
+            if relative + consumed < 1 << 31:
+                sent[s.outgoing] = max(sent[s.outgoing], relative + consumed)
+        else:
+            # An empty segment consumes no sequence space and so moves nothing; it can only carry the
+            # sender's next number or an older one (a duplicate ACK, a keep-alive probe). One past it is
+            # outside the receiver's window and is dropped before its acknowledgement is read.
+            _need(relative <= sent[s.outgoing], f"an empty segment at sequence {relative}, the sender had used {sent[s.outgoing]}")
 
 
 def _check_established(segs: list[Segment], peer_isn: int) -> None:
@@ -776,6 +783,11 @@ def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
     _silence("the peer", [peer_time.time_of(start) for start, _end in peer_spans[1:]], seen["lease_ms"])
     if seen["undeclared"] is not None:
         after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.start(peer_spans[seen["undeclared"]][0]), "the peer undeclared its subscriber before the last sample was sent")
+    if seen["close"] is None:
+        # The end of the peer's stream is read by `Link::fill` as `LinkError::Closed`, which `pump`
+        # propagates before the publisher can report success, so a stock listener's session ends in
+        # a Zenoh CLOSE (`Notice::Closed`) ahead of its FIN, as the captured listens-08-close does.
+        raise CaptureError("the peer's stream ends without a Zenoh CLOSE, so its end of stream is an error to the connector")
     if seen["close"] is not None:
         # The connector fails with PeerClosedEarly on a CLOSE before it has sent all four samples.
         after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.start(peer_spans[seen["close"]][0]), "the peer closed before the last sample was sent")
@@ -1088,10 +1100,10 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 274
+PINNED_CONTROLS = 279
 # The positive controls, pinned as the negative ones are: a judge that quietly loses an honest case
 # keeps refusing everything it refused, so only a count of what it accepts shows the loss.
-PINNED_HONEST_CAPTURES = 42
+PINNED_HONEST_CAPTURES = 45
 PINNED_ACCEPTED_RECEIPTS = 10
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
@@ -1312,6 +1324,8 @@ def build(scenario: dict) -> bytes:
     if early_fin == 0:
         frames.append(peer_fin())
     for number, (from_guest, at, payload) in enumerate(packets):
+        if scenario.get("stray_ack_before_packet") == number:
+            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + sent_guest + scenario.get("stray_ack_seq_skew", 0), pisn + 1 + sent_peer, TCP_ACK), True))
         packet_frame[number] = len(frames)
         if from_guest:
             flags = (data_flags & ~TCP_ACK if "guest_data" in noack else data_flags) | (TCP_URG if "guest_urg" in noack else 0)
@@ -1377,7 +1391,7 @@ def synthesize(contract: dict, initial_sn: int = 0) -> dict:
     sent = judge_guest_lines(lines, contract)["sent"]
     frames = [bytes.fromhex(sent[i]) for i in range(SAMPLES)]
     zid = bytes(range(1, 9))
-    peer = [*STOCK_LISTENER[:5], bytes([ID_KEEP_ALIVE])]
+    peer = [*STOCK_LISTENER[:5], bytes([ID_KEEP_ALIVE]), STOCK_LISTENER[7]]
     guest = [zenoh_wire.init(zid, 512), zenoh_wire.open_(LEASE_MS, initial_sn, _peer_cookie()), *frames, zenoh_wire.close(0, True)]
     wire = [(contract["key"], f.hex() and zenoh_wire.decode_push_frame(f)["payload"].hex(), _attachment_hex(f)) for f in frames]
     return {"guest": guest, "peer": peer, "lines": lines, "listen": LISTEN, "remote_peers": 1, "receipt": wire}
@@ -1639,6 +1653,11 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest CLOSE of the link only", guest_at(-1, lambda b: b"\x03\x00")),
         ("a guest CLOSE with reason 8, one over the last the profile names", guest_at(-1, lambda b: b"\x23\x08")),
         ("a guest CLOSE with reason 255", guest_at(-1, lambda b: b"\x23\xff")),
+        ("a peer stream with no Zenoh CLOSE, its FIN after the last sample", edit(lambda s: s["peer"].pop())),
+        ("a peer stream cut at its subscriber declaration, no CLOSE", edit(lambda s: s.update(peer=s["peer"][:5]))),
+        ("a guest ACK one past its next sequence number", edit(lambda s: s.update(stray_ack_before_packet=1, stray_ack_seq_skew=1))),
+        ("a guest ACK 10000 past its next sequence number, acknowledged by the peer's INIT_ACK", edit(lambda s: s.update(stray_ack_before_packet=1, stray_ack_seq_skew=10000, ack_skew={"peer_data": 10000}))),
+        ("a guest ACK 10000 past its next sequence number alone", edit(lambda s: s.update(stray_ack_before_packet=1, stray_ack_seq_skew=10000))),
         ("a peer FRAME with a DeclareSubscriber and a PUSH", edit(lambda s: s["peer"].__setitem__(4, s["peer"][4] + _push_body(s)))),
         ("a peer FRAME with a PUSH alone", edit(lambda s: s["peer"].append(zenoh_wire.frame(_sn(s["peer"][4]) + 1, _push_body(s))))),
         ("a guest data segment without ACK", edit(lambda s: s.update(noack=["guest_data"]))),
@@ -1874,6 +1893,9 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("PSH on every data segment", update(psh=True)),
+        ("a peer session CLOSE, 23 00, ending the stream", lambda s: {**s, "peer": [*s["peer"][:6], zenoh_wire.close(0, True)]}),
+        ("a duplicate guest ACK at its next sequence number", update(stray_ack_before_packet=1, stray_ack_seq_skew=0)),
+        ("a guest keep-alive probe one sequence number under", update(stray_ack_before_packet=1, stray_ack_seq_skew=-1)),
         ("a peer subscriber FRAME of exactly 512 bytes, the batch bound", lambda s: {**s, "peer": [*s["peer"][:4], _pad_peer_frame(s["peer"][4], 512), *s["peer"][5:]]}),
         ("a peer subscriber FRAME of 511 bytes, one under the bound", lambda s: {**s, "peer": [*s["peer"][:4], _pad_peer_frame(s["peer"][4], 511), *s["peer"][5:]]}),
         ("a guest SYN with MSS 4, window scale 3, SACK-permitted 2 and timestamps 10 bytes long", update(guest_options=_option(MSS, (1460).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x07") + _option(TIMESTAMP_OPTION, bytes(8)))),
