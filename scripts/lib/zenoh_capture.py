@@ -421,7 +421,9 @@ class _Seen:
     def __init__(self) -> None:
         self.alias: tuple[int, str] | None = None
         self.subscriber: str | None = None
-        self.subscriber_batch: int | None = None
+        self.subscriber_id: int | None = None
+        self.active = False
+        self.undeclared = False
 
 
 def _declare(reader: _Reader, header: int, seen: "_Seen | None" = None) -> str:
@@ -449,7 +451,7 @@ def _declare(reader: _Reader, header: int, seen: "_Seen | None" = None) -> str:
         return "keyexpr"
     if kind == ID_D_SUBSCRIBER:
         _need(not sub & FLAG_Z, "DeclareSubscriber with an extension")
-        reader.leb(LEB_LONG, "subscriber id")
+        subscriber_id = reader.leb(LEB_LONG, "subscriber id")
         start = reader.at
         named = bool(sub & FLAG_5)
         _key_reference(reader, named, "DeclareSubscriber")
@@ -462,11 +464,12 @@ def _declare(reader: _Reader, header: int, seen: "_Seen | None" = None) -> str:
                 _need(sub & FLAG_6, "a subscriber alias in the receiver's mapping, which this side never declared")
                 _need(seen.alias is not None and seen.alias[0] == scope, "a subscriber through an alias nobody declared")
                 seen.subscriber = seen.alias[1]
+            seen.subscriber_id, seen.active = subscriber_id, True
         return "subscriber"
     if kind == ID_U_SUBSCRIBER:
         _need(not qos, "UndeclareSubscriber with a QoS extension")
         _need(sub == FLAG_Z | ID_U_SUBSCRIBER, "UndeclareSubscriber with another header")
-        reader.leb(LEB_LONG, "subscriber id")
+        undeclared_id = reader.leb(LEB_LONG, "subscriber id")
         _need(reader.u8("UndeclareSubscriber") == EXT_WIRE_EXPR, "UndeclareSubscriber without its wire expression")
         size = reader.leb(LEB_LONG, "wire expression length")
         _need(size <= 2 + MAX_KEY, f"a wire expression of {size} bytes")
@@ -474,7 +477,12 @@ def _declare(reader: _Reader, header: int, seen: "_Seen | None" = None) -> str:
         flags = inner.u8("wire expression flags")
         _need(not flags & ~3, "wire expression flags the exam does not name")
         _need(inner.leb(LEB_SHORT, "wire expression scope") == 0 and flags & 1 and inner.left() != 0, "an invalid wire expression")
-        _key(inner.take(inner.left(), "wire expression"), "UndeclareSubscriber")
+        undeclared_key = _key(inner.take(inner.left(), "wire expression"), "UndeclareSubscriber")
+        if seen is not None:
+            # The session clears its remote subscriber only for the one it holds, by id and by key.
+            _need(seen.active and seen.subscriber_id == undeclared_id and seen.subscriber == undeclared_key,
+                  "an UndeclareSubscriber that does not name the subscriber the peer holds")
+            seen.active, seen.undeclared = False, True
         return "undeclare"
     raise CaptureError(f"a declaration of kind {kind} the exam does not name")
 
@@ -548,7 +556,7 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
     frames: list[bytes] = []
     keep_alives = 0
     closed = False
-    first_frame = None
+    first_frame = last_frame = None
     for index, batch in enumerate(batches[2:], start=2):
         _need(not closed, "a batch after the guest's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
@@ -559,6 +567,7 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         elif batch[0] == zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R:
             frames.append(batch)
             first_frame = index if first_frame is None else first_frame
+            last_frame = index
         else:
             raise CaptureError(f"a guest batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     _need(len(frames) == SAMPLES, f"the guest put {len(frames)} frames on the wire, the demo has {SAMPLES} samples")
@@ -580,7 +589,7 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         received.append((decoded["key"], decoded["payload"].hex(), attachment.hex()))
     return {
         "frames": len(frames), "bytes": sum(len(f) for f in frames), "keep_alives": keep_alives, "closed": closed,
-        "samples": received, "cookie": cookie, "first_frame": first_frame,
+        "samples": received, "cookie": cookie, "first_frame": first_frame, "last_frame": last_frame,
     }
 
 
@@ -594,7 +603,7 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
     _, expected, _cookie_unused = _open_fields(batches[1], "OPEN_ACK", True)
     seen = _Seen()
     closed = False
-    subscriber = None
+    subscriber = undeclared = None
     for index, batch in enumerate(batches[2:], start=2):
         _need(not closed, "a peer batch after the peer's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
@@ -604,15 +613,20 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
             _need(batch[1] <= MAX_CLOSE_REASON, f"a peer CLOSE with reason {batch[1]}, the profile names 0 to {MAX_CLOSE_REASON}")
             closed = True
         elif _kind(batch) == zenoh_wire.ID_FRAME:
-            sequence, kinds = _frame_messages(batch, "a peer FRAME", seen)
+            was_undeclared = seen.undeclared
+            sequence, _kinds = _frame_messages(batch, "a peer FRAME", seen)
             _need(sequence == expected, f"a peer FRAME with sequence number {sequence}, the OPEN_ACK announced {expected}")
             expected = (expected + 1) & 0xFFFFFFFF
-            if subscriber is None and "subscriber" in kinds:
+            # The subscription counts from the frame that leaves it declared: a declaration the same
+            # frame undeclares never held.
+            if subscriber is None and seen.active:
                 subscriber = index
+            if seen.undeclared and not was_undeclared:
+                undeclared = index
         else:
             raise CaptureError(f"a peer batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     _need(seen.subscriber is None or seen.subscriber == key, f"the peer's subscriber is on {seen.subscriber!r}, not the demo key")
-    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber}
+    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber, "undeclared": undeclared}
 
 
 def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
@@ -632,6 +646,8 @@ def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
     after(peer_time.complete(peer_spans[0][1]), guest_time.start(guest_spans[1][0]), "the OPEN_SYN came before the INIT_ACK was complete")
     after(guest_time.complete(guest_spans[1][1]), peer_time.start(peer_spans[1][0]), "the OPEN_ACK came before the OPEN_SYN was complete")
     after(peer_time.complete(peer_spans[seen["subscriber"]][1]), guest_time.start(guest_spans[result["first_frame"]][0]), "the first sample was sent before the peer's subscriber declaration was complete")
+    if seen["undeclared"] is not None:
+        after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.start(peer_spans[seen["undeclared"]][0]), "the peer undeclared its subscriber before the last sample was sent")
     result.update(peer_batches=seen["batches"], guest_stream=len(guest), peer_stream=len(peer), arp=arp)
     return result
 
@@ -941,7 +957,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 213
+PINNED_CONTROLS = 219
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -1063,7 +1079,8 @@ def _turns(scenario: dict, guest_at: list[int], peer_at: list[int]) -> list[tupl
 
     layout = scenario.get("layout", "honest")
     if layout == "honest":
-        turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 5), g(2, 1 << 30), q(5, 1 << 30)]
+        before = scenario.get("peer_first", 5)
+        turns = [g(0, 1), q(0, 1), g(1, 2), q(1, before), g(2, 1 << 30), q(before, 1 << 30)]
     elif layout == "frames_early":
         turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 2), g(2, 1 << 30), q(2, 1 << 30)]
     elif layout == "open_before_ack":
@@ -1119,14 +1136,14 @@ def build(scenario: dict) -> bytes:
 
     frames = [_arp()]
     if not scenario.get("no_syn"):
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0), b"", 65535, GUEST_OPTIONS), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0), b"", 65535, scenario.get("guest_options", GUEST_OPTIONS)), True))
         if not scenario.get("no_synack"):
-            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0), b"", 65535, PEER_OPTIONS), False))
+            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0), b"", 65535, scenario.get("peer_options", PEER_OPTIONS)), False))
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1, TCP_ACK), True))
     if "synack_again" in scenario:
-        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK, b"", scenario.get("again_window", 65535), scenario.get("again_peer_options", PEER_OPTIONS)), False))
+        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK, b"", scenario.get("again_window", 65535), scenario.get("again_peer_options", scenario.get("peer_options", PEER_OPTIONS))), False))
     if "syn_again" in scenario:
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + scenario["syn_again"], 0, TCP_SYN, b"", scenario.get("again_window", 65535), scenario.get("again_guest_options", GUEST_OPTIONS)), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + scenario["syn_again"], 0, TCP_SYN, b"", scenario.get("again_window", 65535), scenario.get("again_guest_options", scenario.get("guest_options", GUEST_OPTIONS))), True))
     if scenario.get("synack_first") and len(frames) >= 3:
         frames[1], frames[2] = frames[2], frames[1]
     sent_guest = sent_peer = 0
@@ -1216,6 +1233,16 @@ def _other_key_subscriber(batch: bytes) -> bytes:
     sn = _sn(batch)
     body = bytes([ID_DECLARE, 0x42 & ~FLAG_6 | FLAG_5 | 0x40 * 0]) + zenoh_wire.leb128(1) + zenoh_wire.leb128(0) + zenoh_wire.leb128(len(OTHER_KEY)) + OTHER_KEY
     return bytes([zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R]) + zenoh_wire.leb128(sn) + body
+
+
+def K() -> str:
+    return zenoh_exchange.demo()["key"]
+
+
+def _undeclare_frame(scenario: dict, subscriber_id: int, key: str, skip: int = 0) -> bytes:
+    """A peer FRAME that undeclares a subscriber, numbered after the last frame the scenario's peer sent."""
+    last = max(_sn(b) for b in scenario["peer"][2:5])
+    return bytes([zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R]) + zenoh_wire.leb128(last + 1 + skip) + zenoh_wire.undeclare_subscriber(subscriber_id, key, True)
 
 
 def _replace_sent(index: int, change: Callable[[bytes], bytes], both: bool) -> Callable[[dict], dict]:
@@ -1380,6 +1407,11 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("every peer FRAME sequence number one under the OPEN_ACK's", peer_sn(-1)),
         ("a peer FRAME sequence number repeated", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][3]))))),
         ("a peer FRAME sequence number skipped", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][4]) + 5)))),
+        ("a peer subscriber declared and undeclared in one frame", edit(lambda s: s["peer"].__setitem__(4, s["peer"][4] + zenoh_wire.undeclare_subscriber(1, K(), True)))),
+        ("a peer that undeclares its subscriber before the first sample", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, K())], peer_first=6))),
+        ("a peer that undeclares a subscriber it does not hold, id 2", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 2, K())]))),
+        ("a peer that undeclares its subscriber on another key", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, "0/other/key")]))),
+        ("a peer that undeclares a subscriber twice", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, K()), _undeclare_frame(s, 1, K(), 1)]))),
         ("an OPEN_SYN echoing another cookie", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, b"another-cookie-99"))),
         ("an OPEN_SYN echoing the cookie one byte short", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie()[:-1]))),
         ("an OPEN_SYN echoing the cookie with a byte added", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie() + b"\x00"))),
@@ -1461,6 +1493,7 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a report with a line that only contains a keyword", edit(lambda s: s["lines"].insert(-1, f"[{PUBLISHER}] unexpected session diagnostic"))),
         ("a report with a close line that has an extra field", edit(lambda s: s["lines"].__setitem__(-1, s["lines"][-1] + " extra=1"))),
         ("a report with the listen denial twice", edit(lambda s: s["lines"].insert(0, f"[{PUBLISHER}] denial class=listen refused=1"))),
+        ("a report with the undeclared-port denial, which the publisher checks and never prints", edit(lambda s: s["lines"].insert(1, f"[{PUBLISHER}] denial class=undeclared-port refused=1"))),
         ("a report with a denial the exam does not name", edit(lambda s: s["lines"].insert(0, f"[{PUBLISHER}] denial class=invented refused=1"))),
         ("a report from the subscriber", edit(lambda s: s["lines"].insert(0, f"[{SUBSCRIBER}] session open role=listener initial_sn=0 lease_ms=2000"))),
         ("a report whose session closes before the last sample", edit(lambda s: s["lines"].insert(-3, s["lines"].pop()))),
@@ -1512,7 +1545,6 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer sequence number about to wrap", update(peer_isn=0xFFFFFFF0)),
         ("keep-alives from the guest", lambda s: {**s, "guest": s["guest"][:2] + [bytes([ID_KEEP_ALIVE])] * 3 + s["guest"][2:]}),
         ("a guest that never sends CLOSE", lambda s: {**s, "guest": s["guest"][:-1]}),
-        ("the batches a stock peer sent when it listened, as captured", lambda s: {**s, "peer": [bytes.fromhex(h) for _n, h in zenoh_stock_peer.batches("listens")]}),
         ("a non-zero initial sequence number, reported and sent consistently", lambda s: synthesize(contract, 5)),
         ("an INIT_SYN without size parameters", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), zenoh_wire.DEFAULT_BATCH), *s["guest"][1:]]}),
         ("an INIT_SYN with the smallest batch size, 1", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), 1), *s["guest"][1:]]}),
@@ -1520,10 +1552,11 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("an INIT_SYN with a 16 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 17)), 512), *s["guest"][1:]]}),
         ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
-        ("segments of 100 bytes in every turn of the session", update(chunk=100)),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("a guest SYN retransmitted with only a timestamp option differing", update(syn_again=0, again_guest_options=GUEST_OPTIONS + _option(TIMESTAMP_OPTION, bytes(8)))),
-        ("a handshake that negotiates no options", update(syn_again=0, again_guest_options=GUEST_OPTIONS)),
+        ("a handshake that negotiates no options, retransmitted", update(guest_options=b"", peer_options=b"", syn_again=0, synack_again=0)),
+        ("a handshake that negotiates only a segment size", update(guest_options=_option(MSS, (1460).to_bytes(2, "big")), peer_options=_option(MSS, (1460).to_bytes(2, "big")))),
+        ("the peer undeclares its subscriber after the last sample, then closes", lambda s: {**s, "peer": [*s["peer"][:5], _undeclare_frame(s, 1, K()), zenoh_wire.close(0, True)]}),
         ("peer FRAME sequence numbers that wrap through 2**32", lambda s: {**s, "peer": [*s["peer"][:1], zenoh_wire.open_(10000, 0xFFFFFFFE, ack=True), *[_with_sn(b, 0xFFFFFFFE + i) for i, b in enumerate(s["peer"][2:5])], *s["peer"][5:]]}),
         ("a guest SYN retransmitted identically", update(syn_again=0)),
         ("a guest CLOSE with the last reason the profile names, 7", lambda s: {**s, "guest": [*s["guest"][:-1], zenoh_wire.close(7, True)]}),
@@ -1542,7 +1575,11 @@ def controls(contract: dict) -> tuple[int, int, int]:
     first = judge(copy.deepcopy(good), contract)
     _need(first["frames"] == SAMPLES and first["receipt"] == SAMPLES, "the honest scenario was not judged whole")
     accepted = 0
+    distinct = {build(good)}
     for label, change in honest_variants(contract):
+        capture = build(change(copy.deepcopy(good)))
+        _need(capture not in distinct, f"control: the honest variant {label} builds a capture that another honest variant, or the base, already builds")
+        distinct.add(capture)
         try:
             judge(change(copy.deepcopy(good)), contract)
         except (CaptureError, StopIteration) as error:
