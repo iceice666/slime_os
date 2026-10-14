@@ -45,6 +45,7 @@ PUBLISHER = "ros2-demo-publisher"
 SUBSCRIBER = "ros2-demo-subscriber"
 DENIALS = ("undeclared-endpoint", "listen", "scouting")
 MAX_STREAM = 1 << 20
+U32 = 0xFFFFFFFF
 # The attachment the publisher builds for sample `n` (components/lib/src/zenoh_node.rs): sequence n + 1,
 # source timestamp 1000 + n, and one GID for every sample.
 ATTACHMENT_SEQUENCE_BASE = 1
@@ -79,6 +80,7 @@ class Segment:
     payload: bytes
     window: int = 0
     options: tuple = ()
+    time_ns: int = 0
 
 
 # ------------------------------------------------------------------------------ capture
@@ -140,12 +142,29 @@ def _negotiated(s: "Segment") -> tuple:
     return (s.seq, s.ack, s.flags, s.window, tuple(o for o in s.options if o[0] not in VARIABLE_OPTIONS))
 
 
+def _record_times(data: bytes) -> list[int]:
+    """Each record's capture time in whole nanoseconds, read from the PCAP header as integers.
+
+    `http_capture._frames` yields a float, which cannot hold a microsecond exactly at an epoch
+    timestamp, and a lease boundary is judged to the microsecond. The file is already validated.
+    """
+    unit = {b"\xd4\xc3\xb2\xa1": ("<", 1000), b"\xa1\xb2\xc3\xd4": (">", 1000), b"\x4d\x3c\xb2\xa1": ("<", 1), b"\xa1\xb2\x3c\x4d": (">", 1)}[data[:4]]
+    endian, scale = unit
+    times, at = [], 24
+    while at < len(data):
+        seconds, fraction, captured, _original = struct.unpack_from(endian + "IIII", data, at)
+        times.append(seconds * 1_000_000_000 + fraction * scale)
+        at += 16 + captured
+    return times
+
+
 def segments(data: bytes) -> tuple[list[Segment], int]:
     """Every TCP segment in the capture, and the number of ARP frames. Anything else is refused."""
     found: list[Segment] = []
     arp = 0
     try:
         frames = list(http_capture._frames(data))
+        times = _record_times(data)
     except ValueError as error:
         raise CaptureError(str(error)) from error
     for position, (_, frame) in enumerate(frames):
@@ -179,15 +198,19 @@ def segments(data: bytes) -> tuple[list[Segment], int]:
         _need(http_capture._checksum(pseudo + body) == 0, "TCP checksum")
         sport, dport, seq, ack = struct.unpack_from("!HHII", body)
         window = int.from_bytes(body[14:16], "big")
-        found.append(Segment(position, source == GUEST, sport, dport, seq, ack, body[13], body[offset:], window, _options(body[20:offset])))
+        found.append(Segment(position, source == GUEST, sport, dport, seq, ack, body[13], body[offset:], window, _options(body[20:offset]), times[position]))
     return found, arp
 
 
 class _Timing:
     """Where in the capture the bytes of one direction's stream were carried: (packet, start, end)."""
 
-    def __init__(self, parts: list[tuple[int, int, int]]) -> None:
-        self.parts = parts
+    def __init__(self, parts: list[tuple[int, int, int]], times: dict[int, int], fin: int) -> None:
+        self.parts, self.times, self.fin = parts, times, fin
+
+    def time_of(self, offset: int) -> int:
+        """The capture time, in nanoseconds, of the first packet that carried the byte at `offset`."""
+        return self.times[self.start(offset)]
 
     def start(self, offset: int) -> int:
         """The first packet that carried the byte at `offset`."""
@@ -220,6 +243,7 @@ def _reassemble(segs: list[Segment], isn: int, label: str) -> tuple[bytes, _Timi
     pieces: list[tuple[int, bytes]] = []
     parts: list[tuple[int, int, int]] = []
     fin: int | None = None
+    times = {s.index: s.time_ns for s in segs}
     for s in segs:
         if s.flags & TCP_SYN:
             _need(not s.payload, f"{label}: a SYN carries data")
@@ -244,7 +268,7 @@ def _reassemble(segs: list[Segment], isn: int, label: str) -> tuple[bytes, _Timi
         _need(len(stream) <= MAX_STREAM, f"{label}: stream over {MAX_STREAM} bytes")
     _need(fin is not None, f"{label}: the stream was never closed with a FIN")
     _need(fin == len(stream), f"{label}: the FIN is at {fin} but {len(stream)} bytes were delivered")
-    return bytes(stream), _Timing(parts)
+    return bytes(stream), _Timing(parts, times, min(s.index for s in segs if s.flags & TCP_FIN))
 
 
 def _check_acks(segs: list[Segment], guest_isn: int, peer_isn: int) -> None:
@@ -628,10 +652,12 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
     keep_alives = 0
     closed = False
     first_frame = last_frame = None
+    keep_alive_batches = []
     for index, batch in enumerate(batches[2:], start=2):
         _need(not closed, "a batch after the guest's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
             keep_alives += 1
+            keep_alive_batches.append(index)
         elif _kind(batch) == zenoh_wire.ID_CLOSE:
             _close(batch, "guest")
             closed = True
@@ -652,7 +678,8 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         except zenoh_wire.WireError as error:
             raise CaptureError(f"sample {sequence}: {error}") from error
         _need(decoded["key"] == contract["key"], f"sample {sequence}: key expression {decoded['key']!r} is not the demo's")
-        _need(decoded["sn"] == initial_sn + index, f"sample {sequence}: frame sn {decoded['sn']} is not {initial_sn} + {index}")
+        _need(decoded["sn"] <= U32, f"sample {sequence}: frame sn {decoded['sn']} does not fit 32 bits")
+        _need(decoded["sn"] == (initial_sn + index) & U32, f"sample {sequence}: frame sn {decoded['sn']} is not {initial_sn} + {index} modulo 2**32")
         _need(decoded["payload"].hex() == cdr, f"sample {sequence}: the payload is not the contract's")
         _need(decoded["sequence"] == sequence + ATTACHMENT_SEQUENCE_BASE, f"sample {sequence}: attachment sequence {decoded['sequence']}, the publisher sends {sequence + ATTACHMENT_SEQUENCE_BASE}")
         _need(decoded["timestamp"] == ATTACHMENT_TIMESTAMP_BASE + sequence, f"sample {sequence}: attachment timestamp {decoded['timestamp']}, the publisher sends {ATTACHMENT_TIMESTAMP_BASE + sequence}")
@@ -663,7 +690,7 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         received.append((decoded["key"], decoded["payload"].hex(), attachment.hex()))
     return {
         "frames": len(frames), "bytes": sum(len(f) for f in frames), "keep_alives": keep_alives, "closed": closed,
-        "samples": received, "cookie": cookie, "first_frame": first_frame, "last_frame": last_frame,
+        "samples": received, "cookie": cookie, "first_frame": first_frame, "last_frame": last_frame, "keep_alive_batches": keep_alive_batches,
     }
 
 
@@ -674,7 +701,7 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
     _need(_kind(batches[0]) == zenoh_wire.ID_INIT and batches[0][0] & zenoh_wire.FLAG_A, "the first peer batch is not an INIT_ACK")
     cookie = _init_fields(batches[0], "INIT_ACK", True)
     _need(_kind(batches[1]) == zenoh_wire.ID_OPEN and batches[1][0] & zenoh_wire.FLAG_A, "the second peer batch is not an OPEN_ACK")
-    _, expected, _cookie_unused = _open_fields(batches[1], "OPEN_ACK", True)
+    peer_lease_ms, expected, _cookie_unused = _open_fields(batches[1], "OPEN_ACK", True)
     seen = _Seen()
     closed = False
     subscriber = undeclared = close_at = None
@@ -700,7 +727,13 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
         else:
             raise CaptureError(f"a peer batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     _need(seen.subscriber is None or seen.subscriber == key, f"the peer's subscriber is on {seen.subscriber!r}, not the demo key")
-    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber, "undeclared": undeclared, "close": close_at}
+    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber, "undeclared": undeclared, "close": close_at, "lease_ms": peer_lease_ms}
+
+
+def _silence(who: str, times_ns: list[int], lease_ms: int) -> None:
+    for before, after_ in zip(times_ns, times_ns[1:], strict=False):
+        gap = after_ - before
+        _need(gap <= lease_ms * 1_000_000, f"{who} was silent for {gap} ns, over the {lease_ms} ms lease it announced ({lease_ms * 1_000_000} ns)")
 
 
 def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
@@ -720,6 +753,18 @@ def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
     after(peer_time.complete(peer_spans[0][1]), guest_time.start(guest_spans[1][0]), "the OPEN_SYN came before the INIT_ACK was complete")
     after(guest_time.complete(guest_spans[1][1]), peer_time.start(peer_spans[1][0]), "the OPEN_ACK came before the OPEN_SYN was complete")
     after(peer_time.complete(peer_spans[seen["subscriber"]][1]), guest_time.start(guest_spans[result["first_frame"]][0]), "the first sample was sent before the peer's subscriber declaration was complete")
+    # A KEEP_ALIVE is traffic on an open session, and a connector is not open until the OPEN_ACK has arrived.
+    open_ack_done = peer_time.complete(peer_spans[1][1])
+    for index in result["keep_alive_batches"]:
+        after(open_ack_done, guest_time.start(guest_spans[index][0]), "a guest KEEP_ALIVE was carried before the OPEN_ACK was complete")
+    # End of stream is read as a close: `zenoh_link::fill` reports Closed once the peer's FIN is in and
+    # nothing is pending, so the publisher fails if that comes before it has sent every sample.
+    after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.fin, "the peer's FIN came before the last sample was sent")
+    # An open session is closed by the other side after a lease of silence (`Session::expire`: strictly
+    # more than the lease). The guest's silence is judged against the 2000 ms it announced, the peer's
+    # against the lease its OPEN_ACK announced, from each side's OPEN to its last batch.
+    _silence("the guest", [guest_time.time_of(start) for start, _end in guest_spans[1:]], LEASE_MS)
+    _silence("the peer", [peer_time.time_of(start) for start, _end in peer_spans[1:]], seen["lease_ms"])
     if seen["undeclared"] is not None:
         after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.start(peer_spans[seen["undeclared"]][0]), "the peer undeclared its subscriber before the last sample was sent")
     if seen["close"] is not None:
@@ -739,7 +784,7 @@ def guest_lines(contract: dict, initial_sn: int = 0) -> list[str]:
     lines += [f"[{PUBLISHER}] session open role=connector initial_sn={initial_sn} lease_ms={LEASE_MS}", f"[{PUBLISHER}] declaration matched key={key}"]
     for sequence, _value, cdr in contract["samples"]:
         att = zenoh_wire.attachment(sequence + ATTACHMENT_SEQUENCE_BASE, ATTACHMENT_TIMESTAMP_BASE + sequence, DEMO_GID)
-        batch = zenoh_wire.frame(initial_sn + sequence, zenoh_wire.push_put(key, att, bytes.fromhex(cdr), True))
+        batch = zenoh_wire.frame((initial_sn + sequence) & U32, zenoh_wire.push_put(key, att, bytes.fromhex(cdr), True))
         lines.append(f"[{PUBLISHER}] wire sent sample={sequence} hex={batch.hex()}")
     lines.append(f"[{PUBLISHER}] session closed samples={SAMPLES}")
     return lines
@@ -1034,10 +1079,10 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 254
+PINNED_CONTROLS = 262
 # The positive controls, pinned as the negative ones are: a judge that quietly loses an honest case
 # keeps refusing everything it refused, so only a count of what it accepts shows the loss.
-PINNED_HONEST_CAPTURES = 32
+PINNED_HONEST_CAPTURES = 39
 PINNED_ACCEPTED_RECEIPTS = 10
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
@@ -1139,10 +1184,12 @@ def _arp_frame(
     return dst + mac + (0x0806).to_bytes(2, "big") + body
 
 
-def pcap(frames: list[bytes]) -> bytes:
+def pcap(frames: list[bytes], times_us: list[int] | None = None) -> bytes:
+    """A classic PCAP of Ethernet frames. Without `times_us` the frames are one millisecond apart."""
     out = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)
     for i, frame in enumerate(frames):
-        out += struct.pack("<IIII", 1 + i // 1000, (i % 1000) * 1000, len(frame), len(frame)) + frame
+        at = 1_000_000 + (i * 1000 if times_us is None else times_us[i])
+        out += struct.pack("<IIII", at // 1_000_000, at % 1_000_000, len(frame), len(frame)) + frame
     return out
 
 
@@ -1166,6 +1213,8 @@ def _turns(scenario: dict, guest_at: list[int], peer_at: list[int]) -> list[tupl
     if layout == "honest":
         before = scenario.get("peer_first", 5)
         turns = [g(0, 1), q(0, 1), g(1, 2), q(1, before), g(2, 1 << 30), q(before, 1 << 30)]
+    elif layout == "keepalive_with_open":
+        turns = [g(0, 1), q(0, 1), g(1, 3), q(1, 5), g(3, 1 << 30), q(5, 1 << 30)]
     elif layout == "close_after_three_samples":
         turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 5), g(2, 5), q(5, 1 << 30), g(5, 1 << 30)]
     elif layout == "close_after_four_samples":
@@ -1207,12 +1256,15 @@ def build(scenario: dict) -> bytes:
 
     packets: list[tuple[bool, int, bytes]] = []
     last_guest_turn: list[int] = []
+    guest_turn_starts: list[int] = []
+    peer_turn_starts: list[int] = []
     for from_guest, first, last in _turns(scenario, offsets(scenario["guest"]), offsets(scenario["peer"])):
         data = guest_stream if from_guest else peer_stream
         group = []
         for at in range(first, last, chunk):
             group.append(len(packets))
             packets.append((from_guest, at, data[at : min(at + chunk, last)]))
+        (guest_turn_starts if from_guest else peer_turn_starts).append(group[0])
         if from_guest:
             last_guest_turn = group
     if scenario.get("reorder") and len(last_guest_turn) > 1:
@@ -1241,7 +1293,17 @@ def build(scenario: dict) -> bytes:
     sent_guest = sent_peer = 0
     data_flags = TCP_ACK | (TCP_PSH if scenario.get("psh") else 0)
     noack = set(scenario.get("noack", ()))
-    for from_guest, at, payload in packets:
+    packet_frame: dict[int, int] = {}
+    early_fin = scenario.get("peer_fin_after_data_packets")
+    seen_data = 0
+
+    def peer_fin() -> bytes:
+        return _ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), gisn + 1 + sent_guest, TCP_FIN | TCP_ACK), False)
+
+    if early_fin == 0:
+        frames.append(peer_fin())
+    for number, (from_guest, at, payload) in enumerate(packets):
+        packet_frame[number] = len(frames)
         if from_guest:
             flags = (data_flags & ~TCP_ACK if "guest_data" in noack else data_flags) | (TCP_URG if "guest_urg" in noack else 0)
             noack -= {"guest_data", "guest_urg"}
@@ -1254,12 +1316,17 @@ def build(scenario: dict) -> bytes:
             ack = gisn + 1 + (0 if lag else sent_guest) + skew.pop("peer_data", 0)
             frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, ack, flags, payload), False))
             sent_peer = max(sent_peer, at + len(payload))
+        if from_guest and number in last_guest_turn:
+            seen_data += 1
+            if early_fin == seen_data:
+                frames.append(peer_fin())
     frames.extend(scenario.get("extra", []))
     guest_fin = gisn + 1 + len(guest_stream) + scenario.get("fin_skew", 0)
     closing = []
     if scenario.get("guest_fin", True):
         closing.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin, pisn + 1 + len(peer_stream) + skew.pop("guest_fin", 0), TCP_FIN | (0 if "guest_fin_ack" in noack else TCP_ACK)), True))
-    closing.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), guest_fin + 1, TCP_FIN | (0 if "peer_fin_ack" in noack else TCP_ACK)), False))
+    if early_fin is None:
+        closing.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), guest_fin + 1, TCP_FIN | (0 if "peer_fin_ack" in noack else TCP_ACK)), False))
     closing.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin + 1, pisn + 2 + len(peer_stream), 0 if "last_ack" in noack else TCP_ACK), True))
     where = scenario.get("closing", "end")
     if where == "before_syn":
@@ -1268,7 +1335,21 @@ def build(scenario: dict) -> bytes:
         frames = [*frames[:2], *closing, *frames[2:]]
     else:
         frames.extend(closing)
-    return pcap(frames)
+    times = [i * 1000 for i in range(len(frames))]
+
+    def shift_from(frame_index: int, delta_us: int) -> None:
+        for i in range(frame_index, len(times)):
+            times[i] += delta_us
+
+    # `silence_us` is the time from the packet that opens the guest's OPEN_SYN turn to the packet that
+    # opens its data turn; `peer_gap_us` is the time from the peer's declarations to its next turn.
+    if "silence_us" in scenario and len(guest_turn_starts) >= 3:
+        opened, data_turn = packet_frame[guest_turn_starts[1]], packet_frame[guest_turn_starts[2]]
+        shift_from(data_turn, scenario["silence_us"] - (times[data_turn] - times[opened]))
+    if "peer_gap_us" in scenario and len(peer_turn_starts) >= 3:
+        declared, later = packet_frame[peer_turn_starts[1]], packet_frame[peer_turn_starts[2]]
+        shift_from(later, scenario["peer_gap_us"] - (times[later] - times[declared]))
+    return pcap(frames, times)
 
 
 # What a stock eclipse-zenoh 1.0.0 listener sent after a connector reached it, as captured in
@@ -1413,6 +1494,22 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
             for n, frame in enumerate(frames):
                 s["lines"].insert(at + 1 + n, f"[{PUBLISHER}] wire sent sample={n} hex={frame.hex()}")
             s["receipt"] = [(contract["key"], contract["samples"][n][2], _attachment_hex(frame)) for n, frame in enumerate(frames)]
+            return s
+
+        return run
+
+    def wide_frame_numbers(initial: int = 0xFFFFFFFE, first_wide: int = 2) -> Callable[[dict], dict]:
+        """A session that starts at `initial` whose frames from sample `first_wide` on carry the 33-bit
+        value a non-wrapping count reaches, in the report and on the wire alike."""
+
+        def run(s: dict) -> dict:
+            base = synthesize(zenoh_exchange.demo(), initial)
+            s.update(guest=base["guest"], lines=base["lines"])
+            for n in range(first_wide, SAMPLES):
+                old = s["guest"][2 + n]
+                new = old[:1] + zenoh_wire.leb128(initial + n) + old[1 + len(zenoh_wire.leb128((initial + n) & U32)) :]
+                s["guest"][2 + n] = new
+                s["lines"] = [x.replace(old.hex(), new.hex()) for x in s["lines"]]
             return s
 
         return run
@@ -1568,6 +1665,14 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("every peer FRAME sequence number one under the OPEN_ACK's", peer_sn(-1)),
         ("a peer FRAME sequence number repeated", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][3]))))),
         ("a peer FRAME sequence number skipped", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][4]) + 5)))),
+        ("frames numbered 0x100000000 and 0x100000001 after an initial 0xFFFFFFFE", wide_frame_numbers()),
+        ("a frame number of 2**32 after an initial 0xFFFFFFFF", wide_frame_numbers(initial=0xFFFFFFFF, first_wide=1)),
+        ("a guest KEEP_ALIVE carried with the OPEN_SYN, before the OPEN_ACK", edit(lambda s: s.update(layout="keepalive_with_open", guest=[s["guest"][0], s["guest"][1], bytes([ID_KEEP_ALIVE]), *s["guest"][2:]]))),
+        ("the peer's FIN before the first guest frame", edit(lambda s: s.update(peer=s["peer"][:5], peer_fin_after_data_packets=0))),
+        ("the peer's FIN after one of the guest's frames", edit(lambda s: s.update(peer=s["peer"][:5], peer_fin_after_data_packets=1, chunk=1))),
+        ("a guest silent for 2000.001 ms before its first sample", edit(lambda s: s.update(silence_us=2_000_001))),
+        ("a guest silent for 3 s before its first sample", edit(lambda s: s.update(silence_us=3_000_000))),
+        ("a peer silent for 10000.001 ms after its declarations", edit(lambda s: s.update(peer_gap_us=10_000_001))),
         ("a peer subscriber declared and undeclared in one frame", edit(lambda s: s["peer"].__setitem__(4, s["peer"][4] + zenoh_wire.undeclare_subscriber(1, K(), True)))),
         ("a peer CLOSE before the first sample", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.close(0, True)], peer_first=6))),
         ("a peer CLOSE after three of the four samples", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.close(0, True)], layout="close_after_three_samples"))),
@@ -1739,6 +1844,13 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("PSH on every data segment", update(psh=True)),
+        ("an initial sequence number of 0xFFFFFFFE, the frames wrapping through zero", lambda s: synthesize(contract, 0xFFFFFFFE)),
+        ("an initial sequence number of 0xFFFFFFFF, the frames wrapping at once", lambda s: synthesize(contract, 0xFFFFFFFF)),
+        ("a guest silent for exactly the 2000 ms lease before its first sample", update(silence_us=2_000_000)),
+        ("a guest silent for 1999.999 ms before its first sample", update(silence_us=1_999_999)),
+        ("a peer silent for exactly the 10 s lease it announced", update(peer_gap_us=10_000_000)),
+        ("a guest KEEP_ALIVE carried with the first sample, after the OPEN_ACK", lambda s: {**s, "guest": [*s["guest"][:2], bytes([ID_KEEP_ALIVE]), *s["guest"][2:]]}),
+        ("the peer's FIN after the last guest frame", update(peer_fin_after_data_packets=1, chunk=1400)),
         ("data segments that acknowledge less than the other side had sent", update(ack_lag=True)),
         ("the handshake ACK carried by the first data segment", update(no_hs_ack=True)),
         ("the handshake ACK at relative 0 and the first data segment acknowledging the SYN", update(ack_skew={"hs_ack": -1})),
