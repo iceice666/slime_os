@@ -96,6 +96,10 @@ OK_SCENARIOS = (
     "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
     "nine-keys-subscribers-and-samples-fixed",
+    "wide-counts-256-heap",
+    "wide-counts-256-fixed",
+    "wide-counts-65535-heap",
+    "wide-counts-65535-fixed",
     "reassemble-multibyte-key",
     "boundary-at-sequence-width-changes",
 )
@@ -248,6 +252,12 @@ REFUSED_SCENARIOS = (
     # The same limit in fixed mode, where the tables are arrays and not storage the component supplies.
     ("tenth-subscriber-in-nine-fixed", "subscriber-limit"),
     ("tenth-alias-in-nine-fixed", "over-bound"),
+    # With 256 slots the limit is 256 and not 255: the 257th subscriber and alias are refused as the
+    # tenth is, in each mode.
+    ("257th-subscriber-in-256-heap", "subscriber-limit"),
+    ("257th-alias-in-256-heap", "over-bound"),
+    ("257th-subscriber-in-256-fixed", "subscriber-limit"),
+    ("257th-alias-in-256-fixed", "over-bound"),
     # A key is counted in encoded bytes, not characters: five characters of 10 bytes against a declared 9.
     ("fragmented-put-multibyte-key-over-declared", "over-bound"),
 )
@@ -642,6 +652,50 @@ def counts_fixed_lines() -> tuple[str, ...]:
     )
 
 
+# Counts that cross the widths a count could be stored in: 256 keys, subscribers and samples, one past
+# what a byte holds, and 65535 keys and subscribers, the most the contract admits and all a 16-bit field
+# holds, each in both modes. A link that keeps a count in a byte or rejects its 256th slot fails the
+# first, one that narrows a slot index below 16 bits the second. (scenario, mode, keys, subscribers,
+# samples, payload). Each held notice carries a distinct payload that includes its index, which the
+# 251-byte period of `distinct_payload` would repeat across 512 of them.
+WIDE = (
+    ("wide-counts-256-heap", "heap", 256, 256, 256, 12),
+    ("wide-counts-256-fixed", "fixed", 256, 256, 256, 12),
+    ("wide-counts-65535-heap", "heap", 65535, 65535, 1, 12),
+    ("wide-counts-65535-fixed", "fixed", 65535, 65535, 1, 12),
+)
+
+
+def wide_config(mode: str, keys: int, subscribers: int, samples: int, payload: int) -> dict:
+    c = dict(
+        name="wide", mode=mode, batchBytes=2048, payloadBytes=payload, keyBytes=129,
+        attachmentBytes=33, maxKeys=keys, maxSubscribers=subscribers, outstandingSamples=samples,
+        stackBytes=0, reassemblyTimeoutMs=5000 if mode == "heap" else 0, heapBytes=0,
+    )
+    c["stackBytes"] = required_stack(c)
+    c["heapBytes"] = heap_needed(c) if mode == "heap" else 0
+    return c
+
+
+def wide_payload(size: int, index: int) -> bytes:
+    return (index.to_bytes(4, "big") + distinct_payload(size, index))[:size]
+
+
+@lru_cache(maxsize=None)
+def wide_lines() -> tuple[str, ...]:
+    demo, large = pinned_configs()[:2]
+    out = []
+    for _name, mode, keys, subscribers, samples, payload in WIDE:
+        c = wide_config(mode, keys, subscribers, samples, payload)
+        if not contract_accepts(limits_record([demo, large, c])):
+            raise LinksError(f"the limits contract refuses the {mode} configuration of {keys} keys, {subscribers} subscribers and {samples} samples")
+        held = NOTICES * samples
+        count = held + (1 if mode == "heap" else 0)
+        digest = sha("\n".join(sha(wide_payload(payload, i)) for i in range(count)).encode())
+        out.append(f"links wide {mode} {keys} {subscribers} {samples} {held} {payload} {c['stackBytes']} {c['heapBytes']} {digest}")
+    return tuple(out)
+
+
 # Sequence numbers either side of each step in the width of the encoded number. The largest payload
 # that travels whole is one byte smaller at the larger width, so a link that sizes the frame from a
 # cached width puts a whole batch one byte over the announced one.
@@ -805,8 +859,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 255
-PINNED_CONTROLS = 607
+PINNED_CASES = 267
+PINNED_CONTROLS = 632
 
 
 class LinksError(ValueError):
@@ -897,6 +951,8 @@ def good_lines() -> list[str]:
             lines += list(single_lines())
         if name == "reassemble-underfilled-interior":
             lines += list(underfilled_lines())
+        if name.startswith("wide-counts-"):
+            lines.append(next(line for line, spec in zip(wide_lines(), WIDE, strict=True) if spec[0] == name))
         if name == "nine-keys-subscribers-and-samples-fixed":
             lines += list(counts_fixed_lines())
         if name == "reassemble-multibyte-key":
@@ -974,6 +1030,7 @@ SHAPES = {
     ("links", "minimum"): 16,
     ("links", "aliaslong"): 14,
     ("links", "countsfixed"): 9,
+    ("links", "wide"): 11,
     ("links", "multibyte"): 13,
     ("links", "single"): 7,
     ("links", "counts"): 9,
@@ -1054,6 +1111,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    wide = [" ".join(f) for f in only("wide")]
+    if wide != list(wide_lines()):
+        raise LinksError(f"configurations of 256 and of 65535 slots must be built and filled in each mode: {list(wide_lines())}, reported {wide}")
 
     countsfixed = [" ".join(f) for f in only("countsfixed")]
     if countsfixed != list(counts_fixed_lines()):
@@ -1179,7 +1240,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte) + len(wide)
     return positive, len(refused)
 
 
@@ -1419,6 +1480,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
 
     def under_swap(index: int, value: str) -> list[str]:
         at = first("links underfilled ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    def wide_swap(mode: str, keys: int, index: int, value: str) -> list[str]:
+        at = first(f"links wide {mode} {keys} ")
         fields = good[at].split()
         fields[index] = value
         return good[:at] + [" ".join(fields)] + good[at + 1 :]
@@ -1790,6 +1857,31 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("tenth-alias-in-nine-fixed refused with the wrong class", swap("links refused tenth-alias-in-nine-fixed ", "links refused tenth-alias-in-nine-fixed unsupported-message")),
         ("fragmented-put-multibyte-key-over-declared admitted instead of refused", drop("links refused fragmented-put-multibyte-key-over-declared ")),
         ("fragmented-put-multibyte-key-over-declared refused with the wrong class", swap("links refused fragmented-put-multibyte-key-over-declared ", "links refused fragmented-put-multibyte-key-over-declared unsupported-message")),
+        ("257th-subscriber-in-256-heap admitted instead of refused", drop("links refused 257th-subscriber-in-256-heap ")),
+        ("257th-subscriber-in-256-heap refused with the wrong class", swap("links refused 257th-subscriber-in-256-heap ", "links refused 257th-subscriber-in-256-heap over-bound")),
+        ("257th-alias-in-256-heap admitted instead of refused", drop("links refused 257th-alias-in-256-heap ")),
+        ("257th-alias-in-256-heap refused with the wrong class", swap("links refused 257th-alias-in-256-heap ", "links refused 257th-alias-in-256-heap unsupported-message")),
+        ("257th-subscriber-in-256-fixed admitted instead of refused", drop("links refused 257th-subscriber-in-256-fixed ")),
+        ("257th-subscriber-in-256-fixed refused with the wrong class", swap("links refused 257th-subscriber-in-256-fixed ", "links refused 257th-subscriber-in-256-fixed over-bound")),
+        ("257th-alias-in-256-fixed admitted instead of refused", drop("links refused 257th-alias-in-256-fixed ")),
+        ("257th-alias-in-256-fixed refused with the wrong class", swap("links refused 257th-alias-in-256-fixed ", "links refused 257th-alias-in-256-fixed unsupported-message")),
+        ("the wide-count lines dropped", drop("links wide ")),
+        ("the 256-slot heap line dropped", drop("links wide heap 256 ")),
+        ("the 256-slot fixed line dropped", drop("links wide fixed 256 ")),
+        ("the 65535-slot heap line dropped", drop("links wide heap 65535 ")),
+        ("the 65535-slot fixed line dropped", drop("links wide fixed 65535 ")),
+        ("a heap link of 255 keys reported for 256", wide_swap("heap", 256, 3, "255")),
+        ("a fixed link of 255 subscribers reported for 256", wide_swap("fixed", 256, 4, "255")),
+        ("a heap link of 255 samples reported for 256", wide_swap("heap", 256, 5, "255")),
+        ("a fixed notice queue of 510 reported for 512", wide_swap("fixed", 256, 6, "510")),
+        ("a heap link of 65534 keys reported for 65535", wide_swap("heap", 65535, 3, "65534")),
+        ("a fixed link of 255 subscribers reported for 65535", wide_swap("fixed", 65535, 4, "255")),
+        ("a heap link of 256 keys reported for 65535", wide_swap("heap", 65535, 3, "256")),
+        ("a wide queue of payloads that repeat every 251 notices", wide_swap("heap", 256, 9, sha(chr(10).join(sha(distinct_payload(12, i)) for i in range(513)).encode()))),
+        ("a wide queue whose payloads were overwritten", wide_swap("fixed", 256, 9, sha(b"overwritten"))),
+        ("a wide heap link with a heap one message short", wide_swap("heap", 256, 8, str(int(good[first("links wide heap 256 ")].split()[8]) - 1))),
+        ("a wide stack smaller than the arithmetic needs", wide_swap("fixed", 65535, 7, str(int(good[first("links wide fixed 65535 ")].split()[7]) - 1))),
+        ("the wide-count scenarios dropped", [line for line in good if not line.startswith("links ok wide-counts-")]),
         ("the fixed nine-slot line dropped", drop("links countsfixed ")),
         ("a fixed link of four keys reported for nine", fixed_counts_swap(2, "4")),
         ("a fixed link of four subscribers reported for nine", fixed_counts_swap(3, "4")),
