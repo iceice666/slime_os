@@ -360,14 +360,22 @@ def init_ack_bytes(batch: int) -> bytes:
     return zenoh_wire.init(bytes(range(1, 17)), batch=batch, cookie=bytes(range(1, 65)))
 
 
-def handshake_announce(name: str, batch: int) -> tuple[int, str]:
-    """The batch the INIT_ACK announces, decoded from its bytes, and the sha256 of those bytes. The
-    length alone is the same 87 bytes for every non-default batch, so it cannot tell them apart."""
-    ack = init_ack_bytes(batch)
+def init_syn_bytes(batch: int) -> bytes:
+    """The INIT_SYN a connector sends, announcing `batch`: the same ZID, no cookie."""
+    return zenoh_wire.init(bytes(range(1, 17)), batch=batch)
+
+
+def handshake_announce(name: str, batch: int) -> tuple[int, str, str]:
+    """The batch the INIT_ACK and the INIT_SYN announce, each decoded from its bytes, and the sha256 of
+    both. The INIT_ACK is the same 87 bytes for every non-default batch, so its length cannot tell them
+    apart; a link that is the connector sends the INIT_SYN, which a link that is the acceptor never does,
+    so a session that announced another batch there would pass an exam that pinned only the INIT_ACK."""
+    ack, syn = init_ack_bytes(batch), init_syn_bytes(batch)
     announced = int.from_bytes(ack[20:22], "little")
-    if announced != batch:
-        raise LinksError(f"{name}: the handshake announces {announced} and not the batch {batch}")
-    return announced, sha(ack)
+    connector = int.from_bytes(syn[20:22], "little")
+    if announced != batch or connector != batch or not syn[0] & zenoh_wire.FLAG_S:
+        raise LinksError(f"{name}: the handshake announces {announced} and {connector} and not the batch {batch}")
+    return announced, sha(ack), sha(syn)
 
 
 def edge_sizes(name: str, batch: int, key: str) -> tuple[int, int, int]:
@@ -392,7 +400,7 @@ def edge_lines() -> tuple[str, ...]:
         if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload)])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
         handshake, declare, undeclare = edge_sizes(name, batch, key)
-        announced, ack_digest = handshake_announce(name, batch)
+        announced, ack_digest, syn_digest = handshake_announce(name, batch)
         message = edge_message(key, payload)
         digests: list[str] = []
         joined = hashlib.sha256()
@@ -406,7 +414,7 @@ def edge_lines() -> tuple[str, ...]:
         del decoded, message
         out.append(
             f"links edge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
-            f"{len(digests)} {sha(chr(10).join(digests).encode())} {pattern_digest(payload)} {announced} {ack_digest}"
+            f"{len(digests)} {sha(chr(10).join(digests).encode())} {pattern_digest(payload)} {announced} {ack_digest} {syn_digest}"
         )
     return tuple(out)
 
@@ -421,7 +429,7 @@ def minimum_lines() -> tuple[str, ...]:
         if not contract_accepts(limits_record([demo, large, c])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
         handshake, declare, undeclare = edge_sizes(name, MINIMUM_BATCH, MINIMUM_KEY)
-        announced, ack_digest = handshake_announce(name, MINIMUM_BATCH)
+        announced, ack_digest, syn_digest = handshake_announce(name, MINIMUM_BATCH)
         message = bytes(edge_message(MINIMUM_KEY, MINIMUM_PAYLOAD))
         frame = zenoh_wire.frame(FIXED_SN, message)
         if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > MINIMUM_BATCH:
@@ -431,7 +439,7 @@ def minimum_lines() -> tuple[str, ...]:
             raise LinksError(f"{name}: the host reference does not read its own Put back")
         out.append(
             f"links minimum {name} {mode} {MINIMUM_BATCH} {len(MINIMUM_KEY)} {MINIMUM_PAYLOAD} "
-            f"{handshake} {declare} {undeclare} {len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(MINIMUM_PAYLOAD))} {announced} {ack_digest}"
+            f"{handshake} {declare} {undeclare} {len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(MINIMUM_PAYLOAD))} {announced} {ack_digest} {syn_digest}"
         )
     return tuple(out)
 
@@ -446,7 +454,7 @@ def fixed_edge_lines() -> tuple[str, ...]:
         if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload, "fixed")])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
         handshake, declare, undeclare = edge_sizes(name, batch, key)
-        announced, ack_digest = handshake_announce(name, batch)
+        announced, ack_digest, syn_digest = handshake_announce(name, batch)
         if payload != fixed_max_payload(batch, len(key)):
             raise LinksError(f"{name}: {payload} is not the largest payload a batch of {batch} holds with a {len(key)}-byte key")
         message = bytes(edge_message(key, payload))
@@ -458,7 +466,7 @@ def fixed_edge_lines() -> tuple[str, ...]:
             raise LinksError(f"{name}: the host reference does not read its own Put back")
         out.append(
             f"links fixededge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
-            f"{len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(payload))} {announced} {ack_digest}"
+            f"{len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(payload))} {announced} {ack_digest} {syn_digest}"
         )
     return tuple(out)
 
@@ -653,10 +661,13 @@ def deadline_line(timeout: int, first: int, middle: int, last: int, outcome: str
     return f"links deadline {timeout} {first} {middle} {last} {outcome} {digest}"
 
 
-# The contract accepts any positive timeout, so the link is probed at three: the pinned 5000 ms, a
-# shorter 250 ms and the shortest, 1 ms. A receiver that hard-codes one value expires too early or too
-# late at the others.
-TIMEOUTS = (TIMEOUT_MS, 250, 1)
+# The contract accepts any positive timeout, so the link is probed at three small ones, the pinned
+# 5000 ms, a shorter 250 ms and the shortest, 1 ms, and at one on each side of the widths a timeout
+# could be stored in: 65536 (past 16 bits), 4294967296 (past 32 bits) and 9223372036854775807, the
+# largest the contract can state. The session's clock is a 64-bit count of milliseconds, so every one
+# of them is a valid timeout, and a link that stores it narrower, saturates it or rejects it expires
+# the exact run early. A receiver that hard-codes one value expires too early or too late at the others.
+TIMEOUTS = (TIMEOUT_MS, 250, 1, 65536, 1 << 32, (1 << 63) - 1)
 
 
 @lru_cache(maxsize=None)
@@ -738,8 +749,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 241
-PINNED_CONTROLS = 563
+PINNED_CASES = 247
+PINNED_CONTROLS = 579
 
 
 class LinksError(ValueError):
@@ -898,9 +909,9 @@ SHAPES = {
     ("links", "deadline"): 8,
     ("links", "subid"): 7,
     ("links", "shortkey"): 5,
-    ("links", "edge"): 14,
-    ("links", "fixededge"): 14,
-    ("links", "minimum"): 15,
+    ("links", "edge"): 15,
+    ("links", "fixededge"): 15,
+    ("links", "minimum"): 16,
     ("links", "aliaslong"): 14,
     ("links", "single"): 7,
     ("links", "counts"): 9,
@@ -1430,6 +1441,13 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("reassembly-one-ms-after-the-timeout admitted instead of refused", drop("links refused reassembly-one-ms-after-the-timeout ")),
         ("reassembly-one-ms-after-the-timeout refused with the wrong class", swap("links refused reassembly-one-ms-after-the-timeout ", "links refused reassembly-one-ms-after-the-timeout over-bound")),
         ("a dropped deadline line", drop("links deadline ")),
+        ("the 65536 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 65536 ")]),
+        ("the 4294967296 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 4294967296 ")]),
+        ("the 9223372036854775807 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 9223372036854775807 ")]),
+        ("a link that stores 65536 ms in 16 bits expiring the exact run", [deadline_line(65536, DEADLINE_FIRST, DEADLINE_FIRST + 65535, DEADLINE_FIRST + 65536, "reassembly-timeout", "-") if line == deadline_lines()[6] else line for line in good]),
+        ("a link that stores 4294967296 ms in 32 bits expiring the exact run", [deadline_line(1 << 32, DEADLINE_FIRST, DEADLINE_FIRST + (1 << 32) - 1, DEADLINE_FIRST + (1 << 32), "reassembly-timeout", "-") if line == deadline_lines()[8] else line for line in good]),
+        ("a link that saturates the largest timeout accepting the late run", [deadline_line((1 << 63) - 1, DEADLINE_FIRST, DEADLINE_FIRST + (1 << 63) - 2, DEADLINE_FIRST + (1 << 63), "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))) if line == deadline_lines()[11] else line for line in good]),
+        ("a link that stores 65536 ms in 16 bits accepting the run at 1 ms past zero", [deadline_line(65536, DEADLINE_FIRST, DEADLINE_FIRST, DEADLINE_FIRST + 1, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))) if line == deadline_lines()[7] else line for line in good]),
         ("the 250 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 250 ")]),
         ("the 1 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 1 ")]),
         ("a link that hard-codes 5000 ms accepting the late 250 ms run", [deadline_line(250, DEADLINE_FIRST, DEADLINE_FIRST + 249, DEADLINE_FIRST + 251, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))) if line == deadline_lines()[3] else line for line in good]),
@@ -1624,6 +1642,15 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("an alias run that did not wrap to 0", line_set("aliaslong", "edge-alias-long-key-2028", {13: "4294967298"})),
         ("an alias run that left the expected sequence where it began", line_set("aliaslong", "edge-alias-long-key-4076", {13: str(zenoh_fragment.next_sn(ALIAS_SN, 1))})),
         ("the long-key alias scenarios dropped", [line for line in good if not line.startswith("links ok edge-alias-")]),
+        ("a connector announcing 512 at a batch of 89, its INIT_SYN bytes matching", edge_swap("edge-batch-89", 14, sha(init_syn_bytes(512)))),
+        ("a connector announcing 512 at a batch of 4096, its INIT_SYN bytes matching", edge_swap("edge-batch-4096", 14, sha(init_syn_bytes(512)))),
+        ("a connector announcing the default batch", edge_swap("edge-payload-256mib", 14, sha(init_syn_bytes(65535)))),
+        ("a connector whose INIT_SYN is the acceptor's INIT_ACK", edge_swap("edge-batch-89", 14, sha(init_ack_bytes(89)))),
+        ("an edge line without its connector INIT_SYN", [" ".join(line.split()[:14]) if line.startswith("links edge edge-batch-89 ") else line for line in good]),
+        ("a fixed edge connector announcing 2048 at a batch of 4096", fixed_swap("edge-fixed-batch-4096", 14, sha(init_syn_bytes(2048)))),
+        ("a fixed edge connector announcing 512 at a batch of 89", fixed_swap("edge-fixed-batch-89", 14, sha(init_syn_bytes(512)))),
+        ("a minimum connector announcing 512 at a batch of 89", minimum_swap("edge-minimum-fixed", 15, sha(init_syn_bytes(512)))),
+        ("a minimum connector with other bytes", minimum_swap("edge-minimum-heap", 15, sha(b"other"))),
         ("the minimum-configuration lines dropped", drop("links minimum ")),
         ("the fixed minimum configuration dropped", drop("links minimum edge-minimum-fixed ")),
         ("the heap minimum configuration dropped", drop("links minimum edge-minimum-heap ")),
