@@ -87,6 +87,8 @@ OK_SCENARIOS = (
     "edge-payload-256mib",
     "edge-fixed-batch-89",
     "edge-fixed-batch-4096",
+    "edge-minimum-fixed",
+    "edge-minimum-heap",
     "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
     "boundary-at-sequence-width-changes",
@@ -298,6 +300,14 @@ FIXED_EDGES = (
 )
 CHUNK = 1 << 20
 
+# The smallest configuration the contract admits: a one-byte key and a one-byte payload in the smallest
+# batch, one key, one subscriber and one sample, in each mode. The Put travels whole in one frame, as
+# nothing this small is fragmented. (name, mode).
+MINIMUM_EDGES = (("edge-minimum-fixed", "fixed"), ("edge-minimum-heap", "heap"))
+MINIMUM_BATCH = 89
+MINIMUM_KEY = "k"
+MINIMUM_PAYLOAD = 1
+
 
 def edge_config(batch: int, key: str, payload: int, mode: str = "heap") -> dict:
     c = dict(
@@ -377,6 +387,30 @@ def edge_lines() -> tuple[str, ...]:
         out.append(
             f"links edge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
             f"{len(digests)} {sha(chr(10).join(digests).encode())} {pattern_digest(payload)}"
+        )
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def minimum_lines() -> tuple[str, ...]:
+    """What a link must report for the smallest configuration the contract admits, in each mode."""
+    demo, large = pinned_configs()[:2]
+    out = []
+    for name, mode in MINIMUM_EDGES:
+        c = edge_config(MINIMUM_BATCH, MINIMUM_KEY, MINIMUM_PAYLOAD, mode)
+        if not contract_accepts(limits_record([demo, large, c])):
+            raise LinksError(f"the limits contract refuses the configuration of {name}")
+        handshake, declare, undeclare = edge_sizes(name, MINIMUM_BATCH, MINIMUM_KEY)
+        message = bytes(edge_message(MINIMUM_KEY, MINIMUM_PAYLOAD))
+        frame = zenoh_wire.frame(EDGE_SN, message)
+        if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > MINIMUM_BATCH:
+            raise LinksError(f"{name}: the Put does not travel whole in one frame")
+        decoded = zenoh_fragment.decode_message(message, max_key=len(MINIMUM_KEY), max_payload=MINIMUM_PAYLOAD, subscribed=MINIMUM_KEY)
+        if bytes(decoded["key"]) != MINIMUM_KEY.encode() or bytes(decoded["payload"]) != zenoh_fragment.payload_bytes(MINIMUM_PAYLOAD):
+            raise LinksError(f"{name}: the host reference does not read its own Put back")
+        out.append(
+            f"links minimum {name} {mode} {MINIMUM_BATCH} {len(MINIMUM_KEY)} {MINIMUM_PAYLOAD} "
+            f"{handshake} {declare} {undeclare} {len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(MINIMUM_PAYLOAD))}"
         )
     return tuple(out)
 
@@ -501,12 +535,31 @@ def deadline_line(timeout: int, first: int, middle: int, last: int, outcome: str
     return f"links deadline {timeout} {first} {middle} {last} {outcome} {digest}"
 
 
+# The contract accepts any positive timeout, so the link is probed at three: the pinned 5000 ms, a
+# shorter 250 ms and the shortest, 1 ms. A receiver that hard-codes one value expires too early or too
+# late at the others.
+TIMEOUTS = (TIMEOUT_MS, 250, 1)
+
+
+@lru_cache(maxsize=None)
+def check_timeout_configs() -> None:
+    demo, large = pinned_configs()[:2]
+    for timeout in TIMEOUTS:
+        c = edge_config(4096, "k" * 129, 5000)
+        c["reassemblyTimeoutMs"] = timeout
+        if not contract_accepts(limits_record([demo, large, c])):
+            raise LinksError(f"the limits contract refuses a heap configuration with a {timeout} ms timeout")
+
+
 def deadline_lines() -> list[str]:
-    edge, digest = DEADLINE_FIRST + TIMEOUT_MS, sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))
-    return [
-        deadline_line(TIMEOUT_MS, DEADLINE_FIRST, edge - 1, edge, "reassembled", digest),
-        deadline_line(TIMEOUT_MS, DEADLINE_FIRST, edge - 1, edge + 1, "reassembly-timeout", "-"),
-    ]
+    check_timeout_configs()
+    digest = sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))
+    out = []
+    for timeout in TIMEOUTS:
+        edge = DEADLINE_FIRST + timeout
+        out.append(deadline_line(timeout, DEADLINE_FIRST, edge - 1, edge, "reassembled", digest))
+        out.append(deadline_line(timeout, DEADLINE_FIRST, edge - 1, edge + 1, "reassembly-timeout", "-"))
+    return out
 
 
 def reuse_capacity() -> int:
@@ -567,8 +620,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 226
-PINNED_CONTROLS = 498
+PINNED_CASES = 234
+PINNED_CONTROLS = 516
 
 
 class LinksError(ValueError):
@@ -647,7 +700,9 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
-        if name.startswith("edge-fixed-"):
+        if name.startswith("edge-minimum-"):
+            lines.append(next(line for line in minimum_lines() if line.split()[2] == name))
+        elif name.startswith("edge-fixed-"):
             lines.append(next(line for line in fixed_edge_lines() if line.split()[2] == name))
         elif name.startswith("edge-"):
             lines.append(next(line for line in edge_lines() if line.split()[2] == name))
@@ -723,6 +778,7 @@ SHAPES = {
     ("links", "shortkey"): 5,
     ("links", "edge"): 12,
     ("links", "fixededge"): 12,
+    ("links", "minimum"): 13,
     ("links", "counts"): 9,
     ("links", "underfilled"): 7,
     ("links", "boundarysn"): 6,
@@ -801,6 +857,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    minimum = [" ".join(f) for f in only("minimum")]
+    if minimum != list(minimum_lines()):
+        raise LinksError(f"the smallest configuration the contract admits must open, declare and send in each mode: {list(minimum_lines())}, reported {minimum}")
 
     fixededges = [" ".join(f) for f in only("fixededge")]
     if fixededges != list(fixed_edge_lines()):
@@ -906,7 +966,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum)
     return positive, len(refused)
 
 
@@ -1091,6 +1151,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out[a], out[b] = out[b], out[a]
         return out
 
+    def minimum_swap(name: str, index: int, value: str) -> list[str]:
+        at = first(f"links minimum {name} ")
+        fields = good[at].split()
+        fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
     def fixed_swap(name: str, index: int, value: str) -> list[str]:
         at = first(f"links fixededge {name} ")
         fields = good[at].split()
@@ -1119,7 +1185,7 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         out, seen = [], 0
         for line in good:
             if line.startswith("links deadline "):
-                out.append((a, b)[seen])
+                out.append((a, b)[seen] if seen < 2 else line)
                 seen += 1
             else:
                 out.append(line)
@@ -1184,6 +1250,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("reassembly-one-ms-after-the-timeout admitted instead of refused", drop("links refused reassembly-one-ms-after-the-timeout ")),
         ("reassembly-one-ms-after-the-timeout refused with the wrong class", swap("links refused reassembly-one-ms-after-the-timeout ", "links refused reassembly-one-ms-after-the-timeout over-bound")),
         ("a dropped deadline line", drop("links deadline ")),
+        ("the 250 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 250 ")]),
+        ("the 1 ms deadline runs dropped", [line for line in good if not line.startswith("links deadline 1 ")]),
+        ("a link that hard-codes 5000 ms accepting the late 250 ms run", [deadline_line(250, DEADLINE_FIRST, DEADLINE_FIRST + 249, DEADLINE_FIRST + 251, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))) if line == deadline_lines()[3] else line for line in good]),
+        ("a link that expires the exact 250 ms run early", [deadline_line(250, DEADLINE_FIRST, DEADLINE_FIRST + 249, DEADLINE_FIRST + 250, "reassembly-timeout", "-") if line == deadline_lines()[2] else line for line in good]),
+        ("a link that hard-codes 5000 ms accepting the late 1 ms run", [deadline_line(1, DEADLINE_FIRST, DEADLINE_FIRST, DEADLINE_FIRST + 2, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))) if line == deadline_lines()[5] else line for line in good]),
+        ("a link that expires the exact 1 ms run early", [deadline_line(1, DEADLINE_FIRST, DEADLINE_FIRST, DEADLINE_FIRST + 1, "reassembly-timeout", "-") if line == deadline_lines()[4] else line for line in good]),
         ("the late deadline run dropped", [line for line in good if line != deadline_lines()[1]]),
         ("the deadline run at the edge dropped", [line for line in good if line != deadline_lines()[0]]),
         ("a deadline measured from time zero", with_deadline(deadline_line(TIMEOUT_MS, 0, TIMEOUT_MS - 1, TIMEOUT_MS, "reassembled", sha(zenoh_fragment.payload_bytes(DEADLINE_PAYLOAD))), deadline_lines()[1])),
@@ -1331,6 +1403,18 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("the 1 MiB payload reported as 16384", edge_swap("edge-payload-1mib", 5, "16384")),
         ("a 1 MiB send with another number of fragments", edge_swap("edge-payload-1mib", 9, str(int(good[first("links edge edge-payload-1mib ")].split()[9]) - 1))),
         ("a 1 MiB payload that reassembled differently", edge_swap("edge-payload-1mib", 11, sha(b"other"))),
+        ("the minimum-configuration lines dropped", drop("links minimum ")),
+        ("the fixed minimum configuration dropped", drop("links minimum edge-minimum-fixed ")),
+        ("the heap minimum configuration dropped", drop("links minimum edge-minimum-heap ")),
+        ("a fixed minimum link with a three-byte key", minimum_swap("edge-minimum-fixed", 5, "3")),
+        ("a heap minimum link with a twelve-byte payload", minimum_swap("edge-minimum-heap", 6, "12")),
+        ("a minimum link reported at a batch of 512", minimum_swap("edge-minimum-fixed", 4, "512")),
+        ("a minimum link reported in the other mode", minimum_swap("edge-minimum-fixed", 3, "heap")),
+        ("a minimum handshake reported one byte long", minimum_swap("edge-minimum-heap", 7, "88")),
+        ("a minimum declaration reported one byte short", minimum_swap("edge-minimum-fixed", 8, str(int(good[first("links minimum edge-minimum-fixed ")].split()[8]) - 1))),
+        ("a minimum frame with other bytes", minimum_swap("edge-minimum-heap", 11, sha(b"other"))),
+        ("a minimum payload that arrived differently", minimum_swap("edge-minimum-fixed", 12, sha(b"other"))),
+        ("the minimum-configuration scenarios dropped", [line for line in good if not line.startswith("links ok edge-minimum-")]),
         ("the fixed-edge lines dropped", drop("links fixededge ")),
         ("the fixed edge at the smallest batch dropped", drop("links fixededge edge-fixed-batch-89 ")),
         ("the fixed edge at the largest batch dropped", drop("links fixededge edge-fixed-batch-4096 ")),
