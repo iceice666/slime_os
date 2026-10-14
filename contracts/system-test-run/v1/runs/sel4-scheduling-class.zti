@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-scheduling-class";
-  imageClosureIdentity = "e38c3c746b70caa1f0bf0533529e6d520eca93a88b686407e0febfc58264f75a";
+  imageClosureIdentity = "354b1d65184d90db6b25f4e6bec548bf2bc978a0c8c2bfa4879553a30a376ae5";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
