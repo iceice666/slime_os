@@ -87,7 +87,7 @@ def attachment() -> bytes:
     return struct.pack("<qq", 0, 1000) + bytes([16]) + GID
 
 
-def message(size: int, header: int = 0x1D) -> bytes:
+def message(size: int, header: int = 0x1D, alias: int = 1) -> bytes:
     """The serialized network message the captures split: a PUSH with a Put, the alias form.
 
     Header 0x1d, scope 1 (the alias the stock peer declared), then the Put with the attachment
@@ -95,7 +95,7 @@ def message(size: int, header: int = 0x1D) -> bytes:
     att = attachment()
     return (
         bytes([header])
-        + zenoh_wire.leb128(1)
+        + zenoh_wire.leb128(alias)
         + bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])
         + zenoh_wire.leb128(len(att))
         + att

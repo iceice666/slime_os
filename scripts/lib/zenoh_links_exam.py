@@ -26,6 +26,7 @@ from pathlib import Path
 
 import zenoh_exchange
 import zenoh_fragment
+import zenoh_stock_peer
 import zenoh_wire
 import zutai_cli
 from harness import ROOT
@@ -89,6 +90,9 @@ OK_SCENARIOS = (
     "edge-fixed-batch-4096",
     "edge-minimum-fixed",
     "edge-minimum-heap",
+    "edge-alias-long-key-2028",
+    "edge-alias-long-key-4076",
+    "reassemble-single-final-fragment",
     "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
     "boundary-at-sequence-width-changes",
@@ -419,7 +423,7 @@ def minimum_lines() -> tuple[str, ...]:
         handshake, declare, undeclare = edge_sizes(name, MINIMUM_BATCH, MINIMUM_KEY)
         announced, ack_digest = handshake_announce(name, MINIMUM_BATCH)
         message = bytes(edge_message(MINIMUM_KEY, MINIMUM_PAYLOAD))
-        frame = zenoh_wire.frame(EDGE_SN, message)
+        frame = zenoh_wire.frame(FIXED_SN, message)
         if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > MINIMUM_BATCH:
             raise LinksError(f"{name}: the Put does not travel whole in one frame")
         decoded = zenoh_fragment.decode_message(message, max_key=len(MINIMUM_KEY), max_payload=MINIMUM_PAYLOAD, subscribed=MINIMUM_KEY)
@@ -446,15 +450,103 @@ def fixed_edge_lines() -> tuple[str, ...]:
         if payload != fixed_max_payload(batch, len(key)):
             raise LinksError(f"{name}: {payload} is not the largest payload a batch of {batch} holds with a {len(key)}-byte key")
         message = bytes(edge_message(key, payload))
-        frame = zenoh_wire.frame(EDGE_SN, message)
-        if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > batch:
-            raise LinksError(f"{name}: the Put does not travel whole in one frame")
+        frame = zenoh_wire.frame(FIXED_SN, message)
+        if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES != batch:
+            raise LinksError(f"{name}: the frame at the widest sequence number does not fill the batch exactly")
         decoded = zenoh_fragment.decode_message(message, max_key=len(key), subscribed=key)
         if bytes(decoded["key"]) != key.encode() or bytes(decoded["payload"]) != zenoh_fragment.payload_bytes(payload):
             raise LinksError(f"{name}: the host reference does not read its own Put back")
         out.append(
             f"links fixededge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
             f"{len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(payload))} {announced} {ack_digest}"
+        )
+    return tuple(out)
+
+
+# The widest sequence number, five bytes: a frame that fills a batch only at that width is built, so a
+# sender or a buffer that fails only there is caught. The frame is pinned by its sha256.
+FIXED_SN = 0xFFFFFFFF
+
+
+def fixed_edge_frame(batch: int, key: str, payload: int, sn: int) -> bytes:
+    return zenoh_wire.frame(sn, bytes(edge_message(key, payload)))
+
+
+def minimum_frame(sn: int) -> bytes:
+    return zenoh_wire.frame(sn, bytes(edge_message(MINIMUM_KEY, MINIMUM_PAYLOAD)))
+
+
+# A peer may flush a complete Put as one reliable FRAGMENT with the more flag clear, so a run can be a
+# single body. Every other run has two or more, and a receiver that insists the first fragment says
+# "more" follows would fail only here. The next expected sequence number advances by one, also at the
+# wrap.
+SINGLE_SNS = (1000, 0xFFFFFFFF)
+SINGLE_PAYLOAD = 100
+
+
+@lru_cache(maxsize=None)
+def single_lines() -> tuple[str, ...]:
+    message = full_key_message(SINGLE_PAYLOAD)
+    out = []
+    for sn in SINGLE_SNS:
+        bodies = zenoh_fragment.reference_split(message, 2048, sn)
+        if len(bodies) != 1 or bodies[0][0] & zenoh_fragment.FLAG_M:
+            raise LinksError("a complete Put must be one fragment with the more flag clear")
+        if zenoh_fragment.reassemble(bodies, sn, 2048) != message:
+            raise LinksError("the host reference does not reassemble a single final fragment")
+        after = zenoh_fragment.next_sn(sn, 1)
+        out.append(f"links single {sn} {len(bodies[0])} {sha(bodies[0])} {after} {sha(message)}")
+    return tuple(out)
+
+
+# An admitted long key is also declared as a key-expression alias and addressed through it, because the
+# contract budgets every key slot at `keyBytes`, not only the subscriber's. (name, batch, key length,
+# alias id): the alias id has bit 15 set at the larger batch.
+ALIAS_EDGES = (
+    ("edge-alias-long-key-2028", 2048, 2028, 1),
+    ("edge-alias-long-key-4076", 4096, 4076, 0x8000),
+)
+ALIAS_PAYLOAD = 5000
+
+
+def declare_keyexpr(alias: int, key: str) -> bytes:
+    """DECLARE of a key-expression alias in the form that names its key in full: the DECLARE id, the
+    DeclareKeyExpr id with the named flag, the alias id, scope 0 and the key behind its length."""
+    return (
+        bytes([zenoh_wire.ID_DECLARE, zenoh_wire.FLAG_N])
+        + zenoh_wire.leb128(alias)
+        + zenoh_wire.leb128(0)
+        + zenoh_wire.prefixed(key.encode())
+    )
+
+
+@lru_cache(maxsize=None)
+def alias_long_lines() -> tuple[str, ...]:
+    """What a link must report for a long key declared as an alias and addressed by a sender-mapped
+    fragmented Put. The encoder is first shown to write the bytes the stock peer wrote."""
+    demo, large = pinned_configs()[:2]
+    capture = bytes.fromhex(dict(zenoh_stock_peer.CONNECTS)["connects-04-declare-keyexpr-declare-subscriber"])
+    at = capture.index(bytes([0x9E, 0x21, 0x08]))
+    mine = declare_keyexpr(1, key())
+    if capture[at + 3 : at + 3 + len(mine) - 1] != mine[1:]:
+        raise LinksError("the DeclareKeyExpr encoder does not write the bytes the stock peer wrote")
+    out = []
+    for name, batch, length, alias in ALIAS_EDGES:
+        key_text = "k" * length
+        if not contract_accepts(limits_record([demo, large, edge_config(batch, key_text, ALIAS_PAYLOAD)])):
+            raise LinksError(f"the limits contract refuses the configuration of {name}")
+        declaration = zenoh_wire.frame(FIXED_SN, declare_keyexpr(alias, key_text))
+        if len(declaration) + zenoh_fragment.STREAM_LENGTH_BYTES > batch:
+            raise LinksError(f"{name}: the declaration does not fit its batch")
+        message = zenoh_fragment.message(ALIAS_PAYLOAD, 0x5D, alias)
+        digests: list[str] = []
+        joined = zenoh_fragment.reassemble(list(tapped_bodies(message, batch, digests)), EDGE_SN, batch)
+        decoded = zenoh_fragment.decode_message(joined, alias=alias, alias_key=key_text, subscribed=key_text)
+        if joined != message or decoded["scope"] != alias or bytes(decoded["payload"]) != zenoh_fragment.payload_bytes(ALIAS_PAYLOAD):
+            raise LinksError(f"{name}: the host reference does not resolve its own Put through the alias")
+        out.append(
+            f"links aliaslong {name} {batch} {length} {alias} {len(declaration)} {sha(declaration)} "
+            f"{len(digests)} {sha(chr(10).join(digests).encode())} {sha(message)}"
         )
     return tuple(out)
 
@@ -640,8 +732,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 234
-PINNED_CONTROLS = 531
+PINNED_CASES = 241
+PINNED_CONTROLS = 557
 
 
 class LinksError(ValueError):
@@ -720,12 +812,16 @@ def good_lines() -> list[str]:
                 f"links fullkey {index} {len(body)} {body[0]:02x} {sha(body)}"
                 for index, body in enumerate(full_key_bodies())
             ]
-        if name.startswith("edge-minimum-"):
+        if name.startswith("edge-alias-"):
+            lines.append(next(line for line in alias_long_lines() if line.split()[2] == name))
+        elif name.startswith("edge-minimum-"):
             lines.append(next(line for line in minimum_lines() if line.split()[2] == name))
         elif name.startswith("edge-fixed-"):
             lines.append(next(line for line in fixed_edge_lines() if line.split()[2] == name))
         elif name.startswith("edge-"):
             lines.append(next(line for line in edge_lines() if line.split()[2] == name))
+        if name == "reassemble-single-final-fragment":
+            lines += list(single_lines())
         if name == "reassemble-underfilled-interior":
             lines += list(underfilled_lines())
         if name == "nine-keys-subscribers-and-samples":
@@ -799,6 +895,8 @@ SHAPES = {
     ("links", "edge"): 14,
     ("links", "fixededge"): 14,
     ("links", "minimum"): 15,
+    ("links", "aliaslong"): 11,
+    ("links", "single"): 7,
     ("links", "counts"): 9,
     ("links", "underfilled"): 7,
     ("links", "boundarysn"): 6,
@@ -877,6 +975,14 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    aliaslong = [" ".join(f) for f in only("aliaslong")]
+    if aliaslong != list(alias_long_lines()):
+        raise LinksError(f"a long key must be declared as an alias and resolve a sender-mapped fragmented Put: {list(alias_long_lines())}, reported {aliaslong}")
+
+    single = [" ".join(f) for f in only("single")]
+    if single != list(single_lines()):
+        raise LinksError(f"a complete Put in a single final fragment must reassemble and advance the sequence by one: {list(single_lines())}, reported {single}")
 
     minimum = [" ".join(f) for f in only("minimum")]
     if minimum != list(minimum_lines()):
@@ -986,7 +1092,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single)
     return positive, len(refused)
 
 
@@ -1480,6 +1586,32 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a fixed edge handshake announcing 512 at a batch of 89", fixed_swap("edge-fixed-batch-89", 12, "512")),
         ("a minimum handshake announcing 512 at a batch of 89, its bytes matching", line_set("minimum", "edge-minimum-fixed", {13: "512", 14: sha(init_ack_bytes(512))})),
         ("a minimum handshake announcing the batch with other bytes", minimum_swap("edge-minimum-heap", 14, sha(b"other"))),
+        ("a fixed edge frame built at a two-byte sequence number, batch 4096", line_set("fixededge", "edge-fixed-batch-4096", {9: str(len(fixed_edge_frame(*FIXED_EDGES[1][1:], EDGE_SN))), 10: sha(fixed_edge_frame(*FIXED_EDGES[1][1:], EDGE_SN))})),
+        ("a fixed edge frame built at a two-byte sequence number, batch 89", line_set("fixededge", "edge-fixed-batch-89", {9: str(len(fixed_edge_frame(*FIXED_EDGES[0][1:], EDGE_SN))), 10: sha(fixed_edge_frame(*FIXED_EDGES[0][1:], EDGE_SN))})),
+        ("a fixed edge frame reported at 4093 bytes", fixed_swap("edge-fixed-batch-4096", 9, "4093")),
+        ("a minimum frame built at a two-byte sequence number", line_set("minimum", "edge-minimum-fixed", {10: str(len(minimum_frame(EDGE_SN))), 11: sha(minimum_frame(EDGE_SN))})),
+        ("the single-final-fragment lines dropped", drop("links single ")),
+        ("the single final fragment at 1000 dropped", drop("links single 1000 ")),
+        ("the single final fragment at the wrap dropped", drop("links single 4294967295 ")),
+        ("a single final fragment that did not advance the sequence", line_set("single", "1000", {5: "1000"})),
+        ("a single final fragment whose sequence did not wrap", line_set("single", "4294967295", {5: "4294967296"})),
+        ("a single final fragment that advanced by two", line_set("single", "1000", {5: "1002"})),
+        ("a single final fragment taken with the more flag set", line_set("single", "1000", {4: sha(bytes([int(zenoh_fragment.reference_split(full_key_message(SINGLE_PAYLOAD), 2048, 1000)[0][0]) | zenoh_fragment.FLAG_M]) + zenoh_fragment.reference_split(full_key_message(SINGLE_PAYLOAD), 2048, 1000)[0][1:])})),
+        ("a single final fragment that reassembled to another message", line_set("single", "1000", {6: sha(b"other")})),
+        ("the single-final-fragment scenario dropped", [line for line in good if line != "links ok reassemble-single-final-fragment"]),
+        ("the long-key alias lines dropped", drop("links aliaslong ")),
+        ("the 2028-byte alias dropped", drop("links aliaslong edge-alias-long-key-2028 ")),
+        ("the 4076-byte alias dropped", drop("links aliaslong edge-alias-long-key-4076 ")),
+        ("a long-key alias cut to 129 bytes", line_set("aliaslong", "edge-alias-long-key-2028", {4: "129"})),
+        ("a 4076-byte alias cut to 129 bytes", line_set("aliaslong", "edge-alias-long-key-4076", {4: "129"})),
+        ("alias 0x8000 reported as alias 1", line_set("aliaslong", "edge-alias-long-key-4076", {5: "1"})),
+        ("alias 0x8000 stored in 15 bits", line_set("aliaslong", "edge-alias-long-key-4076", {5: "32767"})),
+        ("an alias declaration reported one byte short", line_set("aliaslong", "edge-alias-long-key-2028", {6: str(int(alias_long_lines()[0].split()[6]) - 1)})),
+        ("an alias declaration with other bytes", line_set("aliaslong", "edge-alias-long-key-4076", {7: sha(b"other")})),
+        ("an alias Put with another number of fragments", line_set("aliaslong", "edge-alias-long-key-2028", {8: "9"})),
+        ("an alias Put with other fragment bodies", line_set("aliaslong", "edge-alias-long-key-4076", {9: sha(b"other")})),
+        ("an alias Put that resolved to another message", line_set("aliaslong", "edge-alias-long-key-2028", {10: sha(b"other")})),
+        ("the long-key alias scenarios dropped", [line for line in good if not line.startswith("links ok edge-alias-")]),
         ("the minimum-configuration lines dropped", drop("links minimum ")),
         ("the fixed minimum configuration dropped", drop("links minimum edge-minimum-fixed ")),
         ("the heap minimum configuration dropped", drop("links minimum edge-minimum-heap ")),
@@ -2009,6 +2141,10 @@ def reference_controls() -> int:
     uneven = zenoh_fragment.reference_split_uneven(zenoh_fragment.message(size), batch, sn, (1000, 1))
     if zenoh_fragment.reassemble(uneven, sn, batch) != zenoh_fragment.message(size):
         raise LinksError("control: a run with short interior fragments was not taken")
+    # A complete Put in one fragment with the more flag clear is taken.
+    lone = zenoh_fragment.reference_split(zenoh_fragment.message(100), batch, sn)
+    if len(lone) != 1 or zenoh_fragment.reassemble(lone, sn, batch) != zenoh_fragment.message(100):
+        raise LinksError("control: a complete Put in a single final fragment was not taken")
     # A valid key shorter than the maximum and an alias with bit 15 set are read, so none of the key and
     # alias refusals is a blanket one.
     short_run = zenoh_fragment.reference_split(zenoh_fragment.full_key_for_exam(5000, SHORT_KEY), 2048, sn)
