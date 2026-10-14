@@ -95,12 +95,20 @@ maxKeyLengthBytes :: Int = 65535;
 -- slice length to `u32`, so a payload longer than this can be neither encoded nor decoded.
 maxPayloadLengthBytes :: Int = 4294967295;
 
--- The bytes a PUSH and a Put add around their key, attachment and payload, and the frame header
--- before them: the frame header and a five-byte sequence number, the push header, the scope, a
--- two-byte key length, the Put header, the attachment extension and its length, and a two-byte
--- payload length. The host reference encoder is what proves this figure; the contract holds it
--- with a margin.
-framingBytes :: Int = 32;
+-- What a full-key Put adds around its key, attachment and payload, besides the widths of the key's
+-- and the payload's lengths: the PUSH header, the scope, the Put header, the attachment extension tag
+-- and the attachment's one-byte length, five bytes in all. The host reference encoder proves it.
+messageFixedBytes :: Int = 5;
+
+-- What a FRAME adds before the message it carries: its header byte and a sequence number of up to
+-- five bytes.
+frameFixedBytes :: Int = 6;
+
+-- The contract's integers are 63-bit and it multiplies a sample count by the notices per sample and by
+-- a message or a payload of up to 2^32 bytes. At this count the largest such product, 2000000000
+-- notices of 2^32 bytes, is 8.6e18 and stays under 9.2e18, so every total is computed only for a count
+-- that cannot overflow it, and a count past it is refused and not evaluated.
+maxOutstandingSamples :: Int = 1000000000;
 
 -- What a fragment adds around its slice of a message: the header byte and a sequence number of at
 -- most five bytes, with a margin. Observed: a stock peer with a 2048-byte batch sent fragments of
@@ -163,18 +171,19 @@ closedLimits :: Data -> Bool
 count :: List Config -> Int
   = items => match items { | {;} => 0; | { _; ...rest } => 1 + count rest; };
 
--- The whole serialized message a Put becomes: payload, key, attachment and framing.
-messageBytes :: Config -> Int
-  = c => c.payloadBytes + c.keyBytes + c.attachmentBytes + framingBytes;
+-- The width of a variable-length integer, one to five bytes.
+lebBytes :: Int -> Int
+  = n => if n < 128 then 1 else (if n < 16384 then 2 else (if n < 2097152 then 3 else (if n < 268435456 then 4 else 5)));
 
--- The width of a variable-length integer.
-declarationLengthBytes :: Int -> Int
-  = n => if n < 128 then 1 else (if n < 16384 then 2 else 3);
+-- The whole serialized message a Put becomes: payload, key and attachment, the fixed bytes around
+-- them and the widths of the key's and the payload's lengths.
+messageBytes :: Config -> Int
+  = c => c.payloadBytes + c.keyBytes + c.attachmentBytes + messageFixedBytes + lebBytes c.keyBytes + lebBytes c.payloadBytes;
 
 -- The bytes a key declaration takes on the wire, stream length included: the key, the fixed bytes
 -- around it and the width of the length of its two-byte-longer extension body.
 declarationBytes :: Config -> Int
-  = c => c.keyBytes + declarationFixedBytes + declarationLengthBytes (c.keyBytes + 2);
+  = c => c.keyBytes + declarationFixedBytes + lebBytes (c.keyBytes + 2);
 
 -- The key and subscriber slots a configuration declares.
 slotBytes :: Config -> Int
@@ -198,12 +207,12 @@ commonOk :: Config -> Bool
     && c.attachmentBytes == requiredAttachmentBytes
     && c.maxKeys >= 1 && c.maxKeys <= aliasIds
     && c.maxSubscribers >= 1 && c.maxSubscribers <= c.maxKeys
-    && c.outstandingSamples >= 1
+    && c.outstandingSamples >= 1 && c.outstandingSamples <= maxOutstandingSamples
     && c.stackBytes >= requiredStack c;
 
 -- No heap: the message is one batch, so there is nothing to reassemble.
 fixedOk :: Config -> Bool
-  = c => messageBytes c <= c.batchBytes - streamLengthBytes
+  = c => messageBytes c + frameFixedBytes <= c.batchBytes - streamLengthBytes
     && c.reassemblyTimeoutMs == 0 && c.heapBytes == 0;
 
 -- The heap a heap link needs: a sample is handed out as a slice of the buffer it was reassembled
@@ -274,13 +283,15 @@ decodeLimits :: Data -> Validation DecodeIssue Limits
   streamLengthBytes =;
   handshakeBytes =;
   declarationFixedBytes =;
-  declarationLengthBytes =;
+  lebBytes =;
   declarationBytes =;
   aliasIds =;
   requiredAttachmentBytes =;
   maxKeyLengthBytes =;
   maxPayloadLengthBytes =;
-  framingBytes =;
+  messageFixedBytes =;
+  frameFixedBytes =;
+  maxOutstandingSamples =;
   fragmentFramingBytes =;
   stackFactor =;
   slotOverheadBytes =;

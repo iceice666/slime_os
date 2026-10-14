@@ -1,7 +1,7 @@
 # Zenoh Profile 0 links declared by a named configuration
 
 **Status:** Proposed
-**Related work items:** `01a13891-98f0-7106-9cfe-14be61d5e3bd` (this decision's exam and
+**Related work items:** `01a138b1-d03e-7c79-90a0-1824a0dd5298` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer item
 `01a12f13-a343-7924-af20-18148fc1b0d9` (merged), whose exam this one extends.
 
@@ -64,7 +64,7 @@ declaration before a link is built from it.
    states what a configuration may declare and checks the declaration is consistent with the memory it
    also declares. The limits it keeps each have a source: a batch, which includes its two-byte length, must fit the
    4096 bytes the network service moves in one operation (`DATA_BYTES`) and hold the 89 bytes of the largest handshake message, which cannot be fragmented, and the key declaration, the key plus 18 bytes and the width of its length field, because a declaration is sent whole in one frame; a key count is at most 65535
-   because the alias id is 16 bits, and a key is at most 65535 bytes because its length is a 16-bit field, and a payload is at most 4294967295 bytes because its length is 32 bits; the stack must cover the link's arrays, its key and subscriber slots
+   because the alias id is 16 bits, and a key is at most 65535 bytes because its length is a 16-bit field, and a payload is at most 4294967295 bytes because its length is 32 bits; a sample count is at most 1000000000, the count past which the contract's own arithmetic would overflow; the stack must cover the link's arrays, its key and subscriber slots
    and its queued sample notices; the heap must hold every queued sample notice (two per outstanding sample) and the message being reassembled, because a sample is handed out as a slice of the buffer it was reassembled into. It sets no ceiling on keys,
    subscribers, samples, payload or heap.
 5. **The corpus row may go.** Once the decoder reads a `FRAGMENT` the row cannot stay refused, and it
@@ -83,7 +83,7 @@ The three pinned configurations:
 | key / attachment | 129 / 33 | 129 / 33 | 129 / 33 |
 | keys / subscribers / samples | 1 / 1 / 4 | 4 / 4 / 4 | 4 / 4 / 4 |
 | stack | 16384 | 32768 | 32768 |
-| reassembly timeout / heap | 0 / 0 | 0 / 0 | 5000 ms / 149202 |
+| reassembly timeout / heap | 0 / 0 | 0 / 0 | 5000 ms / 149004 |
 
 `large` and `heap` are examples of what the contract admits. Their numbers are mine and no workload backs
 them; the exam pins them so the host tests have something exact to build, and changing one means

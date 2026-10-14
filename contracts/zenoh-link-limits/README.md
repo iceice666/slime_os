@@ -20,9 +20,10 @@ memory it also declares. The limits it keeps each have a source:
   (`ExprId` is `u16` in `zenoh-protocol` 1.0.0);
 - a key is at most 65535 bytes, because its length travels as a 16-bit field in the profile, and a
   payload at most 4294967295 bytes, because its length is a 32-bit field;
+- a sample count is at most 1000000000, the count past which the contract's own 63-bit arithmetic would overflow;
 - the stack must cover the link's arrays, its key and subscriber slots and its queued sample notices.
   That is arithmetic from the code's own arrays, not a measured high-water mark;
-- in `fixed` mode the whole message (payload, key, attachment and framing) must fit one batch less its two-byte stream length and
+- in `fixed` mode the whole message (payload, key, attachment, and the tags and lengths around them), with its frame header and sequence number, must fit one batch less its two-byte stream length and
   there is no reassembly timeout or heap; in `heap` mode the heap must hold every queued sample notice, two per outstanding sample, and the message being reassembled, the
   timeout is positive, and the batch must be larger than a fragment's own framing.
 
@@ -31,6 +32,6 @@ The names `demo`, `large` and `heap` are the three configurations the exam pins;
 accepts any set of one or more distinctly named configurations that satisfy the rules.
 
 The decision is [`docs/decisions/zenoh-link-limits.md`](../../docs/decisions/zenoh-link-limits.md); the
-scope is `01a13891-98f0-7106-9cfe-14be61d5e3bd`, judged by
+scope is `01a138b1-d03e-7c79-90a0-1824a0dd5298`, judged by
 `scripts/check/check-zenoh-profile0.py --slice links`. The Rust side is the implementation's, not this
 planning contract.

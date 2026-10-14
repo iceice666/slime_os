@@ -40,7 +40,7 @@ CONFIG_FIELDS = (
 CONFIGS = (
     ("demo", "fixed", 512, 12, 129, 33, 1, 1, 4, 16384, 0, 0),
     ("large", "fixed", 2048, 1024, 129, 33, 4, 4, 4, 32768, 0, 0),
-    ("heap", "heap", 2048, 16384, 129, 33, 4, 4, 4, 32768, 5000, 149202),
+    ("heap", "heap", 2048, 16384, 129, 33, 4, 4, 4, 32768, 5000, 149004),
 )
 
 # The edge scenarios: our own first frame on the link carries this sequence number, and the Put
@@ -295,8 +295,8 @@ EDGES = (
 # fragmented: the smallest batch, with the largest message the contract lets it hold, and the largest
 # batch, with a key of 1000 bytes, far past the demo's 129. (name, batch, key, payload).
 FIXED_EDGES = (
-    ("edge-fixed-batch-89", 89, "k" * 10, 12),
-    ("edge-fixed-batch-4096", 4096, "k" * 1000, 3029),
+    ("edge-fixed-batch-89", 89, "k" * 10, 31),
+    ("edge-fixed-batch-4096", 4096, "k" * 1000, 3046),
 )
 CHUNK = 1 << 20
 
@@ -351,6 +351,21 @@ def tapped_bodies(message, batch: int, digests: list[str]):
         yield body
 
 
+def init_ack_bytes(batch: int) -> bytes:
+    """The longest INIT_ACK the profile permits, announcing `batch`."""
+    return zenoh_wire.init(bytes(range(1, 17)), batch=batch, cookie=bytes(range(1, 65)))
+
+
+def handshake_announce(name: str, batch: int) -> tuple[int, str]:
+    """The batch the INIT_ACK announces, decoded from its bytes, and the sha256 of those bytes. The
+    length alone is the same 87 bytes for every non-default batch, so it cannot tell them apart."""
+    ack = init_ack_bytes(batch)
+    announced = int.from_bytes(ack[20:22], "little")
+    if announced != batch:
+        raise LinksError(f"{name}: the handshake announces {announced} and not the batch {batch}")
+    return announced, sha(ack)
+
+
 def edge_sizes(name: str, batch: int, key: str) -> tuple[int, int, int]:
     """The longest handshake message and the declaration and undeclaration of `key`, stream length
     included, each of which must fit one batch because none can be fragmented."""
@@ -373,6 +388,7 @@ def edge_lines() -> tuple[str, ...]:
         if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload)])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
         handshake, declare, undeclare = edge_sizes(name, batch, key)
+        announced, ack_digest = handshake_announce(name, batch)
         message = edge_message(key, payload)
         digests: list[str] = []
         joined = hashlib.sha256()
@@ -386,7 +402,7 @@ def edge_lines() -> tuple[str, ...]:
         del decoded, message
         out.append(
             f"links edge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
-            f"{len(digests)} {sha(chr(10).join(digests).encode())} {pattern_digest(payload)}"
+            f"{len(digests)} {sha(chr(10).join(digests).encode())} {pattern_digest(payload)} {announced} {ack_digest}"
         )
     return tuple(out)
 
@@ -401,6 +417,7 @@ def minimum_lines() -> tuple[str, ...]:
         if not contract_accepts(limits_record([demo, large, c])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
         handshake, declare, undeclare = edge_sizes(name, MINIMUM_BATCH, MINIMUM_KEY)
+        announced, ack_digest = handshake_announce(name, MINIMUM_BATCH)
         message = bytes(edge_message(MINIMUM_KEY, MINIMUM_PAYLOAD))
         frame = zenoh_wire.frame(EDGE_SN, message)
         if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > MINIMUM_BATCH:
@@ -410,7 +427,7 @@ def minimum_lines() -> tuple[str, ...]:
             raise LinksError(f"{name}: the host reference does not read its own Put back")
         out.append(
             f"links minimum {name} {mode} {MINIMUM_BATCH} {len(MINIMUM_KEY)} {MINIMUM_PAYLOAD} "
-            f"{handshake} {declare} {undeclare} {len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(MINIMUM_PAYLOAD))}"
+            f"{handshake} {declare} {undeclare} {len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(MINIMUM_PAYLOAD))} {announced} {ack_digest}"
         )
     return tuple(out)
 
@@ -425,6 +442,9 @@ def fixed_edge_lines() -> tuple[str, ...]:
         if not contract_accepts(limits_record([demo, large, edge_config(batch, key, payload, "fixed")])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
         handshake, declare, undeclare = edge_sizes(name, batch, key)
+        announced, ack_digest = handshake_announce(name, batch)
+        if payload != fixed_max_payload(batch, len(key)):
+            raise LinksError(f"{name}: {payload} is not the largest payload a batch of {batch} holds with a {len(key)}-byte key")
         message = bytes(edge_message(key, payload))
         frame = zenoh_wire.frame(EDGE_SN, message)
         if len(frame) + zenoh_fragment.STREAM_LENGTH_BYTES > batch:
@@ -434,7 +454,7 @@ def fixed_edge_lines() -> tuple[str, ...]:
             raise LinksError(f"{name}: the host reference does not read its own Put back")
         out.append(
             f"links fixededge {name} {batch} {len(key)} {payload} {handshake} {declare} {undeclare} "
-            f"{len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(payload))}"
+            f"{len(frame)} {sha(frame)} {sha(zenoh_fragment.payload_bytes(payload))} {announced} {ack_digest}"
         )
     return tuple(out)
 
@@ -563,7 +583,7 @@ def deadline_lines() -> list[str]:
 
 
 def reuse_capacity() -> int:
-    return REUSE_SIZE + 129 + 33 + FRAMING
+    return message_size(REUSE_SIZE, 129)
 
 
 # The heap configuration queues two notices for each outstanding sample and every one holds a whole
@@ -621,7 +641,7 @@ def drained_digest() -> str:
 
 
 PINNED_CASES = 234
-PINNED_CONTROLS = 516
+PINNED_CONTROLS = 531
 
 
 class LinksError(ValueError):
@@ -776,9 +796,9 @@ SHAPES = {
     ("links", "deadline"): 8,
     ("links", "subid"): 7,
     ("links", "shortkey"): 5,
-    ("links", "edge"): 12,
-    ("links", "fixededge"): 12,
-    ("links", "minimum"): 13,
+    ("links", "edge"): 14,
+    ("links", "fixededge"): 14,
+    ("links", "minimum"): 15,
     ("links", "counts"): 9,
     ("links", "underfilled"): 7,
     ("links", "boundarysn"): 6,
@@ -1009,7 +1029,8 @@ def contract_accepts(text: str) -> bool:
 
 
 # The arithmetic the contract also holds; kept here so a control can sit exactly on a boundary.
-FRAMING, FRAGMENT_FRAMING, STACK_FACTOR, SLOT, NOTICE, NOTICES, SESSION = 32, 8, 8, 16, 40, 2, 640
+FRAGMENT_FRAMING, STACK_FACTOR, SLOT, NOTICE, NOTICES, SESSION = 8, 8, 16, 40, 2, 640
+MESSAGE_FIXED, FRAME_FIXED = 5, 6
 STREAM = 2
 
 
@@ -1019,8 +1040,38 @@ def required_stack(c: dict) -> int:
     return STACK_FACTOR * c["batchBytes"] + SESSION + slots + NOTICES * c["outstandingSamples"] * (NOTICE + payload)
 
 
+def leb_size(value: int) -> int:
+    return len(zenoh_wire.leb128(value))
+
+
+def message_size(payload: int, key: int, attachment: int = 33) -> int:
+    """The serialized full-key Put: its parts, five fixed bytes and the widths of the two lengths."""
+    return payload + key + attachment + MESSAGE_FIXED + leb_size(key) + leb_size(payload)
+
+
+def fixed_need(payload: int, key: int) -> int:
+    """What a fixed link needs of its batch: the message, a frame header and a five-byte sequence
+    number, and the two-byte stream length."""
+    return message_size(payload, key) + FRAME_FIXED + STREAM
+
+
+def fixed_max_payload(batch: int, key: int) -> int:
+    payload = batch
+    while fixed_need(payload, key) > batch:
+        payload -= 1
+    return payload
+
+
+def message_fills(batch: int, key: int) -> int:
+    """The largest payload whose message alone fits `batch`."""
+    payload = batch
+    while message_size(payload, key) > batch:
+        payload -= 1
+    return payload
+
+
 def message_bytes(c: dict) -> int:
-    return c["payloadBytes"] + c["keyBytes"] + c["attachmentBytes"] + FRAMING
+    return message_size(c["payloadBytes"], c["keyBytes"], c["attachmentBytes"])
 
 
 def heap_needed(c: dict) -> int:
@@ -1060,9 +1111,13 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("more keys than the exact stack covers", trio(large=dict(exact(large), maxKeys=8, maxSubscribers=4)), False),
         ("a longer key than the exact stack covers", trio(large=dict(exact(large), keyBytes=200)), False),
         ("demo with one byte too little stack", trio(demo=dict(demo, stackBytes=required_stack(demo) - 1)), False),
-        ("a fixed payload that fits its batch less the stream length exactly", trio(large=exact(large, payloadBytes=2048 - STREAM - 129 - 33 - FRAMING)), True),
-        ("a fixed payload one byte over its batch less the stream length", trio(large=exact(large, payloadBytes=2048 - STREAM - 129 - 33 - FRAMING + 1)), False),
-        ("a fixed payload that fills the whole batch, the stream length not reserved", trio(large=exact(large, payloadBytes=2048 - 129 - 33 - FRAMING)), False),
+        ("a fixed payload whose frame fills the batch exactly", trio(large=exact(large, payloadBytes=fixed_max_payload(2048, 129))), True),
+        ("a fixed payload one byte over what the frame holds", trio(large=exact(large, payloadBytes=fixed_max_payload(2048, 129) + 1)), False),
+        ("a fixed payload whose message fills the batch, the frame and stream length not reserved", trio(large=exact(large, payloadBytes=message_fills(2048, 129))), False),
+        ("a fixed payload whose message and stream length fill the batch, the frame not reserved", trio(large=exact(large, payloadBytes=message_fills(2048 - STREAM, 129))), False),
+        ("a fixed payload of 127 bytes, whose length is one byte, in the batch that holds it exactly", trio(large=exact(large, batchBytes=fixed_need(127, 129), payloadBytes=127)), True),
+        ("a fixed payload of 128 bytes in a batch one byte short of it", trio(large=exact(large, batchBytes=fixed_need(128, 129) - 1, payloadBytes=128)), False),
+        ("a fixed payload of 128 bytes, whose length takes two bytes, in the batch that holds it exactly", trio(large=exact(large, batchBytes=fixed_need(128, 129), payloadBytes=128)), True),
         ("a fixed link with a reassembly timeout", trio(large=dict(large, reassemblyTimeoutMs=1000)), False),
         ("a fixed link with a heap", trio(large=dict(large, heapBytes=1)), False),
         ("a heap link with a timeout of 0", trio(heap=dict(heap, reassemblyTimeoutMs=0)), False),
@@ -1101,6 +1156,12 @@ def limits_cases() -> list[tuple[str, list[dict], bool]]:
         ("a 65536-byte key with the stack and heap it needs", trio(heap=exact(heap, keyBytes=65536, heapBytes=heap_needed(dict(heap, keyBytes=65536)))), False),
         ("a payload of 4294967295 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967295, heapBytes=heap_needed(dict(heap, payloadBytes=4294967295)))), True),
         ("a payload of 4294967296 bytes with the stack and heap it needs", trio(heap=exact(heap, payloadBytes=4294967296, heapBytes=heap_needed(dict(heap, payloadBytes=4294967296)))), False),
+        ("a heap link at the largest sample count the contract's arithmetic holds", trio(heap=exact(heap, outstandingSamples=10**9, heapBytes=heap_needed(dict(heap, outstandingSamples=10**9)))), True),
+        ("a heap link one sample past it", trio(heap=exact(heap, outstandingSamples=10**9 + 1, heapBytes=heap_needed(dict(heap, outstandingSamples=10**9 + 1)))), False),
+        ("a fixed link at the largest sample count", trio(large=exact(large, outstandingSamples=10**9)), True),
+        ("a fixed link one sample past it", trio(large=exact(large, outstandingSamples=10**9 + 1)), False),
+        ("a sample count of 2^62 with the largest storage the contract can hold", trio(heap=dict(heap, outstandingSamples=2**62, stackBytes=2**63 - 1, heapBytes=2**63 - 1)), False),
+        ("the largest integer as a sample count", trio(heap=dict(heap, outstandingSamples=2**63 - 1, stackBytes=2**63 - 1, heapBytes=2**63 - 1)), False),
         ("no keys", trio(large=dict(large, maxKeys=0)), False),
         ("one key and one subscriber", trio(large=exact(large, maxKeys=1, maxSubscribers=1)), True),
         ("no subscribers", trio(large=dict(large, maxSubscribers=0)), False),
@@ -1173,6 +1234,13 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         at = first("links counts ")
         fields = good[at].split()
         fields[index] = value
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    def line_set(kind: str, name: str, updates: dict) -> list[str]:
+        at = first(f"links {kind} {name} ")
+        fields = good[at].split()
+        for index, value in updates.items():
+            fields[index] = value
         return good[:at] + [" ".join(fields)] + good[at + 1 :]
 
     def edge_swap(name: str, index: int, value: str) -> list[str]:
@@ -1403,6 +1471,15 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("the 1 MiB payload reported as 16384", edge_swap("edge-payload-1mib", 5, "16384")),
         ("a 1 MiB send with another number of fragments", edge_swap("edge-payload-1mib", 9, str(int(good[first("links edge edge-payload-1mib ")].split()[9]) - 1))),
         ("a 1 MiB payload that reassembled differently", edge_swap("edge-payload-1mib", 11, sha(b"other"))),
+        ("an edge handshake announcing 512 at a batch of 89", edge_swap("edge-batch-89", 12, "512")),
+        ("an edge handshake announcing 512 at a batch of 89, its bytes matching", line_set("edge", "edge-batch-89", {12: "512", 13: sha(init_ack_bytes(512))})),
+        ("an edge handshake announcing 512 at a batch of 4096, its bytes matching", line_set("edge", "edge-batch-4096", {12: "512", 13: sha(init_ack_bytes(512))})),
+        ("an edge handshake announcing the batch with other bytes", edge_swap("edge-batch-89", 13, sha(b"other"))),
+        ("an edge handshake that announces the default batch", line_set("edge", "edge-payload-256mib", {12: "65535", 13: sha(init_ack_bytes(65535))})),
+        ("a fixed edge handshake announcing 2048 at a batch of 4096, its bytes matching", line_set("fixededge", "edge-fixed-batch-4096", {12: "2048", 13: sha(init_ack_bytes(2048))})),
+        ("a fixed edge handshake announcing 512 at a batch of 89", fixed_swap("edge-fixed-batch-89", 12, "512")),
+        ("a minimum handshake announcing 512 at a batch of 89, its bytes matching", line_set("minimum", "edge-minimum-fixed", {13: "512", 14: sha(init_ack_bytes(512))})),
+        ("a minimum handshake announcing the batch with other bytes", minimum_swap("edge-minimum-heap", 14, sha(b"other"))),
         ("the minimum-configuration lines dropped", drop("links minimum ")),
         ("the fixed minimum configuration dropped", drop("links minimum edge-minimum-fixed ")),
         ("the heap minimum configuration dropped", drop("links minimum edge-minimum-heap ")),
