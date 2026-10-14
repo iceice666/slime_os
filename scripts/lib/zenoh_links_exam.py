@@ -348,9 +348,9 @@ def edge_message(key: str, payload: int) -> bytearray:
     return message
 
 
-def tapped_bodies(message, batch: int, digests: list[str]):
+def tapped_bodies(message, batch: int, digests: list[str], first_sn: int = EDGE_SN):
     """The fragment bodies of `message`, noting the sha256 of each and keeping none."""
-    for body in zenoh_fragment.split_iter(message, batch, EDGE_SN):
+    for body in zenoh_fragment.split_iter(message, batch, first_sn):
         digests.append(sha(body))
         yield body
 
@@ -507,6 +507,10 @@ ALIAS_EDGES = (
     ("edge-alias-long-key-4076", 4096, 4076, 0x8000),
 )
 ALIAS_PAYLOAD = 5000
+# The declaration and the Put that uses the alias share one reliable channel, and a session that accepts
+# a FRAME expects the next sequence number, so the declaration is at 4294967294 and the fragments start
+# at the next, 4294967295, and run across the wrap to 0 and 1.
+ALIAS_SN = 0xFFFFFFFE
 
 
 def declare_keyexpr(alias: int, key: str) -> bytes:
@@ -535,18 +539,20 @@ def alias_long_lines() -> tuple[str, ...]:
         key_text = "k" * length
         if not contract_accepts(limits_record([demo, large, edge_config(batch, key_text, ALIAS_PAYLOAD)])):
             raise LinksError(f"the limits contract refuses the configuration of {name}")
-        declaration = zenoh_wire.frame(FIXED_SN, declare_keyexpr(alias, key_text))
+        declaration = zenoh_wire.frame(ALIAS_SN, declare_keyexpr(alias, key_text))
+        first_fragment = zenoh_fragment.next_sn(ALIAS_SN, 1)
         if len(declaration) + zenoh_fragment.STREAM_LENGTH_BYTES > batch:
             raise LinksError(f"{name}: the declaration does not fit its batch")
         message = zenoh_fragment.message(ALIAS_PAYLOAD, 0x5D, alias)
         digests: list[str] = []
-        joined = zenoh_fragment.reassemble(list(tapped_bodies(message, batch, digests)), EDGE_SN, batch)
+        joined = zenoh_fragment.reassemble(list(tapped_bodies(message, batch, digests, first_fragment)), first_fragment, batch)
+        after = zenoh_fragment.next_sn(first_fragment, len(digests))
         decoded = zenoh_fragment.decode_message(joined, alias=alias, alias_key=key_text, subscribed=key_text)
         if joined != message or decoded["scope"] != alias or bytes(decoded["payload"]) != zenoh_fragment.payload_bytes(ALIAS_PAYLOAD):
             raise LinksError(f"{name}: the host reference does not resolve its own Put through the alias")
         out.append(
             f"links aliaslong {name} {batch} {length} {alias} {len(declaration)} {sha(declaration)} "
-            f"{len(digests)} {sha(chr(10).join(digests).encode())} {sha(message)}"
+            f"{len(digests)} {sha(chr(10).join(digests).encode())} {sha(message)} {ALIAS_SN} {first_fragment} {after}"
         )
     return tuple(out)
 
@@ -733,7 +739,7 @@ def drained_digest() -> str:
 
 
 PINNED_CASES = 241
-PINNED_CONTROLS = 557
+PINNED_CONTROLS = 563
 
 
 class LinksError(ValueError):
@@ -895,7 +901,7 @@ SHAPES = {
     ("links", "edge"): 14,
     ("links", "fixededge"): 14,
     ("links", "minimum"): 15,
-    ("links", "aliaslong"): 11,
+    ("links", "aliaslong"): 14,
     ("links", "single"): 7,
     ("links", "counts"): 9,
     ("links", "underfilled"): 7,
@@ -1611,6 +1617,12 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("an alias Put with another number of fragments", line_set("aliaslong", "edge-alias-long-key-2028", {8: "9"})),
         ("an alias Put with other fragment bodies", line_set("aliaslong", "edge-alias-long-key-4076", {9: sha(b"other")})),
         ("an alias Put that resolved to another message", line_set("aliaslong", "edge-alias-long-key-2028", {10: sha(b"other")})),
+        ("an alias Put whose fragments start at 1000 after a declaration at the wrap", line_set("aliaslong", "edge-alias-long-key-2028", {12: "1000"})),
+        ("an alias Put whose fragments restart at the declaration's own number", line_set("aliaslong", "edge-alias-long-key-4076", {12: str(ALIAS_SN)})),
+        ("an alias declaration at sequence 999", line_set("aliaslong", "edge-alias-long-key-2028", {11: "999"})),
+        ("an alias declaration at the widest sequence number, the fragments left where they were", line_set("aliaslong", "edge-alias-long-key-4076", {11: str(FIXED_SN)})),
+        ("an alias run that did not wrap to 0", line_set("aliaslong", "edge-alias-long-key-2028", {13: "4294967298"})),
+        ("an alias run that left the expected sequence where it began", line_set("aliaslong", "edge-alias-long-key-4076", {13: str(zenoh_fragment.next_sn(ALIAS_SN, 1))})),
         ("the long-key alias scenarios dropped", [line for line in good if not line.startswith("links ok edge-alias-")]),
         ("the minimum-configuration lines dropped", drop("links minimum ")),
         ("the fixed minimum configuration dropped", drop("links minimum edge-minimum-fixed ")),
@@ -2141,6 +2153,18 @@ def reference_controls() -> int:
     uneven = zenoh_fragment.reference_split_uneven(zenoh_fragment.message(size), batch, sn, (1000, 1))
     if zenoh_fragment.reassemble(uneven, sn, batch) != zenoh_fragment.message(size):
         raise LinksError("control: a run with short interior fragments was not taken")
+    # A Put must follow its declaration: after a FRAME at 4294967294 the next number is 4294967295, and a
+    # run from 1000 is refused, as the session refuses it.
+    after_declaration = zenoh_fragment.next_sn(0xFFFFFFFE, 1)
+    consecutive = zenoh_fragment.reference_split(zenoh_fragment.message(5000), 2048, after_declaration)
+    if zenoh_fragment.reassemble(consecutive, after_declaration, 2048) != zenoh_fragment.message(5000):
+        raise LinksError("control: a run that follows its declaration was not taken")
+    try:
+        zenoh_fragment.reassemble(zenoh_fragment.reference_split(zenoh_fragment.message(5000), 2048, 1000), after_declaration, 2048)
+    except zenoh_fragment.FragmentError:
+        pass
+    else:
+        raise LinksError("control: a run that does not follow its declaration was taken")
     # A complete Put in one fragment with the more flag clear is taken.
     lone = zenoh_fragment.reference_split(zenoh_fragment.message(100), batch, sn)
     if len(lone) != 1 or zenoh_fragment.reassemble(lone, sn, batch) != zenoh_fragment.message(100):
