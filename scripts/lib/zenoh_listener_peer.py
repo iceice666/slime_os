@@ -79,7 +79,7 @@ class Listener:
         interpreter = ensure_venv()
         self.receipt.unlink(missing_ok=True)
         self.process = subprocess.Popen(
-            [str(interpreter), str(Path(__file__).resolve()), str(self.port), str(self.receipt)],
+            [str(interpreter), "-E", str(Path(__file__).resolve()), str(self.port), str(self.receipt)],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         assert self.process.stdout is not None
@@ -143,6 +143,12 @@ def serve(port: int, receipt: Path) -> int:
     config.insert_json5("listen/endpoints", json.dumps([listen]))
     config.insert_json5("scouting/multicast/enabled", "false")
     config.insert_json5("scouting/gossip/enabled", "false")
+    # The pinned wheel is the only zenoh this process may use: an import from anywhere else would
+    # let the run pass without the hash-pinned peer.
+    location = Path(zenoh.__file__).resolve()
+    if Path(sys.prefix).resolve() not in location.parents:
+        print(f"[zenoh-listener] fail: zenoh imported from {location}, not from {sys.prefix}", flush=True)
+        return 1
     session = zenoh.open(config)
     received: list[tuple[str, bytes, bytes]] = []
     # A sample is delivered by a remote peer, so the peers the session holds when one arrives are

@@ -45,6 +45,8 @@ PUBLISHER = "ros2-demo-publisher"
 SUBSCRIBER = "ros2-demo-subscriber"
 DENIALS = ("undeclared-endpoint", "listen", "scouting")
 MAX_STREAM = 1 << 20
+# contracts/zenoh-profile/v1 closeConnectionToSelf: the highest CLOSE reason the profile names.
+MAX_CLOSE_REASON = 7
 
 ID_KEEP_ALIVE = 4
 TCP_FIN, TCP_SYN, TCP_RST, TCP_ACK = 1, 2, 4, 16
@@ -146,6 +148,7 @@ def _reassemble(segs: list[Segment], isn: int, label: str) -> bytes:
     for s in segs:
         if s.flags & TCP_SYN:
             _need(not s.payload, f"{label}: a SYN carries data")
+            _need((s.seq & 0xFFFFFFFF) == isn, f"{label}: a SYN with sequence number {s.seq}, the handshake used {isn}")
             continue
         offset = (s.seq - isn - 1) & 0xFFFFFFFF
         _need(offset < 1 << 31, f"{label}: a segment before the connection's first byte")
@@ -182,6 +185,12 @@ def streams(data: bytes) -> tuple[bytes, bytes, int]:
         ports = (s.source_port, s.destination_port)
         _need(ports == ((syn.source_port, PORT) if s.outgoing else (PORT, syn.source_port)), "a segment outside the one connection")
     synacks = [s for s in segs if not s.outgoing and s.flags & TCP_SYN and s.flags & TCP_ACK]
+    for s in segs:
+        if s.flags & TCP_SYN:
+            _need(s.outgoing != bool(s.flags & TCP_ACK), "a SYN that is not the guest's SYN or the peer's SYN-ACK")
+    last_syn = max(i for i, s in enumerate(segs) if s.flags & TCP_SYN)
+    first_data = next((i for i, s in enumerate(segs) if s.payload), len(segs))
+    _need(last_syn < first_data, "a SYN after the connection carried data")
     _need(len({s.seq for s in synacks}) == 1, "the peer never accepted: no single SYN-ACK")
     expected_ack = (syn.seq + 1) & 0xFFFFFFFF
     for synack in synacks:
@@ -205,6 +214,14 @@ def split(stream: bytes, label: str) -> list[bytes]:
 
 
 # -------------------------------------------------------------------------------- wire
+
+
+def _close(batch: bytes, who: str) -> None:
+    """A session CLOSE is exactly `23 <reason>` with the reason one the profile names. The header's
+    flag bits are the session flag and nothing else, and no extension follows."""
+    _need(len(batch) == 2, f"a {who} CLOSE of {len(batch)} bytes")
+    _need(batch[0] == zenoh_wire.ID_CLOSE | zenoh_wire.FLAG_A, f"a {who} CLOSE with header {batch[0]:#04x}, not a session close")
+    _need(batch[1] <= MAX_CLOSE_REASON, f"a {who} CLOSE with reason {batch[1]}, the profile names 0 to {MAX_CLOSE_REASON}")
 
 
 def _kind(batch: bytes) -> int:
@@ -235,7 +252,8 @@ def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
         _need(not closed, "a batch after the guest's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
             keep_alives += 1
-        elif _kind(batch) == zenoh_wire.ID_CLOSE and len(batch) == 2:
+        elif _kind(batch) == zenoh_wire.ID_CLOSE:
+            _close(batch, "guest")
             closed = True
         elif batch[0] == zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R:
             frames.append(batch)
@@ -317,7 +335,8 @@ def judge_peer(batches: list[bytes]) -> int:
         if batch == bytes([ID_KEEP_ALIVE]):
             continue
         if _kind(batch) == zenoh_wire.ID_CLOSE:
-            _need(len(batch) == 2 and batch[0] in (zenoh_wire.ID_CLOSE, zenoh_wire.ID_CLOSE | zenoh_wire.FLAG_A), f"a CLOSE of {len(batch)} bytes with header {batch[0]:#04x}")
+            _need(len(batch) == 2 and batch[0] in (zenoh_wire.ID_CLOSE, zenoh_wire.ID_CLOSE | zenoh_wire.FLAG_A), f"a peer CLOSE of {len(batch)} bytes with header {batch[0]:#04x}")
+            _need(batch[1] <= MAX_CLOSE_REASON, f"a peer CLOSE with reason {batch[1]}, the profile names 0 to {MAX_CLOSE_REASON}")
             closed = True
         elif batch[0] in (zenoh_wire.ID_FRAME, zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R):
             _, at = _leb(batch, 1, "FRAME sequence number")
@@ -640,7 +659,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 152
+PINNED_CONTROLS = 166
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -758,12 +777,14 @@ def build(scenario: dict) -> bytes:
         if not scenario.get("no_synack"):
             frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK), False))
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1, TCP_ACK), True))
+    if "synack_again" in scenario:
+        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK), False))
+    if "syn_again" in scenario:
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + scenario["syn_again"], 0, TCP_SYN), True))
     for at, payload in guest_pieces:
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1, TCP_ACK, payload), True))
     for at, payload in pieces(peer_stream):
         frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + len(guest_stream), TCP_ACK, payload), False))
-    if "synack_again" in scenario:
-        frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK), False))
     frames.extend(scenario.get("extra", []))
     guest_fin = gisn + 1 + len(guest_stream) + scenario.get("fin_skew", 0)
     if scenario.get("guest_fin", True):
@@ -847,6 +868,13 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
 
         return run
 
+    def late(frame: bytes) -> Callable[[dict], dict]:
+        return edit(lambda s: s.setdefault("extra", []).append(frame))
+
+    def c_syn_peer(offset: int) -> bytes:
+        seq = 700000 if offset == 0 else offset
+        return _ethernet(_tcp(PEER, GUEST, PORT, GUEST_PORT, seq, 0, TCP_SYN), False)
+
     def raw(*frames: bytes) -> Callable[[dict], dict]:
         return edit(lambda s: s.setdefault("extra", []).extend(frames))
 
@@ -907,6 +935,13 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a SYN-ACK acknowledging one number too few", edit(lambda s: s.update(synack_skew=-1))),
         ("a SYN-ACK retransmitted with the acknowledgement one too many", edit(lambda s: s.update(synack_again=1))),
         ("a SYN-ACK retransmitted with the acknowledgement one too few", edit(lambda s: s.update(synack_again=-1))),
+        ("a bare SYN from the peer after the data", late(c_syn_peer(0))),
+        ("a bare SYN from the peer after the data with another sequence number", late(c_syn_peer(123456))),
+        ("a SYN-ACK from the guest", late(_ethernet(_tcp(GUEST, PEER, GUEST_PORT, PORT, 1000, 700001, TCP_SYN | TCP_ACK), True))),
+        ("a guest SYN retransmitted after the data", late(_ethernet(_tcp(GUEST, PEER, GUEST_PORT, PORT, 1000, 0, TCP_SYN), True))),
+        ("a peer SYN-ACK retransmitted after the data", late(_ethernet(_tcp(PEER, GUEST, PORT, GUEST_PORT, 700000, 1001, TCP_SYN | TCP_ACK), False))),
+        ("a guest SYN retransmitted with another sequence number", edit(lambda s: s.update(syn_again=1))),
+        ("a guest SYN retransmitted one number under", edit(lambda s: s.update(syn_again=-1))),
         ("a stream that never closes", edit(lambda s: s.update(guest_fin=False))),
         ("a FIN one byte past the data", edit(lambda s: s.update(fin_skew=1))),
         ("a FIN one byte short of the data", edit(lambda s: s.update(fin_skew=-1))),
@@ -927,6 +962,11 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a batch the exam does not name", put_bytes(lambda g: g.insert(2, bytes([zenoh_wire.ID_DECLARE])))),
         ("a peer that sends no INIT_ACK", edit(lambda s: s.update(peer=[bytes([ID_KEEP_ALIVE])]))),
         ("a peer batch the exam does not name", edit(lambda s: s["peer"].append(bytes([0x0D])))),
+        ("a guest CLOSE with bit 6 set", guest_at(-1, lambda b: b"\x43\x00")),
+        ("a guest CLOSE with an extension flag", guest_at(-1, lambda b: b"\x83\x00")),
+        ("a guest CLOSE of the link only", guest_at(-1, lambda b: b"\x03\x00")),
+        ("a guest CLOSE with reason 8, one over the last the profile names", guest_at(-1, lambda b: b"\x23\x08")),
+        ("a guest CLOSE with reason 255", guest_at(-1, lambda b: b"\x23\xff")),
         ("a guest INIT_SYN of three bytes", guest_at(0, lambda b: b[:3])),
         ("a guest INIT_SYN cut inside its ZID", guest_at(0, lambda b: b[:6])),
         ("a guest INIT_SYN cut inside its size parameters", guest_at(0, lambda b: b[:-1])),
@@ -950,6 +990,8 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a keep-alive with a byte after it", edit(lambda s: s["peer"].append(b"\x04\x00"))),
         ("a keep-alive with a flag set", edit(lambda s: s["peer"].append(b"\x24"))),
         ("a CLOSE of one byte", edit(lambda s: s["peer"].append(b"\x03"))),
+        ("a peer CLOSE with reason 8", edit(lambda s: s["peer"].append(b"\x23\x08"))),
+        ("a peer CLOSE with bit 6 set", edit(lambda s: s["peer"].append(b"\x63\x00"))),
         ("a CLOSE of three bytes", edit(lambda s: s["peer"].append(b"\x03\x00\x00"))),
         ("a FRAME with no sequence number", edit(lambda s: s["peer"].append(b"\x25"))),
         ("a FRAME with no message", edit(lambda s: s["peer"].append(b"\x25\x01"))),
@@ -1031,6 +1073,8 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("a non-zero initial sequence number, reported and sent consistently", lambda s: synthesize(contract, 5)),
         ("an INIT_SYN without size parameters", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), zenoh_wire.DEFAULT_BATCH), *s["guest"][1:]]}),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
+        ("a guest SYN retransmitted identically", update(syn_again=0)),
+        ("a guest CLOSE with the last reason the profile names, 7", lambda s: {**s, "guest": [*s["guest"][:-1], zenoh_wire.close(7, True)]}),
         ("an ARP reply from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2)]}),
         ("an ARP request with the standard zero target hardware address", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(target_hw=bytes(6))]}),
         ("an ARP request from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC)]}),
