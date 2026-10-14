@@ -64,8 +64,8 @@ jobs:
             keep-env-derivations = true
             keep-outputs = true
 
-      # Keyed on the flake alone: the projection shell builds myque-gh through
-      # GHC and the pinned Zutai toolchain through cargo when cold.
+      # Shared with work-item CI, closeout and retirement. The key binds both
+      # the flake and local tool derivations; every consumer uses this shell.
       - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: >-
