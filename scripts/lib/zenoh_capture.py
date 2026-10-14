@@ -603,7 +603,7 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
     _, expected, _cookie_unused = _open_fields(batches[1], "OPEN_ACK", True)
     seen = _Seen()
     closed = False
-    subscriber = undeclared = None
+    subscriber = undeclared = close_at = None
     for index, batch in enumerate(batches[2:], start=2):
         _need(not closed, "a peer batch after the peer's CLOSE")
         if batch == bytes([ID_KEEP_ALIVE]):
@@ -611,7 +611,7 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
         if _kind(batch) == zenoh_wire.ID_CLOSE:
             _need(len(batch) == 2 and batch[0] in (zenoh_wire.ID_CLOSE, zenoh_wire.ID_CLOSE | zenoh_wire.FLAG_A), f"a peer CLOSE of {len(batch)} bytes with header {batch[0]:#04x}")
             _need(batch[1] <= MAX_CLOSE_REASON, f"a peer CLOSE with reason {batch[1]}, the profile names 0 to {MAX_CLOSE_REASON}")
-            closed = True
+            closed, close_at = True, index
         elif _kind(batch) == zenoh_wire.ID_FRAME:
             was_undeclared = seen.undeclared
             sequence, _kinds = _frame_messages(batch, "a peer FRAME", seen)
@@ -626,7 +626,7 @@ def judge_peer(batches: list[bytes], key: str) -> dict:
         else:
             raise CaptureError(f"a peer batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     _need(seen.subscriber is None or seen.subscriber == key, f"the peer's subscriber is on {seen.subscriber!r}, not the demo key")
-    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber, "undeclared": undeclared}
+    return {"batches": len(batches), "cookie": cookie, "subscriber": subscriber, "undeclared": undeclared, "close": close_at}
 
 
 def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
@@ -648,6 +648,9 @@ def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
     after(peer_time.complete(peer_spans[seen["subscriber"]][1]), guest_time.start(guest_spans[result["first_frame"]][0]), "the first sample was sent before the peer's subscriber declaration was complete")
     if seen["undeclared"] is not None:
         after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.start(peer_spans[seen["undeclared"]][0]), "the peer undeclared its subscriber before the last sample was sent")
+    if seen["close"] is not None:
+        # The connector fails with PeerClosedEarly on a CLOSE before it has sent all four samples.
+        after(guest_time.complete(guest_spans[result["last_frame"]][1]), peer_time.start(peer_spans[seen["close"]][0]), "the peer closed before the last sample was sent")
     result.update(peer_batches=seen["batches"], guest_stream=len(guest), peer_stream=len(peer), arp=arp)
     return result
 
@@ -957,7 +960,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 219
+PINNED_CONTROLS = 221
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -1081,6 +1084,10 @@ def _turns(scenario: dict, guest_at: list[int], peer_at: list[int]) -> list[tupl
     if layout == "honest":
         before = scenario.get("peer_first", 5)
         turns = [g(0, 1), q(0, 1), g(1, 2), q(1, before), g(2, 1 << 30), q(before, 1 << 30)]
+    elif layout == "close_after_three_samples":
+        turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 5), g(2, 5), q(5, 1 << 30), g(5, 1 << 30)]
+    elif layout == "close_after_four_samples":
+        turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 5), g(2, 6), q(5, 1 << 30), g(6, 1 << 30)]
     elif layout == "frames_early":
         turns = [g(0, 1), q(0, 1), g(1, 2), q(1, 2), g(2, 1 << 30), q(2, 1 << 30)]
     elif layout == "open_before_ack":
@@ -1408,6 +1415,8 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer FRAME sequence number repeated", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][3]))))),
         ("a peer FRAME sequence number skipped", edit(lambda s: s["peer"].__setitem__(4, _with_sn(s["peer"][4], _sn(s["peer"][4]) + 5)))),
         ("a peer subscriber declared and undeclared in one frame", edit(lambda s: s["peer"].__setitem__(4, s["peer"][4] + zenoh_wire.undeclare_subscriber(1, K(), True)))),
+        ("a peer CLOSE before the first sample", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.close(0, True)], peer_first=6))),
+        ("a peer CLOSE after three of the four samples", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.close(0, True)], layout="close_after_three_samples"))),
         ("a peer that undeclares its subscriber before the first sample", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, K())], peer_first=6))),
         ("a peer that undeclares a subscriber it does not hold, id 2", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 2, K())]))),
         ("a peer that undeclares its subscriber on another key", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, "0/other/key")]))),
@@ -1556,6 +1565,7 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("a guest SYN retransmitted with only a timestamp option differing", update(syn_again=0, again_guest_options=GUEST_OPTIONS + _option(TIMESTAMP_OPTION, bytes(8)))),
         ("a handshake that negotiates no options, retransmitted", update(guest_options=b"", peer_options=b"", syn_again=0, synack_again=0)),
         ("a handshake that negotiates only a segment size", update(guest_options=_option(MSS, (1460).to_bytes(2, "big")), peer_options=_option(MSS, (1460).to_bytes(2, "big")))),
+        ("a peer CLOSE right after the fourth sample, before the guest's own CLOSE", lambda s: {**s, "peer": [*s["peer"][:5], zenoh_wire.close(0, True)], "layout": "close_after_four_samples"}),
         ("the peer undeclares its subscriber after the last sample, then closes", lambda s: {**s, "peer": [*s["peer"][:5], _undeclare_frame(s, 1, K()), zenoh_wire.close(0, True)]}),
         ("peer FRAME sequence numbers that wrap through 2**32", lambda s: {**s, "peer": [*s["peer"][:1], zenoh_wire.open_(10000, 0xFFFFFFFE, ack=True), *[_with_sn(b, 0xFFFFFFFE + i) for i, b in enumerate(s["peer"][2:5])], *s["peer"][5:]]}),
         ("a guest SYN retransmitted identically", update(syn_again=0)),
