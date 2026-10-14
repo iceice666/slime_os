@@ -166,6 +166,7 @@ def serve(port: int, receipt: Path) -> int:
     # updates `most` from a value it read earlier, so an unlocked store from one could undo the
     # other's. One lock covers every read-modify-write of the count.
     lock = threading.Lock()
+    last_delivery = time.monotonic()
 
     def note(peers: int) -> None:
         nonlocal most, seen
@@ -174,26 +175,25 @@ def serve(port: int, receipt: Path) -> int:
 
     def on_sample(sample: zenoh.Sample) -> None:
         attachment = sample.attachment
+        nonlocal last_delivery
         with lock:
             received.append((str(sample.key_expr), bytes(sample.payload), b"" if attachment is None else bytes(attachment)))
+            last_delivery = time.monotonic()
         # A delivery is evidence of a remote peer even when no snapshot shows one.
         note(max(len(session.info.peers_zid()), 1))
 
     subscriber = session.declare_subscriber(KEY, on_sample)
     print(READY, flush=True)
-    quiet_since = None
     deadline = time.monotonic() + DEADLINE_SECONDS
     while time.monotonic() < deadline:
-        peers = len(session.info.peers_zid())
-        note(peers)
+        note(len(session.info.peers_zid()))
         with lock:
-            delivered, heard = len(received), seen
-        if heard and peers == 0 and delivered >= SAMPLES:
-            quiet_since = quiet_since or time.monotonic()
-            if time.monotonic() - quiet_since >= SETTLE_SECONDS:
-                break
-        else:
-            quiet_since = None
+            delivered, quiet = len(received), time.monotonic() - last_delivery
+        # The connector keeps its link open until the peer closes it, so waiting for the peer to
+        # disconnect first would wait out the whole deadline. Once all four samples have arrived and
+        # none has followed for the settle time, the session is closed from this side.
+        if delivered >= SAMPLES and quiet >= SETTLE_SECONDS:
+            break
         time.sleep(0.2)
     with lock:
         # A record with samples and no peer cannot be honest: floor the count at one.

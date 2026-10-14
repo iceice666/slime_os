@@ -247,6 +247,27 @@ def _reassemble(segs: list[Segment], isn: int, label: str) -> tuple[bytes, _Timi
     return bytes(stream), _Timing(parts)
 
 
+def _check_acks(segs: list[Segment], guest_isn: int, peer_isn: int) -> None:
+    """No segment acknowledges sequence space the other side had not yet sent.
+
+    TCP discards a segment whose acknowledgement is beyond what its receiver has sent, so a payload
+    carrying one never reached the guest (or the peer). The bound is the highest sequence number the
+    other side had put in the capture by then, a SYN and a FIN each counting one. An acknowledgement
+    below it is an ordinary lagging ACK and is admitted.
+    """
+    mask = 0xFFFFFFFF
+    isn = {True: guest_isn, False: peer_isn}
+    sent = {True: 0, False: 0}
+    for s in segs:
+        if s.flags & TCP_ACK:
+            acknowledged = (s.ack - isn[not s.outgoing]) & mask
+            _need(acknowledged < 1 << 31 and acknowledged <= sent[not s.outgoing],
+                  f"a segment acknowledges {acknowledged} bytes of sequence space, the other side had sent {sent[not s.outgoing]}")
+        end = ((s.seq - isn[s.outgoing]) & mask) + len(s.payload) + (1 if s.flags & (TCP_SYN | TCP_FIN) else 0)
+        if end < 1 << 31:
+            sent[s.outgoing] = max(sent[s.outgoing], end)
+
+
 def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     """The two streams of the capture's one connection, its ARP count, and where each was carried."""
     segs, arp = segments(data)
@@ -276,12 +297,22 @@ def streams(data: bytes) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     first_data = next((i for i, s in enumerate(segs) if s.payload), len(segs))
     _need(last_syn < first_data, "a SYN after the connection carried data")
     _need(len({s.seq for s in synacks}) == 1, "the peer never accepted: no single SYN-ACK")
+    # Nothing but the handshake itself may precede the handshake: a segment recorded before both the
+    # guest's SYN and the peer's SYN-ACK belongs to no established connection, and a FIN is a close,
+    # which needs the handshake to have finished.
+    first_syn = min(i for i, s in enumerate(segs) if s.flags & TCP_SYN and not s.flags & TCP_ACK)
+    first_synack = min(i for i, s in enumerate(segs) if s.flags & TCP_SYN and s.flags & TCP_ACK)
+    for i, s in enumerate(segs):
+        if not s.flags & TCP_SYN:
+            _need(i > max(first_syn, first_synack), "a segment recorded before the handshake's SYN and SYN-ACK")
+            _need(not s.flags & TCP_FIN or i > last_syn, "a FIN recorded before the handshake finished")
     _need(min(s.index for s in syns) < min(s.index for s in synacks), "the peer's SYN-ACK was recorded before the guest's SYN")
     expected_ack = (syn.seq + 1) & 0xFFFFFFFF
     for synack in synacks:
         _need(synack.ack == expected_ack, "a SYN-ACK acknowledges another sequence number")
     _need(len({_negotiated(s) for s in syns}) == 1, "a guest SYN retransmitted with another window or option")
     _need(len({_negotiated(s) for s in synacks}) == 1, "a peer SYN-ACK retransmitted with another window or option")
+    _check_acks(segs, syn.seq, synacks[0].seq)
     guest, guest_time = _reassemble([s for s in segs if s.outgoing], syn.seq, "guest stream")
     peer, peer_time = _reassemble([s for s in segs if not s.outgoing], synacks[0].seq, "peer stream")
     return guest, peer, arp, guest_time, peer_time
@@ -984,7 +1015,11 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 244
+PINNED_CONTROLS = 251
+# The positive controls, pinned as the negative ones are: a judge that quietly loses an honest case
+# keeps refusing everything it refused, so only a count of what it accepts shows the loss.
+PINNED_HONEST_CAPTURES = 30
+PINNED_ACCEPTED_RECEIPTS = 10
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -1005,6 +1040,10 @@ def check_pins(contract: dict) -> int:
     """Refuse a checker whose counts moved from the pins, or from the admitted item while it is active."""
     total = controls_refused(contract)
     _need(total == PINNED_CONTROLS, f"the judges refuse {total} corrupted records, the checker pins {PINNED_CONTROLS}")
+    _samples, honest, _refused = controls(contract)
+    _need(honest == PINNED_HONEST_CAPTURES, f"the capture judge accepts {honest} honest variants, the checker pins {PINNED_HONEST_CAPTURES}")
+    accepted, _refused_records = receipt_controls(contract)
+    _need(accepted == PINNED_ACCEPTED_RECEIPTS, f"the receipt reader accepts {accepted} records, the checker pins {PINNED_ACCEPTED_RECEIPTS}")
     cases, controls_ = item_pins()
     _need(not cases or cases == PINNED_CASES, f"the admitted item fixes {cases} cases, the checker pins {PINNED_CASES}")
     _need(not controls_ or controls_ == PINNED_CONTROLS, f"the admitted item fixes {controls_} controls, the checker pins {PINNED_CONTROLS}")
@@ -1165,12 +1204,14 @@ def build(scenario: dict) -> bytes:
     if "drop_segment" in scenario and len(last_guest_turn) > scenario["drop_segment"]:
         del packets[last_guest_turn[scenario["drop_segment"]]]
 
+    skew = dict(scenario.get("ack_skew", {}))
+    lag = bool(scenario.get("ack_lag"))
     frames = [_arp()]
     if not scenario.get("no_syn"):
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN | scenario.get("syn_flags", 0), b"", 65535, scenario.get("guest_options", GUEST_OPTIONS)), True))
         if not scenario.get("no_synack"):
             frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario.get("synack_skew", 0), TCP_SYN | TCP_ACK | scenario.get("synack_flags", 0), b"", 65535, scenario.get("peer_options", PEER_OPTIONS)), False))
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1, TCP_ACK), True))
+        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1, pisn + 1 + skew.pop("hs_ack", 0), TCP_ACK), True))
     if "synack_again" in scenario:
         frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn, gisn + 1 + scenario["synack_again"], TCP_SYN | TCP_ACK, b"", scenario.get("again_window", 65535), scenario.get("again_peer_options", scenario.get("peer_options", PEER_OPTIONS))), False))
     if "syn_again" in scenario:
@@ -1184,19 +1225,29 @@ def build(scenario: dict) -> bytes:
         if from_guest:
             flags = (data_flags & ~TCP_ACK if "guest_data" in noack else data_flags) | (TCP_URG if "guest_urg" in noack else 0)
             noack -= {"guest_data", "guest_urg"}
-            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, pisn + 1 + sent_peer, flags, payload), True))
+            ack = pisn + 1 + (0 if lag else sent_peer) + skew.pop("guest_data", 0)
+            frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn + 1 + at, ack, flags, payload), True))
             sent_guest = max(sent_guest, at + len(payload))
         else:
             flags = data_flags & ~TCP_ACK if "peer_data" in noack else data_flags
             noack -= {"peer_data"}
-            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, gisn + 1 + sent_guest, flags, payload), False))
+            ack = gisn + 1 + (0 if lag else sent_guest) + skew.pop("peer_data", 0)
+            frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + at, ack, flags, payload), False))
             sent_peer = max(sent_peer, at + len(payload))
     frames.extend(scenario.get("extra", []))
     guest_fin = gisn + 1 + len(guest_stream) + scenario.get("fin_skew", 0)
+    closing = []
     if scenario.get("guest_fin", True):
-        frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin, pisn + 1 + len(peer_stream), TCP_FIN | (0 if "guest_fin_ack" in noack else TCP_ACK)), True))
-    frames.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), guest_fin + 1, TCP_FIN | (0 if "peer_fin_ack" in noack else TCP_ACK)), False))
-    frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin + 1, pisn + 2 + len(peer_stream), 0 if "last_ack" in noack else TCP_ACK), True))
+        closing.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin, pisn + 1 + len(peer_stream) + skew.pop("guest_fin", 0), TCP_FIN | (0 if "guest_fin_ack" in noack else TCP_ACK)), True))
+    closing.append(_ethernet(_tcp(PEER, GUEST, dport, sport, pisn + 1 + len(peer_stream), guest_fin + 1, TCP_FIN | (0 if "peer_fin_ack" in noack else TCP_ACK)), False))
+    closing.append(_ethernet(_tcp(GUEST, PEER, sport, dport, guest_fin + 1, pisn + 2 + len(peer_stream), 0 if "last_ack" in noack else TCP_ACK), True))
+    where = scenario.get("closing", "end")
+    if where == "before_syn":
+        frames = [frames[0], *closing, *frames[1:]]
+    elif where == "between_syn_and_synack":
+        frames = [*frames[:2], *closing, *frames[2:]]
+    else:
+        frames.extend(closing)
     return pcap(frames)
 
 
@@ -1469,6 +1520,13 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("attachment timestamps that go backwards", rebuild_attachments(lambda n: n + 1, lambda n: 1000 - n, lambda n: DEMO_GID)),
         ("an attachment GID with its last byte changed", rebuild_attachments(lambda n: n + 1, lambda n: 1000 + n, lambda n: DEMO_GID[:-1] + b"\xee")),
         ("an attachment GID that changes between samples", rebuild_attachments(lambda n: n + 1, lambda n: 1000 + n, lambda n: bytes([n]) * 16)),
+        ("both FINs and the last ACK recorded before the SYN", edit(lambda s: s.update(closing="before_syn"))),
+        ("both FINs and the last ACK recorded between the SYN and the SYN-ACK", edit(lambda s: s.update(closing="between_syn_and_synack"))),
+        ("a peer data segment acknowledging 0x70000000", edit(lambda s: s.update(ack_skew={"peer_data": 0x70000000}))),
+        ("a peer data segment acknowledging one byte the guest had not sent", edit(lambda s: s.update(ack_skew={"peer_data": 1}))),
+        ("a guest data segment acknowledging one byte the peer had not sent", edit(lambda s: s.update(ack_skew={"guest_data": 1}))),
+        ("a guest FIN acknowledging the peer's FIN before it was sent", edit(lambda s: s.update(ack_skew={"guest_fin": 1}))),
+        ("the handshake ACK acknowledging one past the peer's SYN", edit(lambda s: s.update(ack_skew={"hs_ack": 1}))),
         ("a guest SYN retransmitted with another window", edit(lambda s: s.update(syn_again=0, again_window=1000))),
         ("a peer SYN-ACK retransmitted with another window", edit(lambda s: s.update(synack_again=0, again_window=1000))),
         ("a guest SYN retransmitted with another segment size", edit(lambda s: s.update(syn_again=0, again_guest_options=_option(MSS, (1400).to_bytes(2, "big")) + _option(SACK) + _option(WSCALE, b"\x07")))),
@@ -1658,6 +1716,8 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("an INIT_SYN with a 1 byte ZID", lambda s: {**s, "guest": [zenoh_wire.init(b"\x01", 512), *s["guest"][1:]]}),
         ("the stock listener's whole session, as captured, with its two keep-alives and close", lambda s: {**s, "peer": list(STOCK_LISTENER)}),
         ("PSH on every data segment", update(psh=True)),
+        ("data segments that acknowledge less than the other side had sent", update(ack_lag=True)),
+        ("a peer data segment acknowledging one byte under what the guest had sent", update(ack_skew={"peer_data": -1})),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("a guest SYN retransmitted with only a timestamp option differing", update(syn_again=0, again_guest_options=GUEST_OPTIONS + _option(TIMESTAMP_OPTION, bytes(8)))),
         ("a handshake that negotiates no options, retransmitted", update(guest_options=b"", peer_options=b"", syn_again=0, synack_again=0)),

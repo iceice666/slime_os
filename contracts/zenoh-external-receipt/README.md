@@ -21,5 +21,5 @@ string, a value over a bound, or a field the contract does not name, at the top 
 sample, is refused: the decoder closes the field set itself, because the derived `decode`
 ignores a field it does not know.
 
-The scope is `01a138df-c50b-7229-ab1d-8f63c75145ce`. The decision is
+The scope is `01a138f4-b3d5-72b9-a7cc-b110a18ff27b`. The decision is
 [`docs/decisions/zenoh-external-listener.md`](../../docs/decisions/zenoh-external-listener.md).
