@@ -93,6 +93,8 @@ OK_SCENARIOS = (
     "edge-alias-long-key-2028",
     "edge-alias-long-key-4076",
     "reassemble-single-final-fragment",
+    "peerbatch-heap",
+    "peerbatch-fixed",
     "reassemble-underfilled-interior",
     "nine-keys-subscribers-and-samples",
     "nine-keys-subscribers-and-samples-fixed",
@@ -750,6 +752,65 @@ def slots_lines() -> tuple[str, ...]:
     return tuple(out)
 
 
+# What a link sends is bounded by the smaller of its own batch, which sizes its send storage, and the batch
+# the peer announced in its INIT, which is what the peer accepts. Every other send row announces the
+# link's own batch on both sides, so a sender that ignores the peer's `batch_size` passed. Here the two
+# differ. Heap: a link of 4096 sends to peers announcing 89, 512 and 2048, and one of 2048 to a peer
+# announcing 4096, which does not lift it past its own storage. Fixed: a message cannot be fragmented, so
+# the largest that fits the smaller batch is sent whole and one byte more is refused as over-bound,
+# which is my choice of class, the profile naming none. Our handshake and declarations cannot be
+# fragmented either, so they must fit the peer's batch, which is checked.
+# (ours, peer, payload) and (ours, peer, bytes over the largest the smaller batch holds).
+PEER_KEY = "k" * 30
+PEER_HEAP = ((4096, 89, 1000), (4096, 512, 5000), (2048, 4096, 5000), (4096, 2048, 9000))
+PEER_FIXED = ((2048, 512, 0), (2048, 512, 1), (4096, 89, 0), (4096, 89, 1), (512, 4096, 0))
+
+
+def peer_heap_send(payload: int, batch: int) -> tuple[int, str]:
+    """The count of fragments and the sha256 of their bodies for our Put split for `batch`."""
+    digests: list[str] = []
+    message = edge_message(PEER_KEY, payload)
+    joined = hashlib.sha256()
+    for chunk in zenoh_fragment.reassemble_iter(tapped_bodies(message, batch, digests), EDGE_SN, batch):
+        joined.update(chunk)
+    if joined.hexdigest() != sha(message):
+        raise LinksError("the host reference does not reassemble its own Put")
+    return len(digests), sha(chr(10).join(digests).encode())
+
+
+def peer_fixed_frame(payload: int) -> tuple[int, str]:
+    frame = zenoh_wire.frame(FIXED_SN, bytes(edge_message(PEER_KEY, payload)))
+    return len(frame), sha(frame)
+
+
+@lru_cache(maxsize=None)
+def peerbatch_lines() -> tuple[str, ...]:
+    demo, large = pinned_configs()[:2]
+    cases = [("heap", *case) for case in PEER_HEAP] + [("fixed", *case) for case in PEER_FIXED]
+    out = []
+    for mode, ours, peer, extra in cases:
+        effective = min(ours, peer)
+        payload = extra if mode == "heap" else fixed_max_payload(effective, len(PEER_KEY)) + extra
+        if not contract_accepts(limits_record([demo, large, edge_config(ours, PEER_KEY, payload, mode)])):
+            if mode == "fixed" and payload > fixed_max_payload(ours, len(PEER_KEY)):
+                raise LinksError(f"a fixed case of {ours} against {peer} is not a configuration the contract admits")
+            raise LinksError(f"the limits contract refuses the {mode} configuration of {ours} against a peer of {peer}")
+        edge_sizes("peerbatch", peer, PEER_KEY)
+        syn_digest = handshake_announce("peerbatch", peer)[2]
+        if mode == "heap":
+            count, digest = peer_heap_send(payload, effective)
+            outcome, size = "fragments", count
+        elif fixed_need(payload, len(PEER_KEY)) <= effective:
+            size, digest = peer_fixed_frame(payload)
+            if size + zenoh_fragment.STREAM_LENGTH_BYTES > effective:
+                raise LinksError("a frame reported as sent whole does not fit the smaller batch")
+            outcome = "whole"
+        else:
+            outcome, size, digest = "refused-over-bound", 0, "-"
+        out.append(f"links peerbatch {mode} {ours} {peer} {payload} {effective} {outcome} {size} {digest} {syn_digest}")
+    return tuple(out)
+
+
 # Sequence numbers either side of each step in the width of the encoded number. The largest payload
 # that travels whole is one byte smaller at the larger width, so a link that sizes the frame from a
 # cached width puts a whole batch one byte over the announced one.
@@ -913,8 +974,8 @@ def drained_digest() -> str:
     return sha(distinct_payload(HEAP_PAYLOAD, queue_held() + 1))
 
 
-PINNED_CASES = 275
-PINNED_CONTROLS = 651
+PINNED_CASES = 286
+PINNED_CONTROLS = 669
 
 
 class LinksError(ValueError):
@@ -1005,6 +1066,8 @@ def good_lines() -> list[str]:
             lines += list(single_lines())
         if name == "reassemble-underfilled-interior":
             lines += list(underfilled_lines())
+        if name.startswith("peerbatch-"):
+            lines += [line for line in peerbatch_lines() if line.split()[2] == name.split("-", 1)[1]]
         if name.startswith("wide-slots-"):
             lines.append(next(line for line in slots_lines() if line.split()[2] == name.rsplit("-", 1)[1]))
         if name.startswith("wide-counts-"):
@@ -1088,6 +1151,7 @@ SHAPES = {
     ("links", "countsfixed"): 9,
     ("links", "wide"): 11,
     ("links", "slots"): 10,
+    ("links", "peerbatch"): 11,
     ("links", "multibyte"): 13,
     ("links", "single"): 7,
     ("links", "counts"): 9,
@@ -1168,6 +1232,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wanted_aliased = [("5d", 5000, sha(zenoh_fragment.payload_bytes(5000)))]
     if aliased != wanted_aliased:
         raise LinksError(f"a sender-mapped aliased Put of 5000 bytes must reassemble: {wanted_aliased}, reported {aliased}")
+
+    peerbatch = [" ".join(f) for f in only("peerbatch")]
+    if peerbatch != list(peerbatch_lines()):
+        raise LinksError(f"what a link sends must be bounded by the smaller of its own batch and the peer's announced one: {list(peerbatch_lines())}, reported {peerbatch}")
 
     slots = [" ".join(f) for f in only("slots")]
     if slots != list(slots_lines()):
@@ -1301,7 +1369,7 @@ def judge(lines: list[str]) -> tuple[int, int]:
     wrong = [f"{n}={c} (expected {dict(REFUSED_SCENARIOS)[n]})" for n, c in refused if c != dict(REFUSED_SCENARIOS)[n]]
     if wrong:
         raise LinksError(f"refusal classes differ: {', '.join(wrong)}")
-    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte) + len(wide) + len(slots)
+    positive = len(configs) + len(done) + len(sent) + len(reassembled) + len(fullkey) + len(boundary) + len(advance) + len(reuse) + len(payload) + len(sizes) + len(queue) + len(aliased) + len(deadline) + len(reuseafter) + len(widthsplit) + len(heapfrag) + len(drained) + len(subid) + len(shortkey) + len(highalias) + len(edges) + len(counts) + len(boundarysn) + len(underfilled) + len(fixededges) + len(minimum) + len(aliaslong) + len(single) + len(countsfixed) + len(multibyte) + len(wide) + len(slots) + len(peerbatch)
     return positive, len(refused)
 
 
@@ -1544,6 +1612,25 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         fields = good[at].split()
         fields[index] = value
         return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    def peer_swap(line: str, updates: dict) -> list[str]:
+        fields = line.split()
+        for index, value in updates.items():
+            fields[index] = value
+        at = good.index(line)
+        return good[:at] + [" ".join(fields)] + good[at + 1 :]
+
+    pl = peerbatch_lines()
+
+    def sized_for(line: str, batch: int) -> list[str]:
+        """The line a sender reports when it sizes its fragments for `batch` and not for the smaller one."""
+        count, digest = peer_heap_send(int(line.split()[5]), batch)
+        return peer_swap(line, {6: str(batch), 8: str(count), 9: digest})
+
+    def sent_whole(line: str) -> list[str]:
+        """The line a fixed sender reports when it sends the message that does not fit, whole."""
+        size, digest = peer_fixed_frame(int(line.split()[5]))
+        return peer_swap(line, {7: "whole", 8: str(size), 9: digest})
 
     def slots_swap(mode: str, index: int, value: str) -> list[str]:
         at = first(f"links slots {mode} ")
@@ -1948,6 +2035,23 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, list[str]]]:
         ("a wide queue whose payloads were overwritten", wide_swap("fixed", 256, 10, sha(b"overwritten"))),
         ("a wide heap link with a heap one message short", wide_swap("heap", 256, 9, str(int(good[first("links wide heap 256 ")].split()[9]) - 1))),
         ("a wide stack smaller than the arithmetic needs", wide_swap("fixed", 65535, 8, str(int(good[first("links wide fixed 65535 ")].split()[8]) - 1))),
+        ("the peer-batch lines dropped", drop("links peerbatch ")),
+        ("a sender sizing for its own 4096 to a peer announcing 89", sized_for(pl[0], 4096)),
+        ("a sender sizing for its own 4096 to a peer announcing 512", sized_for(pl[1], 4096)),
+        ("a sender sizing for the peer's 4096 when its own is 2048", sized_for(pl[2], 4096)),
+        ("a sender sizing for its own 4096 to a peer announcing 2048", sized_for(pl[3], 4096)),
+        ("a sender sizing for 512 to a peer announcing 89", sized_for(pl[0], 512)),
+        ("a fixed sender sending the message that does not fit a peer of 512, whole", sent_whole(pl[5])),
+        ("a fixed sender sending the message that does not fit a peer of 89, whole", sent_whole(pl[7])),
+        ("a fixed sender refusing the message that fits a peer of 512", peer_swap(pl[4], {7: "refused-over-bound", 8: "0", 9: "-"})),
+        ("a fixed sender refusing the message that fits a peer of 89", peer_swap(pl[6], {7: "refused-over-bound", 8: "0", 9: "-"})),
+        ("a fixed refusal of the message that does not fit given another class", peer_swap(pl[5], {7: "refused-malformed-message"})),
+        ("a fixed sender at 512 using the peer's larger 4096", peer_swap(pl[8], {6: "4096"})),
+        ("a heap sender reported as sending whole", peer_swap(pl[0], {7: "whole"})),
+        ("a peer announcing its own 4096 to a link of 4096", peer_swap(pl[0], {10: sha(init_syn_bytes(4096))})),
+        ("a peer announcing 512 where it announced 89", peer_swap(pl[0], {10: sha(init_syn_bytes(512))})),
+        ("the peer-batch heap scenario dropped", [line for line in good if line != "links ok peerbatch-heap"]),
+        ("the peer-batch fixed scenario dropped", [line for line in good if line != "links ok peerbatch-fixed"]),
         ("the slot lines dropped", drop("links slots ")),
         ("the heap slot line dropped", drop("links slots heap ")),
         ("the fixed slot line dropped", drop("links slots fixed ")),
@@ -2272,6 +2376,7 @@ def reference_controls() -> int:
 
     cases: list[tuple[str, Callable[[], object]]] = [
         ("a multibyte key longer in bytes than declared though not in characters", lambda: zenoh_fragment.decode_message(zenoh_fragment.full_key_for_exam(5, MULTIBYTE_OVER), max_key=len(MULTIBYTE_KEY.encode()))),
+        ("a run sized for 4096 against a peer announcing 89", lambda: zenoh_fragment.reassemble(zenoh_fragment.reference_split(zenoh_fragment.message(5000), 4096, sn), sn, 89)),
         ("a gap in the sequence numbers", lambda: zenoh_fragment.reassemble([bodies[0], bodies[2]])),
         ("fragments out of order", lambda: zenoh_fragment.reassemble([bodies[1], bodies[0], bodies[2]])),
         ("a run that never ends", lambda: zenoh_fragment.reassemble(bodies[:2])),
@@ -2399,6 +2504,7 @@ def reference_controls() -> int:
         "a fragmented full key with a hash": "invalid-keyexpr",
         "a fragmented full key with a $ wildcard": "wildcard-keyexpr",
         "a truncated sequence number": "truncated",
+        "a run sized for 4096 against a peer announcing 89": "announced batch",
         "a multibyte key longer in bytes than declared though not in characters": "longer than the configuration declares",
         "a PUSH whose body is a delete": "unsupported-message",
         "a PUSH that ends before its body": "truncated",

@@ -1,7 +1,7 @@
 # Zenoh Profile 0 links declared by a named configuration
 
 **Status:** Proposed
-**Related work items:** `01a13930-2793-77b0-bc63-be2f23b1538d` (this decision's exam and
+**Related work items:** `01a13943-5c10-7fbd-b1e0-a1d4c2f89f28` (this decision's exam and
 implementation); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer item
 `01a12f13-a343-7924-af20-18148fc1b0d9` (merged), whose exam this one extends.
 
@@ -49,7 +49,7 @@ declaration before a link is built from it.
    configuration the first release shipped and does not change. `large` is the same mode with bigger
    arrays.
 2. **`heap` mode.** The owning component supplies the storage a fragmented message is reassembled into,
-   from its own allocator. A message may be larger than a batch. One message is reassembled at a time,
+   from its own allocator. A message may be larger than a batch. What a link sends is bounded by the smaller of its own batch, which sizes its send storage, and the batch the peer announced, which is what the peer accepts; a fixed link cannot fragment, so it refuses a message that does not fit that batch. One message is reassembled at a time,
    a gap in the sequence numbers, a run whose first fragment is not the session's next expected sequence
    number, a whole `FRAME` in the middle, an oversize message and a reassembly that outlives its declared
    timeout, measured from the first fragment, with the last allowed to arrive exactly at it and refused one millisecond later (the rule the session's lease uses), are each refused by name, and a storage that cannot hold a message is refused without ending
