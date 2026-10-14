@@ -87,14 +87,18 @@ class Listener:
         # deadline hostage. A reader thread reports the first line and the wait on it is bounded.
         ready = threading.Event()
         stream = self.process.stdout
+        self.output: list[str] = []
 
         def watch() -> None:
+            # The reader runs until the child closes its output: stopping at READY would leave a
+            # pipe nobody drains, and a chatty child would block on it before it wrote its record.
             for line in stream:
+                self.output.append(line)
                 if line.strip() == READY:
                     ready.set()
-                    return
 
-        threading.Thread(target=watch, daemon=True).start()
+        self.reader = threading.Thread(target=watch, daemon=True)
+        self.reader.start()
         if ready.wait(READY_SECONDS):
             return self
         self.__exit__(None, None, None)
@@ -104,9 +108,11 @@ class Listener:
         """Wait for the peer to write its record; returns what it printed."""
         assert self.process is not None and self.process.stdout is not None
         try:
-            output, _ = self.process.communicate(timeout=timeout)
+            self.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as error:
             raise ListenerError("the stock listener did not finish") from error
+        self.reader.join(10)
+        output = "".join(self.output)
         if self.process.returncode != 0:
             raise ListenerError(f"the stock listener exited {self.process.returncode}: {output[-300:]}")
         return output

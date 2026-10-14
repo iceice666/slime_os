@@ -76,18 +76,27 @@ class Segment:
 def _check_arp(frame: bytes) -> None:
     """An ARP request or reply between the guest and the declared peer, and nothing else.
 
-    The sender and target protocol addresses must be the two endpoints, one each, and the sender's
-    hardware address must be the Ethernet source; the guest's is the MAC the composition declares.
+    The sender and target protocol addresses are the two endpoints, one each, and the sender's
+    hardware address is the Ethernet source; the guest's is the MAC the composition declares. A
+    request is broadcast, with a target hardware address of zero (the standard form) or broadcast
+    (what smoltcp 0.13 emits). A reply is addressed to the hardware address it names as its target.
     """
     _need(len(frame) >= 42, "short ARP frame")
     htype, ptype, hlen, plen, operation = struct.unpack_from("!HHBBH", frame, 14)
     _need((htype, ptype, hlen, plen) == (1, 0x0800, 6, 4), "ARP that is not Ethernet and IPv4")
     _need(operation in (1, 2), f"ARP operation {operation} is neither a request nor a reply")
-    sender_mac = frame[22:28]
+    destination, source = frame[0:6], frame[6:12]
+    sender_mac, target_mac = frame[22:28], frame[32:38]
     sender, target = (".".join(str(b) for b in frame[at : at + 4]) for at in (28, 38))
     _need({sender, target} == {GUEST, PEER}, f"ARP from {sender} for {target}: only {GUEST} and {PEER} may speak")
-    _need(sender_mac == frame[6:12], "the ARP sender hardware address is not the Ethernet source")
+    _need(sender_mac == source, "the ARP sender hardware address is not the Ethernet source")
     _need((sender == GUEST) == (sender_mac == GUEST_MAC), f"the ARP sender {sender} has hardware address {sender_mac.hex()}")
+    if operation == 1:
+        _need(destination == BROADCAST, "an ARP request that is not sent to broadcast")
+        _need(target_mac in (bytes(6), BROADCAST), "an ARP request whose target hardware address is neither zero nor broadcast")
+    else:
+        _need(target_mac == destination, "the ARP reply's target hardware address is not its Ethernet destination")
+        _need((target == GUEST) == (target_mac == GUEST_MAC), f"the ARP reply for {target} is addressed to hardware address {target_mac.hex()}")
 
 
 def segments(data: bytes) -> tuple[list[Segment], int]:
@@ -202,13 +211,12 @@ def _kind(batch: bytes) -> int:
     return batch[0] & 0x1F
 
 
-def judge_guest(batches: list[bytes], reported: dict[int, str], contract: dict) -> dict:
+def judge_guest(batches: list[bytes], reported: dict, contract: dict) -> dict:
     """The guest's batches: a connector's INIT_SYN and OPEN_SYN, the four samples, keep-alives, a close."""
     _need(len(batches) >= 2, "the guest sent fewer than an INIT_SYN and an OPEN_SYN")
     init, opened = batches[0], batches[1]
     _need(_kind(init) == zenoh_wire.ID_INIT and not init[0] & zenoh_wire.FLAG_A, "the first guest batch is not an INIT_SYN")
-    _need(len(init) >= 3 and init[1] == zenoh_wire.PROTOCOL_VERSION, "the INIT_SYN is not wire version 9")
-    _need(init[2] & 3 == zenoh_wire.WHATAMI_PEER, "the INIT_SYN is not a peer")
+    _init_fields(init, "INIT_SYN", False)
     _need(_kind(opened) == zenoh_wire.ID_OPEN and not opened[0] & zenoh_wire.FLAG_A, "the second guest batch is not an OPEN_SYN")
     try:
         lease, at = zenoh_wire.read_leb128(opened, 1)
@@ -219,6 +227,7 @@ def judge_guest(batches: list[bytes], reported: dict[int, str], contract: dict) 
     _need(at + cookie == len(opened), "the OPEN_SYN length disagrees with its cookie")
     lease *= 1000 if opened[0] & zenoh_wire.FLAG_T else 1
     _need(lease == LEASE_MS, f"the guest announced a {lease} ms lease, the exam declares {LEASE_MS}")
+    _need(initial_sn == reported["initial_sn"], f"the OPEN_SYN announces initial sequence number {initial_sn}, the connector reported {reported['initial_sn']}")
     frames: list[bytes] = []
     keep_alives = 0
     closed = False
@@ -233,11 +242,11 @@ def judge_guest(batches: list[bytes], reported: dict[int, str], contract: dict) 
         else:
             raise CaptureError(f"a guest batch the exam does not name: header {batch[0]:#04x}, {len(batch)} bytes")
     _need(len(frames) == SAMPLES, f"the guest put {len(frames)} frames on the wire, the demo has {SAMPLES} samples")
-    _need(sorted(reported) == list(range(SAMPLES)), "the guest reported its sent batches for the wrong samples")
+    _need(sorted(reported["sent"]) == list(range(SAMPLES)), "the guest reported its sent batches for the wrong samples")
     received = []
     for index, (sequence, _value, cdr) in enumerate(contract["samples"]):
         batch = frames[index]
-        _need(batch.hex() == reported[sequence], f"sample {sequence}: the wire holds other bytes than the guest reported")
+        _need(batch.hex() == reported["sent"][sequence], f"sample {sequence}: the wire holds other bytes than the guest reported")
         try:
             decoded = zenoh_wire.decode_push_frame(batch)
         except zenoh_wire.WireError as error:
@@ -259,23 +268,30 @@ def _leb(batch: bytes, at: int, label: str) -> tuple[int, int]:
         raise CaptureError(f"{label}: {error}") from error
 
 
-def _init_ack(batch: bytes) -> None:
-    """INIT_ACK: header, version 9, a peer, a 1 to 16 byte ZID, optional size parameters, a cookie.
+def _init_fields(batch: bytes, label: str, cookie: bool) -> None:
+    """INIT: header, version 9, a peer, a 1 to 16 byte ZID, optional size parameters, and in an ACK a cookie.
 
-    The header carries no extension flag: the stock peer's INIT_ACK captured in
-    `zenoh_stock_peer` has none, and an extension this exam does not name is not read past.
+    The header carries no extension flag: the exam names none, and an extension it does not name is
+    not read past. The parse must end exactly at the batch boundary.
     """
-    _need(len(batch) >= 3, "INIT_ACK: truncated before the ZID")
-    _need(not batch[0] & zenoh_wire.FLAG_Z, "INIT_ACK: an extension the exam does not name")
-    _need(batch[1] == zenoh_wire.PROTOCOL_VERSION, f"INIT_ACK: wire version {batch[1]}, not {zenoh_wire.PROTOCOL_VERSION}")
-    _need(batch[2] & 3 == zenoh_wire.WHATAMI_PEER, "INIT_ACK: the peer is not in peer mode")
+    _need(len(batch) >= 3, f"{label}: truncated before the ZID")
+    _need(not batch[0] & zenoh_wire.FLAG_Z, f"{label}: an extension the exam does not name")
+    _need(batch[1] == zenoh_wire.PROTOCOL_VERSION, f"{label}: wire version {batch[1]}, not {zenoh_wire.PROTOCOL_VERSION}")
+    _need(batch[2] & 3 == zenoh_wire.WHATAMI_PEER, f"{label}: the peer is not in peer mode")
     at = 3 + (batch[2] >> 4) + 1
-    _need(at <= len(batch), "INIT_ACK: truncated inside the ZID")
+    _need(at <= len(batch), f"{label}: truncated inside the ZID")
     if batch[0] & zenoh_wire.FLAG_S:
-        _need(at + 3 <= len(batch), "INIT_ACK: truncated inside the size parameters")
+        _need(at + 3 <= len(batch), f"{label}: truncated inside the size parameters")
         at += 3
-    size, at = _leb(batch, at, "INIT_ACK cookie")
-    _need(at + size == len(batch), f"INIT_ACK: a cookie of {size} bytes with {len(batch) - at} left")
+    if cookie:
+        size, at = _leb(batch, at, f"{label} cookie")
+        _need(at + size == len(batch), f"{label}: a cookie of {size} bytes with {len(batch) - at} left")
+    else:
+        _need(at == len(batch), f"{label}: {len(batch) - at} bytes after its fields")
+
+
+def _init_ack(batch: bytes) -> None:
+    _init_fields(batch, "INIT_ACK", True)
 
 
 def _open_ack(batch: bytes) -> None:
@@ -311,7 +327,7 @@ def judge_peer(batches: list[bytes]) -> int:
     return len(batches)
 
 
-def judge_capture(data: bytes, reported: dict[int, str], contract: dict) -> dict:
+def judge_capture(data: bytes, reported: dict, contract: dict) -> dict:
     guest, peer, arp = streams(data)
     result = judge_guest(split(guest, "guest stream"), reported, contract)
     result["peer_batches"] = judge_peer(split(peer, "peer stream"))
@@ -322,29 +338,30 @@ def judge_capture(data: bytes, reported: dict[int, str], contract: dict) -> dict
 # ---------------------------------------------------------------------------- transcript
 
 
-def guest_lines(contract: dict) -> list[str]:
+def guest_lines(contract: dict, initial_sn: int = 0) -> list[str]:
     """What the connector prints when an honest guest runs against an external listener."""
     key = contract["key"]
     lines = [f"[{PUBLISHER}] denial class={cls} refused=1" for cls in DENIALS]
-    lines += [f"[{PUBLISHER}] session open role=connector initial_sn=0 lease_ms={LEASE_MS}", f"[{PUBLISHER}] declaration matched key={key}"]
+    lines += [f"[{PUBLISHER}] session open role=connector initial_sn={initial_sn} lease_ms={LEASE_MS}", f"[{PUBLISHER}] declaration matched key={key}"]
     for sequence, _value, cdr in contract["samples"]:
         att = zenoh_wire.attachment(sequence + 1, 1000, bytes(range(0xE0, 0xF0)))
-        batch = zenoh_wire.frame(sequence, zenoh_wire.push_put(key, att, bytes.fromhex(cdr), True))
+        batch = zenoh_wire.frame(initial_sn + sequence, zenoh_wire.push_put(key, att, bytes.fromhex(cdr), True))
         lines.append(f"[{PUBLISHER}] wire sent sample={sequence} hex={batch.hex()}")
     lines.append(f"[{PUBLISHER}] session closed samples={SAMPLES}")
     return lines
 
 
-def judge_guest_lines(lines: list[str], contract: dict) -> dict[int, str]:
+def judge_guest_lines(lines: list[str], contract: dict) -> dict:
     """The connector's report: its denials, one session, one match, four sent batches, one close.
 
-    Returns the hex of each batch it says it sent, by sample, for the wire to be held against.
+    Returns the hex of each batch it says it sent, by sample, and the initial sequence number it
+    says it opened with, for the wire to be held against.
     """
     own = [line for line in lines if line.startswith(f"[{PUBLISHER}] ")]
     _need(len(own) == len(lines), "a line from a node other than the connector")
     key = re.escape(contract["key"])
     patterns = {
-        "session": rf"\[{PUBLISHER}\] session open role=connector initial_sn=\d+ lease_ms={LEASE_MS}",
+        "session": rf"\[{PUBLISHER}\] session open role=connector initial_sn=(\d+) lease_ms={LEASE_MS}",
         "match": rf"\[{PUBLISHER}\] declaration matched key={key}",
         "close": rf"\[{PUBLISHER}\] session closed samples={SAMPLES}",
     }
@@ -380,7 +397,8 @@ def judge_guest_lines(lines: list[str], contract: dict) -> dict[int, str]:
     _need(opened < matched < where[0], "the order is not session open, declaration matched, first sample")
     _need(where == sorted(where), f"the sent batches are reported in the order of samples {where}, not 0 to {SAMPLES - 1}")
     _need(closed == len(lines) - 1 and closed > where[-1], "the session did not close last")
-    return sent
+    initial_sn = int(re.fullmatch(patterns["session"], lines[opened]).group(1))
+    return {"sent": sent, "initial_sn": initial_sn}
 
 
 # ------------------------------------------------------------------------------ receipt
@@ -622,7 +640,7 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 135
+PINNED_CONTROLS = 152
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
 
@@ -653,7 +671,9 @@ def check_pins(contract: dict) -> int:
 
 
 GUEST_MAC = bytes.fromhex("525400534c01")
-PEER_MAC = bytes.fromhex("525502000202")
+PEER_MAC = bytes.fromhex("52550a000202")
+BROADCAST = bytes.fromhex("ffffffffffff")
+OTHER_MAC = bytes.fromhex("020000000009")
 GUEST_PORT = 49200
 
 
@@ -689,10 +709,18 @@ def _arp() -> bytes:
     return _arp_frame()
 
 
-def _arp_frame(sender: tuple = (10, 0, 2, 15), target: tuple = (10, 0, 2, 2), mac: bytes = GUEST_MAC, operation: int = 1, ptype: int = 0x0800) -> bytes:
-    body = struct.pack("!HHBBH", 1, ptype, 6, 4, operation) + mac + bytes(sender) + bytes(6) + bytes(target)
-    destination = GUEST_MAC if mac == PEER_MAC else PEER_MAC
-    return destination + mac + (0x0806).to_bytes(2, "big") + body
+def _arp_frame(
+    sender: tuple = (10, 0, 2, 15), target: tuple = (10, 0, 2, 2), mac: bytes = GUEST_MAC, operation: int = 1,
+    ptype: int = 0x0800, target_hw: bytes | None = None, dst: bytes | None = None,
+) -> bytes:
+    """A whole ARP frame. A request is broadcast with a broadcast target hardware address, as the
+    guest's stack sends it; a reply goes to the other side's hardware address."""
+    if target_hw is None:
+        target_hw = BROADCAST if operation == 1 else (GUEST_MAC if mac == PEER_MAC else PEER_MAC)
+    if dst is None:
+        dst = BROADCAST if operation == 1 else target_hw
+    body = struct.pack("!HHBBH", 1, ptype, 6, 4, operation) + mac + bytes(sender) + target_hw + bytes(target)
+    return dst + mac + (0x0806).to_bytes(2, "big") + body
 
 
 def pcap(frames: list[bytes]) -> bytes:
@@ -724,7 +752,7 @@ def build(scenario: dict) -> bytes:
         guest_pieces.insert(2, guest_pieces[0])
     if "drop_segment" in scenario:
         del guest_pieces[scenario["drop_segment"]]
-    frames = [_ethernet(_arp()[14:], True, 0x0806)]
+    frames = [_arp()]
     if not scenario.get("no_syn"):
         frames.append(_ethernet(_tcp(GUEST, PEER, sport, dport, gisn, 0, TCP_SYN), True))
         if not scenario.get("no_synack"):
@@ -745,13 +773,13 @@ def build(scenario: dict) -> bytes:
     return pcap(frames)
 
 
-def synthesize(contract: dict) -> dict:
+def synthesize(contract: dict, initial_sn: int = 0) -> dict:
     """The scenario an honest guest and a stock listener produce, from the host reference."""
-    lines = guest_lines(contract)
-    sent = judge_guest_lines(lines, contract)
+    lines = guest_lines(contract, initial_sn)
+    sent = judge_guest_lines(lines, contract)["sent"]
     frames = [bytes.fromhex(sent[i]) for i in range(SAMPLES)]
     zid = bytes(range(1, 9))
-    guest = [zenoh_wire.init(zid, 512), zenoh_wire.open_(LEASE_MS, 0, b"slime-cookie-01"), *frames, zenoh_wire.close(0, True)]
+    guest = [zenoh_wire.init(zid, 512), zenoh_wire.open_(LEASE_MS, initial_sn, b"slime-cookie-01"), *frames, zenoh_wire.close(0, True)]
     peer = [zenoh_wire.init(bytes(range(0x40, 0x48)), 65535, b"stock-cookie-0001"), zenoh_wire.open_(10000, 4242, ack=True), bytes([ID_KEEP_ALIVE])]
     wire = [(contract["key"], f.hex() and zenoh_wire.decode_push_frame(f)["payload"].hex(), _attachment_hex(f)) for f in frames]
     return {"guest": guest, "peer": peer, "lines": lines, "listen": LISTEN, "remote_peers": 1, "receipt": wire}
@@ -805,6 +833,13 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
     def extra(*frames: bytes) -> Callable[[dict], dict]:
         return edit(lambda s: s.setdefault("extra", []).extend(_ethernet(f, True) for f in frames))
 
+    def guest_at(index: int, change: Callable[[bytes], bytes]) -> Callable[[dict], dict]:
+        def run(s: dict) -> dict:
+            s["guest"][index] = change(s["guest"][index])
+            return s
+
+        return run
+
     def peer_at(index: int, change: Callable[[bytes], bytes]) -> Callable[[dict], dict]:
         def run(s: dict) -> dict:
             s["peer"][index] = change(s["peer"][index])
@@ -857,6 +892,13 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("an ARP request for the next address up, 10.0.2.3", raw(_arp_frame(target=(10, 0, 2, 3)))),
         ("an ARP request claiming another sender address", raw(_arp_frame(sender=(10, 0, 2, 16)))),
         ("an ARP request from another hardware address", raw(_arp_frame(mac=bytes.fromhex("525400000001")))),
+        ("an ARP reply with a zero target hardware address", raw(_arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2, target_hw=bytes(6), dst=GUEST_MAC))),
+        ("an ARP reply for the guest naming a third party's hardware address", raw(_arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2, target_hw=OTHER_MAC, dst=OTHER_MAC))),
+        ("an ARP reply whose Ethernet destination is a third party", raw(_arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2, target_hw=GUEST_MAC, dst=OTHER_MAC))),
+        ("an ARP reply sent to broadcast", raw(_arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2, target_hw=GUEST_MAC, dst=BROADCAST))),
+        ("an ARP request that is unicast", raw(_arp_frame(dst=PEER_MAC))),
+        ("an ARP request naming a third party's target hardware address", raw(_arp_frame(target_hw=OTHER_MAC))),
+        ("an ARP frame whose Ethernet source is not its sender hardware address", raw((lambda f: f[:6] + OTHER_MAC + f[12:])(_arp_frame()))),
         ("an ARP operation that is neither request nor reply", raw(_arp_frame(operation=3))),
         ("an ARP request that is not Ethernet and IPv4", raw(_arp_frame(ptype=0x86DD))),
         ("a reset after the data", extra(_tcp(GUEST, PEER, GUEST_PORT, PORT, 9999, 0, TCP_RST))),
@@ -885,6 +927,16 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a batch the exam does not name", put_bytes(lambda g: g.insert(2, bytes([zenoh_wire.ID_DECLARE])))),
         ("a peer that sends no INIT_ACK", edit(lambda s: s.update(peer=[bytes([ID_KEEP_ALIVE])]))),
         ("a peer batch the exam does not name", edit(lambda s: s["peer"].append(bytes([0x0D])))),
+        ("a guest INIT_SYN of three bytes", guest_at(0, lambda b: b[:3])),
+        ("a guest INIT_SYN cut inside its ZID", guest_at(0, lambda b: b[:6])),
+        ("a guest INIT_SYN cut inside its size parameters", guest_at(0, lambda b: b[:-1])),
+        ("a guest INIT_SYN with a byte after it", guest_at(0, lambda b: b + b"\x00")),
+        ("a guest INIT_SYN with an extension flag", guest_at(0, lambda b: bytes([b[0] | 0x80]) + b[1:])),
+        ("a guest INIT_SYN of another wire version", guest_at(0, lambda b: b[:1] + b"\x08" + b[2:])),
+        ("a guest INIT_SYN as a client", guest_at(0, lambda b: b[:2] + bytes([(b[2] & 0xF0) | 2]) + b[3:])),
+        ("a report whose initial sequence number is 999 against a wire of 0", edit(lambda s: s.update(lines=[x.replace("initial_sn=0", "initial_sn=999") for x in s["lines"]]))),
+        ("a report whose initial sequence number is 1 against a wire of 0", edit(lambda s: s.update(lines=[x.replace("initial_sn=0", "initial_sn=1") for x in s["lines"]]))),
+        ("a wire whose initial sequence number is 1 against a report of 0", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 1, b"slime-cookie-01"))),
         ("a peer stream of three one-byte headers", edit(lambda s: s.update(peer=[b"\x21", b"\x22", b"\x03"]))),
         ("an INIT_ACK of another wire version", peer_at(0, lambda b: b[:1] + b"\x08" + b[2:])),
         ("an INIT_ACK from a client", peer_at(0, lambda b: b[:2] + bytes([(b[2] & 0xF0) | 2]) + b[3:])),
@@ -958,7 +1010,7 @@ def byte_mutations() -> list[tuple[str, Callable[[bytes], bytes]]]:
     ]
 
 
-def honest_variants() -> list[tuple[str, Callable[[dict], dict]]]:
+def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
     def update(**changes: object) -> Callable[[dict], dict]:
         def run(s: dict) -> dict:
             s.update(changes)
@@ -976,8 +1028,12 @@ def honest_variants() -> list[tuple[str, Callable[[dict], dict]]]:
         ("keep-alives from the guest", lambda s: {**s, "guest": s["guest"][:2] + [bytes([ID_KEEP_ALIVE])] * 3 + s["guest"][2:]}),
         ("a guest that never sends CLOSE", lambda s: {**s, "guest": s["guest"][:-1]}),
         ("the batches a stock peer sent when it listened, as captured", lambda s: {**s, "peer": [bytes.fromhex(h) for _n, h in zenoh_stock_peer.batches("listens")]}),
+        ("a non-zero initial sequence number, reported and sent consistently", lambda s: synthesize(contract, 5)),
+        ("an INIT_SYN without size parameters", lambda s: {**s, "guest": [zenoh_wire.init(bytes(range(1, 9)), zenoh_wire.DEFAULT_BATCH), *s["guest"][1:]]}),
         ("a SYN-ACK retransmitted identically", update(synack_again=0)),
         ("an ARP reply from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC, operation=2)]}),
+        ("an ARP request with the standard zero target hardware address", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(target_hw=bytes(6))]}),
+        ("an ARP request from the peer", lambda s: {**s, "extra": [*s.get("extra", []), _arp_frame(sender=(10, 0, 2, 2), target=(10, 0, 2, 15), mac=PEER_MAC)]}),
     ]
 
 
@@ -990,7 +1046,7 @@ def controls(contract: dict) -> tuple[int, int, int]:
     first = judge(copy.deepcopy(good), contract)
     _need(first["frames"] == SAMPLES and first["receipt"] == SAMPLES, "the honest scenario was not judged whole")
     accepted = 0
-    for label, change in honest_variants():
+    for label, change in honest_variants(contract):
         try:
             judge(change(copy.deepcopy(good)), contract)
         except (CaptureError, StopIteration) as error:
