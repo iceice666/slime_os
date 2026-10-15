@@ -36,4 +36,6 @@ pub mod zenoh_link;
 pub mod zenoh_node;
 pub mod zenoh_profile0;
 #[cfg(test)]
+mod zenoh_links;
+#[cfg(test)]
 mod zenoh_stock;

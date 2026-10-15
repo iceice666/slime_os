@@ -320,13 +320,13 @@ fn table_error(error: InsertError, full: SessionError) -> SessionError {
 
 /// Delivers a Put to this side's subscriber when it names a key one of them declared.
 fn deliver<'a, const S: usize, const B: usize>(
-    subs: &SlotTable<S, B>,
+    local: &SlotTable<S, B>,
     key: &[u8],
     attachment: crate::zenoh_profile0::Attachment<'a>,
     payload: &'a [u8],
     events: &mut Events<'a>,
 ) -> Result<(), SessionError> {
-    if !subscribed_to(subs, key) {
+    if local.find_key(key).is_none() {
         return Err(SessionError::UndeclaredKey);
     }
     events.push(Event::SampleDelivered {
@@ -336,24 +336,16 @@ fn deliver<'a, const S: usize, const B: usize>(
     })
 }
 
-/// The tag on the id of a subscription this side declared; the peer's carry none.
-const LOCAL: u64 = 1 << 32;
-
-/// Whether this side subscribed to `key`.
-fn subscribed_to<const S: usize, const B: usize>(subs: &SlotTable<S, B>, key: &[u8]) -> bool {
-    subs.find_by(|id, held| id & LOCAL != 0 && held == key).is_some()
-}
-
 /// Takes a slot for a subscriber the peer declared: every slot taken, or its id already held, is the limit.
 fn declare<const S: usize, const B: usize>(
-    subs: &mut SlotTable<S, B>,
+    remote: &mut SlotTable<S, B>,
     id: u64,
     key: &[u8],
 ) -> Result<usize, SessionError> {
-    if subs.len() >= S || subs.find(id).is_some() {
+    if remote.len() >= S || remote.find(id).is_some() {
         return Err(SessionError::SubscriberLimit);
     }
-    subs
+    remote
         .insert(id, key)
         .map_err(|error| table_error(error, SessionError::SubscriberLimit))
 }
@@ -389,14 +381,14 @@ pub struct SessionOf<
     reassembly: Reassembly,
     /// The key aliases a stock peer declared with DeclareKeyExpr, and the keys they stand for.
     aliases: SlotTable<K, B>,
-    /// Every subscription, this side's and the peer's, in the `S` slots the configuration declares. A
-    /// received PUSH is delivered only to the keys of this side's, and a Put this side sends must name
-    /// one of the peer's.
-    subs: SlotTable<S, B>,
+    /// The subscriptions this side declared; received PUSH messages are delivered only to their keys.
+    local: SlotTable<S, B>,
+    /// The subscriptions the peer declared; a Put this side sends must name one of their keys.
+    remote: SlotTable<S, B>,
 }
 
 /// The first release's session.
-pub type Session = SessionOf<1, 2, MAX_KEY_BYTES>;
+pub type Session = SessionOf<1, 1, MAX_KEY_BYTES>;
 
 impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
     /// A session with the first release's parameters, in [`State::Idle`], or
@@ -452,7 +444,8 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
             peer_batch: usize::from(u16::MAX),
             reassembly: Reassembly::new(params.timeout_ms, params.message_limit),
             aliases: SlotTable::new(),
-            subs: SlotTable::new(),
+            local: SlotTable::new(),
+            remote: SlotTable::new(),
         })
     }
 
@@ -506,40 +499,34 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         self.reassembly.is_open()
     }
 
-    /// The subscribers held, of both sides.
+    /// The subscribers this side declared.
     pub const fn subscribers(&self) -> usize {
-        self.subs.len()
+        self.local.len()
     }
 
-    /// The key aliases the peer declared.
-    pub const fn aliases(&self) -> usize {
-        self.aliases.len()
-    }
-
-    fn first_of(&self, side: u64) -> Option<(u32, &[u8])> {
-        let at = self.subs.find_by(|id, _| id & LOCAL == side)?;
-        let (id, key) = self.subs.get(at)?;
-        Some((id as u32, key))
+    /// The subscribers the peer declared.
+    pub const fn peer_subscribers(&self) -> usize {
+        self.remote.len()
     }
 
     /// The id of the subscriber this side declared, if any.
     pub fn subscriber_id(&self) -> Option<u32> {
-        self.first_of(LOCAL).map(|(id, _)| id)
+        self.local.first().map(|(id, _)| id as u32)
     }
 
     /// The key of the subscriber this side declared, if any.
     pub fn subscriber_key(&self) -> Option<&str> {
-        core::str::from_utf8(self.first_of(LOCAL)?.1).ok()
+        core::str::from_utf8(self.local.first()?.1).ok()
     }
 
     /// The id of the subscriber the peer declared, if any.
     pub fn peer_subscriber_id(&self) -> Option<u32> {
-        self.first_of(0).map(|(id, _)| id)
+        self.remote.first().map(|(id, _)| id as u32)
     }
 
     /// The key of the subscriber the peer declared, if any.
     pub fn peer_subscriber_key(&self) -> Option<&str> {
-        core::str::from_utf8(self.first_of(0)?.1).ok()
+        core::str::from_utf8(self.remote.first()?.1).ok()
     }
 
     /// The time after which [`tick`](Self::tick) closes the session; `None`
@@ -575,7 +562,8 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
 
     fn shut(&mut self) {
         self.state = State::Closed;
-        self.subs.clear();
+        self.local.clear();
+        self.remote.clear();
         self.aliases.clear();
         self.reassembly.release();
     }
@@ -814,7 +802,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
             Ok(()) => {
                 for change in journal.iter().take(used).flatten() {
                     if let Change::Unsubscribed(at) = *change {
-                        self.subs.settle(at);
+                        self.remote.settle(at);
                     }
                 }
                 self.rx_sn = self.rx_sn.wrapping_add(1);
@@ -824,8 +812,8 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                 for change in journal.iter().take(used).rev().flatten() {
                     match *change {
                         Change::Alias(at) => self.aliases.remove(at),
-                        Change::Subscribed(at) => self.subs.remove(at),
-                        Change::Unsubscribed(at) => self.subs.restore(at),
+                        Change::Subscribed(at) => self.remote.remove(at),
+                        Change::Unsubscribed(at) => self.remote.restore(at),
                     }
                 }
                 Err(error)
@@ -851,7 +839,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         for network in frame.messages() {
             match network {
                 Network::DeclareSubscriber { id, key, .. } => {
-                    let at = declare(&mut self.subs, u64::from(id), key.as_bytes())?;
+                    let at = declare(&mut self.remote, u64::from(id), key.as_bytes())?;
                     note(Change::Subscribed(at))?;
                     events.push(Event::SubscriberDeclared { id })?;
                 }
@@ -861,21 +849,21 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                     alias: named,
                 } => {
                     let held = resolve(&self.aliases, named, mapping)?;
-                    let at = declare(&mut self.subs, u64::from(id), held)?;
+                    let at = declare(&mut self.remote, u64::from(id), held)?;
                     note(Change::Subscribed(at))?;
                     events.push(Event::SubscriberDeclared { id })?;
                 }
                 Network::UndeclareSubscriber { id, key, .. } => {
                     let at = self
-                        .subs
+                        .remote
                         .find(u64::from(id))
                         .filter(|&at| {
-                            self.subs
+                            self.remote
                                 .get(at)
                                 .is_some_and(|(_, held)| held == key.as_bytes())
                         })
                         .ok_or(SessionError::UnknownSubscriber)?;
-                    self.subs.defer_remove(at);
+                    self.remote.defer_remove(at);
                     note(Change::Unsubscribed(at))?;
                     events.push(Event::SubscriberUndeclared { id })?;
                 }
@@ -884,7 +872,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                     attachment,
                     payload,
                     ..
-                } => deliver(&self.subs, key.as_bytes(), attachment, payload, events)?,
+                } => deliver(&self.local, key.as_bytes(), attachment, payload, events)?,
                 Network::PushPutAlias {
                     mapping,
                     alias: named,
@@ -892,7 +880,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                     payload,
                 } => {
                     let held = resolve(&self.aliases, named, mapping)?;
-                    deliver(&self.subs, held, attachment, payload, events)?;
+                    deliver(&self.local, held, attachment, payload, events)?;
                 }
                 Network::DeclareKeyExpr { id, key } => {
                     // The same id again is a redeclaration whether or not it names the same key; a
@@ -938,8 +926,8 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
             return Ok(Outcome::nothing());
         }
         let (message, next) = self.reassembly.finish(cell)?;
-        let subs = &self.subs;
-        let subscribed = |key: &[u8]| subscribed_to(subs, key);
+        let local = &self.local;
+        let subscribed = |key: &[u8]| local.find_key(key).is_some();
         let rules = PutRules {
             max_key: self.params.bounds.key,
             max_payload: self.params.bounds.payload as u64,
@@ -1059,14 +1047,14 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         key: &str,
         out: &mut [u8],
     ) -> Result<Outcome<'a>, SessionError> {
-        if self.subs.len() >= S || self.subs.find(LOCAL | u64::from(id)).is_some() {
+        if self.local.len() >= S || self.local.find(u64::from(id)).is_some() {
             return Err(SessionError::SubscriberLimit);
         }
         let outcome = self.send_frame(out, |frame| {
             frame.declare_subscriber(id, Mapping::Sender, key)
         })?;
-        self.subs
-            .insert(LOCAL | u64::from(id), key.as_bytes())
+        self.local
+            .insert(u64::from(id), key.as_bytes())
             .map_err(|error| table_error(error, SessionError::SubscriberLimit))?;
         Ok(outcome)
     }
@@ -1079,10 +1067,10 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         out: &mut [u8],
     ) -> Result<Outcome<'a>, SessionError> {
         let at = self
-            .subs
-            .find(LOCAL | u64::from(id))
+            .local
+            .find(u64::from(id))
             .filter(|&at| {
-                self.subs
+                self.local
                     .get(at)
                     .is_some_and(|(_, held)| held == key.as_bytes())
             })
@@ -1090,7 +1078,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         let outcome = self.send_frame(out, |frame| {
             frame.undeclare_subscriber(id, Mapping::Sender, key)
         })?;
-        self.subs.remove(at);
+        self.local.remove(at);
         Ok(outcome)
     }
 
@@ -1101,7 +1089,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         attachment: &[u8],
         payload_len: usize,
     ) -> Result<(), SessionError> {
-        if self.subs.find_by(|id, held| id & LOCAL == 0 && held == key.as_bytes()).is_none() {
+        if self.remote.find_key(key.as_bytes()).is_none() {
             return Err(SessionError::UndeclaredKey);
         }
         encode::validate_put(key, attachment, payload_len, &self.params.bounds)?;
