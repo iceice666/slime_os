@@ -113,7 +113,10 @@ fn the_stock_fragments_reassemble_to_the_payload_they_carried() {
         let payload = reassemble(&bodies, batch, sn, 129);
         assert_eq!(payload, codec::payload(size));
         let capture = std::format!("{size}-{batch}");
-        line(&std::format!("reassembled {capture} {size} {}", codec::sha(&payload)));
+        line(&std::format!(
+            "reassembled {capture} {size} {}",
+            codec::sha(&payload)
+        ));
         ok(&std::format!("reassemble-stock-{capture}"));
     }
 }
@@ -130,8 +133,19 @@ fn whole_edge(batch: usize, sn: u32) -> usize {
 #[test]
 fn a_put_travels_whole_until_its_frame_overruns_the_batch() {
     let edge = whole_edge(BATCH, FULL_KEY_SN);
-    assert_eq!(codec::split(&codec::full_key_put(codec::KEY, edge), BATCH, FULL_KEY_SN).len(), 1);
-    assert_eq!(codec::split(&codec::full_key_put(codec::KEY, edge + 1), BATCH, FULL_KEY_SN).len(), 2);
+    assert_eq!(
+        codec::split(&codec::full_key_put(codec::KEY, edge), BATCH, FULL_KEY_SN).len(),
+        1
+    );
+    assert_eq!(
+        codec::split(
+            &codec::full_key_put(codec::KEY, edge + 1),
+            BATCH,
+            FULL_KEY_SN
+        )
+        .len(),
+        2
+    );
     line(&std::format!("boundary {edge} whole 1"));
     line(&std::format!("boundary {} fragmented 2", edge + 1));
     ok("boundary-whole-then-fragmented");
@@ -139,7 +153,16 @@ fn a_put_travels_whole_until_its_frame_overruns_the_batch() {
 
 #[test]
 fn the_edge_between_whole_and_fragmented_follows_the_width_of_the_sequence_number() {
-    for sn in [127u32, 128, 16_383, 16_384, 2_097_151, 2_097_152, 268_435_455, 268_435_456] {
+    for sn in [
+        127u32,
+        128,
+        16_383,
+        16_384,
+        2_097_151,
+        2_097_152,
+        268_435_455,
+        268_435_456,
+    ] {
         let edge = whole_edge(BATCH, sn);
         let whole = codec::split(&codec::full_key_put(codec::KEY, edge), BATCH, sn);
         let over = codec::split(&codec::full_key_put(codec::KEY, edge + 1), BATCH, sn);
@@ -153,8 +176,16 @@ fn the_edge_between_whole_and_fragmented_follows_the_width_of_the_sequence_numbe
 #[test]
 fn our_put_is_cut_into_the_bodies_the_reference_cuts() {
     let message = codec::full_key_put(codec::KEY, 5000);
-    for (index, body) in codec::split(&message, BATCH, FULL_KEY_SN).iter().enumerate() {
-        line(&std::format!("fullkey {index} {} {:02x} {}", body.len(), body[0], codec::sha(body)));
+    for (index, body) in codec::split(&message, BATCH, FULL_KEY_SN)
+        .iter()
+        .enumerate()
+    {
+        line(&std::format!(
+            "fullkey {index} {} {:02x} {}",
+            body.len(),
+            body[0],
+            codec::sha(body)
+        ));
     }
     ok("put-roundtrip-5000-2048");
     for start in [127u32, 16_383, 2_097_151, 268_435_455, 0xFFFF_FFFE] {
@@ -162,7 +193,12 @@ fn our_put_is_cut_into_the_bodies_the_reference_cuts() {
         assert_eq!(reassemble(&bodies, BATCH, start, 129), codec::payload(5000));
         for (index, body) in bodies.iter().enumerate() {
             assert!(body.len() <= BATCH - 2);
-            line(&std::format!("widthsplit {start} {index} {} {:02x} {}", body.len(), body[0], codec::sha(body)));
+            line(&std::format!(
+                "widthsplit {start} {index} {} {:02x} {}",
+                body.len(),
+                body[0],
+                codec::sha(body)
+            ));
         }
     }
     ok("put-roundtrip-across-sequence-width");
@@ -173,9 +209,17 @@ fn a_put_of_the_declared_payload_is_cut_into_nine_fragments() {
     let message = codec::full_key_put(codec::KEY, 16_384);
     let bodies = codec::split(&message, BATCH, FULL_KEY_SN);
     assert_eq!(bodies.len(), 9);
-    assert_eq!(reassemble(&bodies, BATCH, FULL_KEY_SN, 129), codec::payload(16_384));
+    assert_eq!(
+        reassemble(&bodies, BATCH, FULL_KEY_SN, 129),
+        codec::payload(16_384)
+    );
     for (index, body) in bodies.iter().enumerate() {
-        line(&std::format!("heapfrag {index} {} {:02x} {}", body.len(), body[0], codec::sha(body)));
+        line(&std::format!(
+            "heapfrag {index} {} {:02x} {}",
+            body.len(),
+            body[0],
+            codec::sha(body)
+        ));
     }
     ok("put-roundtrip-at-the-declared-payload");
 }
@@ -191,7 +235,9 @@ fn a_complete_put_may_be_one_final_fragment() {
         let mut storage = std::vec![0u8; message.len()];
         let mut reassembly = Reassembly::new(5000, message.len());
         let fragment = decode_fragment(&bodies[0], Some(BATCH)).expect("fragment");
-        reassembly.accept(&fragment, &mut storage, sn, 0).expect("accepted");
+        reassembly
+            .accept(&fragment, &mut storage, sn, 0)
+            .expect("accepted");
         let (_, after) = reassembly.finish(&storage).expect("finished");
         line(&std::format!(
             "single {sn} {} {} {after} {}",
@@ -223,7 +269,10 @@ fn a_run_whose_interior_fragments_are_shorter_than_the_maximum_is_taken() {
             break;
         }
     }
-    assert_eq!(reassemble(&bodies, BATCH, FULL_KEY_SN, 129), codec::payload(5000));
+    assert_eq!(
+        reassemble(&bodies, BATCH, FULL_KEY_SN, 129),
+        codec::payload(5000)
+    );
     let lengths: Vec<String> = bodies.iter().map(|b| b.len().to_string()).collect();
     let digests: Vec<String> = bodies.iter().map(|b| codec::sha(b)).collect();
     line(&std::format!(
@@ -388,7 +437,10 @@ fn pair_with<
     let a_to_b = Rc::new(RefCell::new(Pipe::default()));
     let b_to_a = Rc::new(RefCell::new(Pipe::default()));
     let a = LinkOf::with_params(
-        Scripted { rx: b_to_a.clone(), tx: a_to_b.clone() },
+        Scripted {
+            rx: b_to_a.clone(),
+            tx: a_to_b.clone(),
+        },
         Role::Connector,
         &config(exam_zid(), b"", a_sn),
         params,
@@ -396,7 +448,10 @@ fn pair_with<
     )
     .expect("connector");
     let b = LinkOf::with_params(
-        Scripted { rx: a_to_b.clone(), tx: b_to_a.clone() },
+        Scripted {
+            rx: a_to_b.clone(),
+            tx: b_to_a.clone(),
+        },
         Role::Listener,
         &config(exam_zid(), exam_cookie(), b_sn),
         params,
@@ -420,20 +475,20 @@ fn pair_with<
     }
 }
 
-impl<
-    const F: usize,
-    const K: usize,
-    const S: usize,
-    const B: usize,
-    const P: usize,
-    const Q: usize,
-> Pair<F, K, S, B, P, Q>
+impl<const F: usize, const K: usize, const S: usize, const B: usize, const P: usize, const Q: usize>
+    Pair<F, K, S, B, P, Q>
 {
     /// Pumps both ends until neither moves a byte or reads a batch.
     fn run(&mut self, now: u64) {
         for _ in 0..4000 {
-            let a = self.a.pump_with(self.ha, now, &mut self.heap_a).expect("a pump");
-            let b = self.b.pump_with(self.hb, now, &mut self.heap_b).expect("b pump");
+            let a = self
+                .a
+                .pump_with(self.ha, now, &mut self.heap_a)
+                .expect("a pump");
+            let b = self
+                .b
+                .pump_with(self.hb, now, &mut self.heap_b)
+                .expect("b pump");
             let quiet = a.batches + b.batches + a.sent_bytes + b.sent_bytes == 0
                 && !self.a.send_pending()
                 && !self.b.send_pending();
@@ -447,8 +502,12 @@ impl<
     fn open(&mut self) {
         self.a.open(self.ha, 0).expect("open");
         self.syn = self.a.last_sent_batch().to_vec();
-        self.a.pump_with(self.ha, 0, &mut self.heap_a).expect("a pump");
-        self.b.pump_with(self.hb, 0, &mut self.heap_b).expect("b pump");
+        self.a
+            .pump_with(self.ha, 0, &mut self.heap_a)
+            .expect("a pump");
+        self.b
+            .pump_with(self.hb, 0, &mut self.heap_b)
+            .expect("b pump");
         self.ack = self.b.last_sent_batch().to_vec();
         self.run(0);
         assert!(self.a.is_open() && self.b.is_open(), "handshake");
@@ -458,7 +517,9 @@ impl<
     }
 
     fn declare(&mut self, id: u32, key: &str) {
-        self.b.declare_subscriber(self.hb, id, key).expect("declare");
+        self.b
+            .declare_subscriber(self.hb, id, key)
+            .expect("declare");
         self.run(1);
         while self.a.next_notice().is_some() {}
     }
@@ -466,13 +527,18 @@ impl<
     /// Sends one Put from `a` to `b`, whole or in fragments, settling the pair after each part.
     fn send(&mut self, key: &str, payload: &[u8], now: u64) {
         self.sequence += 1;
-        let attachment = encode::attachment(self.sequence, 1000 + self.sequence, &codec::GID).expect("attachment");
+        let attachment = encode::attachment(self.sequence, 1000 + self.sequence, &codec::GID)
+            .expect("attachment");
         match self.a.publish(self.ha, key, &attachment, payload) {
             Ok(()) => self.run(now),
             Err(Error::NeedsFragments) => {
                 let mut at = 0;
                 loop {
-                    match self.a.publish_part(self.ha, key, &attachment, payload, at).expect("fragment") {
+                    match self
+                        .a
+                        .publish_part(self.ha, key, &attachment, payload, at)
+                        .expect("fragment")
+                    {
                         Some(next) => {
                             at = next;
                             self.run(now);
@@ -500,7 +566,9 @@ impl<
 
 /// A payload of `size` bytes that differs from every other `index`, so an overwrite is noticed.
 fn distinct_payload(size: usize, index: usize) -> Vec<u8> {
-    (0..size).map(|i| ((i * 7 + 1 + index * 13) % 251) as u8).collect()
+    (0..size)
+        .map(|i| ((i * 7 + 1 + index * 13) % 251) as u8)
+        .collect()
 }
 
 fn heap_pair() -> HeapPair {
@@ -526,11 +594,18 @@ fn a_heap_link_holds_the_queued_samples_and_one_message_in_progress() {
     sent.push(codec::sha(&payload));
     pair.send(codec::KEY, &payload, 10);
     assert_eq!(pair.b.notices_queued(), held);
-    assert!(pair.b.session().reassembling(), "the ninth message is in progress");
+    assert!(
+        pair.b.session().reassembling(),
+        "the ninth message is in progress"
+    );
     let mut back = Vec::new();
     for index in 0..held {
         let sample = pair.take_sample().expect("a notice");
-        assert_eq!(sample, distinct_payload(16_384, index), "sample {index} is intact");
+        assert_eq!(
+            sample,
+            distinct_payload(16_384, index),
+            "sample {index} is intact"
+        );
         back.push(codec::sha(&sample));
     }
     pair.run(11);
@@ -538,13 +613,20 @@ fn a_heap_link_holds_the_queued_samples_and_one_message_in_progress() {
     assert_eq!(sample, payload);
     back.push(codec::sha(&sample));
     assert_eq!(sent, back);
-    line(&std::format!("queue {held} 1 16384 {} {}", digest_of(&sent), digest_of(&back)));
+    line(&std::format!(
+        "queue {held} 1 16384 {} {}",
+        digest_of(&sent),
+        digest_of(&back)
+    ));
     ok("heap-fills-notice-queue");
     // With the queue drained a further message is joined and delivered.
     let payload = distinct_payload(16_384, held + 1);
     pair.send(codec::KEY, &payload, 12);
     assert_eq!(pair.take_sample().expect("a notice"), payload);
-    line(&std::format!("drained {held} 16384 {}", codec::sha(&payload)));
+    line(&std::format!(
+        "drained {held} 16384 {}",
+        codec::sha(&payload)
+    ));
     ok("heap-reassembles-after-queue-drained");
 }
 
@@ -555,7 +637,11 @@ fn a_put_of_the_declared_payload_is_joined_into_the_declared_heap() {
     pair.send(codec::KEY, &payload, 10);
     assert_eq!(pair.take_sample().expect("a notice"), payload);
     assert_eq!(HEAP.heap_needed(), HEAP.heap_bytes);
-    line(&std::format!("payload 16384 {} {}", HEAP.heap_bytes, codec::sha(&payload)));
+    line(&std::format!(
+        "payload 16384 {} {}",
+        HEAP.heap_bytes,
+        codec::sha(&payload)
+    ));
     ok("heap-declared-payload-boundary");
     ok("heap-storage-from-component");
 }
@@ -566,11 +652,23 @@ mod scenarios;
 const REFUSALS: [(&str, &str); 94] = [
     ("fixed-refuses-fragment", "unsupported-message"),
     ("fixed-refuses-best-effort-fragment", "unsupported-message"),
-    ("fixed-refuses-fragment-with-extension", "unsupported-message"),
+    (
+        "fixed-refuses-fragment-with-extension",
+        "unsupported-message",
+    ),
     ("fixed-refuses-empty-fragment", "unsupported-message"),
-    ("fixed-refuses-fragment-sequence-noncanonical", "unsupported-message"),
-    ("fixed-refuses-fragment-sequence-over-32-bits", "unsupported-message"),
-    ("fixed-refuses-fragment-sequence-truncated", "unsupported-message"),
+    (
+        "fixed-refuses-fragment-sequence-noncanonical",
+        "unsupported-message",
+    ),
+    (
+        "fixed-refuses-fragment-sequence-over-32-bits",
+        "unsupported-message",
+    ),
+    (
+        "fixed-refuses-fragment-sequence-truncated",
+        "unsupported-message",
+    ),
     ("fragment-best-effort", "unsupported-message"),
     ("fragment-extension", "unsupported-extension"),
     ("empty-fragment", "malformed-message"),
@@ -585,7 +683,10 @@ const REFUSALS: [(&str, &str); 94] = [
     ("fragment-skipped-first-sequence", "sequence-mismatch"),
     ("frame-during-reassembly", "unexpected-message"),
     ("fragments-of-two-messages-in-one-run", "trailing-bytes"),
-    ("best-effort-fragment-during-reassembly", "unsupported-message"),
+    (
+        "best-effort-fragment-during-reassembly",
+        "unsupported-message",
+    ),
     ("fragmented-put-without-attachment", "malformed-message"),
     ("fragmented-put-with-short-attachment", "malformed-message"),
     ("fragmented-put-gid-length-15", "malformed-message"),
@@ -624,7 +725,10 @@ const REFUSALS: [(&str, &str); 94] = [
     ("fragmented-put-alias-for-another-key", "undeclared-key"),
     ("fragmented-put-receiver-mapped-alias", "invalid-keyexpr"),
     ("fragmented-put-key-length-over-16-bits", "leb128-overflow"),
-    ("fragmented-put-attachment-length-over-32-bits", "leb128-overflow"),
+    (
+        "fragmented-put-attachment-length-over-32-bits",
+        "leb128-overflow",
+    ),
     ("fragmented-put-scope-256", "invalid-keyexpr"),
     ("fragmented-put-key-length-256", "over-bound"),
     ("fragmented-put-attachment-length-65536", "over-bound"),
@@ -639,10 +743,22 @@ const REFUSALS: [(&str, &str); 94] = [
     ("fragment-sequence-noncanonical", "leb128-noncanonical"),
     ("fragment-sequence-over-32-bits", "leb128-overflow"),
     ("fragmented-put-scope-noncanonical", "leb128-noncanonical"),
-    ("fragmented-put-key-length-noncanonical", "leb128-noncanonical"),
-    ("fragmented-put-attachment-length-noncanonical", "leb128-noncanonical"),
-    ("fragmented-put-payload-length-noncanonical", "leb128-noncanonical"),
-    ("fragmented-put-payload-length-over-32-bits", "leb128-overflow"),
+    (
+        "fragmented-put-key-length-noncanonical",
+        "leb128-noncanonical",
+    ),
+    (
+        "fragmented-put-attachment-length-noncanonical",
+        "leb128-noncanonical",
+    ),
+    (
+        "fragmented-put-payload-length-noncanonical",
+        "leb128-noncanonical",
+    ),
+    (
+        "fragmented-put-payload-length-over-32-bits",
+        "leb128-overflow",
+    ),
     ("fragmented-put-undeclared-alias", "invalid-keyexpr"),
     ("fragment-over-the-announced-batch", "length-exceeds-batch"),
     ("reassembly-timeout", "reassembly-timeout"),
@@ -673,11 +789,18 @@ fn every_refusal_carries_the_class_the_exam_names() {
             .join();
         match outcome {
             Ok(got) if got == expected => line(&std::format!("refused {name} {got}")),
-            Ok(got) => failed.push(std::format!("{name}: refused as {got}, the exam names {expected}")),
+            Ok(got) => failed.push(std::format!(
+                "{name}: refused as {got}, the exam names {expected}"
+            )),
             Err(_) => failed.push(std::format!("{name}: the scenario did not hold")),
         }
     }
-    assert!(failed.is_empty(), "{} rows:\n{}", failed.len(), failed.join("\n"));
+    assert!(
+        failed.is_empty(),
+        "{} rows:\n{}",
+        failed.len(),
+        failed.join("\n")
+    );
 }
 
 const OK_ORDER: [&str; 56] = [
@@ -747,10 +870,23 @@ fn zz_every_scenario_finished_and_is_reported_in_the_exams_order() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(sorted.len(), finished.len(), "a scenario finished twice");
-    let missing: Vec<&str> = OK_ORDER.iter().copied().filter(|name| !finished.iter().any(|f| f == name)).collect();
-    assert!(missing.is_empty(), "scenarios that did not finish: {missing:?}");
-    let extra: Vec<&String> = finished.iter().filter(|f| !OK_ORDER.contains(&f.as_str())).collect();
-    assert!(extra.is_empty(), "scenarios the exam does not pin: {extra:?}");
+    let missing: Vec<&str> = OK_ORDER
+        .iter()
+        .copied()
+        .filter(|name| !finished.iter().any(|f| f == name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "scenarios that did not finish: {missing:?}"
+    );
+    let extra: Vec<&String> = finished
+        .iter()
+        .filter(|f| !OK_ORDER.contains(&f.as_str()))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "scenarios the exam does not pin: {extra:?}"
+    );
     // Within a kind the exam pins an order; across kinds it does not, so each kind is printed whole.
     let held = ORDERED.lock().expect("registry").clone();
     for kind in ["edge ", "fixededge ", "peerbatch "] {
@@ -778,8 +914,14 @@ fn order_of(text: &str) -> usize {
     const FIXED: [&str; 2] = ["edge-fixed-batch-89", "edge-fixed-batch-4096"];
     let fields: Vec<&str> = text.split(' ').collect();
     match fields[0] {
-        "edge" => EDGES.iter().position(|name| *name == fields[1]).expect("a pinned edge"),
-        "fixededge" => FIXED.iter().position(|name| *name == fields[1]).expect("a pinned fixed edge"),
+        "edge" => EDGES
+            .iter()
+            .position(|name| *name == fields[1])
+            .expect("a pinned edge"),
+        "fixededge" => FIXED
+            .iter()
+            .position(|name| *name == fields[1])
+            .expect("a pinned fixed edge"),
         _ => {
             // peerbatch: the heap rows first, then the fixed ones, each in the order the exam lists them.
             let key = (fields[1], fields[2], fields[3], fields[4]);

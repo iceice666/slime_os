@@ -15,8 +15,8 @@
 
 use super::encode::{self, EncodeError, FrameEncoder};
 use super::fragment::{
-    FragmentError, PutMessage, PutRules, Source, Splitter, decode_fragment, decode_put, fits_one_frame,
-    is_fragment,
+    FragmentError, PutMessage, PutRules, Source, Splitter, decode_fragment, decode_put,
+    fits_one_frame, is_fragment,
 };
 use super::limits::{Limits, Mode};
 use super::reassembly::{Progress, Reassembly};
@@ -346,17 +346,14 @@ const LOCAL: u64 = 1 << 32;
 
 /// Whether this side subscribed to `key`.
 fn subscribed_to<const S: usize, const B: usize>(subs: &SlotTable<S, B>, key: &[u8]) -> bool {
-    subs.find_by(|id, held| id & LOCAL != 0 && held == key).is_some()
+    subs.find_by(|id, held| id & LOCAL != 0 && held == key)
+        .is_some()
 }
 
 /// A session over `K` key aliases and `S` subscribers of each side, keys of up to `B` bytes. The
 /// defaults are the first release's.
 #[derive(Clone, Debug)]
-pub struct SessionOf<
-    const K: usize = 1,
-    const S: usize = 1,
-    const B: usize = MAX_KEY_BYTES,
-> {
+pub struct SessionOf<const K: usize = 1, const S: usize = 1, const B: usize = MAX_KEY_BYTES> {
     role: Role,
     state: State,
     params: Params,
@@ -934,10 +931,12 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                     if self.aliases.find(u64::from(id)).is_some() {
                         return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
                     }
-                    let at = self
-                        .aliases
-                        .insert(u64::from(id), key.as_bytes())
-                        .map_err(|error| table_error(error, SessionError::Decode(Refusal::OverBound)))?;
+                    let at =
+                        self.aliases
+                            .insert(u64::from(id), key.as_bytes())
+                            .map_err(|error| {
+                                table_error(error, SessionError::Decode(Refusal::OverBound))
+                            })?;
                     note(Change::Alias(at))?;
                 }
                 Network::Oam | Network::DeclareFinal => {}
@@ -1143,7 +1142,11 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         attachment: &[u8],
         payload_len: usize,
     ) -> Result<(), SessionError> {
-        if self.subs.find_by(|id, held| id & LOCAL == 0 && held == key.as_bytes()).is_none() {
+        if self
+            .subs
+            .find_by(|id, held| id & LOCAL == 0 && held == key.as_bytes())
+            .is_none()
+        {
             return Err(SessionError::UndeclaredKey);
         }
         encode::validate_put(key, attachment, payload_len, &self.params.bounds)?;
@@ -1153,7 +1156,8 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
     /// Whether a Put of `payload_len` bytes under `key` travels in one FRAME at the next sequence number.
     pub fn put_fits_one_frame(&self, key: &str, attachment: &[u8], payload_len: usize) -> bool {
         let message = PutMessage::new(key.as_bytes(), attachment, &[]);
-        let size = Source::len(&message) - 1 + super::limits::leb_bytes(payload_len as u64) + payload_len;
+        let size =
+            Source::len(&message) - 1 + super::limits::leb_bytes(payload_len as u64) + payload_len;
         fits_one_frame(size, self.send_body_max() + STREAM_LENGTH_BYTES, self.tx_sn)
     }
 

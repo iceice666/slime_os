@@ -139,7 +139,8 @@ impl Limits {
 
     /// The key and subscriber slots a configuration declares.
     pub const fn slot_bytes(&self) -> u64 {
-        (self.max_keys as u64 + self.max_subscribers as u64) * (self.key_bytes as u64 + SLOT_OVERHEAD_BYTES)
+        (self.max_keys as u64 + self.max_subscribers as u64)
+            * (self.key_bytes as u64 + SLOT_OVERHEAD_BYTES)
     }
 
     /// The queued sample notices. A fixed link copies each payload into its notice; a heap link hands
@@ -149,12 +150,17 @@ impl Limits {
             Mode::Fixed => self.payload_bytes,
             Mode::Heap => 0,
         };
-        NOTICES_PER_SAMPLE as u64 * self.outstanding_samples as u64 * (NOTICE_OVERHEAD_BYTES + carried)
+        NOTICES_PER_SAMPLE as u64
+            * self.outstanding_samples as u64
+            * (NOTICE_OVERHEAD_BYTES + carried)
     }
 
     /// The memory the owning component declares for the link's fixed storage.
     pub const fn required_stack(&self) -> u64 {
-        STACK_FACTOR * self.batch_bytes as u64 + SESSION_FIXED_BYTES + self.slot_bytes() + self.notice_bytes()
+        STACK_FACTOR * self.batch_bytes as u64
+            + SESSION_FIXED_BYTES
+            + self.slot_bytes()
+            + self.notice_bytes()
     }
 
     /// The heap a heap link needs: every queued sample notice holds a whole message until it is

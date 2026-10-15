@@ -31,7 +31,11 @@ fn fill<const N: usize>() {
         table.insert(id + 1, b"k").expect("room");
     }
     assert_eq!(table.len(), N);
-    assert_eq!(table.insert(N as u64 + 1, b"k"), Err(InsertError::Full), "{N}");
+    assert_eq!(
+        table.insert(N as u64 + 1, b"k"),
+        Err(InsertError::Full),
+        "{N}"
+    );
     for id in 0..N as u64 {
         assert!(table.find(id + 1).is_some(), "{N}: {id}");
     }
@@ -75,7 +79,8 @@ fn ids_that_collide_are_each_found_and_removal_leaves_the_chain_intact() {
 #[test]
 fn a_removed_slot_makes_room_in_a_full_table() {
     let mut table = SlotTable::<3, 4>::new();
-    let slots: [usize; 3] = core::array::from_fn(|i| table.insert(i as u64 + 1, b"k").expect("room"));
+    let slots: [usize; 3] =
+        core::array::from_fn(|i| table.insert(i as u64 + 1, b"k").expect("room"));
     assert_eq!(table.insert(4, b"k"), Err(InsertError::Full));
     table.remove(slots[1]);
     table.insert(4, b"k").expect("one slot is free");
@@ -142,7 +147,11 @@ fn a_deferred_removal_is_hidden_until_settled_or_restored() {
     table.defer_remove(a);
     assert_eq!(table.find(1), None);
     assert_eq!(table.len(), 2);
-    assert_eq!(table.insert(4, b"d"), Err(InsertError::Full), "the slot is not reusable yet");
+    assert_eq!(
+        table.insert(4, b"d"),
+        Err(InsertError::Full),
+        "the slot is not reusable yet"
+    );
     table.restore(a);
     assert_eq!(table.find(1), Some(a));
     assert_eq!(table.len(), 3);

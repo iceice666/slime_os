@@ -35,10 +35,12 @@ fn the_pinned_figures_are_the_arithmetic() {
 #[test]
 fn a_batch_holds_the_handshake_and_one_operation() {
     let smallest = HANDSHAKE_BYTES + STREAM_LENGTH_BYTES;
-    let heap = |batch: usize| with(HEAP, |l| {
-        l.batch_bytes = batch;
-        l.key_bytes = 1;
-    });
+    let heap = |batch: usize| {
+        with(HEAP, |l| {
+            l.batch_bytes = batch;
+            l.key_bytes = 1;
+        })
+    };
     assert_eq!(heap(smallest - 1).check(), Err(LimitsError::Batch));
     assert_eq!(heap(smallest).check(), Ok(()));
     assert_eq!(heap(DATA_BYTES).check(), Ok(()));
@@ -48,10 +50,12 @@ fn a_batch_holds_the_handshake_and_one_operation() {
 
 #[test]
 fn a_declaration_fits_the_batch_to_the_byte() {
-    let key = |batch: usize, key: usize| with(HEAP, |l| {
-        l.batch_bytes = batch;
-        l.key_bytes = key;
-    });
+    let key = |batch: usize, key: usize| {
+        with(HEAP, |l| {
+            l.batch_bytes = batch;
+            l.key_bytes = key;
+        })
+    };
     // 19 bytes around a key below 126, 20 from 126, 21 from 16382; the batch holds all of it.
     assert_eq!(key(144, 125).declaration_bytes(), 144);
     assert_eq!(key(144, 125).check(), Ok(()));
@@ -79,14 +83,28 @@ fn a_fixed_message_and_its_frame_fill_the_batch_exactly() {
         l.batch_bytes = 89 + 400;
     });
     assert_eq!(narrow.check(), Ok(()));
-    let batch = |payload: u64, batch: usize| with(LARGE, |l| {
-        l.payload_bytes = payload;
-        l.batch_bytes = batch;
-    });
-    assert_eq!(batch(127, 127 + 129 + 33 + 5 + 2 + 1 + 6 + 2).check(), Ok(()));
-    assert_eq!(batch(127, 127 + 129 + 33 + 5 + 2 + 1 + 6 + 2 - 1).check(), Err(LimitsError::Fixed));
-    assert_eq!(batch(128, 128 + 129 + 33 + 5 + 2 + 2 + 6 + 2).check(), Ok(()));
-    assert_eq!(batch(128, 128 + 129 + 33 + 5 + 2 + 2 + 6 + 2 - 1).check(), Err(LimitsError::Fixed));
+    let batch = |payload: u64, batch: usize| {
+        with(LARGE, |l| {
+            l.payload_bytes = payload;
+            l.batch_bytes = batch;
+        })
+    };
+    assert_eq!(
+        batch(127, 127 + 129 + 33 + 5 + 2 + 1 + 6 + 2).check(),
+        Ok(())
+    );
+    assert_eq!(
+        batch(127, 127 + 129 + 33 + 5 + 2 + 1 + 6 + 2 - 1).check(),
+        Err(LimitsError::Fixed)
+    );
+    assert_eq!(
+        batch(128, 128 + 129 + 33 + 5 + 2 + 2 + 6 + 2).check(),
+        Ok(())
+    );
+    assert_eq!(
+        batch(128, 128 + 129 + 33 + 5 + 2 + 2 + 6 + 2 - 1).check(),
+        Err(LimitsError::Fixed)
+    );
 }
 
 #[test]
@@ -126,12 +144,14 @@ fn any_positive_timeout_is_accepted() {
 
 #[test]
 fn counts_are_bounded_at_what_the_wire_and_the_arithmetic_hold() {
-    let counts = |keys: usize, subscribers: usize, samples: usize| with(HEAP, |l| {
-        l.max_keys = keys;
-        l.max_subscribers = subscribers;
-        l.outstanding_samples = samples;
-        l.payload_bytes = 4;
-    });
+    let counts = |keys: usize, subscribers: usize, samples: usize| {
+        with(HEAP, |l| {
+            l.max_keys = keys;
+            l.max_subscribers = subscribers;
+            l.outstanding_samples = samples;
+            l.payload_bytes = 4;
+        })
+    };
     assert_eq!(counts(0, 0, 4).check(), Err(LimitsError::Count));
     assert_eq!(counts(4, 0, 4).check(), Err(LimitsError::Count));
     assert_eq!(counts(2, 3, 4).check(), Err(LimitsError::Count));
@@ -141,15 +161,20 @@ fn counts_are_bounded_at_what_the_wire_and_the_arithmetic_hold() {
     assert_eq!(counts(256, 256, 256).check(), Ok(()));
     assert_eq!(counts(1, 1, 65_536).check(), Ok(()));
     assert_eq!(counts(1, 1, MAX_OUTSTANDING_SAMPLES).check(), Ok(()));
-    assert_eq!(counts(1, 1, MAX_OUTSTANDING_SAMPLES + 1).check(), Err(LimitsError::Count));
+    assert_eq!(
+        counts(1, 1, MAX_OUTSTANDING_SAMPLES + 1).check(),
+        Err(LimitsError::Count)
+    );
 }
 
 #[test]
 fn sizes_are_bounded_at_what_the_wire_carries() {
-    let key = |key: usize| with(HEAP, |l| {
-        l.key_bytes = key;
-        l.batch_bytes = DATA_BYTES;
-    });
+    let key = |key: usize| {
+        with(HEAP, |l| {
+            l.key_bytes = key;
+            l.batch_bytes = DATA_BYTES;
+        })
+    };
     assert_eq!(key(0).check(), Err(LimitsError::Size));
     assert_eq!(key(1).check(), Ok(()));
     let mut attachment = HEAP;
@@ -161,7 +186,10 @@ fn sizes_are_bounded_at_what_the_wire_carries() {
     assert_eq!(payload(0).check(), Err(LimitsError::Size));
     assert_eq!(payload(1).check(), Ok(()));
     assert_eq!(payload(MAX_PAYLOAD_LENGTH_BYTES).check(), Ok(()));
-    assert_eq!(payload(MAX_PAYLOAD_LENGTH_BYTES + 1).check(), Err(LimitsError::Size));
+    assert_eq!(
+        payload(MAX_PAYLOAD_LENGTH_BYTES + 1).check(),
+        Err(LimitsError::Size)
+    );
 }
 
 #[test]

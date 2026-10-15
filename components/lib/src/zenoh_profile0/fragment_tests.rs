@@ -104,7 +104,14 @@ pub fn alias_table(alias: u32, key: &[u8]) -> super::super::tables::SlotTable<4,
 }
 
 /// The captures: payload bytes, batch, first sequence number, fragment lengths, headers, sha256 of each.
-type Capture = (usize, usize, u32, &'static [usize], &'static [u8], &'static [&'static str]);
+type Capture = (
+    usize,
+    usize,
+    u32,
+    &'static [usize],
+    &'static [u8],
+    &'static [&'static str],
+);
 pub const CAPTURES: [Capture; 3] = [
     (
         5000,
@@ -186,7 +193,10 @@ fn a_run_joins_into_the_message_it_was_cut_from() {
 fn the_sequence_number_wraps_at_32_bits_and_its_width_follows() {
     let message = full_key_put(KEY, 5000);
     let bodies = split(&message, 2048, 0xFFFF_FFFE);
-    let sns: Vec<u32> = bodies.iter().map(|b| decode_fragment(b, None).expect("fragment").sn).collect();
+    let sns: Vec<u32> = bodies
+        .iter()
+        .map(|b| decode_fragment(b, None).expect("fragment").sn)
+        .collect();
     assert_eq!(sns, [0xFFFF_FFFE, 0xFFFF_FFFF, 0]);
     // The header of the first is five bytes of sequence number and the last is one: the slices differ.
     assert_eq!(bodies[0].len(), 2046);
@@ -194,8 +204,13 @@ fn the_sequence_number_wraps_at_32_bits_and_its_width_follows() {
     for start in [127u32, 16_383, 2_097_151, 268_435_455] {
         let bodies = split(&message, 2048, start);
         assert!(bodies.iter().all(|b| b.len() <= 2046));
-        let widths: Vec<usize> = (0..bodies.len() as u32).map(|i| leb(u64::from(start + i)).len()).collect();
-        assert!(widths.windows(2).any(|w| w[0] != w[1]), "{start} crosses a width step");
+        let widths: Vec<usize> = (0..bodies.len() as u32)
+            .map(|i| leb(u64::from(start + i)).len())
+            .collect();
+        assert!(
+            widths.windows(2).any(|w| w[0] != w[1]),
+            "{start} crosses a width step"
+        );
     }
 }
 
@@ -215,26 +230,59 @@ fn a_message_travels_whole_until_its_frame_overruns_the_batch() {
         let whole = full_key_put(KEY, edge);
         let over = full_key_put(KEY, edge + 1);
         assert!(fits_one_frame(whole.len(), 2048, sn), "{sn}: {edge} fits");
-        assert!(!fits_one_frame(over.len(), 2048, sn), "{sn}: {} does not", edge + 1);
+        assert!(
+            !fits_one_frame(over.len(), 2048, sn),
+            "{sn}: {} does not",
+            edge + 1
+        );
     }
 }
 
 fn refused(body: &[u8]) -> &'static str {
-    decode_fragment(body, Some(2048)).expect_err("refused").class()
+    decode_fragment(body, Some(2048))
+        .expect_err("refused")
+        .class()
 }
 
 #[test]
 fn a_fragment_is_the_reliable_form_and_nothing_else() {
     assert_eq!(refused(&[]), "malformed-message");
-    assert_eq!(refused(&[ID_FRAGMENT, 0, 1]), "unsupported-message", "best-effort");
-    assert_eq!(refused(&[ID_FRAGMENT | FLAG_RELIABLE | FLAG_Z, 0, 1]), "unsupported-extension");
-    assert_eq!(refused(&[ID_FRAGMENT | FLAG_RELIABLE, 0]), "malformed-message", "no data");
-    assert_eq!(refused(&[0x25, 0, 1]), "unsupported-message", "another message");
-    assert_eq!(refused(&[ID_FRAGMENT | FLAG_RELIABLE, 0x80]), "truncated", "an unterminated sequence number");
+    assert_eq!(
+        refused(&[ID_FRAGMENT, 0, 1]),
+        "unsupported-message",
+        "best-effort"
+    );
+    assert_eq!(
+        refused(&[ID_FRAGMENT | FLAG_RELIABLE | FLAG_Z, 0, 1]),
+        "unsupported-extension"
+    );
+    assert_eq!(
+        refused(&[ID_FRAGMENT | FLAG_RELIABLE, 0]),
+        "malformed-message",
+        "no data"
+    );
+    assert_eq!(
+        refused(&[0x25, 0, 1]),
+        "unsupported-message",
+        "another message"
+    );
+    assert_eq!(
+        refused(&[ID_FRAGMENT | FLAG_RELIABLE, 0x80]),
+        "truncated",
+        "an unterminated sequence number"
+    );
     assert_eq!(refused(&[0x26, 0x80, 0x00, 0xaa]), "leb128-noncanonical");
-    assert_eq!(refused(&[0x26, 0xff, 0xff, 0xff, 0xff, 0x10, 0xaa]), "leb128-overflow");
-    assert_eq!(refused(&[0x26, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f, 0xaa]), "leb128-overflow", "six bytes");
-    let largest = decode_fragment(&[0x26, 0xff, 0xff, 0xff, 0xff, 0x0f, 0xaa], None).expect("largest");
+    assert_eq!(
+        refused(&[0x26, 0xff, 0xff, 0xff, 0xff, 0x10, 0xaa]),
+        "leb128-overflow"
+    );
+    assert_eq!(
+        refused(&[0x26, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f, 0xaa]),
+        "leb128-overflow",
+        "six bytes"
+    );
+    let largest =
+        decode_fragment(&[0x26, 0xff, 0xff, 0xff, 0xff, 0x0f, 0xaa], None).expect("largest");
     assert_eq!(largest.sn, u32::MAX);
 }
 
@@ -246,7 +294,9 @@ fn a_fragment_longer_than_the_announced_batch_is_refused() {
     assert!(decode_fragment(&body, Some(2048)).is_ok());
     body.push(7);
     assert_eq!(
-        decode_fragment(&body, Some(2048)).expect_err("over").class(),
+        decode_fragment(&body, Some(2048))
+            .expect_err("over")
+            .class(),
         "length-exceeds-batch"
     );
 }
@@ -254,7 +304,10 @@ fn a_fragment_longer_than_the_announced_batch_is_refused() {
 #[test]
 fn a_run_too_small_to_carry_a_fragment_is_refused_at_the_splitter() {
     let message = full_key_put(KEY, 10);
-    assert_eq!(Splitter::new(message.as_slice(), MIN_BATCH, 0).expect_err("small"), FragmentError::BatchTooSmall);
+    assert_eq!(
+        Splitter::new(message.as_slice(), MIN_BATCH, 0).expect_err("small"),
+        FragmentError::BatchTooSmall
+    );
     assert!(Splitter::new(message.as_slice(), MIN_BATCH + 1, 0).is_ok());
 }
 
@@ -274,7 +327,11 @@ fn a_joined_put_is_read_and_held_to_what_a_whole_frame_is_held_to() {
     let at = 2 + leb(KEY.len() as u64).len() + KEY.len();
     let mut broken = base.clone();
     broken[at] = 0x01;
-    assert_eq!(class(&broken), "malformed-message", "no attachment extension flag");
+    assert_eq!(
+        class(&broken),
+        "malformed-message",
+        "no attachment extension flag"
+    );
     let mut broken = base.clone();
     broken[at] |= 0x20;
     assert_eq!(class(&broken), "unsupported-message", "timestamp");
@@ -301,13 +358,33 @@ fn a_joined_put_is_read_and_held_to_what_a_whole_frame_is_held_to() {
     // The PUSH.
     let mut broken = base.clone();
     broken[0] |= 0x80;
-    assert_eq!(class(&broken), "unsupported-extension", "PUSH extension flag");
+    assert_eq!(
+        class(&broken),
+        "unsupported-extension",
+        "PUSH extension flag"
+    );
     assert_eq!(class(&[0x25, 0]), "unsupported-message", "not a PUSH");
     assert_eq!(class(&base[..at]), "truncated", "ends before the body");
-    assert_eq!(class(&[&base[..at], &[0x02]].concat()), "unsupported-message", "a delete");
-    assert_eq!(class(&base[..at + 2]), "truncated", "ends before the attachment");
-    assert_eq!(class(&base[..at + 3 + 10]), "truncated", "inside the attachment");
-    assert_eq!(class(&base[..base.len() - 1]), "truncated", "inside the payload");
+    assert_eq!(
+        class(&[&base[..at], &[0x02]].concat()),
+        "unsupported-message",
+        "a delete"
+    );
+    assert_eq!(
+        class(&base[..at + 2]),
+        "truncated",
+        "ends before the attachment"
+    );
+    assert_eq!(
+        class(&base[..at + 3 + 10]),
+        "truncated",
+        "inside the attachment"
+    );
+    assert_eq!(
+        class(&base[..base.len() - 1]),
+        "truncated",
+        "inside the payload"
+    );
     let mut long = base.clone();
     long.push(0);
     assert_eq!(class(&long), "trailing-bytes");
@@ -316,7 +393,9 @@ fn a_joined_put_is_read_and_held_to_what_a_whole_frame_is_held_to() {
 #[test]
 fn a_joined_put_names_a_valid_key_the_subscriber_declared() {
     let mut rules = rules();
-    let class = |rules: &PutRules<'_>, message: &[u8]| decode_put(message, rules).expect_err("refused").class();
+    let class = |rules: &PutRules<'_>, message: &[u8]| {
+        decode_put(message, rules).expect_err("refused").class()
+    };
     for (key, expect) in [
         ("a/*/b", "wildcard-keyexpr"),
         ("a/**", "wildcard-keyexpr"),
@@ -334,16 +413,34 @@ fn a_joined_put_names_a_valid_key_the_subscriber_declared() {
     assert_eq!(class(&rules, &not_utf8), "invalid-keyexpr");
     let mut empty = full_key_put("a", 1);
     empty[2] = 0;
-    assert_eq!(class(&rules, &[&empty[..3], &empty[4..]].concat()), "invalid-keyexpr", "an empty key");
+    assert_eq!(
+        class(&rules, &[&empty[..3], &empty[4..]].concat()),
+        "invalid-keyexpr",
+        "an empty key"
+    );
     let mut scoped = full_key_put("a/b", 1);
     scoped[1] = 1;
-    assert_eq!(class(&rules, &scoped), "invalid-keyexpr", "a full key in a nonzero scope");
-    assert_eq!(class(&rules, &full_key_put(&"k".repeat(130), 1)), "over-bound");
-    assert_eq!(class(&rules, &full_key_put(&"k".repeat(129), 1)[..40]), "truncated", "inside the key");
+    assert_eq!(
+        class(&rules, &scoped),
+        "invalid-keyexpr",
+        "a full key in a nonzero scope"
+    );
+    assert_eq!(
+        class(&rules, &full_key_put(&"k".repeat(130), 1)),
+        "over-bound"
+    );
+    assert_eq!(
+        class(&rules, &full_key_put(&"k".repeat(129), 1)[..40]),
+        "truncated",
+        "inside the key"
+    );
     let only = |key: &[u8]| key == KEY.as_bytes();
     rules.subscribed = &only;
     assert!(decode_put(&full_key_put(KEY, 1), &rules).is_ok());
-    assert_eq!(class(&rules, &full_key_put("slime_demo/other", 1)), "undeclared-key");
+    assert_eq!(
+        class(&rules, &full_key_put("slime_demo/other", 1)),
+        "undeclared-key"
+    );
 }
 
 #[test]
@@ -354,24 +451,51 @@ fn a_joined_put_names_the_alias_the_peer_declared() {
     let only = |key: &[u8]| key == KEY.as_bytes();
     rules.subscribed = &only;
     assert!(decode_put(&alias_put(1, 5), &rules).is_ok());
-    let class = |rules: &PutRules<'_>, message: &[u8]| decode_put(message, rules).expect_err("refused").class();
-    assert_eq!(class(&rules, &alias_put(2, 5)), "invalid-keyexpr", "an alias nobody declared");
-    assert_eq!(class(&rules, &put(0x1d, 1, None, 5)), "invalid-keyexpr", "receiver-mapped");
-    assert_eq!(class(&rules, &alias_put(0, 5)), "invalid-keyexpr", "scope zero is the global scope");
+    let class = |rules: &PutRules<'_>, message: &[u8]| {
+        decode_put(message, rules).expect_err("refused").class()
+    };
+    assert_eq!(
+        class(&rules, &alias_put(2, 5)),
+        "invalid-keyexpr",
+        "an alias nobody declared"
+    );
+    assert_eq!(
+        class(&rules, &put(0x1d, 1, None, 5)),
+        "invalid-keyexpr",
+        "receiver-mapped"
+    );
+    assert_eq!(
+        class(&rules, &alias_put(0, 5)),
+        "invalid-keyexpr",
+        "scope zero is the global scope"
+    );
     for scope in [256u32, 32_768, 65_535] {
-        assert_eq!(class(&rules, &alias_put(scope, 5)), "invalid-keyexpr", "{scope}");
+        assert_eq!(
+            class(&rules, &alias_put(scope, 5)),
+            "invalid-keyexpr",
+            "{scope}"
+        );
         let declared = alias_table(scope, KEY.as_bytes());
         let mut high = rules;
         high.aliases = Some(&declared);
-        assert!(decode_put(&alias_put(scope, 5), &high).is_ok(), "{scope} declared");
+        assert!(
+            decode_put(&alias_put(scope, 5), &high).is_ok(),
+            "{scope} declared"
+        );
     }
     assert_eq!(
-        decode_put(&alias_put(65_536, 5), &rules).expect_err("wide").class(),
+        decode_put(&alias_put(65_536, 5), &rules)
+            .expect_err("wide")
+            .class(),
         "leb128-overflow"
     );
     let other = alias_table(1, b"slime_demo/other");
     rules.aliases = Some(&other);
-    assert_eq!(class(&rules, &alias_put(1, 5)), "undeclared-key", "an alias for another key");
+    assert_eq!(
+        class(&rules, &alias_put(1, 5)),
+        "undeclared-key",
+        "an alias for another key"
+    );
 }
 
 #[test]
@@ -384,26 +508,90 @@ fn every_variable_length_integer_of_the_put_is_read_at_its_width() {
     let att_len = 3 + 3 + 2;
     let payload_len = att_len + 1 + 33;
     let edit = |at: usize, old: usize, new: &[u8]| [&base[..at], new, &base[at + old..]].concat();
-    assert_eq!(class(&edit(1, 1, &[0x80, 0x00])), "leb128-noncanonical", "scope");
-    assert_eq!(class(&edit(key_len, 1, &[0x83, 0x00])), "leb128-noncanonical", "key length");
-    assert_eq!(class(&edit(att_len, 1, &[0xA1, 0x00])), "leb128-noncanonical", "attachment length");
-    assert_eq!(class(&edit(payload_len, 1, &[0x81, 0x00])), "leb128-noncanonical", "payload length");
-    assert_eq!(class(&edit(1, 1, &[0x80, 0x80, 0x04])), "leb128-overflow", "scope over 16 bits");
-    assert_eq!(class(&edit(key_len, 1, &[0x80, 0x80, 0x04])), "leb128-overflow", "key length over 16 bits");
-    assert_eq!(class(&edit(att_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x10])), "leb128-overflow", "attachment length");
-    assert_eq!(class(&edit(payload_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x10])), "leb128-overflow", "payload length");
+    assert_eq!(
+        class(&edit(1, 1, &[0x80, 0x00])),
+        "leb128-noncanonical",
+        "scope"
+    );
+    assert_eq!(
+        class(&edit(key_len, 1, &[0x83, 0x00])),
+        "leb128-noncanonical",
+        "key length"
+    );
+    assert_eq!(
+        class(&edit(att_len, 1, &[0xA1, 0x00])),
+        "leb128-noncanonical",
+        "attachment length"
+    );
+    assert_eq!(
+        class(&edit(payload_len, 1, &[0x81, 0x00])),
+        "leb128-noncanonical",
+        "payload length"
+    );
+    assert_eq!(
+        class(&edit(1, 1, &[0x80, 0x80, 0x04])),
+        "leb128-overflow",
+        "scope over 16 bits"
+    );
+    assert_eq!(
+        class(&edit(key_len, 1, &[0x80, 0x80, 0x04])),
+        "leb128-overflow",
+        "key length over 16 bits"
+    );
+    assert_eq!(
+        class(&edit(att_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x10])),
+        "leb128-overflow",
+        "attachment length"
+    );
+    assert_eq!(
+        class(&edit(payload_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x10])),
+        "leb128-overflow",
+        "payload length"
+    );
     // Canonical values inside the width are read for what they say, not as an overflow.
-    assert_eq!(class(&edit(key_len, 1, &[0x80, 0x02])), "over-bound", "key length 256");
-    assert_eq!(class(&edit(key_len, 1, &[0x80, 0x80, 0x02])), "over-bound", "key length 32768");
-    assert_eq!(class(&edit(att_len, 1, &[0x80, 0x80, 0x04])), "over-bound", "attachment length 65536");
-    assert_eq!(class(&edit(att_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x08])), "over-bound", "attachment 2^31");
-    assert_eq!(class(&edit(payload_len, 1, &[0x80, 0x80, 0x04])), "over-bound", "payload 65536");
-    assert_eq!(class(&edit(payload_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x08])), "over-bound", "payload 2^31");
+    assert_eq!(
+        class(&edit(key_len, 1, &[0x80, 0x02])),
+        "over-bound",
+        "key length 256"
+    );
+    assert_eq!(
+        class(&edit(key_len, 1, &[0x80, 0x80, 0x02])),
+        "over-bound",
+        "key length 32768"
+    );
+    assert_eq!(
+        class(&edit(att_len, 1, &[0x80, 0x80, 0x04])),
+        "over-bound",
+        "attachment length 65536"
+    );
+    assert_eq!(
+        class(&edit(att_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x08])),
+        "over-bound",
+        "attachment 2^31"
+    );
+    assert_eq!(
+        class(&edit(payload_len, 1, &[0x80, 0x80, 0x04])),
+        "over-bound",
+        "payload 65536"
+    );
+    assert_eq!(
+        class(&edit(payload_len, 1, &[0x80, 0x80, 0x80, 0x80, 0x08])),
+        "over-bound",
+        "payload 2^31"
+    );
     // Unterminated in each field.
     assert_eq!(class(&base[..2]), "truncated", "key length");
     assert_eq!(class(&[&base[..1], &[0x80]].concat()), "truncated", "scope");
-    assert_eq!(class(&[&base[..att_len], &[0x80]].concat()), "truncated", "attachment length");
-    assert_eq!(class(&[&base[..payload_len], &[0x80]].concat()), "truncated", "payload length");
+    assert_eq!(
+        class(&[&base[..att_len], &[0x80]].concat()),
+        "truncated",
+        "attachment length"
+    );
+    assert_eq!(
+        class(&[&base[..payload_len], &[0x80]].concat()),
+        "truncated",
+        "payload length"
+    );
 }
 
 #[test]
@@ -411,10 +599,20 @@ fn a_payload_past_the_configuration_is_refused_though_the_storage_would_hold_it(
     let mut rules = rules();
     rules.max_payload = 12;
     assert!(decode_put(&full_key_put("a/b", 12), &rules).is_ok());
-    assert_eq!(decode_put(&full_key_put("a/b", 13), &rules).expect_err("13").class(), "over-bound");
+    assert_eq!(
+        decode_put(&full_key_put("a/b", 13), &rules)
+            .expect_err("13")
+            .class(),
+        "over-bound"
+    );
     rules.max_payload = 1024;
     assert!(decode_put(&full_key_put("a/b", 1024), &rules).is_ok());
-    assert_eq!(decode_put(&full_key_put("a/b", 1025), &rules).expect_err("1025").class(), "over-bound");
+    assert_eq!(
+        decode_put(&full_key_put("a/b", 1025), &rules)
+            .expect_err("1025")
+            .class(),
+        "over-bound"
+    );
 }
 
 #[test]
@@ -426,7 +624,12 @@ fn a_multibyte_key_is_counted_in_bytes() {
     assert!(decode_put(&full_key_put(key, 5), &rules).is_ok());
     let over = std::format!("{key}x");
     assert_eq!((over.chars().count(), over.len()), (5, 10));
-    assert_eq!(decode_put(&full_key_put(&over, 5), &rules).expect_err("over").class(), "over-bound");
+    assert_eq!(
+        decode_put(&full_key_put(&over, 5), &rules)
+            .expect_err("over")
+            .class(),
+        "over-bound"
+    );
 }
 
 #[test]
@@ -437,7 +640,13 @@ fn a_put_message_produces_the_bytes_the_encoder_writes_at_any_offset() {
         let message = PutMessage::new(KEY.as_bytes(), &attached, &payload);
         let whole = full_key_put(KEY, size);
         assert_eq!(Source::len(&message), whole.len(), "{size}");
-        for (at, len) in [(0usize, whole.len()), (1, 7), (2, 130), (whole.len() - 1, 1), (whole.len() / 2, whole.len() / 2)] {
+        for (at, len) in [
+            (0usize, whole.len()),
+            (1, 7),
+            (2, 130),
+            (whole.len() - 1, 1),
+            (whole.len() / 2, whole.len() / 2),
+        ] {
             let mut out = std::vec![0u8; len];
             message.read(at, &mut out);
             assert_eq!(out, whole[at..at + len], "{size} at {at}");
@@ -454,7 +663,10 @@ fn a_put_message_is_split_as_the_slice_is() {
     let whole = split(&full_key_put(KEY, 5000), 2048, 1000);
     let mut buffer = std::vec![0u8; 2048];
     for expected in whole {
-        let len = splitter.next_body(&mut buffer).expect("body").expect("more");
+        let len = splitter
+            .next_body(&mut buffer)
+            .expect("body")
+            .expect("more");
         assert_eq!(buffer[..len], expected[..]);
     }
     assert_eq!(splitter.next_body(&mut buffer), Ok(None));

@@ -33,9 +33,9 @@ pub mod tick_clock;
 pub mod uart16550;
 pub mod virtio_mmio;
 pub mod zenoh_link;
-pub mod zenoh_node;
-pub mod zenoh_profile0;
 #[cfg(test)]
 mod zenoh_links;
+pub mod zenoh_node;
+pub mod zenoh_profile0;
 #[cfg(test)]
 mod zenoh_stock;

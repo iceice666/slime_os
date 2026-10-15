@@ -128,7 +128,9 @@ fn owned(events: &crate::zenoh_profile0::session::Events<'_>) -> Vec<Ev> {
             },
             Event::SubscriberUndeclared { id } => Ev::Undeclared(id),
             Event::Closed { reason } => Ev::Closed(reason),
-            Event::SampleStored { .. } => unreachable!("a session that cannot fragment stores no sample"),
+            Event::SampleStored { .. } => {
+                unreachable!("a session that cannot fragment stores no sample")
+            }
         })
         .collect()
 }

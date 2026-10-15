@@ -157,7 +157,11 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
 
     /// What a freed slot becomes: empty when no lookup can pass through it, a marker otherwise.
     fn vacated(&self, index: usize) -> u8 {
-        if self.state((index + 1) % N) == EMPTY { EMPTY } else { REMOVED }
+        if self.state((index + 1) % N) == EMPTY {
+            EMPTY
+        } else {
+            REMOVED
+        }
     }
 
     /// Frees a used slot. Later lookups still pass over it.

@@ -117,14 +117,8 @@ fn class(error: &Error) -> String {
     }
 }
 
-impl<
-    const F: usize,
-    const K: usize,
-    const S: usize,
-    const B: usize,
-    const P: usize,
-    const Q: usize,
-> Pair<F, K, S, B, P, Q>
+impl<const F: usize, const K: usize, const S: usize, const B: usize, const P: usize, const Q: usize>
+    Pair<F, K, S, B, P, Q>
 {
     /// Puts one batch body on the stream `b` reads, behind its stream length.
     fn inject(&self, body: &[u8]) {
@@ -161,7 +155,12 @@ impl<
 
     /// Injects `steps`, then pumps at `pump_at`, and returns the class the link refused them with. The
     /// same steps go to a clone of the session, which must refuse them alike and stay open and unchanged.
-    fn refused(&mut self, steps: &[(Vec<u8>, u64)], pump_at: Option<u64>, expect_open: bool) -> String {
+    fn refused(
+        &mut self,
+        steps: &[(Vec<u8>, u64)],
+        pump_at: Option<u64>,
+        expect_open: bool,
+    ) -> String {
         let before = self.b.session().clone();
         let start_sn = before.expected_rx_sn();
         let mut failure = None;
@@ -202,13 +201,29 @@ impl<
             panic!("the session accepted what the link refused as {got}");
         };
         {
-            assert_eq!(session_class(&error), got, "the session and the link refuse alike");
+            assert_eq!(
+                session_class(&error),
+                got,
+                "the session and the link refuse alike"
+            );
             if expect_open {
-                assert_eq!(session.state(), before.state(), "the session keeps its state");
+                assert_eq!(
+                    session.state(),
+                    before.state(),
+                    "the session keeps its state"
+                );
                 assert!(session.is_open(), "the session stays open");
-                assert_eq!(session.expected_rx_sn(), start_sn, "the sequence number does not move");
+                assert_eq!(
+                    session.expected_rx_sn(),
+                    start_sn,
+                    "the sequence number does not move"
+                );
                 assert!(!session.reassembling(), "the run is released");
-                assert_eq!(session.subscribers(), before.subscribers(), "the tables are unchanged");
+                assert_eq!(
+                    session.subscribers(),
+                    before.subscribers(),
+                    "the tables are unchanged"
+                );
             }
         }
         got
@@ -235,9 +250,17 @@ struct Setup {
     heap: usize,
 }
 
-const PLAIN: Setup = Setup { sub: codec::KEY, alias: None, heap: 149_004 };
+const PLAIN: Setup = Setup {
+    sub: codec::KEY,
+    alias: None,
+    heap: 149_004,
+};
 
-fn heap_row(setup: Setup, steps: impl FnOnce(u32) -> Vec<(Vec<u8>, u64)>, pump_at: Option<u64>) -> String {
+fn heap_row(
+    setup: Setup,
+    steps: impl FnOnce(u32) -> Vec<(Vec<u8>, u64)>,
+    pump_at: Option<u64>,
+) -> String {
     let mut pair: HeapPair = pair_of(&HEAP, setup.heap);
     pair.open();
     pair.declare(1, setup.sub);
@@ -325,7 +348,10 @@ pub fn run(name: &str) -> String {
     let demo = Parts::demo(5000);
     let key = codec::KEY.as_bytes();
     let invalid_key = |text: &[u8]| message_row(PLAIN, Parts::full(text, 5000).bytes());
-    let aliased = |key| Setup { alias: Some(key), ..PLAIN };
+    let aliased = |key| Setup {
+        alias: Some(key),
+        ..PLAIN
+    };
     match name {
         // A fixed link refuses every fragment as unsupported-message, whatever its form.
         "fixed-refuses-fragment" => fixed_row(&fragment(true, 1000, &[1, 2, 3])),
@@ -339,22 +365,46 @@ pub fn run(name: &str) -> String {
         "fixed-refuses-fragment-sequence-truncated" => fixed_row(&[0x26, 0x80]),
 
         // A fragment is the reliable form and nothing else.
-        "fragment-best-effort" => heap_row(PLAIN, |sn| std::vec![(fragment(false, sn, &[1]).with_flag(0x20, false), TIME)], None),
-        "fragment-extension" => heap_row(PLAIN, |sn| std::vec![(fragment(false, sn, &[1]).with_flag(0x80, true), TIME)], None),
-        "empty-fragment" => heap_row(PLAIN, |sn| std::vec![(fragment(false, sn, &[]), TIME)], None),
+        "fragment-best-effort" => heap_row(
+            PLAIN,
+            |sn| std::vec![(fragment(false, sn, &[1]).with_flag(0x20, false), TIME)],
+            None,
+        ),
+        "fragment-extension" => heap_row(
+            PLAIN,
+            |sn| std::vec![(fragment(false, sn, &[1]).with_flag(0x80, true), TIME)],
+            None,
+        ),
+        "empty-fragment" => heap_row(
+            PLAIN,
+            |sn| std::vec![(fragment(false, sn, &[]), TIME)],
+            None,
+        ),
         "fragment-before-open" => {
             let mut pair: HeapPair = pair_of(&HEAP, HEAP.heap_bytes as usize);
             pair.refused(&[(fragment(true, 1000, &[1, 2, 3]), TIME)], None, false)
         }
         "fragment-sequence-gap" => heap_row(
             PLAIN,
-            |sn| std::vec![(fragment(true, sn, &[1]), TIME), (fragment(true, sn + 2, &[2]), TIME)],
+            |sn| {
+                std::vec![
+                    (fragment(true, sn, &[1]), TIME),
+                    (fragment(true, sn + 2, &[2]), TIME)
+                ]
+            },
             None,
         ),
-        "fragment-sequence-truncated" => heap_row(PLAIN, |_| std::vec![(std::vec![0x26, 0x80], TIME)], None),
+        "fragment-sequence-truncated" => {
+            heap_row(PLAIN, |_| std::vec![(std::vec![0x26, 0x80], TIME)], None)
+        }
         "fragment-sequence-duplicate" => heap_row(
             PLAIN,
-            |sn| std::vec![(fragment(true, sn, &[1]), TIME), (fragment(true, sn, &[2]), TIME)],
+            |sn| {
+                std::vec![
+                    (fragment(true, sn, &[1]), TIME),
+                    (fragment(true, sn, &[2]), TIME)
+                ]
+            },
             None,
         ),
         "fragment-sequence-backward" => heap_row(
@@ -388,8 +438,12 @@ pub fn run(name: &str) -> String {
             },
             Some(TIME + TIMEOUT + 1),
         ),
-        "fragment-stale-first-sequence" => heap_row(PLAIN, |sn| bodies(&demo.bytes(), sn - 1), None),
-        "fragment-skipped-first-sequence" => heap_row(PLAIN, |sn| bodies(&demo.bytes(), sn + 1), None),
+        "fragment-stale-first-sequence" => {
+            heap_row(PLAIN, |sn| bodies(&demo.bytes(), sn - 1), None)
+        }
+        "fragment-skipped-first-sequence" => {
+            heap_row(PLAIN, |sn| bodies(&demo.bytes(), sn + 1), None)
+        }
         "frame-during-reassembly" => heap_row(
             PLAIN,
             |sn| {
@@ -415,31 +469,49 @@ pub fn run(name: &str) -> String {
         ),
 
         // The Put inside a fragmented message is held to what a single-batch Put is held to.
-        "fragmented-put-without-attachment" => message_row(PLAIN, demo.clone().with(|p| p.put = 0x01).bytes()),
+        "fragmented-put-without-attachment" => {
+            message_row(PLAIN, demo.clone().with(|p| p.put = 0x01).bytes())
+        }
         "fragmented-put-with-short-attachment" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.att_len = std::vec![32];
-                p.att.truncate(32);
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.att_len = std::vec![32];
+                    p.att.truncate(32);
+                })
+                .bytes(),
         ),
-        "fragmented-put-gid-length-15" => message_row(PLAIN, demo.clone().with(|p| p.att[16] = 15).bytes()),
-        "fragmented-put-gid-length-17" => message_row(PLAIN, demo.clone().with(|p| p.att[16] = 17).bytes()),
+        "fragmented-put-gid-length-15" => {
+            message_row(PLAIN, demo.clone().with(|p| p.att[16] = 15).bytes())
+        }
+        "fragmented-put-gid-length-17" => {
+            message_row(PLAIN, demo.clone().with(|p| p.att[16] = 17).bytes())
+        }
         "fragmented-put-attachment-34-bytes" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.att_len = std::vec![34];
-                p.att.push(0);
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.att_len = std::vec![34];
+                    p.att.push(0);
+                })
+                .bytes(),
         ),
-        "fragmented-put-alias-scope-zero" => message_row(aliased(codec::KEY), Parts::alias(0, 5000).bytes()),
+        "fragmented-put-alias-scope-zero" => {
+            message_row(aliased(codec::KEY), Parts::alias(0, 5000).bytes())
+        }
         "fragmented-put-alias-scope-65536" => message_row(
             aliased(codec::KEY),
-            Parts::alias(1, 5000).with(|p| p.scope = std::vec![0x80, 0x80, 0x04]).bytes(),
+            Parts::alias(1, 5000)
+                .with(|p| p.scope = std::vec![0x80, 0x80, 0x04])
+                .bytes(),
         ),
         "message-over-declared-heap" => message_row(PLAIN, Parts::demo(16_385).bytes()),
         "payload-over-declared-with-enough-storage" => message_row(
-            Setup { sub: "a/b", heap: 2 * HEAP.heap_bytes as usize, ..PLAIN },
+            Setup {
+                sub: "a/b",
+                heap: 2 * HEAP.heap_bytes as usize,
+                ..PLAIN
+            },
             Parts::full(b"a/b", 16_385).bytes(),
         ),
         "demo-refuses-payload-13-bytes" => {
@@ -450,7 +522,9 @@ pub fn run(name: &str) -> String {
             assert!(
                 matches!(
                     pair.a.publish(pair.ha, codec::KEY, &attachment, &[0u8; 13]),
-                    Err(Error::Session(SessionError::Encode(encode::EncodeError::PayloadTooLong)))
+                    Err(Error::Session(SessionError::Encode(
+                        encode::EncodeError::PayloadTooLong
+                    )))
                 ),
                 "the sender refuses it too"
             );
@@ -462,7 +536,11 @@ pub fn run(name: &str) -> String {
             pair.open();
             pair.declare(1, codec::KEY);
             let sn = pair.next_peer_sn();
-            pair.refused(&[(frame(sn, &[Parts::demo(1025).bytes()]), TIME)], None, true)
+            pair.refused(
+                &[(frame(sn, &[Parts::demo(1025).bytes()]), TIME)],
+                None,
+                true,
+            )
         }
 
         // The key inside a reassembled Put is held to what a whole-frame key is held to.
@@ -472,38 +550,63 @@ pub fn run(name: &str) -> String {
         "fragmented-put-key-double-slash" => invalid_key(b"a//b"),
         "fragmented-put-key-invalid-utf8" => invalid_key(&[0xff, b'a', b'b', b'c']),
         "fragmented-put-key-not-subscribed" => invalid_key(b"slime_demo/other"),
-        "fragmented-put-full-key-nonzero-scope" => message_row(PLAIN, demo.clone().with(|p| p.scope = std::vec![1]).bytes()),
-        "fragmented-put-empty-key" => message_row(PLAIN, demo.clone().with(|p| p.key = Some((std::vec![0], Vec::new()))).bytes()),
+        "fragmented-put-full-key-nonzero-scope" => {
+            message_row(PLAIN, demo.clone().with(|p| p.scope = std::vec![1]).bytes())
+        }
+        "fragmented-put-empty-key" => message_row(
+            PLAIN,
+            demo.clone()
+                .with(|p| p.key = Some((std::vec![0], Vec::new())))
+                .bytes(),
+        ),
         "fragmented-put-key-trailing-slash" => invalid_key(b"bad/"),
         "fragmented-put-key-question-mark" => invalid_key(b"a?b"),
         "fragmented-put-key-hash" => invalid_key(b"a#b"),
         "fragmented-put-key-dollar" => invalid_key(b"a/b$*"),
         "fragmented-put-key-truncated" => message_row(PLAIN, demo.bytes()[..40].to_vec()),
-        "fragmented-push-delete-body" => message_row(PLAIN, demo.clone().with(|p| p.put = 0x02).bytes()),
-        "fragmented-push-ends-before-body" => message_row(PLAIN, demo.bytes()[..4 + key.len()].to_vec()),
+        "fragmented-push-delete-body" => {
+            message_row(PLAIN, demo.clone().with(|p| p.put = 0x02).bytes())
+        }
+        "fragmented-push-ends-before-body" => {
+            message_row(PLAIN, demo.bytes()[..4 + key.len()].to_vec())
+        }
         "fragmented-put-scope-unterminated" => message_row(PLAIN, std::vec![0x7d, 0x80]),
         "fragmented-put-key-length-unterminated" => message_row(PLAIN, std::vec![0x7d, 0x00, 0x80]),
         "fragmented-put-attachment-length-unterminated" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.att_len = std::vec![0x80];
-                p.att.clear();
-                p.size.clear();
-                p.payload.clear();
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.att_len = std::vec![0x80];
+                    p.att.clear();
+                    p.size.clear();
+                    p.payload.clear();
+                })
+                .bytes(),
         ),
         "fragmented-put-payload-length-unterminated" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.size = std::vec![0x80];
-                p.payload.clear();
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.size = std::vec![0x80];
+                    p.payload.clear();
+                })
+                .bytes(),
         ),
-        "fragmented-push-extension-flag" => message_row(PLAIN, demo.clone().with(|p| p.header = 0xfd).bytes()),
-        "fragmented-put-timestamp-flag" => message_row(PLAIN, demo.clone().with(|p| p.put = 0xa1).bytes()),
-        "fragmented-put-encoding-flag" => message_row(PLAIN, demo.clone().with(|p| p.put = 0xc1).bytes()),
-        "fragmented-put-unknown-extension" => message_row(PLAIN, demo.clone().with(|p| p.ext = 0x41).bytes()),
-        "fragmented-put-extension-chained" => message_row(PLAIN, demo.clone().with(|p| p.ext = 0xc3).bytes()),
+        "fragmented-push-extension-flag" => {
+            message_row(PLAIN, demo.clone().with(|p| p.header = 0xfd).bytes())
+        }
+        "fragmented-put-timestamp-flag" => {
+            message_row(PLAIN, demo.clone().with(|p| p.put = 0xa1).bytes())
+        }
+        "fragmented-put-encoding-flag" => {
+            message_row(PLAIN, demo.clone().with(|p| p.put = 0xc1).bytes())
+        }
+        "fragmented-put-unknown-extension" => {
+            message_row(PLAIN, demo.clone().with(|p| p.ext = 0x41).bytes())
+        }
+        "fragmented-put-extension-chained" => {
+            message_row(PLAIN, demo.clone().with(|p| p.ext = 0xc3).bytes())
+        }
         "fragmented-put-alias-for-another-key" => {
             message_row(aliased("slime_demo/other"), Parts::alias(1, 5000).bytes())
         }
@@ -515,30 +618,42 @@ pub fn run(name: &str) -> String {
         // Every variable-length integer is read at its width, canonically, and its top bit too.
         "fragmented-put-key-length-over-16-bits" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.key = Some((std::vec![0x80, 0x80, 0x04], Vec::new()))).bytes(),
+            demo.clone()
+                .with(|p| p.key = Some((std::vec![0x80, 0x80, 0x04], Vec::new())))
+                .bytes(),
         ),
         "fragmented-put-attachment-length-over-32-bits" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.att_len = std::vec![0x80, 0x80, 0x80, 0x80, 0x10]).bytes(),
+            demo.clone()
+                .with(|p| p.att_len = std::vec![0x80, 0x80, 0x80, 0x80, 0x10])
+                .bytes(),
         ),
         "fragmented-put-scope-256" => message_row(
             aliased(codec::KEY),
-            Parts::alias(1, 5000).with(|p| p.scope = std::vec![0x80, 0x02]).bytes(),
+            Parts::alias(1, 5000)
+                .with(|p| p.scope = std::vec![0x80, 0x02])
+                .bytes(),
         ),
         "fragmented-put-key-length-256" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.key = Some((std::vec![0x80, 0x02], Vec::new()))).bytes(),
+            demo.clone()
+                .with(|p| p.key = Some((std::vec![0x80, 0x02], Vec::new())))
+                .bytes(),
         ),
         "fragmented-put-attachment-length-65536" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.att_len = std::vec![0x80, 0x80, 0x04]).bytes(),
+            demo.clone()
+                .with(|p| p.att_len = std::vec![0x80, 0x80, 0x04])
+                .bytes(),
         ),
         "fragmented-put-payload-length-65536" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.size = std::vec![0x80, 0x80, 0x04];
-                p.payload.clear();
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.size = std::vec![0x80, 0x80, 0x04];
+                    p.payload.clear();
+                })
+                .bytes(),
         ),
         "fragmented-put-payload-truncated" => {
             let whole = demo.bytes();
@@ -546,24 +661,34 @@ pub fn run(name: &str) -> String {
         }
         "fragmented-put-scope-32768" => message_row(
             aliased(codec::KEY),
-            Parts::alias(1, 5000).with(|p| p.scope = std::vec![0x80, 0x80, 0x02]).bytes(),
+            Parts::alias(1, 5000)
+                .with(|p| p.scope = std::vec![0x80, 0x80, 0x02])
+                .bytes(),
         ),
         "fragmented-put-key-length-32768" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.key = Some((std::vec![0x80, 0x80, 0x02], Vec::new()))).bytes(),
+            demo.clone()
+                .with(|p| p.key = Some((std::vec![0x80, 0x80, 0x02], Vec::new())))
+                .bytes(),
         ),
         "fragmented-put-attachment-length-2147483648" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.att_len = std::vec![0x80, 0x80, 0x80, 0x80, 0x08]).bytes(),
+            demo.clone()
+                .with(|p| p.att_len = std::vec![0x80, 0x80, 0x80, 0x80, 0x08])
+                .bytes(),
         ),
         "fragmented-put-payload-length-2147483648" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.size = std::vec![0x80, 0x80, 0x80, 0x80, 0x08];
-                p.payload.clear();
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.size = std::vec![0x80, 0x80, 0x80, 0x80, 0x08];
+                    p.payload.clear();
+                })
+                .bytes(),
         ),
-        "fragmented-put-attachment-truncated" => message_row(PLAIN, demo.bytes()[..4 + key.len() + 3 + 10].to_vec()),
+        "fragmented-put-attachment-truncated" => {
+            message_row(PLAIN, demo.bytes()[..4 + key.len() + 3 + 10].to_vec())
+        }
         "reassembly-one-ms-after-the-timeout" => heap_row(
             PLAIN,
             |sn| {
@@ -578,36 +703,55 @@ pub fn run(name: &str) -> String {
             },
             None,
         ),
-        "fragment-sequence-noncanonical" => heap_row(PLAIN, |_| std::vec![(std::vec![0x26, 0x80, 0x00, 0xaa], TIME)], None),
+        "fragment-sequence-noncanonical" => heap_row(
+            PLAIN,
+            |_| std::vec![(std::vec![0x26, 0x80, 0x00, 0xaa], TIME)],
+            None,
+        ),
         "fragment-sequence-over-32-bits" => heap_row(
             PLAIN,
             |_| std::vec![(std::vec![0x26, 0xff, 0xff, 0xff, 0xff, 0x10, 0xaa], TIME)],
             None,
         ),
-        "fragmented-put-scope-noncanonical" => message_row(PLAIN, demo.clone().with(|p| p.scope = std::vec![0x80, 0x00]).bytes()),
+        "fragmented-put-scope-noncanonical" => message_row(
+            PLAIN,
+            demo.clone()
+                .with(|p| p.scope = std::vec![0x80, 0x00])
+                .bytes(),
+        ),
         "fragmented-put-key-length-noncanonical" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.key = Some((std::vec![0x81, 0x00], Vec::new()))).bytes(),
+            demo.clone()
+                .with(|p| p.key = Some((std::vec![0x81, 0x00], Vec::new())))
+                .bytes(),
         ),
         "fragmented-put-attachment-length-noncanonical" => message_row(
             PLAIN,
-            demo.clone().with(|p| p.att_len = std::vec![0xa1, 0x00]).bytes(),
+            demo.clone()
+                .with(|p| p.att_len = std::vec![0xa1, 0x00])
+                .bytes(),
         ),
         "fragmented-put-payload-length-noncanonical" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.size = std::vec![0x81, 0x00];
-                p.payload.clear();
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.size = std::vec![0x81, 0x00];
+                    p.payload.clear();
+                })
+                .bytes(),
         ),
         "fragmented-put-payload-length-over-32-bits" => message_row(
             PLAIN,
-            demo.clone().with(|p| {
-                p.size = std::vec![0x80, 0x80, 0x80, 0x80, 0x10];
-                p.payload.clear();
-            }).bytes(),
+            demo.clone()
+                .with(|p| {
+                    p.size = std::vec![0x80, 0x80, 0x80, 0x80, 0x10];
+                    p.payload.clear();
+                })
+                .bytes(),
         ),
-        "fragmented-put-undeclared-alias" => message_row(aliased(codec::KEY), Parts::alias(2, 5000).bytes()),
+        "fragmented-put-undeclared-alias" => {
+            message_row(aliased(codec::KEY), Parts::alias(2, 5000).bytes())
+        }
         "fragment-over-the-announced-batch" => heap_row(
             PLAIN,
             |sn| {
@@ -622,7 +766,13 @@ pub fn run(name: &str) -> String {
             |sn| bodies(&demo.bytes(), sn).into_iter().take(2).collect(),
             Some(TIME + TIMEOUT + 1),
         ),
-        "storage-refused" => message_row(Setup { heap: 4000, ..PLAIN }, demo.bytes()),
+        "storage-refused" => message_row(
+            Setup {
+                heap: 4000,
+                ..PLAIN
+            },
+            demo.bytes(),
+        ),
 
         // The tables hold what the configuration declares and refuse the next.
         "fifth-subscriber" => limit_row::<2048, 4, 5, 129, 0, 8>(pair_of(&HEAP, 0), 4, false),
@@ -714,7 +864,6 @@ impl Flagged for Vec<u8> {
     }
 }
 
-
 fn edge_limits(mode: Mode, batch: usize, key: usize, payload: u64, timeout: u64) -> Limits {
     let mut limits = Limits {
         name: "edge",
@@ -757,7 +906,9 @@ impl Rx {
 
     /// Feeds one batch and returns the payload of a sample it completed.
     fn feed(&mut self, body: &[u8], now: u64) -> Result<Option<Vec<u8>>, SessionError> {
-        let outcome = self.session.on_batch_with(body, now, &mut self.out, &mut self.cell)?;
+        let outcome = self
+            .session
+            .on_batch_with(body, now, &mut self.out, &mut self.cell)?;
         for event in outcome.events.iter() {
             match *event {
                 crate::zenoh_profile0::session::Event::SampleStored { offset, len, .. } => {
@@ -821,9 +972,15 @@ fn a_run_that_outlives_its_timeout_frees_the_storage_for_the_next() {
     late[2].1 = 100 + TIMEOUT + 1;
     let error = rx.run(&late).expect_err("late");
     assert_eq!(session_class(&error), "reassembly-timeout");
-    assert_eq!((rx.sn(), rx.session.is_open(), rx.session.reassembling()), (before, true, false));
+    assert_eq!(
+        (rx.sn(), rx.session.is_open(), rx.session.reassembling()),
+        (before, true, false)
+    );
     let payload = rx.run(&rx.good(200)).expect("the storage is free again");
-    line(&std::format!("reuse {ONE_MESSAGE} 5000 {}", payload_digest(&payload)));
+    line(&std::format!(
+        "reuse {ONE_MESSAGE} 5000 {}",
+        payload_digest(&payload)
+    ));
     ok("reassembly-after-timeout-reuses-storage");
 }
 
@@ -832,7 +989,10 @@ fn each_way_a_run_ends_without_a_sample_frees_the_storage() {
     let demo = Parts::demo(5000);
     let causes: [(&str, fn(u32) -> Vec<(Vec<u8>, u64)>); 6] = [
         ("sequence-gap", |sn| {
-            std::vec![(fragment(true, sn, &[1]), TIME), (fragment(true, sn + 2, &[2]), TIME)]
+            std::vec![
+                (fragment(true, sn, &[1]), TIME),
+                (fragment(true, sn + 2, &[2]), TIME)
+            ]
         }),
         ("whole-frame-during-reassembly", |sn| {
             std::vec![
@@ -846,9 +1006,15 @@ fn each_way_a_run_ends_without_a_sample_frees_the_storage() {
                 (fragment(true, sn + 1, &[2]).with_flag(0x20, false), TIME),
             ]
         }),
-        ("completed-malformed-put", |sn| bodies(&Parts::demo(5000).with(|p| p.put = 0x01).bytes(), sn)),
-        ("completed-undeclared-key", |sn| bodies(&Parts::full(b"slime_demo/other", 5000).bytes(), sn)),
-        ("completed-payload-over-declared", |sn| bodies(&Parts::demo(5001).bytes(), sn)),
+        ("completed-malformed-put", |sn| {
+            bodies(&Parts::demo(5000).with(|p| p.put = 0x01).bytes(), sn)
+        }),
+        ("completed-undeclared-key", |sn| {
+            bodies(&Parts::full(b"slime_demo/other", 5000).bytes(), sn)
+        }),
+        ("completed-payload-over-declared", |sn| {
+            bodies(&Parts::demo(5001).bytes(), sn)
+        }),
     ];
     let _ = demo;
     for (cause, steps) in causes {
@@ -857,9 +1023,17 @@ fn each_way_a_run_ends_without_a_sample_frees_the_storage() {
         let before = (rx.sn(), rx.session.subscribers());
         rx.run(&steps(rx.sn())).expect_err(cause);
         assert_eq!((rx.sn(), rx.session.subscribers()), before, "{cause}");
-        assert!(rx.session.is_open() && !rx.session.reassembling(), "{cause}");
-        let payload = rx.run(&rx.good(TIME + 1)).unwrap_or_else(|_| panic!("{cause}: the storage was not freed"));
-        line(&std::format!("reuseafter {cause} {ONE_MESSAGE} 5000 {}", payload_digest(&payload)));
+        assert!(
+            rx.session.is_open() && !rx.session.reassembling(),
+            "{cause}"
+        );
+        let payload = rx
+            .run(&rx.good(TIME + 1))
+            .unwrap_or_else(|_| panic!("{cause}: the storage was not freed"));
+        line(&std::format!(
+            "reuseafter {cause} {ONE_MESSAGE} 5000 {}",
+            payload_digest(&payload)
+        ));
     }
     ok("reassembly-after-refusals-reuses-storage");
     ok("refused-fragment-run-leaves-session-unchanged");
@@ -883,21 +1057,32 @@ fn a_reassembly_is_measured_from_its_first_fragment_to_the_millisecond() {
         let mut run = on_time.good(0);
         (run[0].1, run[1].1, run[2].1) = (FIRST, edge - 1, edge);
         let payload = on_time.run(&run).expect("on time");
-        line(&std::format!("deadline {timeout} {FIRST} {} {edge} reassembled {}", edge - 1, payload_digest(&payload)));
+        line(&std::format!(
+            "deadline {timeout} {FIRST} {} {edge} reassembled {}",
+            edge - 1,
+            payload_digest(&payload)
+        ));
         let mut late = Rx::of(&pair, ONE_MESSAGE);
         let mut run = late.good(0);
         (run[0].1, run[1].1, run[2].1) = (FIRST, edge - 1, edge + 1);
         let error = late.run(&run).expect_err("late");
         assert_eq!(session_class(&error), "reassembly-timeout");
         assert!(late.session.is_open() && !late.session.reassembling());
-        line(&std::format!("deadline {timeout} {FIRST} {} {} reassembly-timeout -", edge - 1, edge + 1));
+        line(&std::format!(
+            "deadline {timeout} {FIRST} {} {} reassembly-timeout -",
+            edge - 1,
+            edge + 1
+        ));
     }
     ok("reassembly-completes-at-the-timeout-edge");
 }
 
 #[test]
 fn a_whole_run_advances_the_sessions_sequence_number_by_its_fragments() {
-    for (label, before) in [("fullkey-5000-2048", 1000u32), ("fullkey-wraps-32-bits", 0xFFFF_FFFE)] {
+    for (label, before) in [
+        ("fullkey-5000-2048", 1000u32),
+        ("fullkey-wraps-32-bits", 0xFFFF_FFFE),
+    ] {
         let mut pair: Heap4 = pair_sn(Params::from_limits(&HEAP), HEAP.heap_bytes as usize, before);
         pair.open();
         pair.declare(1, codec::KEY);
@@ -937,7 +1122,10 @@ fn a_put_through_an_alias_the_peer_declared_reassembles() {
     line(&std::format!("aliased 5d 5000 {}", aliased_put(1)));
     ok("reassemble-sender-mapped-alias");
     for alias in [0x8000u32, 0xFFFF] {
-        line(&std::format!("highalias {alias} 5000 {}", aliased_put(alias)));
+        line(&std::format!(
+            "highalias {alias} 5000 {}",
+            aliased_put(alias)
+        ));
     }
     ok("reassemble-high-aliases");
 }
@@ -946,7 +1134,10 @@ fn a_put_through_an_alias_the_peer_declared_reassembles() {
 fn a_key_shorter_than_the_declared_maximum_reassembles() {
     let mut pair = heap_pair_for("a/b");
     pair.send("a/b", &codec::payload(5000), 10);
-    line(&std::format!("shortkey 3 5000 {}", payload_digest(&sample_of(&mut pair))));
+    line(&std::format!(
+        "shortkey 3 5000 {}",
+        payload_digest(&sample_of(&mut pair))
+    ));
     ok("reassemble-short-key");
 }
 
@@ -970,13 +1161,19 @@ fn message_of(frame_body: &[u8]) -> &[u8] {
 fn a_subscriber_id_uses_all_32_bits() {
     for id in [0u32, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF] {
         let mut pair = heap_pair_for("unused");
-        pair.b.undeclare_subscriber(pair.hb, 1, "unused").expect("undeclare");
+        pair.b
+            .undeclare_subscriber(pair.hb, 1, "unused")
+            .expect("undeclare");
         pair.run(2);
-        pair.b.declare_subscriber(pair.hb, id, codec::KEY).expect("declare");
+        pair.b
+            .declare_subscriber(pair.hb, id, codec::KEY)
+            .expect("declare");
         let declare = message_of(pair.b.last_sent_batch()).to_vec();
         pair.run(3);
         assert_eq!(pair.a.session().peer_subscriber_id(), Some(id));
-        pair.b.undeclare_subscriber(pair.hb, id, codec::KEY).expect("undeclare");
+        pair.b
+            .undeclare_subscriber(pair.hb, id, codec::KEY)
+            .expect("undeclare");
         let undeclare = message_of(pair.b.last_sent_batch()).to_vec();
         pair.run(4);
         assert_eq!(pair.a.session().peer_subscriber_id(), None);
@@ -996,13 +1193,32 @@ fn the_link_fits_the_stack_its_configuration_declares() {
     use crate::zenoh_link::{Link, LinkOf};
     let measured = [
         (DEMO, core::mem::size_of::<Link<Scripted>>()),
-        (LARGE, core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 1024, 8>>()),
-        (HEAP, core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 0, 8>>()),
+        (
+            LARGE,
+            core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 1024, 8>>(),
+        ),
+        (
+            HEAP,
+            core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 0, 8>>(),
+        ),
     ];
     for (limits, size) in measured {
-        assert!(size > 0 && size as u64 <= limits.stack_bytes, "{}: {size}", limits.name);
-        assert!(size as u64 <= limits.required_stack(), "{}: {size} over {}", limits.name, limits.required_stack());
-        line(&std::format!("size {} {size} {}", limits.name, limits.stack_bytes));
+        assert!(
+            size > 0 && size as u64 <= limits.stack_bytes,
+            "{}: {size}",
+            limits.name
+        );
+        assert!(
+            size as u64 <= limits.required_stack(),
+            "{}: {size} over {}",
+            limits.name,
+            limits.required_stack()
+        );
+        line(&std::format!(
+            "size {} {size} {}",
+            limits.name,
+            limits.stack_bytes
+        ));
     }
     ok("stack-covers-measured-sizes");
 }
@@ -1078,13 +1294,21 @@ fn sha_chunks(data: &[u8]) -> String {
 /// The declaration and undeclaration of `key` at the widest sequence number and subscriber id, stream
 /// length included: none of them can be fragmented, so each must fit the batch.
 fn widest_sizes(batch: usize, key: &str) -> (usize, usize) {
-    let bounds = Bounds { batch: batch - 2, key: key.len(), payload: 0 };
+    let bounds = Bounds {
+        batch: batch - 2,
+        key: key.len(),
+        payload: 0,
+    };
     let mut out = std::vec![0u8; batch];
     let mut declare = FrameEncoder::with_bounds(&mut out, 0xFFFF_FFFF, bounds).expect("frame");
-    declare.declare_subscriber(0xFFFF_FFFF, Mapping::Sender, key).expect("declare");
+    declare
+        .declare_subscriber(0xFFFF_FFFF, Mapping::Sender, key)
+        .expect("declare");
     let declared = declare.finish().expect("finish") + 2;
     let mut undeclare = FrameEncoder::with_bounds(&mut out, 0xFFFF_FFFF, bounds).expect("frame");
-    undeclare.undeclare_subscriber(0xFFFF_FFFF, Mapping::Sender, key).expect("undeclare");
+    undeclare
+        .undeclare_subscriber(0xFFFF_FFFF, Mapping::Sender, key)
+        .expect("undeclare");
     (declared, undeclare.finish().expect("finish") + 2)
 }
 
@@ -1135,7 +1359,10 @@ fn heap_edge<
     };
     let received = sample.payload(&pair.heap_b);
     assert_eq!(received.len(), payload_len, "{name}");
-    assert!(received == payload.as_slice(), "{name}: the payload came back changed");
+    assert!(
+        received == payload.as_slice(),
+        "{name}: the payload came back changed"
+    );
     let (declare, undeclare) = widest_sizes(F, key);
     ordered(&std::format!(
         "edge {name} {F} {} {payload_len} {} {declare} {undeclare} {} {} {} {}",
@@ -1243,9 +1470,12 @@ fn fixed_edge<
 #[test]
 fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
     let key = "k".repeat(10);
-    let (tail, frame) = fixed_edge::<89, 1, 2, 10, 31, 2>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
+    let (tail, frame) =
+        fixed_edge::<89, 1, 2, 10, 31, 2>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
     assert_eq!(frame.len() + 2, 89, "the frame fills the batch exactly");
-    ordered(&std::format!("fixededge edge-fixed-batch-89 89 10 31 {tail}"));
+    ordered(&std::format!(
+        "fixededge edge-fixed-batch-89 89 10 31 {tail}"
+    ));
     ok("edge-fixed-batch-89");
 }
 
@@ -1255,20 +1485,28 @@ fn a_fixed_link_sends_a_thousand_byte_key_whole_at_the_largest_batch() {
     let (tail, frame) =
         fixed_edge::<4096, 1, 2, 1000, 3046, 2>("edge-fixed-batch-4096", Mode::Fixed, &key, 3046);
     assert_eq!(frame.len() + 2, 4096, "the frame fills the batch exactly");
-    ordered(&std::format!("fixededge edge-fixed-batch-4096 4096 1000 3046 {tail}"));
+    ordered(&std::format!(
+        "fixededge edge-fixed-batch-4096 4096 1000 3046 {tail}"
+    ));
     ok("edge-fixed-batch-4096");
 }
 
 #[test]
 fn the_smallest_configuration_in_each_mode_sends_a_put_whole() {
-    for (name, mode) in [("edge-minimum-fixed", Mode::Fixed), ("edge-minimum-heap", Mode::Heap)] {
+    for (name, mode) in [
+        ("edge-minimum-fixed", Mode::Fixed),
+        ("edge-minimum-heap", Mode::Heap),
+    ] {
         let (tail, frame) = if mode == Mode::Fixed {
             fixed_edge::<89, 1, 2, 1, 1, 2>(name, mode, "k", 1)
         } else {
             fixed_edge::<89, 1, 2, 1, 0, 2>(name, mode, "k", 1)
         };
         assert_eq!(frame.len(), 48);
-        line(&std::format!("minimum {name} {} 89 1 1 {tail}", mode.name()));
+        line(&std::format!(
+            "minimum {name} {} 89 1 1 {tail}",
+            mode.name()
+        ));
         ok(name);
     }
 }
@@ -1289,7 +1527,11 @@ fn long_alias<
     let key = "k".repeat(length);
     let limits = edge_limits(Mode::Heap, F, length, 5000, 5000);
     limits.check().expect("the contract admits it");
-    let mut pair: Pair<F, K, S, B, P, Q> = pair_sn(Params::from_limits(&limits), limits.heap_bytes as usize, ALIAS_SN);
+    let mut pair: Pair<F, K, S, B, P, Q> = pair_sn(
+        Params::from_limits(&limits),
+        limits.heap_bytes as usize,
+        ALIAS_SN,
+    );
     pair.open();
     pair.declare(1, &key);
     assert_eq!(pair.next_peer_sn(), ALIAS_SN);
@@ -1355,20 +1597,17 @@ struct Solo<
     out: Rc<RefCell<Pipe>>,
 }
 
-impl<
-    const F: usize,
-    const K: usize,
-    const S: usize,
-    const B: usize,
-    const P: usize,
-    const Q: usize,
-> Solo<F, K, S, B, P, Q>
+impl<const F: usize, const K: usize, const S: usize, const B: usize, const P: usize, const Q: usize>
+    Solo<F, K, S, B, P, Q>
 {
     fn new(params: Params, link_sn: u32) -> Self {
         let into = Rc::new(RefCell::new(Pipe::default()));
         let out = Rc::new(RefCell::new(Pipe::default()));
         let link = LinkOf::with_params(
-            Scripted { rx: into.clone(), tx: out.clone() },
+            Scripted {
+                rx: into.clone(),
+                tx: out.clone(),
+            },
             Role::Listener,
             &config(exam_zid(), exam_cookie(), link_sn),
             params,
@@ -1415,13 +1654,21 @@ impl<
         self.pump(0);
         let ack = self.bodies();
         assert_eq!(ack.len(), 1);
-        assert_eq!(usize::from(u16::from_le_bytes([ack[0][20], ack[0][21]])), F, "it announces its own batch");
+        assert_eq!(
+            usize::from(u16::from_le_bytes([ack[0][20], ack[0][21]])),
+            F,
+            "it announces its own batch"
+        );
         let length = encode::open_syn(&mut buf, LEASE_MS, PEER_SN, exam_cookie()).expect("open");
         self.push(&buf[..length]);
         self.pump(0);
         assert_eq!(self.bodies().len(), 1);
         assert!(self.link.is_open());
-        let bounds = Bounds { batch: peer - 2, key: PEER_KEY.len(), payload: 0 };
+        let bounds = Bounds {
+            batch: peer - 2,
+            key: PEER_KEY.len(),
+            payload: 0,
+        };
         self.push(&subscriber_frame(bounds, PEER_SN, 1, PEER_KEY));
         self.pump(1);
         codec::sha(&syn)
@@ -1472,7 +1719,10 @@ fn peer_heap<
             None => break,
         }
     }
-    assert!(bodies.iter().all(|body| body.len() <= effective - 2), "no fragment is longer than the peer accepts");
+    assert!(
+        bodies.iter().all(|body| body.len() <= effective - 2),
+        "no fragment is longer than the peer accepts"
+    );
     assert_eq!(reassemble(&bodies, peer, 1000, PEER_KEY.len()), payload);
     let digests: Vec<String> = bodies.iter().map(|body| codec::sha(body)).collect();
     std::format!(
@@ -1506,7 +1756,10 @@ fn peer_fixed<
             solo.pump(2);
             let sent = solo.bodies();
             assert_eq!(sent.len(), 1);
-            assert!(sent[0].len() + 2 <= effective, "the frame fits the smaller batch");
+            assert!(
+                sent[0].len() + 2 <= effective,
+                "the frame fits the smaller batch"
+            );
             ("whole".to_string(), sent[0].len(), codec::sha(&sent[0]))
         }
         Err(Error::Session(SessionError::Decode(Refusal::OverBound))) => {
@@ -1557,7 +1810,9 @@ fn a_key_is_counted_in_bytes_not_characters() {
     pair.open();
     pair.declare(1, key);
     let declare = message_of(pair.b.last_sent_batch()).to_vec();
-    pair.b.undeclare_subscriber(pair.hb, 1, key).expect("undeclare");
+    pair.b
+        .undeclare_subscriber(pair.hb, 1, key)
+        .expect("undeclare");
     let undeclare = message_of(pair.b.last_sent_batch()).to_vec();
     pair.run(2);
     pair.declare(1, key);
@@ -1567,7 +1822,10 @@ fn a_key_is_counted_in_bytes_not_characters() {
     let mut digests = Vec::new();
     let mut at = 0;
     loop {
-        let next = pair.a.publish_part(pair.ha, key, &attachment, &payload, at).expect("fragment");
+        let next = pair
+            .a
+            .publish_part(pair.ha, key, &attachment, &payload, at)
+            .expect("fragment");
         digests.push(codec::sha(pair.a.last_sent_batch()));
         pair.run(10);
         match next {
@@ -1665,7 +1923,11 @@ fn filled<
     }
     // The peer's subscribers, and the one subscription of our own.
     assert_eq!(pair.b.session().subscribers(), ids.len() + 1);
-    let put = |payload: Vec<u8>| Parts::full(codec::KEY.as_bytes(), size).with(|p| p.payload = payload).bytes();
+    let put = |payload: Vec<u8>| {
+        Parts::full(codec::KEY.as_bytes(), size)
+            .with(|p| p.payload = payload)
+            .bytes()
+    };
     let mut sent = Vec::new();
     for index in 0..held {
         let payload = make(index);
@@ -1683,7 +1945,10 @@ fn filled<
             pair.inject(&body);
             pair.pump_b(TIME).expect("joined");
         }
-        assert!(pair.b.session().reassembling(), "the last fragment waits for room in the queue");
+        assert!(
+            pair.b.session().reassembling(),
+            "the last fragment waits for room in the queue"
+        );
         assert_eq!(pair.b.notices_queued(), held);
     }
     let mut back = Vec::new();
@@ -1712,15 +1977,28 @@ fn nine_keys_subscribers_and_samples_are_held_and_read_back() {
         let (heap, ids) = (heap, ids.clone());
         move || filled::<2048, 9, 10, 129, 0, 18>(&heap, &ids, make)
     });
-    line(&std::format!("counts 9 9 9 18 1024 {} {digest}", heap.heap_bytes));
+    line(&std::format!(
+        "counts 9 9 9 18 1024 {} {digest}",
+        heap.heap_bytes
+    ));
     ok("nine-keys-subscribers-and-samples");
     let fixed = counts(Mode::Fixed, 9, 9, 9, 1024);
     let digest = on_big_stack(move || filled::<2048, 9, 10, 129, 1024, 18>(&fixed, &ids, make));
-    line(&std::format!("countsfixed 9 9 9 18 1024 {} {digest}", fixed.stack_bytes));
+    line(&std::format!(
+        "countsfixed 9 9 9 18 1024 {} {digest}",
+        fixed.stack_bytes
+    ));
     ok("nine-keys-subscribers-and-samples-fixed");
 }
 
-fn wide_line(mode: Mode, keys: usize, subscribers: usize, samples: usize, payload: u64, digest: &str) {
+fn wide_line(
+    mode: Mode,
+    keys: usize,
+    subscribers: usize,
+    samples: usize,
+    payload: u64,
+    digest: &str,
+) {
     let limits = counts(mode, keys, subscribers, samples, payload);
     line(&std::format!(
         "wide {} {keys} {subscribers} {samples} {} {payload} {} {} {digest}",
@@ -1758,7 +2036,8 @@ fn counts_of_65535_fill_the_width_of_sixteen_bits() {
     wide_line(Mode::Heap, 65_535, 65_535, 1, 12, &digest);
     ok("wide-counts-65535-heap");
     let fixed = counts(Mode::Fixed, 65_535, 65_535, 1, 12);
-    let digest = on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2>(&fixed, &ids, make));
+    let digest =
+        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2>(&fixed, &ids, make));
     wide_line(Mode::Fixed, 65_535, 65_535, 1, 12, &digest);
     ok("wide-counts-65535-fixed");
 }
@@ -1787,7 +2066,9 @@ fn message_of_frame(frame: &[u8]) -> Vec<u8> {
 fn undeclare_frame(bounds: Bounds, sn: u32, id: u32, key: &str) -> Vec<u8> {
     let mut out = std::vec![0u8; bounds.batch + 2];
     let mut frame = FrameEncoder::with_bounds(&mut out, sn, bounds).expect("frame");
-    frame.undeclare_subscriber(id, Mapping::Sender, key).expect("undeclare");
+    frame
+        .undeclare_subscriber(id, Mapping::Sender, key)
+        .expect("undeclare");
     let length = frame.finish().expect("finish");
     out.truncate(length);
     out
@@ -1809,7 +2090,12 @@ fn slots_run<
     pair.open();
     let (mut declared, mut used, mut removed) = (Sha256::new(), Sha256::new(), Sha256::new());
     for index in 0..65_535u32 {
-        let subscriber = message_of_frame(&subscriber_frame(pair.bounds, 0, index, &std::format!("s/{index}")));
+        let subscriber = message_of_frame(&subscriber_frame(
+            pair.bounds,
+            0,
+            index,
+            &std::format!("s/{index}"),
+        ));
         let alias = declare_alias(index + 1, &std::format!("a/{index}"));
         declared.update(&subscriber);
         declared.update(&alias);
@@ -1818,7 +2104,11 @@ fn slots_run<
         pair.pump_b(TIME).expect("a slot within the limit");
         pair.drain();
     }
-    assert_eq!(pair.b.session().subscribers(), 65_535, "every slot is taken");
+    assert_eq!(
+        pair.b.session().subscribers(),
+        65_535,
+        "every slot is taken"
+    );
     for index in [256u32, 65_534] {
         // A Put to the subscriber named in full, and a Put through the alias at its slot.
         let to_subscriber = Parts::full(std::format!("s/{index}").as_bytes(), 12).bytes();
@@ -1828,14 +2118,18 @@ fn slots_run<
             (std::format!("a/{index}"), through_alias),
         ] {
             used.update(&message);
-            pair.b.declare_subscriber(pair.hb, 1, &key).expect("subscribe");
+            pair.b
+                .declare_subscriber(pair.hb, 1, &key)
+                .expect("subscribe");
             pair.run(2);
             while pair.a.next_notice().is_some() {}
             let sn = pair.next_peer_sn();
             pair.inject(&frame(sn, &[message]));
             pair.pump_b(TIME).expect("carried");
             assert_eq!(payload_of(&mut pair), codec::payload(12), "{key}");
-            pair.b.undeclare_subscriber(pair.hb, 1, &key).expect("unsubscribe");
+            pair.b
+                .undeclare_subscriber(pair.hb, 1, &key)
+                .expect("unsubscribe");
             pair.run(3);
             while pair.a.next_notice().is_some() {}
         }
@@ -1849,7 +2143,11 @@ fn slots_run<
         pair.pump_b(TIME).expect("undeclared");
         pair.drain();
     }
-    assert_eq!(pair.b.session().subscribers(), 0, "every subscriber is gone");
+    assert_eq!(
+        pair.b.session().subscribers(),
+        0,
+        "every subscriber is gone"
+    );
     std::format!(
         "slots {} 65535 65535 256 65534 {} {} {}",
         mode.name(),

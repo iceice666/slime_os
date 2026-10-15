@@ -677,11 +677,7 @@ fn oam<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> 
     Ok(Network::Oam)
 }
 
-fn push<'a>(
-    reader: &mut Reader<'a>,
-    header: u8,
-    bounds: &Bounds,
-) -> Result<Network<'a>, Refusal> {
+fn push<'a>(reader: &mut Reader<'a>, header: u8, bounds: &Bounds) -> Result<Network<'a>, Refusal> {
     no_extension(header)?;
     let key = key_reference(reader, header & FLAG_BIT5 != 0, bounds)?;
     let body = reader.u8()?;
@@ -749,11 +745,7 @@ fn parse_network<'a>(reader: &mut Reader<'a>, bounds: &Bounds) -> Result<Network
     }
 }
 
-fn frame<'a>(
-    mut reader: Reader<'a>,
-    header: u8,
-    bounds: &Bounds,
-) -> Result<Message<'a>, Refusal> {
+fn frame<'a>(mut reader: Reader<'a>, header: u8, bounds: &Bounds) -> Result<Message<'a>, Refusal> {
     if header & FLAG_BIT5 == 0 {
         return Err(Refusal::UnsupportedMessage);
     }

@@ -15,10 +15,18 @@ fn fragments(size: usize, first: u32) -> (Vec<u8>, Vec<Vec<u8>>) {
 }
 
 /// Feeds a whole run and returns the joined message.
-fn join(reassembly: &mut Reassembly, storage: &mut [u8], bodies: &[Vec<u8>], first: u32, now: u64) -> Vec<u8> {
+fn join(
+    reassembly: &mut Reassembly,
+    storage: &mut [u8],
+    bodies: &[Vec<u8>],
+    first: u32,
+    now: u64,
+) -> Vec<u8> {
     for (index, body) in bodies.iter().enumerate() {
         let fragment = decode_fragment(body, Some(BATCH)).expect("fragment");
-        let progress = reassembly.accept(&fragment, storage, first, now).expect("accepted");
+        let progress = reassembly
+            .accept(&fragment, storage, first, now)
+            .expect("accepted");
         assert_eq!(progress == Progress::Open, index + 1 < bodies.len());
     }
     let (message, next) = reassembly.finish(storage).expect("finished");
@@ -31,7 +39,10 @@ fn a_run_joins_into_the_front_of_the_supplied_storage() {
     let (message, bodies) = fragments(5000, FIRST);
     let mut storage = std::vec![0u8; message.len()];
     let mut reassembly = Reassembly::new(5000, message.len());
-    assert_eq!(join(&mut reassembly, &mut storage, &bodies, FIRST, 0), message);
+    assert_eq!(
+        join(&mut reassembly, &mut storage, &bodies, FIRST, 0),
+        message
+    );
     assert!(!reassembly.is_open());
 }
 
@@ -43,7 +54,16 @@ fn the_storage_of_exactly_one_message_serves_message_after_message() {
     for round in 0..4u32 {
         let (_, bodies) = fragments(5000, FIRST + round * bodies.len() as u32);
         let first = FIRST + round * 3;
-        assert_eq!(join(&mut reassembly, &mut storage, &bodies, first, u64::from(round)), message);
+        assert_eq!(
+            join(
+                &mut reassembly,
+                &mut storage,
+                &bodies,
+                first,
+                u64::from(round)
+            ),
+            message
+        );
     }
 }
 
@@ -82,7 +102,13 @@ fn a_message_over_the_declared_limit_is_refused_though_the_storage_would_hold_it
     assert!(!reassembly.is_open());
 }
 
-fn first_error(reassembly: &mut Reassembly, storage: &mut [u8], run: &[Vec<u8>], first: u32, now: u64) -> Option<&'static str> {
+fn first_error(
+    reassembly: &mut Reassembly,
+    storage: &mut [u8],
+    run: &[Vec<u8>],
+    first: u32,
+    now: u64,
+) -> Option<&'static str> {
     for body in run {
         let fragment = decode_fragment(body, Some(BATCH)).expect("fragment");
         if let Err(refused) = reassembly.accept(&fragment, storage, first, now) {
@@ -98,12 +124,22 @@ fn a_gap_a_duplicate_and_a_step_back_are_refused_as_fragment_sequence() {
     let mut storage = std::vec![0u8; message.len()];
     let cases: [(&str, Vec<Vec<u8>>); 3] = [
         ("gap", std::vec![bodies[0].clone(), bodies[2].clone()]),
-        ("duplicate", std::vec![bodies[0].clone(), bodies[0].clone(), bodies[2].clone()]),
-        ("backward", std::vec![bodies[0].clone(), bodies[1].clone(), bodies[0].clone()]),
+        (
+            "duplicate",
+            std::vec![bodies[0].clone(), bodies[0].clone(), bodies[2].clone()],
+        ),
+        (
+            "backward",
+            std::vec![bodies[0].clone(), bodies[1].clone(), bodies[0].clone()],
+        ),
     ];
     for (label, run) in cases {
         let mut reassembly = Reassembly::new(5000, message.len());
-        assert_eq!(first_error(&mut reassembly, &mut storage, &run, FIRST, 0), Some("fragment-sequence"), "{label}");
+        assert_eq!(
+            first_error(&mut reassembly, &mut storage, &run, FIRST, 0),
+            Some("fragment-sequence"),
+            "{label}"
+        );
         assert!(!reassembly.is_open(), "{label} frees the run");
     }
 }
@@ -124,7 +160,10 @@ fn the_first_fragment_must_be_the_sessions_next_sequence_number() {
     // Across the wrap, the expected number is taken as it stands.
     let (message, bodies) = fragments(5000, 0xFFFF_FFFE);
     let mut reassembly = Reassembly::new(5000, message.len());
-    assert_eq!(join(&mut reassembly, &mut storage, &bodies, 0xFFFF_FFFE, 0), message);
+    assert_eq!(
+        join(&mut reassembly, &mut storage, &bodies, 0xFFFF_FFFE, 0),
+        message
+    );
 }
 
 #[test]
@@ -135,9 +174,15 @@ fn a_run_ends_at_the_final_fragment_and_a_fragment_after_it_is_refused() {
     // An interior fragment that says no more follows ends the run early: the next is refused.
     let mut early = decode_fragment(&bodies[0], Some(BATCH)).expect("fragment");
     early.more = false;
-    assert_eq!(reassembly.accept(&early, &mut storage, FIRST, 0), Ok(Progress::Complete(early.data.len())));
+    assert_eq!(
+        reassembly.accept(&early, &mut storage, FIRST, 0),
+        Ok(Progress::Complete(early.data.len()))
+    );
     let next = decode_fragment(&bodies[1], Some(BATCH)).expect("fragment");
-    assert_eq!(reassembly.accept(&next, &mut storage, FIRST, 0), Err(FragmentError::FragmentSequence));
+    assert_eq!(
+        reassembly.accept(&next, &mut storage, FIRST, 0),
+        Err(FragmentError::FragmentSequence)
+    );
     assert!(!reassembly.is_open());
 }
 
@@ -153,7 +198,9 @@ fn the_deadline_is_measured_from_the_first_fragment_and_a_continuation_does_not_
         let times = [started, edge - 1, edge];
         for (index, body) in bodies.iter().enumerate() {
             let fragment = decode_fragment(body, Some(BATCH)).expect("fragment");
-            reassembly.accept(&fragment, &mut storage, FIRST, times[index]).expect("on time");
+            reassembly
+                .accept(&fragment, &mut storage, FIRST, times[index])
+                .expect("on time");
         }
         let (joined, _) = reassembly.finish(&storage).expect("finished");
         assert_eq!(joined, message, "{timeout}");
@@ -179,7 +226,10 @@ fn a_first_fragment_after_the_clock_passed_the_timeout_is_not_late() {
     let mut storage = std::vec![0u8; message.len()];
     let mut reassembly = Reassembly::new(5000, message.len());
     // The session has been up for two hours; the deadline comes from this run, not from the clock.
-    assert_eq!(join(&mut reassembly, &mut storage, &bodies, FIRST, 7_200_000), message);
+    assert_eq!(
+        join(&mut reassembly, &mut storage, &bodies, FIRST, 7_200_000),
+        message
+    );
 }
 
 #[test]
@@ -190,7 +240,11 @@ fn a_last_fragment_that_still_says_more_waits_and_expires() {
     for (index, body) in bodies.iter().enumerate() {
         let mut fragment = decode_fragment(body, Some(BATCH)).expect("fragment");
         fragment.more = true;
-        assert_eq!(reassembly.accept(&fragment, &mut storage, FIRST, 100), Ok(Progress::Open), "{index}");
+        assert_eq!(
+            reassembly.accept(&fragment, &mut storage, FIRST, 100),
+            Ok(Progress::Open),
+            "{index}"
+        );
     }
     assert!(reassembly.is_open());
     assert_eq!(reassembly.deadline(), Some(5100));
@@ -208,14 +262,21 @@ fn a_single_final_fragment_is_a_complete_message() {
     assert_eq!(bodies.len(), 1);
     let mut storage = std::vec![0u8; message.len()];
     let mut reassembly = Reassembly::new(5000, message.len());
-    assert_eq!(join(&mut reassembly, &mut storage, &bodies, FIRST, 0), message);
+    assert_eq!(
+        join(&mut reassembly, &mut storage, &bodies, FIRST, 0),
+        message
+    );
     let (_, next) = {
         let fragment = decode_fragment(&bodies[0], Some(BATCH)).expect("fragment");
         let mut other = Reassembly::new(5000, message.len());
-        other.accept(&fragment, &mut storage, 0xFFFF_FFFF, 0).expect_err("wrong number");
+        other
+            .accept(&fragment, &mut storage, 0xFFFF_FFFF, 0)
+            .expect_err("wrong number");
         let bodies = codec::split(&message, BATCH, 0xFFFF_FFFF);
         let fragment = decode_fragment(&bodies[0], Some(BATCH)).expect("fragment");
-        other.accept(&fragment, &mut storage, 0xFFFF_FFFF, 0).expect("accepted");
+        other
+            .accept(&fragment, &mut storage, 0xFFFF_FFFF, 0)
+            .expect("accepted");
         other.finish(&storage).expect("finished")
     };
     assert_eq!(next, 0, "the expected number wraps to zero");
@@ -230,10 +291,15 @@ fn a_run_whose_slices_are_shorter_than_the_maximum_is_taken() {
     let mut sn = FIRST;
     for take in [1000usize, 1, 1500, usize::MAX, usize::MAX] {
         // A slice is at most the batch less the stream length and the fragment's own header.
-        let room = BATCH - crate::zenoh_profile0::STREAM_LENGTH_BYTES - 1 - codec::leb(u64::from(sn)).len();
+        let room = BATCH
+            - crate::zenoh_profile0::STREAM_LENGTH_BYTES
+            - 1
+            - codec::leb(u64::from(sn)).len();
         let take = take.min(room).min(message.len() - at);
         let more = at + take < message.len();
-        let mut body = std::vec![crate::zenoh_profile0::fragment::ID_FRAGMENT | 0x20 | if more { 0x40 } else { 0 }];
+        let mut body = std::vec![
+            crate::zenoh_profile0::fragment::ID_FRAGMENT | 0x20 | if more { 0x40 } else { 0 }
+        ];
         body.extend(codec::leb(u64::from(sn)));
         body.extend(&message[at..at + take]);
         bodies.push(body);
@@ -246,5 +312,8 @@ fn a_run_whose_slices_are_shorter_than_the_maximum_is_taken() {
     assert!(bodies.len() >= 4);
     let mut storage = std::vec![0u8; message.len()];
     let mut reassembly = Reassembly::new(5000, message.len());
-    assert_eq!(join(&mut reassembly, &mut storage, &bodies, FIRST, 0), message);
+    assert_eq!(
+        join(&mut reassembly, &mut storage, &bodies, FIRST, 0),
+        message
+    );
 }

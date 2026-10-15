@@ -91,7 +91,11 @@ pub const fn notice_need(header: u8, frame_events: usize) -> (usize, bool) {
     if header & ID_MASK == super::ID_FRAME {
         (frame_events, true)
     } else if is_fragment(header) {
-        if header & FLAG_MORE == 0 { (1, true) } else { (0, false) }
+        if header & FLAG_MORE == 0 {
+            (1, true)
+        } else {
+            (0, false)
+        }
     } else {
         (1, false)
     }

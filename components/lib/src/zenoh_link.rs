@@ -14,8 +14,7 @@ use crate::zenoh_profile0::session::{
     Config, Event, MAX_EVENTS, Outcome, Params, Role, SessionError, SessionOf, State,
 };
 use crate::zenoh_profile0::{
-    MAX_BATCH_BYTES, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, Refusal, STREAM_LENGTH_BYTES,
-    StreamFramerOf,
+    MAX_BATCH_BYTES, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, Refusal, STREAM_LENGTH_BYTES, StreamFramerOf,
 };
 
 #[cfg(test)]
@@ -132,12 +131,18 @@ impl StoredSample {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Notice<const P: usize = MAX_PAYLOAD_BYTES> {
     HandshakeComplete,
-    SubscriberDeclared { id: u32 },
+    SubscriberDeclared {
+        id: u32,
+    },
     SampleDelivered(Sample<P>),
     /// A sample joined from fragments into the heap the owner lends.
     SampleStored(StoredSample),
-    SubscriberUndeclared { id: u32 },
-    Closed { reason: u8 },
+    SubscriberUndeclared {
+        id: u32,
+    },
+    Closed {
+        reason: u8,
+    },
 }
 
 /// An owned copy of one batch body, kept so a node can report the exact bytes it exchanged.
@@ -345,7 +350,8 @@ impl<
         if self.send_len != 0 {
             return Err(Error::SendBusy);
         }
-        let written = encode::stream_batch_max(&mut self.send, batch, FRAMED - STREAM_LENGTH_BYTES)?;
+        let written =
+            encode::stream_batch_max(&mut self.send, batch, FRAMED - STREAM_LENGTH_BYTES)?;
         self.tap_sent.keep(batch);
         self.send_len = written;
         self.sent = 0;
@@ -725,7 +731,11 @@ impl<
             self.tap_received.keep(body);
             let limit = self.session.params().message_limit;
             let cell_start = self.cell_start(heap.len());
-            let cell_end = if limit == 0 { 0 } else { (cell_start + limit).min(heap.len()) };
+            let cell_end = if limit == 0 {
+                0
+            } else {
+                (cell_start + limit).min(heap.len())
+            };
             let cell = heap
                 .get_mut(cell_start.min(heap.len())..cell_end)
                 .unwrap_or(&mut []);
