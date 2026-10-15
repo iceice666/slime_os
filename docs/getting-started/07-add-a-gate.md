@@ -187,9 +187,11 @@ just component_spec_check
 just docs_check          # the new recipe name is now referenced from docs
 ```
 
-Then add the recipe to [`docs/reference/just-targets.md`](../reference/just-targets.md)
-if it is a gate other people will be routed to, and to the owning `docs/architecture/` page's
-"Verification" list.
+Then add a row for the recipe to
+[`docs/reference/just-targets.md`](../reference/just-targets.md) — every
+public recipe has one; a recipe that should not be listed is private
+(`_name`) — and add it to the owning `docs/architecture/` page's
+"Verification" list if it is a gate other people will be routed to.
 
 ## Writing good markers
 

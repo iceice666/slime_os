@@ -82,14 +82,18 @@ rebuild is seconds, the cost of a forged cache is a false pass.
 ## Closures and recipes
 
 Adding or editing any recipe under `just/` or `Justfile` changes every
-closure's `just-recipes` identity: regenerate the closures and refresh the
-test-run records in the same PR, in a derived commit. `scripts/check/` and
+closure's `just-recipes` identity: regenerate the closures
+(`python3 scripts/generate/generate-system-image-closures.py`) and refresh
+the test-run records
+(`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`,
+or `just system_test_run_bless` when an execution declaration changed) in
+the same PR, in a derived commit. `scripts/check/` and
 `scripts/lib/` are not closure inputs except the files `RELEASE_INPUTS` in
 `scripts/generate/generate-system-image-closures.py` names by path (today
 `scripts/lib/elf_delivery.py` and the builders under `scripts/build/`); a
 change confined to other checker or library files leaves the closures
 current. Confirm either way with
-`generate-system-image-closures.py --check`.
+`python3 scripts/generate/generate-system-image-closures.py --check`.
 
 A checker, recipe, pin, or fixture under `.devloop/policy.json` `codePaths`
 stales the evidence recorded against it. A change to one is a planning
