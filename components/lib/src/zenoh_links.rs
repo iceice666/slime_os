@@ -11,8 +11,12 @@ fn line(text: &str) {
     println!("[zenoh-exam] links {text}");
 }
 
+/// The scenarios whose assertions held, in the order they finished. `ok` lines are printed together, in
+/// the order the exam pins, by the last test, so a scenario that did not finish prints none and fails it.
+static FINISHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 fn ok(name: &str) {
-    line(&format!("ok {name}"));
+    FINISHED.lock().expect("registry").push(name.into());
 }
 
 fn config_line(limits: &Limits) -> String {
@@ -293,7 +297,6 @@ struct Pair<
     ha: LinkHandle,
     hb: LinkHandle,
     a_to_b: Rc<RefCell<Pipe>>,
-    b_to_a: Rc<RefCell<Pipe>>,
     heap_a: Vec<u8>,
     heap_b: Vec<u8>,
     sequence: i64,
@@ -399,7 +402,6 @@ fn pair_with<
         ha,
         hb,
         a_to_b,
-        b_to_a,
         heap_a: Vec::new(),
         heap_b: std::vec![0; heap],
         sequence: 0,
@@ -668,4 +670,80 @@ fn every_refusal_carries_the_class_the_exam_names() {
         }
     }
     assert!(failed.is_empty(), "{} rows:\n{}", failed.len(), failed.join("\n"));
+}
+
+const OK_ORDER: [&str; 56] = [
+    "encode-stock-5000-2048",
+    "encode-stock-2200-2048",
+    "encode-stock-5000-512",
+    "reassemble-stock-5000-2048",
+    "reassemble-stock-2200-2048",
+    "reassemble-stock-5000-512",
+    "boundary-whole-then-fragmented",
+    "two-messages-in-a-row",
+    "reassembly-after-timeout-reuses-storage",
+    "reassembly-after-refusals-reuses-storage",
+    "put-roundtrip-across-sequence-width",
+    "put-roundtrip-at-the-declared-payload",
+    "heap-reassembles-after-queue-drained",
+    "reassembly-completes-at-the-timeout-edge",
+    "heap-declared-payload-boundary",
+    "heap-fills-notice-queue",
+    "stack-covers-measured-sizes",
+    "heap-storage-from-component",
+    "put-roundtrip-5000-2048",
+    "reassemble-sender-mapped-alias",
+    "fragment-run-advances-session-sequence",
+    "refused-fragment-run-leaves-session-unchanged",
+    "demo-config-unchanged",
+    "large-delivers-1024-whole",
+    "four-keys-and-subscribers",
+    "subscriber-ids-use-all-32-bits",
+    "reassemble-short-key",
+    "reassemble-high-aliases",
+    "edge-batch-89",
+    "edge-batch-4096",
+    "edge-key-2028",
+    "edge-payload-1mib",
+    "edge-payload-2mib",
+    "edge-payload-256mib",
+    "edge-fixed-batch-89",
+    "edge-fixed-batch-4096",
+    "edge-minimum-fixed",
+    "edge-minimum-heap",
+    "edge-alias-long-key-2028",
+    "edge-alias-long-key-4076",
+    "reassemble-single-final-fragment",
+    "peerbatch-heap",
+    "peerbatch-fixed",
+    "reassemble-underfilled-interior",
+    "nine-keys-subscribers-and-samples",
+    "nine-keys-subscribers-and-samples-fixed",
+    "wide-counts-256-heap",
+    "wide-counts-256-fixed",
+    "wide-counts-65535-heap",
+    "wide-counts-65535-fixed",
+    "wide-counts-65536-samples-heap",
+    "wide-counts-65536-samples-fixed",
+    "wide-slots-65535-heap",
+    "wide-slots-65535-fixed",
+    "reassemble-multibyte-key",
+    "boundary-at-sequence-width-changes",
+];
+
+/// Sorts after every other test of the module, which `--test-threads=1` runs in name order.
+#[test]
+fn zz_every_scenario_finished_and_is_reported_in_the_exams_order() {
+    let finished = FINISHED.lock().expect("registry").clone();
+    let mut sorted = finished.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), finished.len(), "a scenario finished twice");
+    let missing: Vec<&str> = OK_ORDER.iter().copied().filter(|name| !finished.iter().any(|f| f == name)).collect();
+    assert!(missing.is_empty(), "scenarios that did not finish: {missing:?}");
+    let extra: Vec<&String> = finished.iter().filter(|f| !OK_ORDER.contains(&f.as_str())).collect();
+    assert!(extra.is_empty(), "scenarios the exam does not pin: {extra:?}");
+    for name in OK_ORDER {
+        line(&std::format!("ok {name}"));
+    }
 }

@@ -1088,13 +1088,6 @@ fn widest_sizes(batch: usize, key: &str) -> (usize, usize) {
     (declared, undeclare.finish().expect("finish") + 2)
 }
 
-/// What the handshake announced: its length with the stream length, the batch it named, and the digests
-/// of the INIT_ACK and the INIT_SYN.
-fn handshake_of(ack: &[u8], syn: &[u8]) -> String {
-    let announced = u16::from_le_bytes([ack[20], ack[21]]);
-    std::format!("{} {announced} {} {}", ack.len() + 2, codec::sha(ack), codec::sha(syn))
-}
-
 fn handshake_length(ack: &[u8]) -> usize {
     ack.len() + 2
 }
@@ -1597,4 +1590,281 @@ fn a_key_is_counted_in_bytes_not_characters() {
         codec::sha(&message),
     ));
     ok("reassemble-multibyte-key");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Configurations filled to their limits: every key and subscriber declared, the notice queue held
+// undrained with a distinct payload in each notice, and in heap mode one more message joined behind them.
+
+fn wide_payload(size: usize, index: usize) -> Vec<u8> {
+    let mut out = (index as u32).to_be_bytes().to_vec();
+    out.extend(distinct_payload(size, index));
+    out.truncate(size);
+    out
+}
+
+/// Runs `body` on a thread with the stack the largest configurations need: a session of 65535 slots holds
+/// its tables on the stack and the test builds are not optimized.
+fn on_big_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(body)
+        .expect("thread")
+        .join()
+        .expect("the scenario held")
+}
+
+fn payload_of<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    pair: &mut Pair<F, K, S, B, P, Q>,
+) -> Vec<u8> {
+    match pair.b.next_notice().expect("a notice") {
+        Notice::SampleStored(sample) => sample.payload(&pair.heap_b).to_vec(),
+        Notice::SampleDelivered(sample) => sample.payload().to_vec(),
+        other => panic!("not a sample: {other:?}"),
+    }
+}
+
+/// Fills `limits` to its limits through the link and returns the digest of every payload read back.
+/// `ids` are the keys and subscribers the peer declares; the queue then holds two notices for each
+/// outstanding sample, and in heap mode one more message is joined behind them from fragments.
+fn filled<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    limits: &Limits,
+    ids: &[u32],
+    make: impl Fn(usize) -> Vec<u8>,
+) -> String {
+    let held = 2 * limits.outstanding_samples;
+    let heap = limits.mode == Mode::Heap;
+    let size = limits.payload_bytes as usize;
+    let mut pair: Pair<F, K, S, B, P, Q> = pair_of(limits, limits.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    for &id in ids {
+        let key = std::format!("k/{id}");
+        let sn = pair.next_peer_sn();
+        pair.inject(&subscriber_frame(pair.bounds, sn, id, &key));
+        pair.pump_b(TIME).expect("a subscriber within the limit");
+        pair.drain();
+        let sn = pair.next_peer_sn();
+        pair.inject(&frame(sn, &[declare_alias(id, &key)]));
+        pair.pump_b(TIME).expect("an alias within the limit");
+        pair.drain();
+    }
+    // The peer's subscribers, and the one subscription of our own.
+    assert_eq!(pair.b.session().subscribers(), ids.len() + 1);
+    let put = |payload: Vec<u8>| Parts::full(codec::KEY.as_bytes(), size).with(|p| p.payload = payload).bytes();
+    let mut sent = Vec::new();
+    for index in 0..held {
+        let payload = make(index);
+        sent.push(codec::sha(&payload));
+        let sn = pair.next_peer_sn();
+        pair.inject(&frame(sn, &[put(payload)]));
+        pair.pump_b(TIME).expect("held");
+    }
+    assert_eq!(pair.b.notices_queued(), held, "the owner has drained none");
+    if heap {
+        let payload = make(held);
+        sent.push(codec::sha(&payload));
+        let sn = pair.next_peer_sn();
+        for body in codec::split(&put(payload), 100, sn) {
+            pair.inject(&body);
+            pair.pump_b(TIME).expect("joined");
+        }
+        assert!(pair.b.session().reassembling(), "the last fragment waits for room in the queue");
+        assert_eq!(pair.b.notices_queued(), held);
+    }
+    let mut back = Vec::new();
+    for index in 0..held {
+        let payload = payload_of(&mut pair);
+        assert!(payload == make(index), "sample {index} is intact");
+        back.push(codec::sha(&payload));
+    }
+    if heap {
+        pair.pump_b(TIME + 1).expect("the last fragment is taken");
+        let payload = payload_of(&mut pair);
+        assert!(payload == make(held), "the joined sample is intact");
+        back.push(codec::sha(&payload));
+    }
+    assert!(pair.b.next_notice().is_none());
+    assert_eq!(sent, back);
+    digest_of(&sent)
+}
+
+#[test]
+fn nine_keys_subscribers_and_samples_are_held_and_read_back() {
+    let ids: Vec<u32> = (1..=9).collect();
+    let make = |index| distinct_payload(1024, index);
+    let heap = counts(Mode::Heap, 9, 9, 9, 1024);
+    let digest = on_big_stack({
+        let (heap, ids) = (heap, ids.clone());
+        move || filled::<2048, 9, 10, 129, 0, 18>(&heap, &ids, make)
+    });
+    line(&std::format!("counts 9 9 9 18 1024 {} {digest}", heap.heap_bytes));
+    ok("nine-keys-subscribers-and-samples");
+    let fixed = counts(Mode::Fixed, 9, 9, 9, 1024);
+    let digest = on_big_stack(move || filled::<2048, 9, 10, 129, 1024, 18>(&fixed, &ids, make));
+    line(&std::format!("countsfixed 9 9 9 18 1024 {} {digest}", fixed.stack_bytes));
+    ok("nine-keys-subscribers-and-samples-fixed");
+}
+
+fn wide_line(mode: Mode, keys: usize, subscribers: usize, samples: usize, payload: u64, digest: &str) {
+    let limits = counts(mode, keys, subscribers, samples, payload);
+    line(&std::format!(
+        "wide {} {keys} {subscribers} {samples} {} {payload} {} {} {digest}",
+        mode.name(),
+        2 * samples,
+        limits.stack_bytes,
+        limits.heap_bytes,
+    ));
+}
+
+#[test]
+fn counts_of_256_cross_the_width_of_a_byte() {
+    let ids: Vec<u32> = (1..=256).collect();
+    let make = |index| wide_payload(12, index);
+    let heap = counts(Mode::Heap, 256, 256, 256, 12);
+    let digest = on_big_stack({
+        let ids = ids.clone();
+        move || filled::<2048, 256, 257, 129, 0, 512>(&heap, &ids, make)
+    });
+    wide_line(Mode::Heap, 256, 256, 256, 12, &digest);
+    ok("wide-counts-256-heap");
+    let fixed = counts(Mode::Fixed, 256, 256, 256, 12);
+    let digest = on_big_stack(move || filled::<2048, 256, 257, 129, 12, 512>(&fixed, &ids, make));
+    wide_line(Mode::Fixed, 256, 256, 256, 12, &digest);
+    ok("wide-counts-256-fixed");
+}
+
+#[test]
+fn counts_of_65535_fill_the_width_of_sixteen_bits() {
+    // The first and the last slot are declared here; the slots test declares every one.
+    let ids = [1u32, 65_535];
+    let make = |index| wide_payload(12, index);
+    let heap = counts(Mode::Heap, 65_535, 65_535, 1, 12);
+    let digest = on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 0, 2>(&heap, &ids, make));
+    wide_line(Mode::Heap, 65_535, 65_535, 1, 12, &digest);
+    ok("wide-counts-65535-heap");
+    let fixed = counts(Mode::Fixed, 65_535, 65_535, 1, 12);
+    let digest = on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2>(&fixed, &ids, make));
+    wide_line(Mode::Fixed, 65_535, 65_535, 1, 12, &digest);
+    ok("wide-counts-65535-fixed");
+}
+
+#[test]
+fn counts_of_65536_samples_hold_131072_notices_each_a_distinct_index() {
+    let make = |index| wide_payload(4, index);
+    let heap = counts(Mode::Heap, 1, 1, 65_536, 4);
+    let digest = on_big_stack(move || filled::<2048, 1, 2, 129, 0, 131_072>(&heap, &[1], make));
+    wide_line(Mode::Heap, 1, 1, 65_536, 4, &digest);
+    ok("wide-counts-65536-samples-heap");
+    let fixed = counts(Mode::Fixed, 1, 1, 65_536, 4);
+    let digest = on_big_stack(move || filled::<2048, 1, 2, 129, 4, 131_072>(&fixed, &[1], make));
+    wide_line(Mode::Fixed, 1, 1, 65_536, 4, &digest);
+    ok("wide-counts-65536-samples-fixed");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Every one of 65535 slots used, not only the first 256.
+
+fn message_of_frame(frame: &[u8]) -> Vec<u8> {
+    // The frame header and a one-byte sequence number (0) precede the messages.
+    frame[2..].to_vec()
+}
+
+fn undeclare_frame(bounds: Bounds, sn: u32, id: u32, key: &str) -> Vec<u8> {
+    let mut out = std::vec![0u8; bounds.batch + 2];
+    let mut frame = FrameEncoder::with_bounds(&mut out, sn, bounds).expect("frame");
+    frame.undeclare_subscriber(id, Mapping::Sender, key).expect("undeclare");
+    let length = frame.finish().expect("finish");
+    out.truncate(length);
+    out
+}
+
+fn slots_run<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    mode: Mode,
+) -> String {
+    use boot_contracts::sha256::Sha256;
+    let limits = counts(mode, 65_535, 65_535, 1, 12);
+    let mut pair: Pair<F, K, S, B, P, Q> = pair_of(&limits, limits.heap_bytes as usize);
+    pair.open();
+    let (mut declared, mut used, mut removed) = (Sha256::new(), Sha256::new(), Sha256::new());
+    for index in 0..65_535u32 {
+        let subscriber = message_of_frame(&subscriber_frame(pair.bounds, 0, index, &std::format!("s/{index}")));
+        let alias = declare_alias(index + 1, &std::format!("a/{index}"));
+        declared.update(&subscriber);
+        declared.update(&alias);
+        let sn = pair.next_peer_sn();
+        pair.inject(&frame(sn, &[subscriber, alias]));
+        pair.pump_b(TIME).expect("a slot within the limit");
+        pair.drain();
+    }
+    assert_eq!(pair.b.session().subscribers(), 65_535, "every slot is taken");
+    for index in [256u32, 65_534] {
+        // A Put to the subscriber named in full, and a Put through the alias at its slot.
+        let to_subscriber = Parts::full(std::format!("s/{index}").as_bytes(), 12).bytes();
+        let through_alias = Parts::alias(index + 1, 12).bytes();
+        for (key, message) in [
+            (std::format!("s/{index}"), to_subscriber),
+            (std::format!("a/{index}"), through_alias),
+        ] {
+            used.update(&message);
+            pair.b.declare_subscriber(pair.hb, 1, &key).expect("subscribe");
+            pair.run(2);
+            while pair.a.next_notice().is_some() {}
+            let sn = pair.next_peer_sn();
+            pair.inject(&frame(sn, &[message]));
+            pair.pump_b(TIME).expect("carried");
+            assert_eq!(payload_of(&mut pair), codec::payload(12), "{key}");
+            pair.b.undeclare_subscriber(pair.hb, 1, &key).expect("unsubscribe");
+            pair.run(3);
+            while pair.a.next_notice().is_some() {}
+        }
+    }
+    for index in 0..65_535u32 {
+        let key = std::format!("s/{index}");
+        let message = message_of_frame(&undeclare_frame(pair.bounds, 0, index, &key));
+        removed.update(&message);
+        let sn = pair.next_peer_sn();
+        pair.inject(&frame(sn, &[message]));
+        pair.pump_b(TIME).expect("undeclared");
+        pair.drain();
+    }
+    assert_eq!(pair.b.session().subscribers(), 0, "every subscriber is gone");
+    std::format!(
+        "slots {} 65535 65535 256 65534 {} {} {}",
+        mode.name(),
+        codec::hex(&declared.finalize()),
+        codec::hex(&used.finalize()),
+        codec::hex(&removed.finalize()),
+    )
+}
+
+#[test]
+fn every_slot_of_65535_is_declared_used_and_undeclared() {
+    let heap = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 0, 2>(Mode::Heap));
+    line(&heap);
+    ok("wide-slots-65535-heap");
+    let fixed = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 12, 2>(Mode::Fixed));
+    line(&fixed);
+    ok("wide-slots-65535-fixed");
 }

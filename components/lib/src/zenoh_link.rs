@@ -716,10 +716,6 @@ impl<
                 return Ok(());
             }
             let heap_mode = self.session.params().fragments;
-            let is_fragment = body
-                .first()
-                .copied()
-                .is_some_and(crate::zenoh_profile0::fragment::is_fragment);
             // A heap link waits for a free cell for every sample the batch can yield: each cell holds a
             // sample the owner has not taken.
             let cells_needed = if heap_mode { samples } else { 0 };
