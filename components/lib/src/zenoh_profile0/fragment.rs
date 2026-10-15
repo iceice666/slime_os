@@ -11,7 +11,7 @@
 //! identifier and flags are those of the Zenoh transport specification, which this crate does not own.
 
 use super::limits::leb_bytes;
-use super::tables::Table;
+use super::tables::Keys;
 use super::{
     ATTACHMENT_GID_LEN_AT, Attachment, EXT_ATTACHMENT, FLAG_BIT5, FLAG_BIT6, FLAG_Z, GID_BYTES,
     ID_MASK, ID_PUSH, ID_PUT, MAX_ATTACHMENT_BYTES, Reader, Refusal, STREAM_LENGTH_BYTES,
@@ -317,7 +317,7 @@ pub struct PutRules<'a> {
     /// The largest payload the configuration declares.
     pub max_payload: u64,
     /// The aliases the peer declared. A peer-declared alias is in the sender's mapping.
-    pub aliases: Option<Table<'a>>,
+    pub aliases: Option<&'a dyn Keys>,
     /// The key this side's subscriber declared; a Put for another key is refused.
     pub subscribed: Option<&'a [u8]>,
 }
@@ -378,8 +378,7 @@ pub fn decode_put<'a>(
         }
         let stands_for = rules
             .aliases
-            .and_then(|table| table.find(scope).and_then(|at| table.get(at)))
-            .map(|(_, key)| key)
+            .and_then(|table| table.key_of(scope))
             .ok_or(Refusal::InvalidKeyexpr)?;
         if rules.subscribed.is_some_and(|held| held != stands_for) {
             return Err(FragmentError::UndeclaredKey);

@@ -1,20 +1,15 @@
-//! Slot tables over storage the caller supplies: the key aliases and the subscribers a session holds.
+//! Slot tables: the key aliases and the subscribers a session holds.
 //!
-//! A table is a run of equal slots in a byte slice, each `SLOT_OVERHEAD_BYTES` of bookkeeping and room for
-//! a key of the configured size, which is the arithmetic `limits` states. A slot is found by its id with
-//! open addressing from `id % slots`, so the ids a peer numbers in sequence land in their own slots and an
-//! operation costs one probe; a table that is full or has been emptied around an id costs at most one pass.
-//! The table owns no memory and keeps no count: the caller keeps how many slots are used.
+//! A table is `N` slots, each the contract's `SLOT_OVERHEAD_BYTES` of bookkeeping and room for a key of
+//! `K` bytes, so it occupies `table_bytes(N, K)` and `size_of` reports exactly that. A slot is found by
+//! its id with open addressing from `id % N`, so ids a peer numbers in sequence land in their own slots
+//! and an operation costs one probe. A removed slot is reused and the chain behind it stays intact.
 
 use super::limits::SLOT_OVERHEAD_BYTES;
 
 const EMPTY: u8 = 0;
 const USED: u8 = 1;
 const REMOVED: u8 = 2;
-const STATE_AT: usize = 0;
-const ID_AT: usize = 1;
-const LEN_AT: usize = 5;
-const KEY_AT: usize = SLOT_OVERHEAD_BYTES as usize;
 
 /// Why a slot could not be taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,71 +24,79 @@ pub enum InsertError {
 
 /// The bytes a table of `slots` slots for keys of `key_max` bytes occupies.
 pub const fn table_bytes(slots: usize, key_max: usize) -> usize {
-    slots * (key_max + KEY_AT)
+    slots * (key_max + SLOT_OVERHEAD_BYTES as usize)
 }
 
-/// A read view of a table.
+/// What a slot records besides its key: sixteen bytes, as the contract counts them.
 #[derive(Clone, Copy, Debug)]
-pub struct Table<'a> {
-    bytes: &'a [u8],
-    slots: usize,
-    slot: usize,
+#[repr(C)]
+struct Meta {
+    id: u32,
+    len: u16,
+    state: u8,
+    spare: [u8; 9],
 }
 
-/// A table that can be changed.
-pub struct TableMut<'a> {
-    bytes: &'a mut [u8],
-    slots: usize,
-    slot: usize,
+const _: () = assert!(core::mem::size_of::<Meta>() == SLOT_OVERHEAD_BYTES as usize);
+
+const VACANT: Meta = Meta {
+    id: 0,
+    len: 0,
+    state: EMPTY,
+    spare: [0; 9],
+};
+
+/// Looks a key up by the id that names it.
+pub trait Keys: core::fmt::Debug {
+    fn key_of(&self, id: u32) -> Option<&[u8]>;
 }
 
-fn read_u32(bytes: &[u8], at: usize) -> u32 {
-    let mut word = [0u8; 4];
-    if let Some(src) = bytes.get(at..at + 4) {
-        word.copy_from_slice(src);
+/// `N` slots for keys of up to `K` bytes.
+#[derive(Clone, Debug)]
+pub struct SlotTable<const N: usize, const K: usize> {
+    meta: [Meta; N],
+    keys: [[u8; K]; N],
+    used: usize,
+}
+
+impl<const N: usize, const K: usize> Default for SlotTable<N, K> {
+    fn default() -> Self {
+        Self::new()
     }
-    u32::from_le_bytes(word)
 }
 
-fn read_u16(bytes: &[u8], at: usize) -> u16 {
-    let mut word = [0u8; 2];
-    if let Some(src) = bytes.get(at..at + 2) {
-        word.copy_from_slice(src);
-    }
-    u16::from_le_bytes(word)
-}
-
-impl<'a> Table<'a> {
-    /// A view over the first `table_bytes(slots, key_max)` bytes of `bytes`.
-    pub fn new(bytes: &'a [u8], slots: usize, key_max: usize) -> Self {
+impl<const N: usize, const K: usize> SlotTable<N, K> {
+    pub const fn new() -> Self {
         Self {
-            bytes,
-            slots,
-            slot: key_max + KEY_AT,
+            meta: [VACANT; N],
+            keys: [[0; K]; N],
+            used: 0,
         }
     }
 
-    fn at(&self, index: usize) -> &'a [u8] {
-        self.bytes
-            .get(index * self.slot..(index + 1) * self.slot)
-            .unwrap_or(&[])
+    pub const fn len(&self) -> usize {
+        self.used
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.used == 0
     }
 
     fn state(&self, index: usize) -> u8 {
-        self.at(index).get(STATE_AT).copied().unwrap_or(EMPTY)
+        self.meta.get(index).map_or(EMPTY, |meta| meta.state)
     }
 
     /// The slot holding `id`.
     pub fn find(&self, id: u32) -> Option<usize> {
-        if self.slots == 0 {
+        if N == 0 {
             return None;
         }
-        let start = id as usize % self.slots;
-        for step in 0..self.slots {
-            let index = (start + step) % self.slots;
-            match self.state(index) {
-                EMPTY => return None,
-                USED if read_u32(self.at(index), ID_AT) == id => return Some(index),
+        let start = id as usize % N;
+        for step in 0..N {
+            let index = (start + step) % N;
+            match self.meta.get(index) {
+                Some(meta) if meta.state == EMPTY => return None,
+                Some(meta) if meta.state == USED && meta.id == id => return Some(index),
                 _ => {}
             }
         }
@@ -101,89 +104,75 @@ impl<'a> Table<'a> {
     }
 
     /// The id and key of a used slot.
-    pub fn get(&self, index: usize) -> Option<(u32, &'a [u8])> {
-        let slot = self.at(index);
-        if slot.get(STATE_AT) != Some(&USED) {
+    pub fn get(&self, index: usize) -> Option<(u32, &[u8])> {
+        let meta = self.meta.get(index)?;
+        if meta.state != USED {
             return None;
         }
-        let len = usize::from(read_u16(slot, LEN_AT));
-        Some((read_u32(slot, ID_AT), slot.get(KEY_AT..KEY_AT + len)?))
+        let key = self.keys.get(index)?.get(..usize::from(meta.len))?;
+        Some((meta.id, key))
     }
 
     /// The first used slot, for a table that holds one.
-    pub fn first(&self) -> Option<(u32, &'a [u8])> {
-        (0..self.slots).find_map(|index| self.get(index))
-    }
-}
-
-impl<'a> TableMut<'a> {
-    /// A table over the first `table_bytes(slots, key_max)` bytes of `bytes`.
-    pub fn new(bytes: &'a mut [u8], slots: usize, key_max: usize) -> Self {
-        Self {
-            bytes,
-            slots,
-            slot: key_max + KEY_AT,
+    pub fn first(&self) -> Option<(u32, &[u8])> {
+        if self.used == 0 {
+            return None;
         }
-    }
-
-    pub fn view(&self) -> Table<'_> {
-        Table {
-            bytes: self.bytes,
-            slots: self.slots,
-            slot: self.slot,
-        }
+        (0..N).find_map(|index| self.get(index))
     }
 
     /// Takes a slot for `id` and `key`.
     pub fn insert(&mut self, id: u32, key: &[u8]) -> Result<usize, InsertError> {
-        if key.len() > self.slot - KEY_AT || self.slots == 0 {
-            return Err(if self.slots == 0 {
-                InsertError::Full
-            } else {
-                InsertError::KeyTooLong
-            });
+        if key.len() > K {
+            return Err(InsertError::KeyTooLong);
         }
-        if self.view().find(id).is_some() {
+        if self.find(id).is_some() {
             return Err(InsertError::Duplicate);
         }
-        let start = id as usize % self.slots;
-        let mut chosen = None;
-        for step in 0..self.slots {
-            let index = (start + step) % self.slots;
-            if self.view().state(index) != USED {
-                chosen = Some(index);
-                break;
+        if self.used >= N {
+            return Err(InsertError::Full);
+        }
+        let start = id as usize % N;
+        let index = (0..N)
+            .map(|step| (start + step) % N)
+            .find(|&index| self.state(index) != USED)
+            .ok_or(InsertError::Full)?;
+        if let (Some(meta), Some(slot)) = (self.meta.get_mut(index), self.keys.get_mut(index)) {
+            *meta = Meta {
+                id,
+                len: key.len() as u16,
+                state: USED,
+                spare: [0; 9],
+            };
+            slot.fill(0);
+            if let Some(dst) = slot.get_mut(..key.len()) {
+                dst.copy_from_slice(key);
             }
         }
-        let index = chosen.ok_or(InsertError::Full)?;
-        let slot = self
-            .bytes
-            .get_mut(index * self.slot..(index + 1) * self.slot)
-            .ok_or(InsertError::Full)?;
-        slot.fill(0);
-        slot[STATE_AT] = USED;
-        slot[ID_AT..ID_AT + 4].copy_from_slice(&id.to_le_bytes());
-        slot[LEN_AT..LEN_AT + 2].copy_from_slice(&(key.len() as u16).to_le_bytes());
-        slot[KEY_AT..KEY_AT + key.len()].copy_from_slice(key);
+        self.used += 1;
         Ok(index)
     }
 
     /// Frees a used slot. Later lookups still pass over it.
     pub fn remove(&mut self, index: usize) {
-        if let Some(slot) = self
-            .bytes
-            .get_mut(index * self.slot..(index + 1) * self.slot)
+        if let Some(meta) = self.meta.get_mut(index)
+            && meta.state == USED
         {
-            slot[STATE_AT] = REMOVED;
+            meta.state = REMOVED;
+            self.used -= 1;
         }
     }
 
     /// Frees every slot.
     pub fn clear(&mut self) {
-        let end = self.slots * self.slot;
-        if let Some(all) = self.bytes.get_mut(..end) {
-            all.fill(EMPTY);
-        }
+        self.meta.fill(VACANT);
+        self.used = 0;
+    }
+}
+
+impl<const N: usize, const K: usize> Keys for SlotTable<N, K> {
+    fn key_of(&self, id: u32) -> Option<&[u8]> {
+        self.get(self.find(id)?).map(|(_, key)| key)
     }
 }
 

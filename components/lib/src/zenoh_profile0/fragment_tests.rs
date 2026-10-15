@@ -92,13 +92,11 @@ pub fn rules() -> PutRules<'static> {
     }
 }
 
-/// The storage of an alias table holding `alias` for `key`.
-pub fn alias_storage(alias: u32, key: &[u8]) -> Vec<u8> {
-    let mut bytes = std::vec![0u8; super::super::tables::table_bytes(4, 160)];
-    super::super::tables::TableMut::new(&mut bytes, 4, 160)
-        .insert(alias, key)
-        .expect("alias");
-    bytes
+/// An alias table holding `alias` for `key`.
+pub fn alias_table(alias: u32, key: &[u8]) -> super::super::tables::SlotTable<4, 160> {
+    let mut table = super::super::tables::SlotTable::new();
+    table.insert(alias, key).expect("alias");
+    table
 }
 
 /// The captures: payload bytes, batch, first sequence number, fragment lengths, headers, sha256 of each.
@@ -345,11 +343,9 @@ fn a_joined_put_names_a_valid_key_the_subscriber_declared() {
 
 #[test]
 fn a_joined_put_names_the_alias_the_peer_declared() {
-    use super::super::tables::Table;
-    let bytes = alias_storage(1, KEY.as_bytes());
-    let table = Table::new(&bytes, 4, 160);
+    let table = alias_table(1, KEY.as_bytes());
     let mut rules = rules();
-    rules.aliases = Some(table);
+    rules.aliases = Some(&table);
     rules.subscribed = Some(KEY.as_bytes());
     assert!(decode_put(&alias_put(1, 5), &rules).is_ok());
     let class = |rules: &PutRules<'_>, message: &[u8]| decode_put(message, rules).expect_err("refused").class();
@@ -358,17 +354,17 @@ fn a_joined_put_names_the_alias_the_peer_declared() {
     assert_eq!(class(&rules, &alias_put(0, 5)), "invalid-keyexpr", "scope zero is the global scope");
     for scope in [256u32, 32_768, 65_535] {
         assert_eq!(class(&rules, &alias_put(scope, 5)), "invalid-keyexpr", "{scope}");
-        let bytes = alias_storage(scope, KEY.as_bytes());
+        let declared = alias_table(scope, KEY.as_bytes());
         let mut high = rules;
-        high.aliases = Some(Table::new(&bytes, 4, 160));
+        high.aliases = Some(&declared);
         assert!(decode_put(&alias_put(scope, 5), &high).is_ok(), "{scope} declared");
     }
     assert_eq!(
         decode_put(&alias_put(65_536, 5), &rules).expect_err("wide").class(),
         "leb128-overflow"
     );
-    let other = alias_storage(1, b"slime_demo/other");
-    rules.aliases = Some(Table::new(&other, 4, 160));
+    let other = alias_table(1, b"slime_demo/other");
+    rules.aliases = Some(&other);
     assert_eq!(class(&rules, &alias_put(1, 5)), "undeclared-key", "an alias for another key");
 }
 
