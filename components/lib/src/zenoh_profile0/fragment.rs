@@ -11,6 +11,7 @@
 //! identifier and flags are those of the Zenoh transport specification, which this crate does not own.
 
 use super::limits::leb_bytes;
+use super::tables::Table;
 use super::{
     ATTACHMENT_GID_LEN_AT, Attachment, EXT_ATTACHMENT, FLAG_BIT5, FLAG_BIT6, FLAG_Z, GID_BYTES,
     ID_MASK, ID_PUSH, ID_PUT, MAX_ATTACHMENT_BYTES, Reader, Refusal, STREAM_LENGTH_BYTES,
@@ -138,18 +139,129 @@ fn write_leb(out: &mut [u8], value: u32) -> Result<usize, FragmentError> {
     Ok(width)
 }
 
+/// A serialized network message read in ranges, so one far larger than any buffer is never held whole.
+pub trait Source {
+    fn len(&self) -> usize;
+    /// Fills `out` with the bytes from `at`; the range lies inside the message.
+    fn read(&self, at: usize, out: &mut [u8]);
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl Source for &[u8] {
+    fn len(&self) -> usize {
+        <[u8]>::len(self)
+    }
+
+    fn read(&self, at: usize, out: &mut [u8]) {
+        if let Some(src) = self.get(at..at + out.len()) {
+            out.copy_from_slice(src);
+        }
+    }
+}
+
+/// The widest variable-length integer is five bytes.
+const LEB_MAX: usize = 5;
+
+/// Our own PUSH with a Put, in the sender mapping: its parts are borrowed and its bytes are produced on
+/// demand, so a payload of any size is carried without a copy.
+#[derive(Clone, Copy, Debug)]
+pub struct PutMessage<'a> {
+    head: [u8; 2 + LEB_MAX],
+    head_len: usize,
+    key: &'a [u8],
+    mid: [u8; 2 + LEB_MAX],
+    mid_len: usize,
+    attachment: &'a [u8],
+    size: [u8; LEB_MAX],
+    size_len: usize,
+    payload: &'a [u8],
+}
+
+fn leb_into(out: &mut [u8], value: u64) -> usize {
+    let width = leb_bytes(value);
+    let mut rest = value;
+    for (index, slot) in out.iter_mut().take(width).enumerate() {
+        let low = (rest & 0x7F) as u8;
+        rest >>= 7;
+        *slot = if index + 1 == width { low } else { low | 0x80 };
+    }
+    width
+}
+
+impl<'a> PutMessage<'a> {
+    pub fn new(key: &'a [u8], attachment: &'a [u8], payload: &'a [u8]) -> Self {
+        let mut head = [0u8; 2 + LEB_MAX];
+        head[0] = ID_PUSH | FLAG_BIT5 | FLAG_BIT6;
+        head[1] = 0;
+        let head_len = 2 + leb_into(&mut head[2..], key.len() as u64);
+        let mut mid = [0u8; 2 + LEB_MAX];
+        mid[0] = ID_PUT | FLAG_Z;
+        mid[1] = EXT_ATTACHMENT;
+        let mid_len = 2 + leb_into(&mut mid[2..], attachment.len() as u64);
+        let mut size = [0u8; LEB_MAX];
+        let size_len = leb_into(&mut size, payload.len() as u64);
+        Self {
+            head,
+            head_len,
+            key,
+            mid,
+            mid_len,
+            attachment,
+            size,
+            size_len,
+            payload,
+        }
+    }
+
+    fn parts(&self) -> [&[u8]; 6] {
+        [
+            &self.head[..self.head_len],
+            self.key,
+            &self.mid[..self.mid_len],
+            self.attachment,
+            &self.size[..self.size_len],
+            self.payload,
+        ]
+    }
+}
+
+impl Source for PutMessage<'_> {
+    fn len(&self) -> usize {
+        self.parts().iter().map(|part| part.len()).sum()
+    }
+
+    fn read(&self, at: usize, out: &mut [u8]) {
+        let mut start = 0;
+        let mut filled = 0;
+        for part in self.parts() {
+            let end = start + part.len();
+            let want = at + filled;
+            if want < end && filled < out.len() {
+                let from = want - start;
+                let take = (part.len() - from).min(out.len() - filled);
+                out[filled..filled + take].copy_from_slice(&part[from..from + take]);
+                filled += take;
+            }
+            start = end;
+        }
+    }
+}
+
 /// Cuts one serialized network message into FRAGMENT bodies for a peer whose batch is `batch`.
 #[derive(Clone, Copy, Debug)]
-pub struct Splitter<'a> {
-    message: &'a [u8],
+pub struct Splitter<S: Source> {
+    message: S,
     at: usize,
     sn: u32,
     batch: usize,
 }
 
-impl<'a> Splitter<'a> {
+impl<S: Source> Splitter<S> {
     /// A splitter over `message`, numbering its fragments from `first_sn`.
-    pub fn new(message: &'a [u8], batch: usize, first_sn: u32) -> Result<Self, FragmentError> {
+    pub fn new(message: S, batch: usize, first_sn: u32) -> Result<Self, FragmentError> {
         if batch <= MIN_BATCH {
             return Err(FragmentError::BatchTooSmall);
         }
@@ -166,7 +278,7 @@ impl<'a> Splitter<'a> {
         self.sn
     }
 
-    pub const fn done(&self) -> bool {
+    pub fn done(&self) -> bool {
         self.at >= self.message.len()
     }
 
@@ -184,7 +296,7 @@ impl<'a> Splitter<'a> {
         let slot = out.get_mut(..total).ok_or(FragmentError::OutputTooSmall)?;
         slot[0] = ID_FRAGMENT | FLAG_RELIABLE | if more { FLAG_MORE } else { 0 };
         write_leb(&mut slot[1..], self.sn)?;
-        slot[header_len..].copy_from_slice(&self.message[self.at..self.at + take]);
+        self.message.read(self.at, &mut slot[header_len..]);
         self.at += take;
         self.sn = self.sn.wrapping_add(1);
         Ok(Some(total))
@@ -204,11 +316,9 @@ pub struct PutRules<'a> {
     pub max_key: usize,
     /// The largest payload the configuration declares.
     pub max_payload: u64,
-    /// The alias the peer declared, if any. A peer-declared alias is in the sender's mapping.
-    pub alias: Option<u32>,
-    /// The key that alias stands for.
-    pub alias_key: Option<&'a [u8]>,
-    /// The key this side's subscriber declared.
+    /// The aliases the peer declared. A peer-declared alias is in the sender's mapping.
+    pub aliases: Option<Table<'a>>,
+    /// The key this side's subscriber declared; a Put for another key is refused.
     pub subscribed: Option<&'a [u8]>,
 }
 
@@ -263,17 +373,15 @@ pub fn decode_put<'a>(
         }
         Some(raw)
     } else {
-        if scope == 0 {
+        if scope == 0 || !sender {
             return Err(Refusal::InvalidKeyexpr.into());
         }
-        if let Some(declared) = rules.alias
-            && (!sender || scope != declared)
-        {
-            return Err(Refusal::InvalidKeyexpr.into());
-        }
-        if let (Some(stands_for), Some(held)) = (rules.alias_key, rules.subscribed)
-            && stands_for != held
-        {
+        let stands_for = rules
+            .aliases
+            .and_then(|table| table.find(scope).and_then(|at| table.get(at)))
+            .map(|(_, key)| key)
+            .ok_or(Refusal::InvalidKeyexpr)?;
+        if rules.subscribed.is_some_and(|held| held != stands_for) {
             return Err(FragmentError::UndeclaredKey);
         }
         None

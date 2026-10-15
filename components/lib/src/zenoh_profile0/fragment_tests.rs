@@ -87,10 +87,18 @@ pub fn rules() -> PutRules<'static> {
     PutRules {
         max_key: 129,
         max_payload: 16_384,
-        alias: None,
-        alias_key: None,
+        aliases: None,
         subscribed: None,
     }
+}
+
+/// The storage of an alias table holding `alias` for `key`.
+pub fn alias_storage(alias: u32, key: &[u8]) -> Vec<u8> {
+    let mut bytes = std::vec![0u8; super::super::tables::table_bytes(4, 160)];
+    super::super::tables::TableMut::new(&mut bytes, 4, 160)
+        .insert(alias, key)
+        .expect("alias");
+    bytes
 }
 
 /// The captures: payload bytes, batch, first sequence number, fragment lengths, headers, sha256 of each.
@@ -244,8 +252,8 @@ fn a_fragment_longer_than_the_announced_batch_is_refused() {
 #[test]
 fn a_run_too_small_to_carry_a_fragment_is_refused_at_the_splitter() {
     let message = full_key_put(KEY, 10);
-    assert_eq!(Splitter::new(&message, MIN_BATCH, 0).expect_err("small"), FragmentError::BatchTooSmall);
-    assert!(Splitter::new(&message, MIN_BATCH + 1, 0).is_ok());
+    assert_eq!(Splitter::new(message.as_slice(), MIN_BATCH, 0).expect_err("small"), FragmentError::BatchTooSmall);
+    assert!(Splitter::new(message.as_slice(), MIN_BATCH + 1, 0).is_ok());
 }
 
 #[test]
@@ -337,8 +345,12 @@ fn a_joined_put_names_a_valid_key_the_subscriber_declared() {
 
 #[test]
 fn a_joined_put_names_the_alias_the_peer_declared() {
+    use super::super::tables::Table;
+    let bytes = alias_storage(1, KEY.as_bytes());
+    let table = Table::new(&bytes, 4, 160);
     let mut rules = rules();
-    rules.alias = Some(1);
+    rules.aliases = Some(table);
+    rules.subscribed = Some(KEY.as_bytes());
     assert!(decode_put(&alias_put(1, 5), &rules).is_ok());
     let class = |rules: &PutRules<'_>, message: &[u8]| decode_put(message, rules).expect_err("refused").class();
     assert_eq!(class(&rules, &alias_put(2, 5)), "invalid-keyexpr", "an alias nobody declared");
@@ -346,16 +358,17 @@ fn a_joined_put_names_the_alias_the_peer_declared() {
     assert_eq!(class(&rules, &alias_put(0, 5)), "invalid-keyexpr", "scope zero is the global scope");
     for scope in [256u32, 32_768, 65_535] {
         assert_eq!(class(&rules, &alias_put(scope, 5)), "invalid-keyexpr", "{scope}");
+        let bytes = alias_storage(scope, KEY.as_bytes());
         let mut high = rules;
-        high.alias = Some(scope);
+        high.aliases = Some(Table::new(&bytes, 4, 160));
         assert!(decode_put(&alias_put(scope, 5), &high).is_ok(), "{scope} declared");
     }
     assert_eq!(
         decode_put(&alias_put(65_536, 5), &rules).expect_err("wide").class(),
         "leb128-overflow"
     );
-    rules.alias_key = Some(b"slime_demo/other");
-    rules.subscribed = Some(KEY.as_bytes());
+    let other = alias_storage(1, b"slime_demo/other");
+    rules.aliases = Some(Table::new(&other, 4, 160));
     assert_eq!(class(&rules, &alias_put(1, 5)), "undeclared-key", "an alias for another key");
 }
 
@@ -412,4 +425,35 @@ fn a_multibyte_key_is_counted_in_bytes() {
     let over = std::format!("{key}x");
     assert_eq!((over.chars().count(), over.len()), (5, 10));
     assert_eq!(decode_put(&full_key_put(&over, 5), &rules).expect_err("over").class(), "over-bound");
+}
+
+#[test]
+fn a_put_message_produces_the_bytes_the_encoder_writes_at_any_offset() {
+    for size in [0usize, 1, 12, 300, 5000] {
+        let payload = payload(size);
+        let attached = attachment();
+        let message = PutMessage::new(KEY.as_bytes(), &attached, &payload);
+        let whole = full_key_put(KEY, size);
+        assert_eq!(Source::len(&message), whole.len(), "{size}");
+        for (at, len) in [(0usize, whole.len()), (1, 7), (2, 130), (whole.len() - 1, 1), (whole.len() / 2, whole.len() / 2)] {
+            let mut out = std::vec![0u8; len];
+            message.read(at, &mut out);
+            assert_eq!(out, whole[at..at + len], "{size} at {at}");
+        }
+    }
+}
+
+#[test]
+fn a_put_message_is_split_as_the_slice_is() {
+    let payload = payload(5000);
+    let attached = attachment();
+    let message = PutMessage::new(KEY.as_bytes(), &attached, &payload);
+    let mut splitter = Splitter::new(message, 2048, 1000).expect("splitter");
+    let whole = split(&full_key_put(KEY, 5000), 2048, 1000);
+    let mut buffer = std::vec![0u8; 2048];
+    for expected in whole {
+        let len = splitter.next_body(&mut buffer).expect("body").expect("more");
+        assert_eq!(buffer[..len], expected[..]);
+    }
+    assert_eq!(splitter.next_body(&mut buffer), Ok(None));
 }

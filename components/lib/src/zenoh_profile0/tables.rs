@@ -33,7 +33,7 @@ pub const fn table_bytes(slots: usize, key_max: usize) -> usize {
 }
 
 /// A read view of a table.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Table<'a> {
     bytes: &'a [u8],
     slots: usize,
