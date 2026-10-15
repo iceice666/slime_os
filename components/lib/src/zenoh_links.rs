@@ -19,6 +19,14 @@ fn ok(name: &str) {
     FINISHED.lock().expect("registry").push(name.into());
 }
 
+/// Lines whose order the exam pins within their kind, held until the last test prints them in that
+/// order: tests run by name, and a group of scenarios that share a kind must not be reordered by it.
+static ORDERED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn ordered(text: &str) {
+    ORDERED.lock().expect("registry").push(text.into());
+}
+
 fn config_line(limits: &Limits) -> String {
     std::format!(
         "config {} {} {} {} {} {} {} {} {} {} {} {}",
@@ -743,7 +751,52 @@ fn zz_every_scenario_finished_and_is_reported_in_the_exams_order() {
     assert!(missing.is_empty(), "scenarios that did not finish: {missing:?}");
     let extra: Vec<&String> = finished.iter().filter(|f| !OK_ORDER.contains(&f.as_str())).collect();
     assert!(extra.is_empty(), "scenarios the exam does not pin: {extra:?}");
+    // Within a kind the exam pins an order; across kinds it does not, so each kind is printed whole.
+    let held = ORDERED.lock().expect("registry").clone();
+    for kind in ["edge ", "fixededge ", "peerbatch "] {
+        let mut group: Vec<&String> = held.iter().filter(|text| text.starts_with(kind)).collect();
+        group.sort_by_key(|text| order_of(text));
+        for text in group {
+            line(text);
+        }
+    }
     for name in OK_ORDER {
         line(&std::format!("ok {name}"));
+    }
+}
+
+/// The position the exam gives a held line within its kind.
+fn order_of(text: &str) -> usize {
+    const EDGES: [&str; 6] = [
+        "edge-batch-89",
+        "edge-batch-4096",
+        "edge-key-2028",
+        "edge-payload-1mib",
+        "edge-payload-2mib",
+        "edge-payload-256mib",
+    ];
+    const FIXED: [&str; 2] = ["edge-fixed-batch-89", "edge-fixed-batch-4096"];
+    let fields: Vec<&str> = text.split(' ').collect();
+    match fields[0] {
+        "edge" => EDGES.iter().position(|name| *name == fields[1]).expect("a pinned edge"),
+        "fixededge" => FIXED.iter().position(|name| *name == fields[1]).expect("a pinned fixed edge"),
+        _ => {
+            // peerbatch: the heap rows first, then the fixed ones, each in the order the exam lists them.
+            let key = (fields[1], fields[2], fields[3], fields[4]);
+            [
+                ("heap", "4096", "89", "1000"),
+                ("heap", "4096", "512", "5000"),
+                ("heap", "2048", "4096", "5000"),
+                ("heap", "4096", "2048", "9000"),
+                ("fixed", "2048", "512", "433"),
+                ("fixed", "2048", "512", "434"),
+                ("fixed", "4096", "89", "11"),
+                ("fixed", "4096", "89", "12"),
+                ("fixed", "512", "4096", "433"),
+            ]
+            .iter()
+            .position(|row| *row == key)
+            .expect("a pinned row")
+        }
     }
 }

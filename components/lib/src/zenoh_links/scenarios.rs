@@ -1137,7 +1137,7 @@ fn heap_edge<
     assert_eq!(received.len(), payload_len, "{name}");
     assert!(received == payload.as_slice(), "{name}: the payload came back changed");
     let (declare, undeclare) = widest_sizes(F, key);
-    line(&std::format!(
+    ordered(&std::format!(
         "edge {name} {F} {} {payload_len} {} {declare} {undeclare} {} {} {} {}",
         key.len(),
         handshake_length(&pair.ack),
@@ -1245,7 +1245,7 @@ fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
     let key = "k".repeat(10);
     let (tail, frame) = fixed_edge::<89, 1, 2, 10, 31, 2>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
     assert_eq!(frame.len() + 2, 89, "the frame fills the batch exactly");
-    line(&std::format!("fixededge edge-fixed-batch-89 89 10 31 {tail}"));
+    ordered(&std::format!("fixededge edge-fixed-batch-89 89 10 31 {tail}"));
     ok("edge-fixed-batch-89");
 }
 
@@ -1255,7 +1255,7 @@ fn a_fixed_link_sends_a_thousand_byte_key_whole_at_the_largest_batch() {
     let (tail, frame) =
         fixed_edge::<4096, 1, 2, 1000, 3046, 2>("edge-fixed-batch-4096", Mode::Fixed, &key, 3046);
     assert_eq!(frame.len() + 2, 4096, "the frame fills the batch exactly");
-    line(&std::format!("fixededge edge-fixed-batch-4096 4096 1000 3046 {tail}"));
+    ordered(&std::format!("fixededge edge-fixed-batch-4096 4096 1000 3046 {tail}"));
     ok("edge-fixed-batch-4096");
 }
 
@@ -1528,7 +1528,7 @@ fn a_heap_link_sends_no_more_than_the_peer_announced() {
         peer_heap::<2048, 1, 2, 30, 0, 2>(4096, 5000),
         peer_heap::<4096, 1, 2, 30, 0, 2>(2048, 9000),
     ] {
-        line(&std::format!("peerbatch {tail}"));
+        ordered(&std::format!("peerbatch {tail}"));
     }
     ok("peerbatch-heap");
 }
@@ -1542,7 +1542,7 @@ fn a_fixed_link_sends_the_largest_message_the_smaller_batch_holds_and_refuses_on
         peer_fixed::<4096, 1, 2, 30, 434, 2>(89, 1),
         peer_fixed::<512, 1, 2, 30, 434, 2>(4096, 0),
     ] {
-        line(&std::format!("peerbatch {tail}"));
+        ordered(&std::format!("peerbatch {tail}"));
     }
     ok("peerbatch-fixed");
 }
