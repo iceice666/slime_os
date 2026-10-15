@@ -63,6 +63,10 @@ readable and link to the decision that replaced them.
   what a captured eclipse-zenoh 1.0.0 peer sends that Profile 0 refuses (an optional
   QoS extension, OAM and DeclareFinal, a key-expression alias, keep-alives), the four
   bounded changes that would take it, and what the capture did not cover.
+- [Zenoh Profile 0 links declared by a named configuration](zenoh-link-limits.md) — proposed;
+  a link declared in a fixed mode with no heap or a heap mode where the component supplies the
+  storage a fragmented message is reassembled into, judged by a contract that sets no size of its
+  own, against the fragments a stock eclipse-zenoh 1.0.0 peer wrote.
 - [Zenoh Profile 0 guest connecting out to a stock listener](zenoh-external-listener.md) —
   proposed; the guest opens one TCP connection over a NIC to a stock eclipse-zenoh 1.0.0
   listener on the host, judged from the listener's own record, a packet capture and the host

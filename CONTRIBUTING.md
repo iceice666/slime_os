@@ -13,7 +13,7 @@ combine a new item and its implementation, or stack implementation on
 unmerged planning; CI refuses a pull request that does both. A work-item
 proposal PR is the bootstrap exception: it needs no existing item. A pull
 request that touches neither the product tree nor the grader closure — CI
-workflows, this file, `AGENTS.md`, `docs/` — needs no work item at all; see
+workflows outside `codePaths`, this file, `AGENTS.md`, `docs/` — needs no work item at all; see
 [Pull request scope](#pull-request-scope).
 
 **PR merged != work item done.** Completion requires the item's exit conditions
@@ -236,7 +236,15 @@ These guides own the tutorials; this document owns the contribution workflow.
 
 `scripts/check/check-pr-scope.py` classifies every path a pull request
 changes, from lists the repository already maintains rather than a third
-table, and CI runs it on every pull request:
+table, and CI runs it on every pull request. Classification uses the union of
+`codePaths` from the compared base and head commits, not the checkout policy.
+Removing protection in the same diff does not exempt the changed path. Renames
+and detected copies retain source and destination classification; destinations
+introducing a new work-item UUID count as new items even without an `A` status.
+The Git comparison explicitly detects copies from unchanged sources, so a
+copied schema does not qualify as an added interface merely because its source
+was unchanged. Missing or malformed revision policies refuse classification.
+
 
 | Class | Paths | Rule |
 |---|---|---|
@@ -244,7 +252,12 @@ table, and CI runs it on every pull request:
 | **product** | every other `codePaths` entry in `.devloop/policy.json`: `slime-root/`, `components/`, `contracts/`, `boot-contracts/`, `sel4/`, build inputs, pins, toolchain configuration | needs a landed work item; **never** in a PR that adds one |
 | **interface** | an **added** `contracts/<name>/v<N>/schema.zt`, or a contract's `README.md` — the boundary a grader binds to | needs a landed work item; may land with the item as part of its exam. `gen_rust.zt`, generated bindings, system specs, and a modified or renamed schema are product |
 | **derived** | regenerated closure records under `contracts/system-image-closure/v2/{closures,negative}/` and `contracts/system-test-run/v1/runs/` | mirrors whatever else changed; never decides |
-| **other** | `.github/`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
+| **other** | `.github/` paths outside `codePaths`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
+
+The CI, MyQue projection, closeout and retirement workflow files are explicitly
+in `codePaths`: their contents affect shared-tool cache qualification, so edits
+stale evidence and follow the product-classified planning-first rule. Other
+workflow files remain process changes unless explicitly covered.
 
 Two rules follow. A pull request that **adds** a `.tasks/items/*.md` file may
 change grader, interface, derived and other paths — the exam and the schema it
@@ -440,6 +453,21 @@ the Nix store, `~/.rustup`, `~/.cargo`, and the persistent Cargo build outputs,
 then fetches both pinned toolchains' locked dependencies before the deliberately
 offline product build. Jobs that need neither the seL4 prefix nor Nix use a
 plain pinned toolchain and `Swatinem/rust-cache`.
+
+Work-item CI uses `nix develop .#projection`, including its trusted retirement
+verifier. It shares the architecture-qualified `projection-v2-*` Nix cache with
+projection, closeout and retirement; all four keys include the flake and local
+devloop/Zutai derivations. Main push CI can populate the shared tool cache even
+when another consumer's trigger only permits restores. Legacy `myque-*` entries
+are not deleted by the workflows: retirement requires a measured replacement,
+successful restore and separate operator authorization. Each consumer roots the
+projection environment with a profile under `RUNNER_TEMP` before running its
+commands and retains that profile through the cache action's post-job GC/save.
+The v2 namespace excludes earlier archives whose unrooted tools could be
+collected before saving; it intentionally has no fallback to that namespace.
+A rooted closure can exceed the GC size target, so archive size still needs
+measurement. A shared key alone does
+not establish cold/warm qualification or byte savings.
 
 Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the
 seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in

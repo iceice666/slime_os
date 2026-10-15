@@ -59,6 +59,15 @@ zenoh_xcheck_check:
 zenoh_stock_check:
     python3 scripts/check/check-zenoh-profile0.py --slice stock
 
+# A Zenoh Profile 0 link declared by a named configuration, in a fixed mode with no heap or a
+# heap mode where the component supplies the storage a fragmented message is reassembled into.
+# Judged against the fragments a stock eclipse-zenoh 1.0.0 peer wrote, reproduced byte for byte by
+# scripts/lib/zenoh_fragment.py, and against contracts/zenoh-link-limits/v1. The live peer is an
+# explicit local experiment; nothing here needs a registry. Fails until the link takes fragments.
+[group('hardware')]
+zenoh_links_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice links
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.

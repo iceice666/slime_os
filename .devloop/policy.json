@@ -2,6 +2,10 @@
   "schema": "devloop-policy/v1",
   "bodyProfile": "fenced-zti/v1",
   "codePaths": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/myque-project.yml",
+    ".github/workflows/myque-closeout.yml",
+    ".github/workflows/myque-retire.yml",
     "boot-contracts",
     "slime-root",
     "components",
@@ -245,6 +249,8 @@
     "scripts/lib/work_items.py",
     "scripts/lib/zenoh_capture.py",
     "scripts/lib/zenoh_exchange.py",
+    "scripts/lib/zenoh_fragment.py",
+    "scripts/lib/zenoh_links_exam.py",
     "scripts/lib/zenoh_listener_peer.py",
     "scripts/lib/zenoh_stock_peer.py",
     "scripts/lib/zenoh_wire.py",
@@ -409,6 +415,23 @@
           "id": "recipeSetPreserved",
           "kind": "bool"
         }
+      ]
+    },
+    {
+      "id": "ci-shared-tools",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [
+        { "id": "sharedEnvironmentVerified", "kind": "bool" },
+        { "id": "coldConsumersPassed", "kind": "bool" },
+        { "id": "warmConsumersPassed", "kind": "bool" },
+        { "id": "noRepeatedToolBuilds", "kind": "bool" },
+        { "id": "checksPreserved", "kind": "bool" },
+        { "id": "trustBoundaryPreserved", "kind": "bool" },
+        { "id": "legacyRetirementVerified", "kind": "bool" },
+        { "id": "measurementsRecorded", "kind": "bool" },
+        { "id": "cacheBytesSaved", "kind": "int" }
       ]
     },
     {
