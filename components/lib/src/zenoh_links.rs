@@ -228,8 +228,10 @@ fn a_run_whose_interior_fragments_are_shorter_than_the_maximum_is_taken() {
 // A connected pair of links over scripted streams, and the heap the receiving end lends.
 
 use crate::zenoh_link::{ByteLink, Error, LinkError, LinkHandle, LinkOf, Notice};
-use crate::zenoh_profile0::encode;
-use crate::zenoh_profile0::session::{Config, Params, Role};
+use crate::zenoh_profile0::encode::{self, FrameEncoder};
+use crate::zenoh_profile0::limits::Mode;
+use crate::zenoh_profile0::session::{Config, Params, Role, SessionError};
+use crate::zenoh_profile0::{Bounds, Mapping, Refusal};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -301,6 +303,9 @@ struct Pair<
     heap_a: Vec<u8>,
     heap_b: Vec<u8>,
     sequence: i64,
+    bounds: Bounds,
+    /// The sequence number of the next raw FRAME injected as the peer.
+    peer_sn: u32,
 }
 
 type HeapPair = Pair<2048, 4, 5, 129, 0, 8>;
@@ -316,9 +321,22 @@ fn pair_of<
     limits: &Limits,
     heap: usize,
 ) -> Pair<F, K, S, B, P, Q> {
+    pair_params(Params::from_limits(limits), heap)
+}
+
+fn pair_params<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    params: Params,
+    heap: usize,
+) -> Pair<F, K, S, B, P, Q> {
     let a_to_b = Rc::new(RefCell::new(Pipe::default()));
     let b_to_a = Rc::new(RefCell::new(Pipe::default()));
-    let params = Params::from_limits(limits);
     let a = LinkOf::with_params(
         Scripted { rx: b_to_a.clone(), tx: a_to_b.clone() },
         Role::Connector,
@@ -346,6 +364,8 @@ fn pair_of<
         heap_a: std::vec![0; heap],
         heap_b: std::vec![0; heap],
         sequence: 0,
+        bounds: params.bounds,
+        peer_sn: 0,
     }
 }
 
@@ -379,6 +399,7 @@ impl<
         assert!(self.a.is_open() && self.b.is_open(), "handshake");
         while self.a.next_notice().is_some() {}
         while self.b.next_notice().is_some() {}
+        self.peer_sn = self.b.session().expected_rx_sn();
     }
 
     fn declare(&mut self, id: u32, key: &str) {
@@ -482,4 +503,124 @@ fn a_put_of_the_declared_payload_is_joined_into_the_declared_heap() {
     line(&std::format!("payload 16384 {} {}", HEAP.heap_bytes, codec::sha(&payload)));
     ok("heap-declared-payload-boundary");
     ok("heap-storage-from-component");
+}
+
+mod refusals;
+
+/// The refusals the exam pins, by name and class.
+const REFUSALS: [(&str, &str); 94] = [
+    ("fixed-refuses-fragment", "unsupported-message"),
+    ("fixed-refuses-best-effort-fragment", "unsupported-message"),
+    ("fixed-refuses-fragment-with-extension", "unsupported-message"),
+    ("fixed-refuses-empty-fragment", "unsupported-message"),
+    ("fixed-refuses-fragment-sequence-noncanonical", "unsupported-message"),
+    ("fixed-refuses-fragment-sequence-over-32-bits", "unsupported-message"),
+    ("fixed-refuses-fragment-sequence-truncated", "unsupported-message"),
+    ("fragment-best-effort", "unsupported-message"),
+    ("fragment-extension", "unsupported-extension"),
+    ("empty-fragment", "malformed-message"),
+    ("fragment-before-open", "unexpected-message"),
+    ("fragment-sequence-gap", "fragment-sequence"),
+    ("fragment-sequence-truncated", "truncated"),
+    ("fragment-sequence-duplicate", "fragment-sequence"),
+    ("fragment-sequence-backward", "fragment-sequence"),
+    ("fragment-interior-marked-final", "truncated"),
+    ("fragment-final-marked-more", "reassembly-timeout"),
+    ("fragment-stale-first-sequence", "sequence-mismatch"),
+    ("fragment-skipped-first-sequence", "sequence-mismatch"),
+    ("frame-during-reassembly", "unexpected-message"),
+    ("fragments-of-two-messages-in-one-run", "trailing-bytes"),
+    ("best-effort-fragment-during-reassembly", "unsupported-message"),
+    ("fragmented-put-without-attachment", "malformed-message"),
+    ("fragmented-put-with-short-attachment", "malformed-message"),
+    ("fragmented-put-gid-length-15", "malformed-message"),
+    ("fragmented-put-gid-length-17", "malformed-message"),
+    ("fragmented-put-attachment-34-bytes", "over-bound"),
+    ("fragmented-put-alias-scope-zero", "invalid-keyexpr"),
+    ("fragmented-put-alias-scope-65536", "leb128-overflow"),
+    ("message-over-declared-heap", "over-bound"),
+    ("payload-over-declared-with-enough-storage", "over-bound"),
+    ("demo-refuses-payload-13-bytes", "over-bound"),
+    ("large-refuses-payload-1025-bytes", "over-bound"),
+    ("fragmented-put-key-130-bytes", "over-bound"),
+    ("fragmented-put-key-wildcard", "wildcard-keyexpr"),
+    ("fragmented-put-key-leading-slash", "invalid-keyexpr"),
+    ("fragmented-put-key-double-slash", "invalid-keyexpr"),
+    ("fragmented-put-key-invalid-utf8", "invalid-keyexpr"),
+    ("fragmented-put-key-not-subscribed", "undeclared-key"),
+    ("fragmented-put-full-key-nonzero-scope", "invalid-keyexpr"),
+    ("fragmented-put-empty-key", "invalid-keyexpr"),
+    ("fragmented-put-key-trailing-slash", "invalid-keyexpr"),
+    ("fragmented-put-key-question-mark", "invalid-keyexpr"),
+    ("fragmented-put-key-hash", "invalid-keyexpr"),
+    ("fragmented-put-key-dollar", "wildcard-keyexpr"),
+    ("fragmented-put-key-truncated", "truncated"),
+    ("fragmented-push-delete-body", "unsupported-message"),
+    ("fragmented-push-ends-before-body", "truncated"),
+    ("fragmented-put-scope-unterminated", "truncated"),
+    ("fragmented-put-key-length-unterminated", "truncated"),
+    ("fragmented-put-attachment-length-unterminated", "truncated"),
+    ("fragmented-put-payload-length-unterminated", "truncated"),
+    ("fragmented-push-extension-flag", "unsupported-extension"),
+    ("fragmented-put-timestamp-flag", "unsupported-message"),
+    ("fragmented-put-encoding-flag", "unsupported-message"),
+    ("fragmented-put-unknown-extension", "unsupported-extension"),
+    ("fragmented-put-extension-chained", "unsupported-extension"),
+    ("fragmented-put-alias-for-another-key", "undeclared-key"),
+    ("fragmented-put-receiver-mapped-alias", "invalid-keyexpr"),
+    ("fragmented-put-key-length-over-16-bits", "leb128-overflow"),
+    ("fragmented-put-attachment-length-over-32-bits", "leb128-overflow"),
+    ("fragmented-put-scope-256", "invalid-keyexpr"),
+    ("fragmented-put-key-length-256", "over-bound"),
+    ("fragmented-put-attachment-length-65536", "over-bound"),
+    ("fragmented-put-payload-length-65536", "over-bound"),
+    ("fragmented-put-payload-truncated", "truncated"),
+    ("fragmented-put-scope-32768", "invalid-keyexpr"),
+    ("fragmented-put-key-length-32768", "over-bound"),
+    ("fragmented-put-attachment-length-2147483648", "over-bound"),
+    ("fragmented-put-payload-length-2147483648", "over-bound"),
+    ("fragmented-put-attachment-truncated", "truncated"),
+    ("reassembly-one-ms-after-the-timeout", "reassembly-timeout"),
+    ("fragment-sequence-noncanonical", "leb128-noncanonical"),
+    ("fragment-sequence-over-32-bits", "leb128-overflow"),
+    ("fragmented-put-scope-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-key-length-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-attachment-length-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-payload-length-noncanonical", "leb128-noncanonical"),
+    ("fragmented-put-payload-length-over-32-bits", "leb128-overflow"),
+    ("fragmented-put-undeclared-alias", "invalid-keyexpr"),
+    ("fragment-over-the-announced-batch", "length-exceeds-batch"),
+    ("reassembly-timeout", "reassembly-timeout"),
+    ("storage-refused", "out-of-memory"),
+    ("fifth-subscriber", "subscriber-limit"),
+    ("fifth-alias", "over-bound"),
+    ("tenth-subscriber-in-nine", "subscriber-limit"),
+    ("tenth-alias-in-nine", "over-bound"),
+    ("tenth-subscriber-in-nine-fixed", "subscriber-limit"),
+    ("tenth-alias-in-nine-fixed", "over-bound"),
+    ("257th-subscriber-in-256-heap", "subscriber-limit"),
+    ("257th-alias-in-256-heap", "over-bound"),
+    ("257th-subscriber-in-256-fixed", "subscriber-limit"),
+    ("257th-alias-in-256-fixed", "over-bound"),
+    ("fragmented-put-multibyte-key-over-declared", "over-bound"),
+];
+
+#[test]
+fn every_refusal_carries_the_class_the_exam_names() {
+    // A row on its own thread: the largest configurations hold their tables on the stack. Every row
+    // runs, and the ones that did not hold are named together.
+    let mut failed = Vec::new();
+    for (name, expected) in REFUSALS {
+        let outcome = std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || refusals::run(name))
+            .expect("thread")
+            .join();
+        match outcome {
+            Ok(got) if got == expected => line(&std::format!("refused {name} {got}")),
+            Ok(got) => failed.push(std::format!("{name}: refused as {got}, the exam names {expected}")),
+            Err(_) => failed.push(std::format!("{name}: the scenario did not hold")),
+        }
+    }
+    assert!(failed.is_empty(), "{} rows:\n{}", failed.len(), failed.join("\n"));
 }
