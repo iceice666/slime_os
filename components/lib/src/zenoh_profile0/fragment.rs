@@ -20,7 +20,7 @@ use slime_proto::zenoh_profile as p;
 
 #[cfg(test)]
 #[path = "fragment_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// The transport message identifier of a FRAGMENT.
 pub const ID_FRAGMENT: u8 = 0x06;
