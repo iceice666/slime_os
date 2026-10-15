@@ -288,8 +288,8 @@ fn a_run_whose_slices_are_shorter_than_the_maximum_is_taken() {
     let message = codec::full_key_put("a/b", 5000);
     let mut bodies = Vec::new();
     let mut at = 0;
-    let mut sn = FIRST;
-    for take in [1000usize, 1, 1500, usize::MAX, usize::MAX] {
+    for (step, take) in [1000usize, 1, 1500, usize::MAX, usize::MAX].into_iter().enumerate() {
+        let sn = FIRST + step as u32;
         // A slice is at most the batch less the stream length and the fragment's own header.
         let room = BATCH
             - crate::zenoh_profile0::STREAM_LENGTH_BYTES
@@ -304,7 +304,6 @@ fn a_run_whose_slices_are_shorter_than_the_maximum_is_taken() {
         body.extend(&message[at..at + take]);
         bodies.push(body);
         at += take;
-        sn += 1;
         if !more {
             break;
         }

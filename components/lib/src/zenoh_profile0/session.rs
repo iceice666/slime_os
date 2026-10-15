@@ -294,11 +294,11 @@ enum Change {
 /// The alias a reference names, or the refusal a reference to an alias nobody declared draws. The alias
 /// resolves to the declared key and no other. The peer declared it, so it lives in the sender's mapping;
 /// a reference in the receiver's mapping names an alias this side declared, and this side declares none.
-fn resolve<'t, const K: usize, const B: usize>(
-    aliases: &'t SlotTable<K, B>,
+fn resolve<const K: usize, const B: usize>(
+    aliases: &SlotTable<K, B>,
     named: u32,
     mapping: Mapping,
-) -> Result<&'t [u8], SessionError> {
+) -> Result<&[u8], SessionError> {
     match aliases.key_of(u64::from(named)) {
         Some(key) if mapping == Mapping::Sender => Ok(key),
         _ => Err(SessionError::Decode(Refusal::InvalidKeyexpr)),

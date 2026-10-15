@@ -987,7 +987,7 @@ fn a_run_that_outlives_its_timeout_frees_the_storage_for_the_next() {
 #[test]
 fn each_way_a_run_ends_without_a_sample_frees_the_storage() {
     let demo = Parts::demo(5000);
-    let causes: [(&str, fn(u32) -> Vec<(Vec<u8>, u64)>); 6] = [
+    let causes: [(&str, Steps); 6] = [
         ("sequence-gap", |sn| {
             std::vec![
                 (fragment(true, sn, &[1]), TIME),
@@ -1038,6 +1038,9 @@ fn each_way_a_run_ends_without_a_sample_frees_the_storage() {
     ok("reassembly-after-refusals-reuses-storage");
     ok("refused-fragment-run-leaves-session-unchanged");
 }
+
+/// A run of raw bodies, each with the time it arrives, built from the session's next sequence number.
+type Steps = fn(u32) -> Vec<(Vec<u8>, u64)>;
 
 const FIRST: u64 = 7_000_000;
 const TIMEOUTS: [u64; 6] = [5000, 250, 1, 65_536, 1 << 32, (1 << 63) - 1];
