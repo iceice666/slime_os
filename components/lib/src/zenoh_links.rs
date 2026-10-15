@@ -335,12 +335,28 @@ fn pair_params<
     params: Params,
     heap: usize,
 ) -> Pair<F, K, S, B, P, Q> {
+    pair_sn(params, heap, 1000)
+}
+
+/// A pair whose connector numbers its first FRAME `a_sn`.
+fn pair_sn<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    params: Params,
+    heap: usize,
+    a_sn: u32,
+) -> Pair<F, K, S, B, P, Q> {
     let a_to_b = Rc::new(RefCell::new(Pipe::default()));
     let b_to_a = Rc::new(RefCell::new(Pipe::default()));
     let a = LinkOf::with_params(
         Scripted { rx: b_to_a.clone(), tx: a_to_b.clone() },
         Role::Connector,
-        &config(&[0xa1, 0xa2], b"", 1000),
+        &config(&[0xa1, 0xa2], b"", a_sn),
         params,
         1,
     )
@@ -505,7 +521,7 @@ fn a_put_of_the_declared_payload_is_joined_into_the_declared_heap() {
     ok("heap-storage-from-component");
 }
 
-mod refusals;
+mod scenarios;
 
 /// The refusals the exam pins, by name and class.
 const REFUSALS: [(&str, &str); 94] = [
@@ -613,7 +629,7 @@ fn every_refusal_carries_the_class_the_exam_names() {
     for (name, expected) in REFUSALS {
         let outcome = std::thread::Builder::new()
             .stack_size(64 << 20)
-            .spawn(move || refusals::run(name))
+            .spawn(move || scenarios::run(name))
             .expect("thread")
             .join();
         match outcome {
