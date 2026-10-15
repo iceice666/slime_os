@@ -21,6 +21,14 @@ Read the work item (requirements, acceptance rationale, `scope`,
 `nonGoals`), the PR description, and the existing review threads before
 reading the diff.
 
+A process PR — CI workflows outside `codePaths`, `CONTRIBUTING.md`,
+`AGENTS.md`, `.agents/`, `docs/` — has no item. There the bound is the rules
+in `AGENTS.md` the PR claims to follow and the claims its description makes:
+a finding names the rule or claim the diff contradicts, with the file and
+line, and the input or reader that would be misled. The absence of an
+acceptance rationale neither makes such a PR unreviewable nor excuses a
+defect in it.
+
 - A finding names the requirement, invariant, or rule in `AGENTS.md` that
   the diff breaks, the file and line, and the input that produces the wrong
   result.
