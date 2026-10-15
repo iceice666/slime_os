@@ -206,7 +206,7 @@ pub struct LinkOf<
 
 /// The first release's link: a 512-byte batch, one alias and one subscriber of each side, a 129-byte key
 /// and a 12-byte payload.
-pub type Link<L> = LinkOf<L, DEMO_FRAMED, 1, 1, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, DEMO_NOTICES>;
+pub type Link<L> = LinkOf<L, DEMO_FRAMED, 1, 2, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, DEMO_NOTICES>;
 
 impl<L: ByteLink> Link<L> {
     /// A link in its generation under the first release's parameters, with a fresh session and
