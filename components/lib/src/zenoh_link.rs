@@ -446,15 +446,29 @@ impl<
         }
         let mut body = [0u8; FRAMED];
         let outcome = self.session.close(reason, &mut body)?;
-        self.absorb(&outcome, 0);
+        self.absorb(&outcome, &mut []);
         self.queue(outcome.batch(&body))?;
         self.closed = true;
         Ok(())
     }
 
-    /// Turns a session's events into notices. `cell_start` is where the heap cell the batch was joined
-    /// into begins, so a stored sample names its place in the whole heap.
-    fn absorb(&mut self, outcome: &Outcome<'_>, cell_start: usize) {
+    /// The cells `heap_len` bytes hold, one message each; a heap shorter than one message still has one
+    /// cell, which a join then finds too small.
+    fn cells(&self, heap_len: usize) -> usize {
+        match self.session.params().message_limit {
+            0 => 1,
+            limit => (heap_len / limit).max(1),
+        }
+    }
+
+    /// Where the cell the next message goes into begins.
+    fn cell_start(&self, heap_len: usize) -> usize {
+        (self.cell_next % self.cells(heap_len)) * self.session.params().message_limit
+    }
+
+    /// Turns a session's events into notices. A heap link keeps every sample in the heap the owner lent,
+    /// whether it arrived whole or in fragments, so its notices carry no payload of their own.
+    fn absorb(&mut self, outcome: &Outcome<'_>, heap: &mut [u8]) {
         for event in outcome.events.iter() {
             let notice = match *event {
                 Event::HandshakeComplete => Notice::HandshakeComplete,
@@ -467,12 +481,31 @@ impl<
                     offset,
                     len,
                 } => {
-                    self.stored += 1;
+                    let start = self.cell_start(heap.len()) + offset;
+                    self.keep_cell();
                     Notice::SampleStored(StoredSample {
                         sequence,
                         timestamp,
-                        start: cell_start + offset,
+                        start,
                         len,
+                    })
+                }
+                Event::SampleDelivered {
+                    sequence,
+                    timestamp,
+                    payload,
+                } if self.session.params().fragments => {
+                    let start = self.cell_start(heap.len());
+                    let Some(room) = heap.get_mut(start..start + payload.len()) else {
+                        continue;
+                    };
+                    room.copy_from_slice(payload);
+                    self.keep_cell();
+                    Notice::SampleStored(StoredSample {
+                        sequence,
+                        timestamp,
+                        start,
+                        len: payload.len(),
                     })
                 }
                 Event::SampleDelivered {
@@ -497,11 +530,17 @@ impl<
         }
     }
 
+    /// A sample now occupies the cell the next message would have gone into.
+    fn keep_cell(&mut self) {
+        self.stored += 1;
+        self.cell_next = self.cell_next.wrapping_add(1);
+    }
+
     /// Ends the link after a stream or session refusal that makes the rest of the stream untrustworthy.
     fn fail(&mut self, error: Error) -> Error {
         let mut body = [0u8; FRAMED];
         if let Ok(outcome) = self.session.close(0, &mut body) {
-            self.absorb(&outcome, 0);
+            self.absorb(&outcome, &mut []);
             let batch = outcome.batch(&body);
             if self.send_len == 0 {
                 let _ = self.queue(batch);
@@ -576,7 +615,7 @@ impl<
                 self.session.tick_lease(now_ms, &mut body)?
             };
             let ended = !outcome.events.is_empty();
-            self.absorb(&outcome, 0);
+            self.absorb(&outcome, &mut []);
             if outcome.sent != 0 {
                 let batch = outcome.batch(&body);
                 if self.send_len == 0 {
@@ -637,15 +676,6 @@ impl<
         }
     }
 
-    /// The cells the heap holds, one message each; a heap shorter than one message still has one cell,
-    /// which the join then finds too small.
-    fn cells(&self, heap_len: usize) -> usize {
-        match self.session.params().message_limit {
-            0 => 1,
-            limit => (heap_len / limit).max(1),
-        }
-    }
-
     fn drain(
         &mut self,
         now_ms: u64,
@@ -676,28 +706,31 @@ impl<
             if !self.notice_room(needed) {
                 return Ok(());
             }
-            let is_fragment = body.first().copied().is_some_and(crate::zenoh_profile0::fragment::is_fragment);
-            let cells = self.cells(heap.len());
-            // A fragment waits for a free cell: every cell holds a sample the owner has not taken.
-            if is_fragment && self.stored >= cells {
+            let heap_mode = self.session.params().fragments;
+            let is_fragment = body
+                .first()
+                .copied()
+                .is_some_and(crate::zenoh_profile0::fragment::is_fragment);
+            // A heap link waits for a free cell for every sample the batch can yield: each cell holds a
+            // sample the owner has not taken.
+            let cells_needed = if is_fragment { 1 } else if heap_mode { needed } else { 0 };
+            if self.stored + cells_needed > self.cells(heap.len()) {
                 return Ok(());
             }
             self.tap_received.keep(body);
             let limit = self.session.params().message_limit;
-            let cell_start = if limit == 0 { 0 } else { (self.cell_next % cells) * limit };
+            let cell_start = self.cell_start(heap.len());
             let cell_end = if limit == 0 { 0 } else { (cell_start + limit).min(heap.len()) };
-            let cell = heap.get_mut(cell_start.min(heap.len())..cell_end).unwrap_or(&mut []);
+            let cell = heap
+                .get_mut(cell_start.min(heap.len())..cell_end)
+                .unwrap_or(&mut []);
             let mut reply = [0u8; FRAMED];
             let outcome = match self.session.on_batch_with(body, now_ms, &mut reply, cell) {
                 Ok(outcome) => outcome,
                 Err(error) => return Err(self.fail(Error::Session(error))),
             };
             let observed = !outcome.events.is_empty();
-            let stored_before = self.stored;
-            self.absorb(&outcome, cell_start);
-            if self.stored > stored_before {
-                self.cell_next = (self.cell_next + 1) % cells;
-            }
+            self.absorb(&outcome, heap);
             if self.session.state() == State::Closed {
                 self.closed = true;
             }
