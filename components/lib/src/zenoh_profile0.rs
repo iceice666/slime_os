@@ -20,6 +20,7 @@
 mod tests;
 
 pub mod encode;
+pub mod limits;
 pub mod session;
 
 use slime_proto::zenoh_profile as p;
