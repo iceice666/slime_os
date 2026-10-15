@@ -609,10 +609,14 @@ impl<
             // The single send slot decides whether a keep-alive may be written at all: with a batch
             // waiting in it only the lease is checked, so the keep-alive never collides with that
             // batch and the batch goes out whole.
-            let outcome = if self.send_len == 0 {
-                self.session.tick(now_ms, &mut body)?
+            let ticked = if self.send_len == 0 {
+                self.session.tick(now_ms, &mut body)
             } else {
-                self.session.tick_lease(now_ms, &mut body)?
+                self.session.tick_lease(now_ms, &mut body)
+            };
+            let outcome = match ticked {
+                Ok(outcome) => outcome,
+                Err(error) => return Err(self.fail(Error::Session(error))),
             };
             let ended = !outcome.events.is_empty();
             self.absorb(&outcome, &mut []);
@@ -699,7 +703,7 @@ impl<
                 Err(refusal) => return Err(self.fail(Error::Stream(refusal))),
             };
             let body = batch.get(..len).unwrap_or(&[]);
-            let needed = self.session.events_needed(body);
+            let (needed, samples) = self.session.events_needed(body);
             if needed > Q {
                 return Err(self.fail(Error::ReceiveQueueFull));
             }
@@ -713,7 +717,7 @@ impl<
                 .is_some_and(crate::zenoh_profile0::fragment::is_fragment);
             // A heap link waits for a free cell for every sample the batch can yield: each cell holds a
             // sample the owner has not taken.
-            let cells_needed = if is_fragment { 1 } else if heap_mode { needed } else { 0 };
+            let cells_needed = if heap_mode { samples } else { 0 };
             if self.stored + cells_needed > self.cells(heap.len()) {
                 return Ok(());
             }

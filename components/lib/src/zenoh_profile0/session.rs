@@ -644,24 +644,34 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         self.on_message(message, now_ms, out)
     }
 
-    /// The most notices a received batch can raise, judged without applying it, so a link can wait
-    /// until its queue has room. A batch the decoder refuses raises none.
-    pub fn events_needed(&self, batch: &[u8]) -> usize {
+    /// What a received batch can raise, judged without applying it so a link can wait until its queue
+    /// and heap have room: the most notices, and how many of them are samples. A batch the decoder
+    /// refuses raises none.
+    pub fn events_needed(&self, batch: &[u8]) -> (usize, usize) {
         if self.params.fragments && batch.first().copied().is_some_and(is_fragment) {
-            return usize::from(batch.first().is_some_and(|header| header & 0x40 == 0));
+            let last = batch.first().is_some_and(|header| header & 0x40 == 0);
+            return (usize::from(last), usize::from(last));
         }
         match decode_batch_with(batch, &self.params.bounds) {
-            Ok(Message::Frame(frame)) => frame
-                .messages()
-                .filter(|network| {
-                    !matches!(
-                        network,
-                        Network::DeclareKeyExpr { .. } | Network::Oam | Network::DeclareFinal
-                    )
-                })
-                .count(),
-            Ok(Message::OpenSyn { .. } | Message::OpenAck { .. } | Message::Close { .. }) => 1,
-            _ => 0,
+            Ok(Message::Frame(frame)) => {
+                let mut events = 0;
+                let mut samples = 0;
+                for network in frame.messages() {
+                    match network {
+                        Network::PushPut { .. } | Network::PushPutAlias { .. } => {
+                            events += 1;
+                            samples += 1;
+                        }
+                        Network::DeclareSubscriber { .. }
+                        | Network::DeclareSubscriberAlias { .. }
+                        | Network::UndeclareSubscriber { .. } => events += 1,
+                        _ => {}
+                    }
+                }
+                (events, samples)
+            }
+            Ok(Message::OpenSyn { .. } | Message::OpenAck { .. } | Message::Close { .. }) => (1, 0),
+            _ => (0, 0),
         }
     }
 
@@ -1017,6 +1027,12 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
     /// The expiry check without the clock: a refused call must leave the session as it was, so
     /// the callers advance `now_ms` only after the whole operation has succeeded.
     fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+        // A run whose last fragment never came is refused once its deadline has passed and its storage is
+        // released; the session itself stays open.
+        if self.reassembly.expired(now_ms) {
+            self.reassembly.release();
+            return Err(FragmentError::ReassemblyTimeout.into());
+        }
         match self.lease_deadline() {
             Some(deadline) if now_ms > deadline => {
                 let sent = encode::close(out, CLOSE_EXPIRED, true)?;
