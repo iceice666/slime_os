@@ -84,6 +84,19 @@ pub struct Fragment<'a> {
     pub data: &'a [u8],
 }
 
+/// The notices one received batch can raise, judged from its first byte before the batch is decoded:
+/// how many at most, and whether one may be a sample. A FRAME can carry several events; the last
+/// fragment of a run, one sample; any other fragment, none.
+pub const fn notice_need(header: u8, frame_events: usize) -> (usize, bool) {
+    if header & ID_MASK == super::ID_FRAME {
+        (frame_events, true)
+    } else if is_fragment(header) {
+        if header & FLAG_MORE == 0 { (1, true) } else { (0, false) }
+    } else {
+        (1, false)
+    }
+}
+
 /// Whether a transport message header is a FRAGMENT's, whatever else it says. A link that cannot
 /// reassemble refuses it on this alone.
 pub const fn is_fragment(header: u8) -> bool {

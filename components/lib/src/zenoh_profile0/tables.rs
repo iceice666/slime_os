@@ -10,6 +10,8 @@ use super::limits::SLOT_OVERHEAD_BYTES;
 const EMPTY: u8 = 0;
 const USED: u8 = 1;
 const REMOVED: u8 = 2;
+/// Removed by a change that may still be rolled back: not found, and not yet reusable.
+const PENDING: u8 = 3;
 
 /// Why a slot could not be taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,7 +137,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
         let start = id as usize % N;
         let index = (0..N)
             .map(|step| (start + step) % N)
-            .find(|&index| self.state(index) != USED)
+            .find(|&index| !matches!(self.state(index), USED | PENDING))
             .ok_or(InsertError::Full)?;
         if let (Some(meta), Some(slot)) = (self.meta.get_mut(index), self.keys.get_mut(index)) {
             *meta = Meta {
@@ -153,13 +155,58 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
         Ok(index)
     }
 
+    /// What a freed slot becomes: empty when no lookup can pass through it, a marker otherwise.
+    fn vacated(&self, index: usize) -> u8 {
+        if self.state((index + 1) % N) == EMPTY { EMPTY } else { REMOVED }
+    }
+
     /// Frees a used slot. Later lookups still pass over it.
     pub fn remove(&mut self, index: usize) {
+        let vacated = self.vacated(index);
         if let Some(meta) = self.meta.get_mut(index)
             && meta.state == USED
         {
-            meta.state = REMOVED;
+            meta.state = vacated;
             self.used -= 1;
+        }
+    }
+
+    /// The slot whose key is `key`. A scan, for the one lookup that is not by id.
+    pub fn find_key(&self, key: &[u8]) -> Option<usize> {
+        if self.used == 0 {
+            return None;
+        }
+        (0..N).find(|&index| self.get(index).is_some_and(|(_, held)| held == key))
+    }
+
+    /// Takes a used slot out of lookups without making it reusable, so the change can be rolled back
+    /// with [`restore`](Self::restore) or kept with [`settle`](Self::settle).
+    pub fn defer_remove(&mut self, index: usize) {
+        if let Some(meta) = self.meta.get_mut(index)
+            && meta.state == USED
+        {
+            meta.state = PENDING;
+            self.used -= 1;
+        }
+    }
+
+    /// Makes a deferred removal final.
+    pub fn settle(&mut self, index: usize) {
+        let vacated = self.vacated(index);
+        if let Some(meta) = self.meta.get_mut(index)
+            && meta.state == PENDING
+        {
+            meta.state = vacated;
+        }
+    }
+
+    /// Undoes a deferred removal.
+    pub fn restore(&mut self, index: usize) {
+        if let Some(meta) = self.meta.get_mut(index)
+            && meta.state == PENDING
+        {
+            meta.state = USED;
+            self.used += 1;
         }
     }
 

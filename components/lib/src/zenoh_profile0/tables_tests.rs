@@ -132,3 +132,41 @@ fn every_slot_of_a_table_of_65535_is_taken_found_and_freed() {
         .join()
         .expect("table");
 }
+
+#[test]
+fn a_deferred_removal_is_hidden_until_settled_or_restored() {
+    let mut table = SlotTable::<3, 4>::new();
+    let a = table.insert(1, b"a").expect("1");
+    table.insert(2, b"b").expect("2");
+    table.insert(3, b"c").expect("3");
+    table.defer_remove(a);
+    assert_eq!(table.find(1), None);
+    assert_eq!(table.len(), 2);
+    assert_eq!(table.insert(4, b"d"), Err(InsertError::Full), "the slot is not reusable yet");
+    table.restore(a);
+    assert_eq!(table.find(1), Some(a));
+    assert_eq!(table.len(), 3);
+    table.defer_remove(a);
+    table.settle(a);
+    assert_eq!(table.insert(4, b"d"), Ok(a));
+}
+
+#[test]
+fn a_key_is_found_by_its_bytes() {
+    let mut table = SlotTable::<4, 8>::new();
+    table.insert(9, b"one").expect("1");
+    let two = table.insert(10, b"two").expect("2");
+    assert_eq!(table.find_key(b"two"), Some(two));
+    assert_eq!(table.find_key(b"three"), None);
+}
+
+#[test]
+fn a_lookup_after_many_removals_still_ends() {
+    let mut table = SlotTable::<8, 4>::new();
+    for round in 0..40u32 {
+        let at = table.insert(round + 1, b"k").expect("room");
+        table.remove(at);
+    }
+    assert_eq!(table.find(999), None);
+    assert!(table.is_empty());
+}

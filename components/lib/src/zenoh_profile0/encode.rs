@@ -346,6 +346,27 @@ fn undeclare_subscriber(
     writer.put(key)
 }
 
+/// Refuses a Put the decoder would refuse: a key that is not a valid key expression within the bounds,
+/// an attachment that is not the 33-byte form, or a payload over the bound.
+pub fn validate_put(
+    key: &str,
+    attachment: &[u8],
+    payload_len: usize,
+    bounds: &Bounds,
+) -> Result<(), EncodeError> {
+    check_key(key, bounds.key)?;
+    if attachment.len() != MAX_ATTACHMENT_BYTES {
+        return Err(EncodeError::AttachmentLength);
+    }
+    if attachment.get(ATTACHMENT_GID_LEN_AT) != Some(&GID_LEN_BYTE) {
+        return Err(EncodeError::AttachmentGid);
+    }
+    if payload_len > bounds.payload {
+        return Err(EncodeError::PayloadTooLong);
+    }
+    Ok(())
+}
+
 fn push_put(
     writer: &mut Writer<'_>,
     mapping: Mapping,
@@ -354,16 +375,8 @@ fn push_put(
     payload: &[u8],
     bounds: Bounds,
 ) -> Result<(), EncodeError> {
+    validate_put(key, attachment, payload.len(), &bounds)?;
     let key = check_key(key, bounds.key)?;
-    if attachment.len() != MAX_ATTACHMENT_BYTES {
-        return Err(EncodeError::AttachmentLength);
-    }
-    if attachment.get(ATTACHMENT_GID_LEN_AT) != Some(&GID_LEN_BYTE) {
-        return Err(EncodeError::AttachmentGid);
-    }
-    if payload.len() > bounds.payload {
-        return Err(EncodeError::PayloadTooLong);
-    }
     let mut header = ID_PUSH | FLAG_BIT5;
     if mapping == Mapping::Sender {
         header |= FLAG_BIT6;
