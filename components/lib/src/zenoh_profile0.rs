@@ -20,6 +20,7 @@
 mod tests;
 
 pub mod encode;
+pub mod fragment;
 pub mod limits;
 pub mod session;
 
