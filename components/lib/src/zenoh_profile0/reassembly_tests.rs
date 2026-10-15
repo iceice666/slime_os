@@ -288,7 +288,10 @@ fn a_run_whose_slices_are_shorter_than_the_maximum_is_taken() {
     let message = codec::full_key_put("a/b", 5000);
     let mut bodies = Vec::new();
     let mut at = 0;
-    for (step, take) in [1000usize, 1, 1500, usize::MAX, usize::MAX].into_iter().enumerate() {
+    for (step, take) in [1000usize, 1, 1500, usize::MAX, usize::MAX]
+        .into_iter()
+        .enumerate()
+    {
         let sn = FIRST + step as u32;
         // A slice is at most the batch less the stream length and the fragment's own header.
         let room = BATCH
