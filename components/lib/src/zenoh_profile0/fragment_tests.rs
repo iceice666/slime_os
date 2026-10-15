@@ -83,19 +83,23 @@ pub fn split(message: &[u8], batch: usize, first_sn: u32) -> Vec<Vec<u8>> {
     out
 }
 
-pub fn rules() -> PutRules<'static> {
+pub fn rules<'a>() -> PutRules<'a> {
     PutRules {
         max_key: 129,
         max_payload: 16_384,
         aliases: None,
-        subscribed: None,
+        subscribed: &any_key,
     }
+}
+
+pub fn any_key(_: &[u8]) -> bool {
+    true
 }
 
 /// An alias table holding `alias` for `key`.
 pub fn alias_table(alias: u32, key: &[u8]) -> super::super::tables::SlotTable<4, 160> {
     let mut table = super::super::tables::SlotTable::new();
-    table.insert(alias, key).expect("alias");
+    table.insert(u64::from(alias), key).expect("alias");
     table
 }
 
@@ -336,7 +340,8 @@ fn a_joined_put_names_a_valid_key_the_subscriber_declared() {
     assert_eq!(class(&rules, &scoped), "invalid-keyexpr", "a full key in a nonzero scope");
     assert_eq!(class(&rules, &full_key_put(&"k".repeat(130), 1)), "over-bound");
     assert_eq!(class(&rules, &full_key_put(&"k".repeat(129), 1)[..40]), "truncated", "inside the key");
-    rules.subscribed = Some(KEY.as_bytes());
+    let only = |key: &[u8]| key == KEY.as_bytes();
+    rules.subscribed = &only;
     assert!(decode_put(&full_key_put(KEY, 1), &rules).is_ok());
     assert_eq!(class(&rules, &full_key_put("slime_demo/other", 1)), "undeclared-key");
 }
@@ -346,7 +351,8 @@ fn a_joined_put_names_the_alias_the_peer_declared() {
     let table = alias_table(1, KEY.as_bytes());
     let mut rules = rules();
     rules.aliases = Some(&table);
-    rules.subscribed = Some(KEY.as_bytes());
+    let only = |key: &[u8]| key == KEY.as_bytes();
+    rules.subscribed = &only;
     assert!(decode_put(&alias_put(1, 5), &rules).is_ok());
     let class = |rules: &PutRules<'_>, message: &[u8]| decode_put(message, rules).expect_err("refused").class();
     assert_eq!(class(&rules, &alias_put(2, 5)), "invalid-keyexpr", "an alias nobody declared");

@@ -33,10 +33,10 @@ pub const fn table_bytes(slots: usize, key_max: usize) -> usize {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 struct Meta {
-    id: u32,
+    id: u64,
     len: u16,
     state: u8,
-    spare: [u8; 9],
+    spare: [u8; 5],
 }
 
 const _: () = assert!(core::mem::size_of::<Meta>() == SLOT_OVERHEAD_BYTES as usize);
@@ -45,12 +45,12 @@ const VACANT: Meta = Meta {
     id: 0,
     len: 0,
     state: EMPTY,
-    spare: [0; 9],
+    spare: [0; 5],
 };
 
 /// Looks a key up by the id that names it.
 pub trait Keys: core::fmt::Debug {
-    fn key_of(&self, id: u32) -> Option<&[u8]>;
+    fn key_of(&self, id: u64) -> Option<&[u8]>;
 }
 
 /// `N` slots for keys of up to `K` bytes.
@@ -89,11 +89,11 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
     }
 
     /// The slot holding `id`.
-    pub fn find(&self, id: u32) -> Option<usize> {
+    pub fn find(&self, id: u64) -> Option<usize> {
         if N == 0 {
             return None;
         }
-        let start = id as usize % N;
+        let start = (id % N as u64) as usize;
         for step in 0..N {
             let index = (start + step) % N;
             match self.meta.get(index) {
@@ -106,7 +106,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
     }
 
     /// The id and key of a used slot.
-    pub fn get(&self, index: usize) -> Option<(u32, &[u8])> {
+    pub fn get(&self, index: usize) -> Option<(u64, &[u8])> {
         let meta = self.meta.get(index)?;
         if meta.state != USED {
             return None;
@@ -116,7 +116,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
     }
 
     /// The first used slot, for a table that holds one.
-    pub fn first(&self) -> Option<(u32, &[u8])> {
+    pub fn first(&self) -> Option<(u64, &[u8])> {
         if self.used == 0 {
             return None;
         }
@@ -124,7 +124,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
     }
 
     /// Takes a slot for `id` and `key`.
-    pub fn insert(&mut self, id: u32, key: &[u8]) -> Result<usize, InsertError> {
+    pub fn insert(&mut self, id: u64, key: &[u8]) -> Result<usize, InsertError> {
         if key.len() > K {
             return Err(InsertError::KeyTooLong);
         }
@@ -134,7 +134,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
         if self.used >= N {
             return Err(InsertError::Full);
         }
-        let start = id as usize % N;
+        let start = (id % N as u64) as usize;
         let index = (0..N)
             .map(|step| (start + step) % N)
             .find(|&index| !matches!(self.state(index), USED | PENDING))
@@ -144,7 +144,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
                 id,
                 len: key.len() as u16,
                 state: USED,
-                spare: [0; 9],
+                spare: [0; 5],
             };
             slot.fill(0);
             if let Some(dst) = slot.get_mut(..key.len()) {
@@ -218,7 +218,7 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
 }
 
 impl<const N: usize, const K: usize> Keys for SlotTable<N, K> {
-    fn key_of(&self, id: u32) -> Option<&[u8]> {
+    fn key_of(&self, id: u64) -> Option<&[u8]> {
         self.get(self.find(id)?).map(|(_, key)| key)
     }
 }

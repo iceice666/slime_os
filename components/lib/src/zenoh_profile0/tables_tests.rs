@@ -27,12 +27,12 @@ fn a_slot_holds_its_id_and_key() {
 
 fn fill<const N: usize>() {
     let mut table = SlotTable::<N, 8>::new();
-    for id in 0..N as u32 {
+    for id in 0..N as u64 {
         table.insert(id + 1, b"k").expect("room");
     }
     assert_eq!(table.len(), N);
-    assert_eq!(table.insert(N as u32 + 1, b"k"), Err(InsertError::Full), "{N}");
-    for id in 0..N as u32 {
+    assert_eq!(table.insert(N as u64 + 1, b"k"), Err(InsertError::Full), "{N}");
+    for id in 0..N as u64 {
         assert!(table.find(id + 1).is_some(), "{N}: {id}");
     }
 }
@@ -75,7 +75,7 @@ fn ids_that_collide_are_each_found_and_removal_leaves_the_chain_intact() {
 #[test]
 fn a_removed_slot_makes_room_in_a_full_table() {
     let mut table = SlotTable::<3, 4>::new();
-    let slots: [usize; 3] = core::array::from_fn(|i| table.insert(i as u32 + 1, b"k").expect("room"));
+    let slots: [usize; 3] = core::array::from_fn(|i| table.insert(i as u64 + 1, b"k").expect("room"));
     assert_eq!(table.insert(4, b"k"), Err(InsertError::Full));
     table.remove(slots[1]);
     table.insert(4, b"k").expect("one slot is free");
@@ -97,8 +97,8 @@ fn clear_empties_every_slot() {
 
 #[test]
 fn ids_use_all_32_bits() {
-    let mut table = SlotTable::<4, 4>::new();
-    let ids = [0u32, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF];
+    let mut table = SlotTable::<5, 4>::new();
+    let ids = [0u64, 0x7FFF_FFFF, 0x8000_0000, 0xFFFF_FFFF, u64::MAX];
     for id in ids {
         table.insert(id, b"k").expect("insert");
     }
@@ -114,15 +114,15 @@ fn every_slot_of_a_table_of_65535_is_taken_found_and_freed() {
         .stack_size(64 << 20)
         .spawn(|| {
             let mut table = std::boxed::Box::new(SlotTable::<65_535, 16>::new());
-            for id in 1..=65_535u32 {
-                table.insert(id, &id.to_le_bytes()).expect("room");
+            for id in 1..=65_535u64 {
+                table.insert(id, &(id as u32).to_le_bytes()).expect("room");
             }
             assert_eq!(table.insert(65_536, b"k"), Err(InsertError::Full));
-            for id in [1u32, 255, 256, 257, 32_768, 65_534, 65_535] {
+            for id in [1u64, 255, 256, 257, 32_768, 65_534, 65_535] {
                 let at = table.find(id).expect("found");
-                assert_eq!(table.get(at), Some((id, &id.to_le_bytes()[..])));
+                assert_eq!(table.get(at), Some((id, &(id as u32).to_le_bytes()[..])));
             }
-            for id in 1..=65_535u32 {
+            for id in 1..=65_535u64 {
                 let at = table.find(id).expect("found");
                 table.remove(at);
             }
@@ -163,7 +163,7 @@ fn a_key_is_found_by_its_bytes() {
 #[test]
 fn a_lookup_after_many_removals_still_ends() {
     let mut table = SlotTable::<8, 4>::new();
-    for round in 0..40u32 {
+    for round in 0..40u64 {
         let at = table.insert(round + 1, b"k").expect("room");
         table.remove(at);
     }

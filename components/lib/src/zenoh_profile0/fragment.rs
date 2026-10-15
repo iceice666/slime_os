@@ -323,7 +323,7 @@ pub const fn fits_one_frame(message_len: usize, batch: usize, frame_sn: u32) -> 
 }
 
 /// What the session knows when a reassembled message is read.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct PutRules<'a> {
     /// The longest key the configuration declares, in encoded bytes.
     pub max_key: usize,
@@ -331,8 +331,8 @@ pub struct PutRules<'a> {
     pub max_payload: u64,
     /// The aliases the peer declared. A peer-declared alias is in the sender's mapping.
     pub aliases: Option<&'a dyn Keys>,
-    /// The key this side's subscriber declared; a Put for another key is refused.
-    pub subscribed: Option<&'a [u8]>,
+    /// Whether a key is one this side subscribed to; a Put for any other key is refused.
+    pub subscribed: &'a dyn Fn(&[u8]) -> bool,
 }
 
 /// The Put a run of fragments joined into.
@@ -381,7 +381,7 @@ pub fn decode_put<'a>(
         if scope != 0 {
             return Err(Refusal::InvalidKeyexpr.into());
         }
-        if rules.subscribed.is_some_and(|held| held != text.as_bytes()) {
+        if !(rules.subscribed)(text.as_bytes()) {
             return Err(FragmentError::UndeclaredKey);
         }
         Some(raw)
@@ -391,9 +391,9 @@ pub fn decode_put<'a>(
         }
         let stands_for = rules
             .aliases
-            .and_then(|table| table.key_of(scope))
+            .and_then(|table| table.key_of(u64::from(scope)))
             .ok_or(Refusal::InvalidKeyexpr)?;
-        if rules.subscribed.is_some_and(|held| held != stands_for) {
+        if !(rules.subscribed)(stands_for) {
             return Err(FragmentError::UndeclaredKey);
         }
         None
