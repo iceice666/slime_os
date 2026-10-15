@@ -350,6 +350,7 @@ impl<L: ByteLink> Link<L> {
                 Event::SubscriberDeclared { id } => Notice::SubscriberDeclared { id },
                 Event::SubscriberUndeclared { id } => Notice::SubscriberUndeclared { id },
                 Event::Closed { reason } => Notice::Closed { reason },
+                Event::SampleStored { .. } => continue,
                 Event::SampleDelivered {
                     sequence,
                     timestamp,

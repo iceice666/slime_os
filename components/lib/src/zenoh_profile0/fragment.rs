@@ -275,15 +275,25 @@ pub struct Splitter<S: Source> {
 impl<S: Source> Splitter<S> {
     /// A splitter over `message`, numbering its fragments from `first_sn`.
     pub fn new(message: S, batch: usize, first_sn: u32) -> Result<Self, FragmentError> {
+        Self::resume(message, batch, 0, first_sn)
+    }
+
+    /// A splitter that carries on from byte `at` of `message`, `sn` the number of the next fragment.
+    pub fn resume(message: S, batch: usize, at: usize, sn: u32) -> Result<Self, FragmentError> {
         if batch <= MIN_BATCH {
             return Err(FragmentError::BatchTooSmall);
         }
         Ok(Self {
             message,
-            at: 0,
-            sn: first_sn,
+            at,
+            sn,
             batch,
         })
+    }
+
+    /// The byte of the message the next fragment starts at.
+    pub const fn position(&self) -> usize {
+        self.at
     }
 
     /// The sequence number the next fragment carries; after the last it is the session's next.
