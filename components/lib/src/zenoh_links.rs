@@ -254,17 +254,11 @@ impl ByteLink for Scripted {
 
     fn recv(&mut self, buf: &mut [u8]) -> Result<usize, LinkError> {
         let mut pipe = self.rx.borrow_mut();
-        let mut count = 0;
-        while count < buf.len() {
-            match pipe.bytes.pop_front() {
-                Some(byte) => {
-                    buf[count] = byte;
-                    count += 1;
-                }
-                None => break,
-            }
+        let take = buf.len().min(pipe.bytes.len());
+        for (slot, byte) in buf.iter_mut().zip(pipe.bytes.drain(..take)) {
+            *slot = byte;
         }
-        Ok(count)
+        Ok(take)
     }
 
     fn eof(&self) -> bool {
@@ -306,6 +300,9 @@ struct Pair<
     bounds: Bounds,
     /// The sequence number of the next raw FRAME injected as the peer.
     peer_sn: u32,
+    /// The INIT_SYN the connector sent and the INIT_ACK the listener answered with.
+    syn: Vec<u8>,
+    ack: Vec<u8>,
 }
 
 type HeapPair = Pair<2048, 4, 5, 129, 0, 8>;
@@ -351,12 +348,38 @@ fn pair_sn<
     heap: usize,
     a_sn: u32,
 ) -> Pair<F, K, S, B, P, Q> {
+    pair_with(params, heap, a_sn, 2000)
+}
+
+/// The ZID and cookie the exam's handshake bytes are pinned with: the longest the profile permits.
+fn exam_zid() -> &'static [u8] {
+    Vec::leak((1..=16u8).collect())
+}
+
+fn exam_cookie() -> &'static [u8] {
+    Vec::leak((1..=64u8).collect())
+}
+
+/// A pair whose connector numbers its first FRAME `a_sn` and whose listener numbers its first `b_sn`.
+fn pair_with<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    params: Params,
+    heap: usize,
+    a_sn: u32,
+    b_sn: u32,
+) -> Pair<F, K, S, B, P, Q> {
     let a_to_b = Rc::new(RefCell::new(Pipe::default()));
     let b_to_a = Rc::new(RefCell::new(Pipe::default()));
     let a = LinkOf::with_params(
         Scripted { rx: b_to_a.clone(), tx: a_to_b.clone() },
         Role::Connector,
-        &config(&[0xa1, 0xa2], b"", a_sn),
+        &config(exam_zid(), b"", a_sn),
         params,
         1,
     )
@@ -364,7 +387,7 @@ fn pair_sn<
     let b = LinkOf::with_params(
         Scripted { rx: a_to_b.clone(), tx: b_to_a.clone() },
         Role::Listener,
-        &config(&[0xb1, 0xb2], b"cookie-b", 2000),
+        &config(exam_zid(), exam_cookie(), b_sn),
         params,
         1,
     )
@@ -377,11 +400,13 @@ fn pair_sn<
         hb,
         a_to_b,
         b_to_a,
-        heap_a: std::vec![0; heap],
+        heap_a: Vec::new(),
         heap_b: std::vec![0; heap],
         sequence: 0,
         bounds: params.bounds,
         peer_sn: 0,
+        syn: Vec::new(),
+        ack: Vec::new(),
     }
 }
 
@@ -411,6 +436,10 @@ impl<
 
     fn open(&mut self) {
         self.a.open(self.ha, 0).expect("open");
+        self.syn = self.a.last_sent_batch().to_vec();
+        self.a.pump_with(self.ha, 0, &mut self.heap_a).expect("a pump");
+        self.b.pump_with(self.hb, 0, &mut self.heap_b).expect("b pump");
+        self.ack = self.b.last_sent_batch().to_vec();
         self.run(0);
         assert!(self.a.is_open() && self.b.is_open(), "handshake");
         while self.a.next_notice().is_some() {}

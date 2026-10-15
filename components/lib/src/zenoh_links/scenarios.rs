@@ -1062,3 +1062,539 @@ fn two_messages_follow_each_other() {
     assert_eq!(sample_of(&mut pair), second);
     ok("two-messages-in-a-row");
 }
+
+// ---------------------------------------------------------------------------------------------
+// The edges the contract admits: the smallest and largest batch, the longest key, payloads far past
+// the heap configuration's, and what a link sends to a peer whose batch is not its own.
+
+fn sha_chunks(data: &[u8]) -> String {
+    let mut hasher = boot_contracts::sha256::Sha256::new();
+    for chunk in data.chunks(1 << 20) {
+        hasher.update(chunk);
+    }
+    codec::hex(&hasher.finalize())
+}
+
+/// The declaration and undeclaration of `key` at the widest sequence number and subscriber id, stream
+/// length included: none of them can be fragmented, so each must fit the batch.
+fn widest_sizes(batch: usize, key: &str) -> (usize, usize) {
+    let bounds = Bounds { batch: batch - 2, key: key.len(), payload: 0 };
+    let mut out = std::vec![0u8; batch];
+    let mut declare = FrameEncoder::with_bounds(&mut out, 0xFFFF_FFFF, bounds).expect("frame");
+    declare.declare_subscriber(0xFFFF_FFFF, Mapping::Sender, key).expect("declare");
+    let declared = declare.finish().expect("finish") + 2;
+    let mut undeclare = FrameEncoder::with_bounds(&mut out, 0xFFFF_FFFF, bounds).expect("frame");
+    undeclare.undeclare_subscriber(0xFFFF_FFFF, Mapping::Sender, key).expect("undeclare");
+    (declared, undeclare.finish().expect("finish") + 2)
+}
+
+/// What the handshake announced: its length with the stream length, the batch it named, and the digests
+/// of the INIT_ACK and the INIT_SYN.
+fn handshake_of(ack: &[u8], syn: &[u8]) -> String {
+    let announced = u16::from_le_bytes([ack[20], ack[21]]);
+    std::format!("{} {announced} {} {}", ack.len() + 2, codec::sha(ack), codec::sha(syn))
+}
+
+fn handshake_length(ack: &[u8]) -> usize {
+    ack.len() + 2
+}
+
+fn announced_digests(ack: &[u8], syn: &[u8]) -> String {
+    let announced = u16::from_le_bytes([ack[20], ack[21]]);
+    std::format!("{announced} {} {}", codec::sha(ack), codec::sha(syn))
+}
+
+fn heap_edge<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    name: &str,
+    key: &str,
+    payload_len: usize,
+) {
+    let limits = edge_limits(Mode::Heap, F, key.len(), payload_len as u64, 5000);
+    limits.check().expect("the contract admits it");
+    let mut pair: Pair<F, K, S, B, P, Q> = pair_of(&limits, limits.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, key);
+    let payload = codec::payload(payload_len);
+    let attachment = codec::attachment();
+    let mut digests = Vec::new();
+    let mut at = 0;
+    loop {
+        let next = pair
+            .a
+            .publish_part(pair.ha, key, &attachment, &payload, at)
+            .expect("fragment");
+        digests.push(codec::sha(pair.a.last_sent_batch()));
+        pair.run(10);
+        match next {
+            Some(more) => at = more,
+            None => break,
+        }
+    }
+    let Some(Notice::SampleStored(sample)) = pair.b.next_notice() else {
+        panic!("{name}: the Put was not joined");
+    };
+    let received = sample.payload(&pair.heap_b);
+    assert_eq!(received.len(), payload_len, "{name}");
+    assert!(received == payload.as_slice(), "{name}: the payload came back changed");
+    let (declare, undeclare) = widest_sizes(F, key);
+    line(&std::format!(
+        "edge {name} {F} {} {payload_len} {} {declare} {undeclare} {} {} {} {}",
+        key.len(),
+        handshake_length(&pair.ack),
+        digests.len(),
+        digest_of(&digests),
+        sha_chunks(received),
+        announced_digests(&pair.ack, &pair.syn),
+    ));
+    ok(name);
+}
+
+#[test]
+fn the_smallest_batch_carries_a_fragmented_put() {
+    heap_edge::<89, 1, 2, 70, 0, 2>("edge-batch-89", &"k".repeat(70), 300);
+}
+
+#[test]
+fn the_largest_batch_carries_the_longest_key() {
+    heap_edge::<4096, 1, 2, 4076, 0, 2>("edge-batch-4096", &"k".repeat(4076), 16_384);
+}
+
+#[test]
+fn a_key_of_2028_bytes_is_declared_used_and_undeclared() {
+    heap_edge::<2048, 1, 2, 2028, 0, 2>("edge-key-2028", &"k".repeat(2028), 5000);
+}
+
+#[test]
+fn a_payload_of_one_mebibyte_is_sent_and_joined() {
+    heap_edge::<4096, 1, 2, 129, 0, 2>("edge-payload-1mib", &"k".repeat(129), 1 << 20);
+}
+
+#[test]
+fn a_payload_of_two_mebibytes_is_sent_and_joined() {
+    heap_edge::<4096, 1, 2, 129, 0, 2>("edge-payload-2mib", &"k".repeat(129), 1 << 21);
+}
+
+#[test]
+fn a_payload_of_256_mebibytes_is_sent_and_joined() {
+    heap_edge::<4096, 1, 2, 129, 0, 2>("edge-payload-256mib", &"k".repeat(129), 1 << 28);
+}
+
+/// Sends one Put whole from `a` at the widest sequence number, and returns the FRAME body it queued.
+fn whole_frame<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    pair: &mut Pair<F, K, S, B, P, Q>,
+    key: &str,
+    payload: &[u8],
+) -> Vec<u8> {
+    let attachment = codec::attachment();
+    pair.a
+        .publish(pair.ha, key, &attachment, payload)
+        .expect("the Put fits one frame");
+    let frame = pair.a.last_sent_batch().to_vec();
+    pair.run(10);
+    frame
+}
+
+fn fixed_edge<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    name: &str,
+    mode: Mode,
+    key: &str,
+    payload_len: usize,
+) -> (String, Vec<u8>) {
+    let limits = edge_limits(mode, F, key.len(), payload_len as u64, 5000);
+    limits.check().expect("the contract admits it");
+    let params = Params::from_limits(&limits);
+    let mut pair: Pair<F, K, S, B, P, Q> = pair_sn(params, limits.heap_bytes as usize, 0xFFFF_FFFF);
+    pair.open();
+    pair.declare(1, key);
+    let payload = codec::payload(payload_len);
+    let frame = whole_frame(&mut pair, key, &payload);
+    let received = match pair.b.next_notice() {
+        Some(Notice::SampleDelivered(sample)) => sample.payload().to_vec(),
+        Some(Notice::SampleStored(sample)) => sample.payload(&pair.heap_b).to_vec(),
+        other => panic!("{name}: no sample, {other:?}"),
+    };
+    assert_eq!(received, payload, "{name}");
+    let (declare, undeclare) = widest_sizes(F, key);
+    let tail = std::format!(
+        "{} {declare} {undeclare} {} {} {} {}",
+        handshake_length(&pair.ack),
+        frame.len(),
+        codec::sha(&frame),
+        codec::sha(&payload),
+        announced_digests(&pair.ack, &pair.syn),
+    );
+    (tail, frame)
+}
+
+#[test]
+fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
+    let key = "k".repeat(10);
+    let (tail, frame) = fixed_edge::<89, 1, 2, 10, 31, 2>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
+    assert_eq!(frame.len() + 2, 89, "the frame fills the batch exactly");
+    line(&std::format!("fixededge edge-fixed-batch-89 89 10 31 {tail}"));
+    ok("edge-fixed-batch-89");
+}
+
+#[test]
+fn a_fixed_link_sends_a_thousand_byte_key_whole_at_the_largest_batch() {
+    let key = "k".repeat(1000);
+    let (tail, frame) =
+        fixed_edge::<4096, 1, 2, 1000, 3046, 2>("edge-fixed-batch-4096", Mode::Fixed, &key, 3046);
+    assert_eq!(frame.len() + 2, 4096, "the frame fills the batch exactly");
+    line(&std::format!("fixededge edge-fixed-batch-4096 4096 1000 3046 {tail}"));
+    ok("edge-fixed-batch-4096");
+}
+
+#[test]
+fn the_smallest_configuration_in_each_mode_sends_a_put_whole() {
+    for (name, mode) in [("edge-minimum-fixed", Mode::Fixed), ("edge-minimum-heap", Mode::Heap)] {
+        let (tail, frame) = if mode == Mode::Fixed {
+            fixed_edge::<89, 1, 2, 1, 1, 2>(name, mode, "k", 1)
+        } else {
+            fixed_edge::<89, 1, 2, 1, 0, 2>(name, mode, "k", 1)
+        };
+        assert_eq!(frame.len(), 48);
+        line(&std::format!("minimum {name} {} 89 1 1 {tail}", mode.name()));
+        ok(name);
+    }
+}
+
+fn long_alias<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    name: &str,
+    length: usize,
+    alias: u32,
+) {
+    const ALIAS_SN: u32 = 0xFFFF_FFFE;
+    let key = "k".repeat(length);
+    let limits = edge_limits(Mode::Heap, F, length, 5000, 5000);
+    limits.check().expect("the contract admits it");
+    let mut pair: Pair<F, K, S, B, P, Q> = pair_sn(Params::from_limits(&limits), limits.heap_bytes as usize, ALIAS_SN);
+    pair.open();
+    pair.declare(1, &key);
+    assert_eq!(pair.next_peer_sn(), ALIAS_SN);
+    let declaration = frame(ALIAS_SN, &[declare_alias(alias, &key)]);
+    assert!(declaration.len() + 2 <= F, "the declaration fits its batch");
+    pair.inject(&declaration);
+    pair.pump_b(5).expect("the alias is declared");
+    let message = Parts::alias(alias, 5000).bytes();
+    let first = pair.next_peer_sn();
+    assert_eq!(first, ALIAS_SN.wrapping_add(1));
+    let run = codec::split(&message, F, first);
+    let digests: Vec<String> = run.iter().map(|body| codec::sha(body)).collect();
+    for body in &run {
+        pair.inject(body);
+        pair.pump_b(10).expect("accepted");
+    }
+    let Some(Notice::SampleStored(sample)) = pair.b.next_notice() else {
+        panic!("{name}: the Put was not joined");
+    };
+    assert_eq!(sample.payload(&pair.heap_b), codec::payload(5000));
+    let after = pair.next_peer_sn();
+    assert_eq!(after, first.wrapping_add(run.len() as u32));
+    line(&std::format!(
+        "aliaslong {name} {F} {length} {alias} {} {} {} {} {} {ALIAS_SN} {first} {after}",
+        declaration.len(),
+        codec::sha(&declaration),
+        run.len(),
+        digest_of(&digests),
+        codec::sha(&message),
+    ));
+    ok(name);
+}
+
+#[test]
+fn a_key_of_2028_bytes_is_declared_as_an_alias_and_addressed_through_it() {
+    long_alias::<2048, 1, 2, 2028, 0, 2>("edge-alias-long-key-2028", 2028, 1);
+}
+
+#[test]
+fn a_key_of_4076_bytes_is_addressed_through_an_alias_with_bit_15_set() {
+    long_alias::<4096, 1, 2, 4076, 0, 2>("edge-alias-long-key-4076", 4076, 0x8000);
+}
+
+// ---------------------------------------------------------------------------------------------
+// What a link sends is bounded by the smaller of its own batch and the one the peer announced.
+
+const PEER_KEY: &str = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkk";
+const PEER_SN: u32 = 5000;
+
+/// One end of a stream whose other end is played by the test: the bytes it sends are read back as
+/// batches, and the bytes the test injects are what the peer wrote.
+struct Solo<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+> {
+    link: LinkOf<Scripted, F, K, S, B, P, Q>,
+    h: LinkHandle,
+    into: Rc<RefCell<Pipe>>,
+    out: Rc<RefCell<Pipe>>,
+}
+
+impl<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+> Solo<F, K, S, B, P, Q>
+{
+    fn new(params: Params, link_sn: u32) -> Self {
+        let into = Rc::new(RefCell::new(Pipe::default()));
+        let out = Rc::new(RefCell::new(Pipe::default()));
+        let link = LinkOf::with_params(
+            Scripted { rx: into.clone(), tx: out.clone() },
+            Role::Listener,
+            &config(exam_zid(), exam_cookie(), link_sn),
+            params,
+            1,
+        )
+        .expect("listener");
+        let h = link.handle();
+        Self { link, h, into, out }
+    }
+
+    fn push(&self, body: &[u8]) {
+        let mut pipe = self.into.borrow_mut();
+        pipe.bytes.extend((body.len() as u16).to_le_bytes());
+        pipe.bytes.extend(body.iter());
+    }
+
+    fn pump(&mut self, now: u64) {
+        for _ in 0..64 {
+            let report = self.link.pump_with(self.h, now, &mut []).expect("pump");
+            if report.batches == 0 && !self.link.send_pending() {
+                return;
+            }
+        }
+    }
+
+    fn bodies(&self) -> Vec<Vec<u8>> {
+        let bytes: Vec<u8> = self.out.borrow_mut().bytes.drain(..).collect();
+        let (mut out, mut at) = (Vec::new(), 0);
+        while at + 2 <= bytes.len() {
+            let length = usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
+            out.push(bytes[at + 2..at + 2 + length].to_vec());
+            at += 2 + length;
+        }
+        out
+    }
+
+    /// The handshake as a connector announcing `peer`, then a subscription to the key. Returns the
+    /// digest of the INIT_SYN the peer sent.
+    fn meet(&mut self, peer: usize) -> String {
+        let mut buf = std::vec![0u8; 256];
+        let length = encode::init_syn(&mut buf, exam_zid(), peer as u16).expect("syn");
+        let syn = buf[..length].to_vec();
+        self.push(&syn);
+        self.pump(0);
+        let ack = self.bodies();
+        assert_eq!(ack.len(), 1);
+        assert_eq!(usize::from(u16::from_le_bytes([ack[0][20], ack[0][21]])), F, "it announces its own batch");
+        let length = encode::open_syn(&mut buf, LEASE_MS, PEER_SN, exam_cookie()).expect("open");
+        self.push(&buf[..length]);
+        self.pump(0);
+        assert_eq!(self.bodies().len(), 1);
+        assert!(self.link.is_open());
+        let bounds = Bounds { batch: peer - 2, key: PEER_KEY.len(), payload: 0 };
+        self.push(&subscriber_frame(bounds, PEER_SN, 1, PEER_KEY));
+        self.pump(1);
+        codec::sha(&syn)
+    }
+}
+
+fn fixed_need(payload: usize, key: usize) -> usize {
+    payload + key + 33 + 5 + codec::leb(key as u64).len() + codec::leb(payload as u64).len() + 6 + 2
+}
+
+fn fixed_max_payload(batch: usize, key: usize) -> usize {
+    let mut payload = batch;
+    while fixed_need(payload, key) > batch {
+        payload -= 1;
+    }
+    payload
+}
+
+fn peer_heap<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    peer: usize,
+    payload_len: usize,
+) -> String {
+    let effective = F.min(peer);
+    let limits = edge_limits(Mode::Heap, F, PEER_KEY.len(), payload_len as u64, 5000);
+    limits.check().expect("the contract admits it");
+    let mut solo: Solo<F, K, S, B, P, Q> = Solo::new(Params::from_limits(&limits), 1000);
+    let syn = solo.meet(peer);
+    let payload = codec::payload(payload_len);
+    let attachment = codec::attachment();
+    let mut bodies: Vec<Vec<u8>> = Vec::new();
+    let mut at = 0;
+    loop {
+        let next = solo
+            .link
+            .publish_part(solo.h, PEER_KEY, &attachment, &payload, at)
+            .expect("fragment");
+        solo.pump(2);
+        bodies.extend(solo.bodies());
+        match next {
+            Some(more) => at = more,
+            None => break,
+        }
+    }
+    assert!(bodies.iter().all(|body| body.len() <= effective - 2), "no fragment is longer than the peer accepts");
+    assert_eq!(reassemble(&bodies, peer, 1000, PEER_KEY.len()), payload);
+    let digests: Vec<String> = bodies.iter().map(|body| codec::sha(body)).collect();
+    std::format!(
+        "heap {F} {peer} {payload_len} {effective} fragments {} {} {syn}",
+        bodies.len(),
+        digest_of(&digests)
+    )
+}
+
+fn peer_fixed<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    peer: usize,
+    over: usize,
+) -> String {
+    let effective = F.min(peer);
+    let payload_len = fixed_max_payload(effective, PEER_KEY.len()) + over;
+    let limits = edge_limits(Mode::Fixed, F, PEER_KEY.len(), payload_len as u64, 5000);
+    limits.check().expect("the contract admits it");
+    let mut solo: Solo<F, K, S, B, P, Q> = Solo::new(Params::from_limits(&limits), 0xFFFF_FFFF);
+    let syn = solo.meet(peer);
+    let payload = codec::payload(payload_len);
+    let attachment = codec::attachment();
+    let (outcome, size, digest) = match solo.link.publish(solo.h, PEER_KEY, &attachment, &payload) {
+        Ok(()) => {
+            solo.pump(2);
+            let sent = solo.bodies();
+            assert_eq!(sent.len(), 1);
+            assert!(sent[0].len() + 2 <= effective, "the frame fits the smaller batch");
+            ("whole".to_string(), sent[0].len(), codec::sha(&sent[0]))
+        }
+        Err(Error::Session(SessionError::Decode(Refusal::OverBound))) => {
+            assert!(fixed_need(payload_len, PEER_KEY.len()) > effective);
+            solo.pump(2);
+            assert!(solo.bodies().is_empty(), "nothing was sent");
+            ("refused-over-bound".to_string(), 0, "-".to_string())
+        }
+        Err(other) => panic!("the Put was refused as {other:?}"),
+    };
+    std::format!("fixed {F} {peer} {payload_len} {effective} {outcome} {size} {digest} {syn}")
+}
+
+#[test]
+fn a_heap_link_sends_no_more_than_the_peer_announced() {
+    for tail in [
+        peer_heap::<4096, 1, 2, 30, 0, 2>(89, 1000),
+        peer_heap::<4096, 1, 2, 30, 0, 2>(512, 5000),
+        peer_heap::<2048, 1, 2, 30, 0, 2>(4096, 5000),
+        peer_heap::<4096, 1, 2, 30, 0, 2>(2048, 9000),
+    ] {
+        line(&std::format!("peerbatch {tail}"));
+    }
+    ok("peerbatch-heap");
+}
+
+#[test]
+fn a_fixed_link_sends_the_largest_message_the_smaller_batch_holds_and_refuses_one_byte_more() {
+    for tail in [
+        peer_fixed::<2048, 1, 2, 30, 434, 2>(512, 0),
+        peer_fixed::<2048, 1, 2, 30, 434, 2>(512, 1),
+        peer_fixed::<4096, 1, 2, 30, 434, 2>(89, 0),
+        peer_fixed::<4096, 1, 2, 30, 434, 2>(89, 1),
+        peer_fixed::<512, 1, 2, 30, 434, 2>(4096, 0),
+    ] {
+        line(&std::format!("peerbatch {tail}"));
+    }
+    ok("peerbatch-fixed");
+}
+
+#[test]
+fn a_key_is_counted_in_bytes_not_characters() {
+    let key = "\u{e9}/\u{65e5}\u{672c}";
+    let mut limits = edge_limits(Mode::Heap, 512, key.len(), 1500, 5000);
+    limits.name = "multibyte";
+    limits.check().expect("the contract admits it");
+    let mut pair: Pair<512, 1, 2, 9, 0, 2> = pair_of(&limits, limits.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, key);
+    let declare = message_of(pair.b.last_sent_batch()).to_vec();
+    pair.b.undeclare_subscriber(pair.hb, 1, key).expect("undeclare");
+    let undeclare = message_of(pair.b.last_sent_batch()).to_vec();
+    pair.run(2);
+    pair.declare(1, key);
+    let payload = codec::payload(1500);
+    let attachment = codec::attachment();
+    let message = Parts::full(key.as_bytes(), 1500).bytes();
+    let mut digests = Vec::new();
+    let mut at = 0;
+    loop {
+        let next = pair.a.publish_part(pair.ha, key, &attachment, &payload, at).expect("fragment");
+        digests.push(codec::sha(pair.a.last_sent_batch()));
+        pair.run(10);
+        match next {
+            Some(more) => at = more,
+            None => break,
+        }
+    }
+    let Some(Notice::SampleStored(sample)) = pair.b.next_notice() else {
+        panic!("the Put was not joined");
+    };
+    assert_eq!(sample.payload(&pair.heap_b), payload);
+    let (wide_declare, wide_undeclare) = widest_sizes(512, key);
+    assert_eq!((key.chars().count(), key.len()), (4, 9));
+    line(&std::format!(
+        "multibyte 4 9 512 1500 {wide_declare} {} {wide_undeclare} {} {} {} {}",
+        codec::sha(&declare),
+        codec::sha(&undeclare),
+        digests.len(),
+        digest_of(&digests),
+        codec::sha(&message),
+    ));
+    ok("reassemble-multibyte-key");
+}
