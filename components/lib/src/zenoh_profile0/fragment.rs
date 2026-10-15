@@ -396,15 +396,22 @@ pub fn decode_put<'a>(
         }
         Some(raw)
     } else {
-        if scope == 0 || !sender {
+        if scope == 0 {
             return Err(Refusal::InvalidKeyexpr.into());
         }
-        let stands_for = rules
-            .aliases
-            .and_then(|table| table.key_of(u64::from(scope)))
-            .ok_or(Refusal::InvalidKeyexpr)?;
-        if !(rules.subscribed)(stands_for) {
-            return Err(FragmentError::UndeclaredKey);
+        // A session passes the aliases its peer declared: a reference must then be sender-mapped, name a
+        // declared alias, and stand for a key this side subscribed to. With no table the codec reads the
+        // Put as it is, which is how a captured stock Put is read.
+        if let Some(table) = rules.aliases {
+            if !sender {
+                return Err(Refusal::InvalidKeyexpr.into());
+            }
+            let stands_for = table
+                .key_of(u64::from(scope))
+                .ok_or(Refusal::InvalidKeyexpr)?;
+            if !(rules.subscribed)(stands_for) {
+                return Err(FragmentError::UndeclaredKey);
+            }
         }
         None
     };
