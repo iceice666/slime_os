@@ -299,6 +299,11 @@ impl<
         self.send_len != 0
     }
 
+    /// Notices queued and not yet taken.
+    pub const fn notices_queued(&self) -> usize {
+        self.notice_len
+    }
+
     /// Takes the oldest notice.
     pub fn next_notice(&mut self) -> Option<Notice<P>> {
         if self.notice_len == 0 {

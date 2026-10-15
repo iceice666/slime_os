@@ -223,3 +223,263 @@ fn a_run_whose_interior_fragments_are_shorter_than_the_maximum_is_taken() {
     ));
     ok("reassemble-underfilled-interior");
 }
+
+// ---------------------------------------------------------------------------------------------
+// A connected pair of links over scripted streams, and the heap the receiving end lends.
+
+use crate::zenoh_link::{ByteLink, Error, LinkError, LinkHandle, LinkOf, Notice};
+use crate::zenoh_profile0::encode;
+use crate::zenoh_profile0::session::{Config, Params, Role};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+
+#[derive(Default)]
+struct Pipe {
+    bytes: VecDeque<u8>,
+}
+
+struct Scripted {
+    rx: Rc<RefCell<Pipe>>,
+    tx: Rc<RefCell<Pipe>>,
+}
+
+impl ByteLink for Scripted {
+    fn send(&mut self, buf: &[u8]) -> Result<usize, LinkError> {
+        self.tx.borrow_mut().bytes.extend(buf.iter());
+        Ok(buf.len())
+    }
+
+    fn recv(&mut self, buf: &mut [u8]) -> Result<usize, LinkError> {
+        let mut pipe = self.rx.borrow_mut();
+        let mut count = 0;
+        while count < buf.len() {
+            match pipe.bytes.pop_front() {
+                Some(byte) => {
+                    buf[count] = byte;
+                    count += 1;
+                }
+                None => break,
+            }
+        }
+        Ok(count)
+    }
+
+    fn eof(&self) -> bool {
+        false
+    }
+}
+
+/// A lease no test clock reaches, so only the reassembly timeout and the lease the exam names expire.
+const LEASE_MS: u64 = 4_000_000_000;
+
+fn config(zid: &[u8], cookie: &[u8], initial_sn: u32) -> Config<'static> {
+    Config {
+        zid: Vec::leak(zid.to_vec()),
+        lease_ms: LEASE_MS,
+        initial_sn,
+        cookie: Vec::leak(cookie.to_vec()),
+    }
+}
+
+/// `F` framed batch, `K` aliases, `S` subscriber slots (the peer's and our own), `B` key bytes, `P` payload
+/// bytes copied into a fixed notice and `Q` notices.
+struct Pair<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+> {
+    a: LinkOf<Scripted, F, K, S, B, P, Q>,
+    b: LinkOf<Scripted, F, K, S, B, P, Q>,
+    ha: LinkHandle,
+    hb: LinkHandle,
+    a_to_b: Rc<RefCell<Pipe>>,
+    b_to_a: Rc<RefCell<Pipe>>,
+    heap_a: Vec<u8>,
+    heap_b: Vec<u8>,
+    sequence: i64,
+}
+
+type HeapPair = Pair<2048, 4, 5, 129, 0, 8>;
+
+fn pair_of<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+>(
+    limits: &Limits,
+    heap: usize,
+) -> Pair<F, K, S, B, P, Q> {
+    let a_to_b = Rc::new(RefCell::new(Pipe::default()));
+    let b_to_a = Rc::new(RefCell::new(Pipe::default()));
+    let params = Params::from_limits(limits);
+    let a = LinkOf::with_params(
+        Scripted { rx: b_to_a.clone(), tx: a_to_b.clone() },
+        Role::Connector,
+        &config(&[0xa1, 0xa2], b"", 1000),
+        params,
+        1,
+    )
+    .expect("connector");
+    let b = LinkOf::with_params(
+        Scripted { rx: a_to_b.clone(), tx: b_to_a.clone() },
+        Role::Listener,
+        &config(&[0xb1, 0xb2], b"cookie-b", 2000),
+        params,
+        1,
+    )
+    .expect("listener");
+    let (ha, hb) = (a.handle(), b.handle());
+    Pair {
+        a,
+        b,
+        ha,
+        hb,
+        a_to_b,
+        b_to_a,
+        heap_a: std::vec![0; heap],
+        heap_b: std::vec![0; heap],
+        sequence: 0,
+    }
+}
+
+impl<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+> Pair<F, K, S, B, P, Q>
+{
+    /// Pumps both ends until neither moves a byte or reads a batch.
+    fn run(&mut self, now: u64) {
+        for _ in 0..4000 {
+            let a = self.a.pump_with(self.ha, now, &mut self.heap_a).expect("a pump");
+            let b = self.b.pump_with(self.hb, now, &mut self.heap_b).expect("b pump");
+            let quiet = a.batches + b.batches + a.sent_bytes + b.sent_bytes == 0
+                && !self.a.send_pending()
+                && !self.b.send_pending();
+            if quiet {
+                return;
+            }
+        }
+        panic!("the pair did not settle");
+    }
+
+    fn open(&mut self) {
+        self.a.open(self.ha, 0).expect("open");
+        self.run(0);
+        assert!(self.a.is_open() && self.b.is_open(), "handshake");
+        while self.a.next_notice().is_some() {}
+        while self.b.next_notice().is_some() {}
+    }
+
+    fn declare(&mut self, id: u32, key: &str) {
+        self.b.declare_subscriber(self.hb, id, key).expect("declare");
+        self.run(1);
+        while self.a.next_notice().is_some() {}
+    }
+
+    /// Sends one Put from `a` to `b`, whole or in fragments, settling the pair after each part.
+    fn send(&mut self, key: &str, payload: &[u8], now: u64) {
+        self.sequence += 1;
+        let attachment = encode::attachment(self.sequence, 1000 + self.sequence, &codec::GID).expect("attachment");
+        match self.a.publish(self.ha, key, &attachment, payload) {
+            Ok(()) => self.run(now),
+            Err(Error::NeedsFragments) => {
+                let mut at = 0;
+                loop {
+                    match self.a.publish_part(self.ha, key, &attachment, payload, at).expect("fragment") {
+                        Some(next) => {
+                            at = next;
+                            self.run(now);
+                        }
+                        None => {
+                            self.run(now);
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(error) => panic!("publish: {error:?}"),
+        }
+    }
+
+    /// Takes the next notice of `b` and, when it is a stored sample, reads its payload from the heap.
+    fn take_sample(&mut self) -> Option<Vec<u8>> {
+        match self.b.next_notice()? {
+            Notice::SampleStored(sample) => Some(sample.payload(&self.heap_b).to_vec()),
+            Notice::SampleDelivered(sample) => Some(sample.payload().to_vec()),
+            _ => Some(Vec::new()),
+        }
+    }
+}
+
+/// A payload of `size` bytes that differs from every other `index`, so an overwrite is noticed.
+fn distinct_payload(size: usize, index: usize) -> Vec<u8> {
+    (0..size).map(|i| ((i * 7 + 1 + index * 13) % 251) as u8).collect()
+}
+
+fn heap_pair() -> HeapPair {
+    let mut pair = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    pair
+}
+
+#[test]
+fn a_heap_link_holds_the_queued_samples_and_one_message_in_progress() {
+    let mut pair = heap_pair();
+    let held = 8;
+    let mut sent = Vec::new();
+    for index in 0..held {
+        let payload = distinct_payload(16_384, index);
+        sent.push(codec::sha(&payload));
+        pair.send(codec::KEY, &payload, 10);
+    }
+    assert_eq!(pair.b.notices_queued(), held, "the owner has drained none");
+    // A ninth message is joined into the ninth cell, and its last fragment waits for room in the queue.
+    let payload = distinct_payload(16_384, held);
+    sent.push(codec::sha(&payload));
+    pair.send(codec::KEY, &payload, 10);
+    assert_eq!(pair.b.notices_queued(), held);
+    assert!(pair.b.session().reassembling(), "the ninth message is in progress");
+    let mut back = Vec::new();
+    for index in 0..held {
+        let sample = pair.take_sample().expect("a notice");
+        assert_eq!(sample, distinct_payload(16_384, index), "sample {index} is intact");
+        back.push(codec::sha(&sample));
+    }
+    pair.run(11);
+    let sample = pair.take_sample().expect("the ninth sample");
+    assert_eq!(sample, payload);
+    back.push(codec::sha(&sample));
+    assert_eq!(sent, back);
+    line(&std::format!("queue {held} 1 16384 {} {}", digest_of(&sent), digest_of(&back)));
+    ok("heap-fills-notice-queue");
+    // With the queue drained a further message is joined and delivered.
+    let payload = distinct_payload(16_384, held + 1);
+    pair.send(codec::KEY, &payload, 12);
+    assert_eq!(pair.take_sample().expect("a notice"), payload);
+    line(&std::format!("drained {held} 16384 {}", codec::sha(&payload)));
+    ok("heap-reassembles-after-queue-drained");
+}
+
+#[test]
+fn a_put_of_the_declared_payload_is_joined_into_the_declared_heap() {
+    let mut pair = heap_pair();
+    let payload = codec::payload(16_384);
+    pair.send(codec::KEY, &payload, 10);
+    assert_eq!(pair.take_sample().expect("a notice"), payload);
+    assert_eq!(HEAP.heap_needed(), HEAP.heap_bytes);
+    line(&std::format!("payload 16384 {} {}", HEAP.heap_bytes, codec::sha(&payload)));
+    ok("heap-declared-payload-boundary");
+    ok("heap-storage-from-component");
+}
