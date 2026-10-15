@@ -58,7 +58,9 @@ import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
 import devloop_observations  # noqa: E402
+import zenoh_capture  # noqa: E402
 import zenoh_exchange  # noqa: E402
+import zenoh_listener_peer  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from sel4_plane import run_plane  # noqa: E402
 
@@ -1129,6 +1131,62 @@ def run_zenoh_arm(transcript_path: Path | None) -> None:
     devloop_observations.record(casesObserved=samples, bytesObserved=wire_bytes, negativeControlsRefused=controls)
 
 
+def run_zenoh_external_arm(transcript_path: Path | None) -> None:
+    """Boot the demo against a stock eclipse-zenoh 1.0.0 listener on the host, over a NIC.
+
+    The composition must exist and grant exactly one outbound connection before QEMU starts. The
+    publisher's report, the packet capture taken at the virtio-net device and the record the
+    stock listener wrote are then judged against one another and against the host wire reference.
+    The listener is built from a hash-pinned wheel, so this arm is explicit and needs a registry.
+    """
+    contract = zenoh_exchange.demo()
+    try:
+        zenoh_capture.check_pins(contract)
+    except zenoh_capture.CaptureError as error:
+        fail(str(error))
+    fixture = COMPOSITIONS / f"{zenoh_capture.CLOSURE}.zti"
+    if not fixture.is_file():
+        fail(f"{fixture.relative_to(ROOT)} does not exist; the {zenoh_capture.CLOSURE} composition has not landed")
+    try:
+        facts = zenoh_capture.check_external_rows(*zenoh_capture.external_from_text(fixture.read_text(encoding="utf-8")))
+        zenoh_exchange.reference_self_test(ROOT / "components" / "lib" / "src" / "zenoh_profile0" / "vectors.txt")
+    except (zenoh_capture.CaptureError, zenoh_exchange.ExchangeError, zenoh_exchange.zenoh_wire.WireError) as error:
+        fail(str(error))
+    image = build_image(zenoh_capture.CLOSURE)
+    netdev = f"user,id=slimenet,net=10.0.2.0/24,host={zenoh_capture.PEER},dhcpstart={zenoh_capture.GUEST},ipv6=off"
+    terminal = re.compile(r"\[ros2-demo-publisher\] session closed samples=4|" + "|".join(FAILURE_MARKERS))
+    try:
+        with tempfile.TemporaryDirectory(prefix="slime-zenoh-external-") as directory, \
+                zenoh_listener_peer.Listener(Path(directory) / "receipt.zti", zenoh_capture.PORT) as listener:
+            capture = Path(directory) / "network.pcap"
+            transcript = run_plane(
+                image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS,
+                additional_arguments=(
+                    "-netdev", netdev,
+                    "-device", f"virtio-net-device,netdev=slimenet,mac={zenoh_capture.INTERFACE['mac']}",
+                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",
+                ),
+            )
+            if not capture.is_file():
+                fail("QEMU did not produce the zenoh-external packet observation")
+            packets = capture.read_bytes()
+            listener_output = listener.finish(zenoh_listener_peer.DEADLINE_SECONDS)
+            if transcript_path is not None:
+                transcript_path.write_text(transcript + "\n" + listener_output, encoding="utf-8")
+                transcript_path.with_suffix(".pcap").write_bytes(packets)
+            lines = [line.strip() for line in transcript.splitlines() if line.strip().startswith("[ros2-demo-publisher] ")]
+            result = zenoh_capture.judge_run(packets, lines, Path(directory) / "receipt.zti", contract)
+    except (OSError, RuntimeError, ValueError) as error:
+        fail(f"zenoh-external evidence refused: {error}")
+    good, accepted, mutations = zenoh_capture.controls(contract)
+    composition_facts, composition_refused = zenoh_capture.external_controls()
+    _receipts_accepted, receipts_refused = zenoh_capture.receipt_controls(contract)
+    controls = mutations + composition_refused + receipts_refused
+    print(f"[zenoh-external-wire] guest-stream={result['guest_stream']} peer-stream={result['peer_stream']} frames={result['frames']} keep-alives={result['keep_alives']} arp={result['arp']} peer-batches={result['peer_batches']}")
+    print(f"[zenoh-external] samples-in-receipt={result['receipt']} wire-bytes={result['bytes']} authority-facts={facts} controls-refused={controls} honest-variants={accepted} composition-facts={composition_facts}")
+    devloop_observations.record(casesObserved=result["receipt"], bytesObserved=result["bytes"], negativeControlsRefused=controls)
+
+
 def http_launch_text(url: str) -> str:
     """Serialize only through the schema-generated launch binding."""
     encoded = url.encode("ascii")
@@ -1317,7 +1375,8 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "zenoh", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
+    parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their mutated evidence, without QEMU or a listener")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -1342,6 +1401,8 @@ def main() -> None:
         fail(f"run from repository root: {ROOT}")
     if arguments.arm == "http-public" and not arguments.allow_public:
         fail("public HTTP requires explicit --allow-public; unavailable public access is not a pass")
+    if arguments.controls_only and arguments.arm != "zenoh-external":
+        fail("--controls-only requires --arm zenoh-external")
     if arguments.http_case is not None and arguments.arm != "http":
         fail("--http-case requires --arm http")
     if arguments.arm == "http":
@@ -1455,6 +1516,21 @@ def main() -> None:
     if arguments.arm == "zenoh":
         run_zenoh_arm(arguments.transcript)
         print("seL4 zenoh plane check: two nodes exchanged four samples over one Zenoh Profile 0 session, byte-exact against the host reference, with exactly the declared authority and every denial observed")
+    if arguments.arm == "zenoh-external" and arguments.controls_only:
+        contract = zenoh_exchange.demo()
+        try:
+            samples, accepted, mutations = zenoh_capture.controls(contract)
+            facts, composition = zenoh_capture.external_controls()
+            receipts_accepted, receipts_refused = zenoh_capture.receipt_controls(contract)
+            zenoh_capture.check_pins(contract)
+            zenoh_exchange.reference_self_test(ROOT / "components" / "lib" / "src" / "zenoh_profile0" / "vectors.txt")
+        except (zenoh_capture.CaptureError, zenoh_exchange.ExchangeError, zenoh_exchange.zenoh_wire.WireError) as error:
+            fail(str(error))
+        print(f"zenoh external judges: {samples} samples on an honest capture, {accepted} honest variants accepted, {mutations} mutated captures and in-memory receipts refused, {receipts_accepted} listener records accepted and {receipts_refused} refused by the contract's decoder, {facts} authority facts on an honest composition, {composition} mutations refused")
+        return
+    if arguments.arm == "zenoh-external":
+        run_zenoh_external_arm(arguments.transcript)
+        print("seL4 zenoh external check: the guest connected out over TCP to a stock eclipse-zenoh 1.0.0 listener, which delivered all four samples, and the capture holds exactly that one connection")
     if arguments.arm in ("tcp", "all"):
         mac = check_tcp_fixture()
         image = build_image(TCP_CLOSURE)

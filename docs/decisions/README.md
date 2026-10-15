@@ -67,3 +67,7 @@ readable and link to the decision that replaced them.
   a link declared in a fixed mode with no heap or a heap mode where the component supplies the
   storage a fragmented message is reassembled into, judged by a contract that sets no size of its
   own, against the fragments a stock eclipse-zenoh 1.0.0 peer wrote.
+- [Zenoh Profile 0 guest connecting out to a stock listener](zenoh-external-listener.md) —
+  proposed; the guest opens one TCP connection over a NIC to a stock eclipse-zenoh 1.0.0
+  listener on the host, judged from the listener's own record, a packet capture and the host
+  wire reference, with the composition and guest left to the implementation.

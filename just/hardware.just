@@ -75,6 +75,16 @@ zenoh_links_check:
 rpi5_ros2_zenoh_check: sel4_pin_check zenoh_composition_check zenoh_encoder_check zenoh_session_check zenoh_cdr_check zenoh_transport_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm zenoh
 
+# The demo's guest connects out over a NIC to a stock eclipse-zenoh 1.0.0 listener on the
+# host, built from a hash-pinned wheel into build/zenoh-external. The listener's own record,
+# a packet capture holding exactly one TCP connection to 10.0.2.2:17447 and no DNS or UDP,
+# and the guest's report are judged against one another and the host wire reference.
+# Needs the wheel from a registry, so it is explicit and not in CI or any aggregate. Fails
+# until the sel4-zenoh-external composition (generation 169) lands.
+[group('hardware')]
+zenoh_external_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm zenoh-external
+
 [group('hardware')]
 rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check rpi5_ros2_demo_contract_v2_check
     python3 scripts/check/check-rpi5-artifacts.py
