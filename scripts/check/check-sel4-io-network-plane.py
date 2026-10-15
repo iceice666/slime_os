@@ -1376,7 +1376,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
-    parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their corrupted evidence, without QEMU or a listener")
+    parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their mutated evidence, without QEMU or a listener")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -1526,7 +1526,7 @@ def main() -> None:
             zenoh_exchange.reference_self_test(ROOT / "components" / "lib" / "src" / "zenoh_profile0" / "vectors.txt")
         except (zenoh_capture.CaptureError, zenoh_exchange.ExchangeError, zenoh_exchange.zenoh_wire.WireError) as error:
             fail(str(error))
-        print(f"zenoh external judges: {samples} samples on an honest capture, {accepted} honest variants accepted, {mutations} corrupted captures and in-memory receipts refused, {receipts_accepted} listener records accepted and {receipts_refused} refused by the contract's decoder, {facts} authority facts on an honest composition, {composition} mutations refused")
+        print(f"zenoh external judges: {samples} samples on an honest capture, {accepted} honest variants accepted, {mutations} mutated captures and in-memory receipts refused, {receipts_accepted} listener records accepted and {receipts_refused} refused by the contract's decoder, {facts} authority facts on an honest composition, {composition} mutations refused")
         return
     if arguments.arm == "zenoh-external":
         run_zenoh_external_arm(arguments.transcript)
