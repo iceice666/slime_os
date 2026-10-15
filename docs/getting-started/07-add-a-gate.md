@@ -6,7 +6,9 @@ are allowed to add one, and the exact files a new gate touches. It is the
 missing half of every change here — code without an observing gate is a claim,
 not a behavior.
 
-`AGENTS.md`'s "Verification code discipline" section is the rule; this page is
+The `verification-checkers` skill
+([`.agents/skills/verification-checkers/SKILL.md`](../../.agents/skills/verification-checkers/SKILL.md))
+is the rule, summarized under "Verification code discipline" in `AGENTS.md`; this page is
 the walk-through. Read the rule first, because most of the time the correct
 answer is **extend an existing gate**, not add one.
 
@@ -185,8 +187,8 @@ just component_spec_check
 just docs_check          # the new recipe name is now referenced from docs
 ```
 
-Then add the recipe to `AGENTS.md`'s command list if it is a gate other
-people will be routed to, and to the owning `docs/architecture/` page's
+Then add the recipe to [`docs/reference/just-targets.md`](../reference/just-targets.md)
+if it is a gate other people will be routed to, and to the owning `docs/architecture/` page's
 "Verification" list.
 
 ## Writing good markers
