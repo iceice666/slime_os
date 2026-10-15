@@ -24,6 +24,7 @@ pub mod fragment;
 pub mod limits;
 pub mod reassembly;
 pub mod session;
+pub mod tables;
 
 use slime_proto::zenoh_profile as p;
 
