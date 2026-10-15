@@ -477,7 +477,15 @@ impl<'a> FrameEncoder<'a> {
 
 /// The 2-byte little-endian stream length prefix for a batch of `batch_len`.
 pub fn stream_prefix(batch_len: usize) -> Result<[u8; STREAM_LENGTH_BYTES], EncodeError> {
-    if batch_len == 0 || batch_len > MAX_BATCH_BYTES {
+    stream_prefix_max(batch_len, MAX_BATCH_BYTES)
+}
+
+/// The stream length of a batch body of `batch_len` bytes, none longer than `max`.
+pub fn stream_prefix_max(
+    batch_len: usize,
+    max: usize,
+) -> Result<[u8; STREAM_LENGTH_BYTES], EncodeError> {
+    if batch_len == 0 || batch_len > max {
         return Err(EncodeError::StreamLength);
     }
     let length = u16::try_from(batch_len).map_err(|_| EncodeError::StreamLength)?;
@@ -486,7 +494,12 @@ pub fn stream_prefix(batch_len: usize) -> Result<[u8; STREAM_LENGTH_BYTES], Enco
 
 /// Copies `batch` behind its stream length prefix and returns the bytes written.
 pub fn stream_batch(out: &mut [u8], batch: &[u8]) -> Result<usize, EncodeError> {
-    let prefix = stream_prefix(batch.len())?;
+    stream_batch_max(out, batch, MAX_BATCH_BYTES)
+}
+
+/// Copies `batch`, no longer than `max`, behind its stream length prefix.
+pub fn stream_batch_max(out: &mut [u8], batch: &[u8], max: usize) -> Result<usize, EncodeError> {
+    let prefix = stream_prefix_max(batch.len(), max)?;
     let total = STREAM_LENGTH_BYTES + batch.len();
     let (head, body) = out
         .get_mut(..total)

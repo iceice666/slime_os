@@ -171,6 +171,14 @@ impl<const N: usize, const K: usize> SlotTable<N, K> {
         }
     }
 
+    /// The first slot a predicate accepts. A scan, for the lookups that are not by id.
+    pub fn find_by(&self, accept: impl Fn(u64, &[u8]) -> bool) -> Option<usize> {
+        if self.used == 0 {
+            return None;
+        }
+        (0..N).find(|&index| self.get(index).is_some_and(|(id, key)| accept(id, key)))
+    }
+
     /// The slot whose key is `key`. A scan, for the one lookup that is not by id.
     pub fn find_key(&self, key: &[u8]) -> Option<usize> {
         if self.used == 0 {

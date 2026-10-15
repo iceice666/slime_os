@@ -808,21 +808,24 @@ pub fn decode_batch_with<'a>(batch: &'a [u8], bounds: &Bounds) -> Result<Message
 /// caller loops: push, drain every complete batch, push the remainder. A prefix
 /// is judged as soon as both its bytes have arrived, wherever the chunk
 /// boundaries fall.
-pub struct StreamFramer {
-    buffer: [u8; STREAM_LENGTH_BYTES + MAX_BATCH_BYTES],
+pub struct StreamFramerOf<const N: usize> {
+    buffer: [u8; N],
     len: usize,
 }
 
-impl Default for StreamFramer {
+/// The first release's framer: a 512-byte batch and its two-byte length.
+pub type StreamFramer = StreamFramerOf<{ STREAM_LENGTH_BYTES + MAX_BATCH_BYTES }>;
+
+impl<const N: usize> Default for StreamFramerOf<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StreamFramer {
+impl<const N: usize> StreamFramerOf<N> {
     pub const fn new() -> Self {
         Self {
-            buffer: [0; STREAM_LENGTH_BYTES + MAX_BATCH_BYTES],
+            buffer: [0; N],
             len: 0,
         }
     }
@@ -850,7 +853,7 @@ impl StreamFramer {
         if length == 0 {
             return Err(Refusal::EmptyBatch);
         }
-        if length > MAX_BATCH_BYTES {
+        if length > N.saturating_sub(STREAM_LENGTH_BYTES) {
             return Err(Refusal::LengthExceedsBatch);
         }
         let end = STREAM_LENGTH_BYTES + length;
