@@ -29,9 +29,12 @@ line, and the input or reader that would be misled. The absence of an
 acceptance rationale neither makes such a PR unreviewable nor excuses a
 defect in it.
 
-- A finding names the requirement, invariant, or rule in `AGENTS.md` that
-  the diff breaks, the file and line, and the input that produces the wrong
-  result.
+- A finding names what the diff breaks — a requirement or acceptance of the
+  landed item, an invariant the code or its contract states, or a
+  repository rule in `AGENTS.md` — with the file and line and the input
+  that produces the wrong result. An item-specific acceptance (an exact
+  refusal case, a pinned count) grounds a finding on its own; no
+  repository-wide rule needs to be broken as well.
 - An exam's case count and control floor belong to the planning item: "this
   boundary could also be exercised" is not a finding unless the acceptance
   rationale claims that boundary, because every added case re-admits the
