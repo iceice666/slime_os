@@ -259,9 +259,10 @@ payloads too large to ride inline in an IPC message.
 badges, endpoint slots, and a timer, dispatched in bounded order.
 → [runtime authority](architecture/runtime-authority.md).
 
-**Work item.** The canonical unit of planned work: one file under
-`.tasks/items/` with a UUID identity, managed by **MyQue**. An ordinary prose
-item closes by `myque close`; a **Spec-driven item** closes through devloop.
+**Work item.** The canonical unit of planned work, with a UUID identity and
+managed by **MyQue**: a live item is `.tasks/items/<UUID>.md`, and a retired
+one survives as `.tasks/terminal/<UUID>.json`. An ordinary prose item closes
+by `myque close`; a **Spec-driven item** closes through devloop.
 → `CONTRIBUTING.md` (Where work lives).
 
 **Zutai.** The schema and generation language every contract is written in
