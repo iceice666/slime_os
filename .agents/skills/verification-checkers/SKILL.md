@@ -65,10 +65,12 @@ judges on every boundary it claims:
   the pinned corpus judge and the controls that protect what the subset
   relies on; an implementation must not be able to alter a pinned refusal
   on a path the narrower gate never looks at.
-- A record a judge consumes from outside (a listener's receipt, a peer's
-  capture) is read only through its Zutai contract's decoder, and its
-  presence is recorded from the event that produced it, not from a poll
-  that may miss a short-lived peer.
+- A repository-owned record a judge consumes from outside (a listener's
+  receipt) is read only through its Zutai contract's decoder. An externally
+  specified capture (a PCAP, an Ethernet frame) has no Slime contract and is
+  parsed directly by its standard's layout, as `scripts/lib/zenoh_capture.py`
+  reads PCAP. Either way, its presence is recorded from the event that
+  produced it, not from a poll that may miss a short-lived peer.
 
 ## Pinned external artifacts
 
@@ -82,7 +84,8 @@ rebuild is seconds, the cost of a forged cache is a false pass.
 ## Closures and recipes
 
 Adding or editing any recipe under `just/` or `Justfile` changes every
-closure's `just-recipes` identity: regenerate the closures
+closure's identity — through the `just-recipes` input for the `just/` tree
+and the separate `justfile` input for `Justfile`: regenerate the closures
 (`python3 scripts/generate/generate-system-image-closures.py`) and refresh
 the test-run records
 (`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`,
@@ -96,6 +99,13 @@ current. Confirm either way with
 `python3 scripts/generate/generate-system-image-closures.py --check`.
 
 A checker, recipe, pin, or fixture under `.devloop/policy.json` `codePaths`
-stales the evidence recorded against it. A change to one is a planning
-change that lands with its item, and the item's acceptances bind only
-closures the change does not edit (see `work-item-lifecycle`).
+stales the evidence recorded against it. Where it lands depends on its
+`scripts/lib/pr_scope.py` class:
+
+- A grader path (`scripts/`, `just/`, `Justfile`, `.devloop/`) is a planning
+  change that lands with its item, and the item's acceptances bind only
+  closures the change does not edit (see `work-item-lifecycle`).
+- Any other `codePaths` entry — a product pin or fixture such as
+  `sel4/pins.toml` or `verification/zenoh-xcheck/Cargo.lock` — is product:
+  `scripts/check/check-pr-scope.py` refuses it beside a new item, so it
+  implements an item already on `main`.
