@@ -52,8 +52,8 @@ consolidation PR's `## Not done` section
 --json number,title,mergedAt,body`, then take the most recently merged one
 whose title starts with `docs(repo/consolidate)`). Every line marked
 `Deferred:` names an item, PR, or page to process in this run as if it
-were inside the window. Lines that give a reason it will never be done (a
-cancelled item, a process PR) are not carried.
+were inside the window, whatever kind of PR it is; carry every such line.
+Not done lines without the marker are not carried.
 
 ```sh
 git fetch origin main
@@ -162,8 +162,8 @@ For each `done` item and each product PR in the window:
    refuses, correct it.
 3. **Invariants.** A lasting property of the subsystem (a refused input
    changes no state; a queue never holds more than its declared capacity)
-   becomes a claim on the page. Claims come from two sources, and both must
-   be owned:
+   becomes a claim on the page. Claims come from three sources, and all
+   must be owned:
    - a requirement of a `done` item whose acceptance has passing evidence,
      owned by the recipe that evidence ran. An evidence entry names its gate
      and an `inputs:` digest, not the recipe: the digest is the SHA-256 of
@@ -176,6 +176,9 @@ For each `done` item and each product PR in the window:
      Cite that assertion with the recipe. If nothing in the recipe asserts
      it, the requirement is not a claim; it goes under "Needs a person" as
      unverified;
+   - a property a `done` legacy prose item's `## Closure evidence` states,
+     owned by the test or recipe that section names, once you have found
+     where that test or recipe asserts the property, as above;
    - a review finding fixed with a test, owned by that test. Decide whether
      it states a lasting property or a one-off defect, and promote only the
      lasting ones.
@@ -206,7 +209,9 @@ For each `done` item and each product PR in the window:
    `## Records` index, and list it under "Needs a person".
 
 Process and verification PRs produce no architecture claims. They are read
-only for vocabulary (Pass 2) and for decisions about the product.
+only for vocabulary (Pass 2) and for decisions about the product, and a
+durable product choice in one, including its `## Decisions` section, goes
+through step 5 like a product PR's.
 
 ## Pass 2: lint
 
@@ -322,7 +327,10 @@ record every PR carries:
 
 A person answers "Needs a person" entries in the PR thread. Apply each answer
 in the same PR:
-- an accepted decision changes its record to `accepted`;
+- an accepted decision changes its record to `accepted`, unless it came from
+  a planning PR whose implementation and evidence have not landed. That
+  record stays `proposed`, with the person's answer noted under it, as
+  `change-records` requires;
 - a claim the person drops stays out of the page, or is removed if it was
   already there;
 - a claim the person keeps but no one can own stays out of the page, and
