@@ -652,7 +652,8 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
 
     /// What a received batch can raise, judged without applying it so a link can wait until its queue
     /// and heap have room: the most notices, and how many of them are samples. A batch the decoder
-    /// refuses raises none.
+    /// refuses raises none, and one that raises more than the session's events can hold is reported at
+    /// the cap, so the session, not the link, refuses it and names the cause.
     pub fn events_needed(&self, batch: &[u8]) -> (usize, usize) {
         if self.params.fragments && batch.first().copied().is_some_and(is_fragment) {
             let last = batch.first().is_some_and(|header| header & 0x40 == 0);
@@ -674,7 +675,7 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                         _ => {}
                     }
                 }
-                (events, samples)
+                (events.min(E), samples.min(E))
             }
             Ok(Message::OpenSyn { .. } | Message::OpenAck { .. } | Message::Close { .. }) => (1, 0),
             _ => (0, 0),
@@ -731,6 +732,11 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
             self.params.announced,
             self.own_cookie()?,
         )?;
+        // The reply is a batch and cannot be fragmented: the peer must have said it accepts it, stream
+        // length included.
+        if sent + STREAM_LENGTH_BYTES > usize::from(batch_size) {
+            return Err(SessionError::Decode(Refusal::LengthExceedsBatch));
+        }
         self.peer_batch = usize::from(batch_size);
         self.state = State::AwaitOpenSyn;
         Ok(Outcome::sending(sent))
@@ -750,6 +756,9 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
             .get_mut(..cookie.len())
             .ok_or(SessionError::Decode(Refusal::OverBound))?;
         let sent = encode::open_syn(out, self.lease_ms, self.tx_sn, cookie)?;
+        if sent + STREAM_LENGTH_BYTES > usize::from(batch_size) {
+            return Err(SessionError::Decode(Refusal::LengthExceedsBatch));
+        }
         slot.copy_from_slice(cookie);
         self.cookie_len = cookie.len();
         self.peer_batch = usize::from(batch_size);

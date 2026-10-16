@@ -2284,3 +2284,107 @@ fn a_frame_refused_for_its_size_leaves_no_alias_behind() {
         ),
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Second review round: a sample the heap cannot keep, a reply the peer cannot take, and an over-cap frame.
+
+#[test]
+fn a_heap_link_without_a_cell_refuses_a_whole_sample_it_cannot_keep() {
+    // A heap shorter than one message still has one cell, and a Put that fits a FRAME would be accepted,
+    // advance the sequence number and then find nowhere to put its sample.
+    let mut pair: HeapPair = pair_of(&HEAP, 0);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    let sn = pair.next_peer_sn();
+    pair.inject(&frame(sn, &[Parts::demo(12).bytes()]));
+    let result = pair.pump_b(TIME);
+    assert!(
+        matches!(result, Err(Error::Session(SessionError::OutOfMemory))),
+        "the sample is refused, not lost: {result:?}"
+    );
+}
+
+#[test]
+fn a_handshake_reply_longer_than_the_peers_batch_is_refused_before_it_changes_anything() {
+    use crate::zenoh_profile0::session::State;
+    let pair: HeapPair = pair_of(&HEAP, 0);
+    let mut buf = std::vec![0u8; 256];
+    let mut out = std::vec![0u8; 2048];
+    // The listener's INIT_ACK: the batch it needs from the peer is its length and the stream length.
+    let length = encode::init_syn(&mut buf, exam_zid(), 2048).expect("syn");
+    let mut probe = pair.b.session().clone();
+    let reply = probe
+        .on_batch(&buf[..length], 0, &mut out)
+        .expect("accepted")
+        .sent;
+    for (peer, accepted) in [(reply + 1, false), (reply + 2, true), (1, false)] {
+        let length = encode::init_syn(&mut buf, exam_zid(), peer as u16).expect("syn");
+        let mut listener = pair.b.session().clone();
+        let result = listener.on_batch(&buf[..length], 0, &mut out);
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "a listener told {peer}: {result:?}"
+        );
+        if !accepted {
+            assert_eq!(
+                listener.state(),
+                State::Idle,
+                "a refused INIT_SYN changes nothing"
+            );
+            assert_eq!(listener.peer_batch(), usize::from(u16::MAX));
+        }
+    }
+    // The connector's OPEN_SYN, answering an INIT_ACK that announces the peer's batch.
+    let mut probe_ack = |peer: usize| {
+        let mut ack = std::vec![0u8; 256];
+        let length =
+            encode::init_ack(&mut ack, exam_zid(), peer as u16, exam_cookie()).expect("ack");
+        ack.truncate(length);
+        let mut connector = pair.a.session().clone();
+        connector.connect(0, &mut out).expect("connect");
+        let result = connector.on_batch(&ack, 0, &mut out).map(|o| o.sent);
+        (result, connector.state())
+    };
+    let (open_syn, _) = probe_ack(2048);
+    let open_syn = open_syn.expect("accepted");
+    for (peer, accepted) in [(open_syn + 1, false), (open_syn + 2, true)] {
+        let (result, state) = probe_ack(peer);
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "a connector told {peer}: {result:?}"
+        );
+        if !accepted {
+            assert_eq!(
+                state,
+                State::AwaitInitAck,
+                "a refused INIT_ACK changes nothing"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_frame_over_the_events_a_batch_may_yield_is_refused_by_the_session_for_its_own_reason() {
+    // HEAP: four events a batch, a queue of eight. Nine Puts exceed both, and the session names the cause.
+    let mut pair: HeapPair = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    let puts: Vec<Vec<u8>> = (0..9).map(|_| Parts::demo(12).bytes()).collect();
+    let sn = pair.next_peer_sn();
+    let body = frame(sn, &puts);
+    let mut session = pair.b.session().clone();
+    let mut out = std::vec![0u8; 2048];
+    let by_session = session
+        .on_batch(&body, TIME, &mut out)
+        .expect_err("refused");
+    assert_eq!(session_class(&by_session), "TooManyMessages");
+    pair.inject(&body);
+    let by_link = pair.pump_b(TIME).expect_err("refused");
+    assert_eq!(
+        class(&by_link),
+        "TooManyMessages",
+        "the link and its session agree: {by_link:?}"
+    );
+}

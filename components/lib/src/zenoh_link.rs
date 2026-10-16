@@ -725,6 +725,11 @@ impl<
                 return Ok(());
             }
             let heap_mode = self.session.params().fragments;
+            // A heap link keeps every sample in the heap it was lent, so a sample the heap cannot hold is
+            // refused before the session applies it and moves its sequence number.
+            if heap_mode && samples > 0 && heap.len() < self.session.params().message_limit {
+                return Err(self.fail(Error::Session(SessionError::OutOfMemory)));
+            }
             // A heap link waits for a free cell for every sample the batch can yield: each cell holds a
             // sample the owner has not taken.
             let cells_needed = if heap_mode { samples } else { 0 };
