@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-matrix";
-  imageClosureIdentity = "edb3b2d51eac8dad1bc3c3871c215d6e1f93c6497e975ff02737ed38e8fab739";
+  imageClosureIdentity = "dccec4333cb6ea26b84f2dc0127fb10038829bcca530d73153d9d26d7c11595f";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
