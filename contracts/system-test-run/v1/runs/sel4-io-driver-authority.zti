@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-driver-authority";
-  imageClosureIdentity = "2aa573a1f1848ff25538a5c47d32bdc76e7f2dbe8b9b4e0d5419cd0093ce969d";
+  imageClosureIdentity = "34c4bb047fdb5f3103e5eaa83364f0a31711c60bacd7167dfc8381ff43ceac28";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [

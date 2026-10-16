@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-mavlink";
-  imageClosureIdentity = "1648fe161aeba7d5bffaf7f63bfc8af1f5a22fbb843947cec7f8ab118c2748e7";
+  imageClosureIdentity = "4492419425f8e0b40f73c138c6af89254f9e8a9a66d0275da3c1c08c9d60b9fc";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
