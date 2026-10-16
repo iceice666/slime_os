@@ -250,6 +250,12 @@ impl<
         if params.bounds.batch + STREAM_LENGTH_BYTES != FRAMED {
             return Err(SessionError::InvalidConfig);
         }
+        // A fixed link copies each payload into its notice, so a notice smaller than the declared payload
+        // would cut a valid sample short without a word. A heap link keeps samples in the heap and its
+        // notices carry none.
+        if !params.fragments && params.bounds.payload > P {
+            return Err(SessionError::InvalidConfig);
+        }
         Ok(Self {
             io,
             session: SessionOf::with_params(role, config, params)?,

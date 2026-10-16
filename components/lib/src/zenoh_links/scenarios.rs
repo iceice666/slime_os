@@ -2388,3 +2388,107 @@ fn a_frame_over_the_events_a_batch_may_yield_is_refused_by_the_session_for_its_o
         "the link and its session agree: {by_link:?}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Third review round: a fixed link whose notice array is smaller than its payload, and an OPEN_ACK
+// the peer cannot take.
+
+#[test]
+fn a_fixed_link_whose_notice_cannot_hold_its_payload_is_refused_at_construction() {
+    // LARGE declares 1024 payload bytes; a notice of 12 would truncate a valid sample without a word.
+    let params = Params::from_limits(&LARGE);
+    let build = |_: ()| {
+        let a_to_b = Rc::new(RefCell::new(Pipe::default()));
+        let b_to_a = Rc::new(RefCell::new(Pipe::default()));
+        LinkOf::<Scripted, 2048, 4, 5, 129, 12, 8, 4>::with_params(
+            Scripted {
+                rx: b_to_a,
+                tx: a_to_b,
+            },
+            Role::Listener,
+            &config(exam_zid(), exam_cookie(), 2000),
+            params,
+            1,
+        )
+    };
+    assert!(matches!(build(()), Err(SessionError::InvalidConfig)));
+    // The right size is built, and one byte more is too: a notice may be larger than the payload.
+    let ok = |payload: usize| match payload {
+        1024 => LinkOf::<Scripted, 2048, 4, 5, 129, 1024, 8, 4>::with_params(
+            Scripted {
+                rx: Rc::default(),
+                tx: Rc::default(),
+            },
+            Role::Listener,
+            &config(exam_zid(), exam_cookie(), 2000),
+            params,
+            1,
+        )
+        .is_ok(),
+        _ => LinkOf::<Scripted, 2048, 4, 5, 129, 1025, 8, 4>::with_params(
+            Scripted {
+                rx: Rc::default(),
+                tx: Rc::default(),
+            },
+            Role::Listener,
+            &config(exam_zid(), exam_cookie(), 2000),
+            params,
+            1,
+        )
+        .is_ok(),
+    };
+    assert!(ok(1024) && ok(1025));
+}
+
+#[test]
+fn an_open_ack_longer_than_the_peers_batch_is_refused_before_the_listener_opens() {
+    use crate::zenoh_profile0::STREAM_LENGTH_BYTES;
+    use crate::zenoh_profile0::session::{SessionOf, State};
+    // A one-byte ZID and cookie make the INIT_ACK as short as it gets; a five-byte lease and a five-byte
+    // sequence number make the OPEN_ACK as long as it gets, so the later reply is the longer.
+    let config = Config {
+        zid: &[1],
+        lease_ms: 1 << 30,
+        initial_sn: u32::MAX,
+        cookie: &[1],
+    };
+    let params = Params::from_limits(&HEAP);
+    let listener =
+        SessionOf::<4, 5, 129, 4>::with_params(Role::Listener, &config, params).expect("listener");
+    let mut out = std::vec![0u8; 2048];
+    let mut buf = std::vec![0u8; 256];
+    let mut probe = listener.clone();
+    let length = encode::init_syn(&mut buf, &[1], 2048).expect("syn");
+    let init_ack = probe
+        .on_batch(&buf[..length], 0, &mut out)
+        .expect("ack")
+        .sent;
+    let length = encode::open_syn(&mut buf, 1 << 30, 1000, &[1]).expect("open");
+    let open_ack = probe
+        .on_batch(&buf[..length], 0, &mut out)
+        .expect("open_ack")
+        .sent;
+    assert!(
+        open_ack > init_ack,
+        "the later reply is the longer, or this proves nothing: {init_ack} then {open_ack}"
+    );
+    // A peer that announced exactly what the INIT_ACK needs, and so less than the OPEN_ACK needs.
+    let announced = init_ack + STREAM_LENGTH_BYTES;
+    assert!(open_ack + STREAM_LENGTH_BYTES > announced);
+    let mut listener = listener.clone();
+    let length = encode::init_syn(&mut buf, &[1], announced as u16).expect("syn");
+    listener
+        .on_batch(&buf[..length], 0, &mut out)
+        .expect("an INIT_ACK that fits");
+    let length = encode::open_syn(&mut buf, 1 << 30, 1000, &[1]).expect("open");
+    let result = listener.on_batch(&buf[..length], 0, &mut out);
+    assert!(
+        result.is_err(),
+        "an OPEN_ACK of {open_ack} to a peer that accepts {announced}: {result:?}"
+    );
+    assert_eq!(
+        listener.state(),
+        State::AwaitOpenSyn,
+        "a refused OPEN_SYN changes nothing"
+    );
+}

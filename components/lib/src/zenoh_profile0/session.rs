@@ -780,6 +780,10 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
             return Err(SessionError::CookieMismatch);
         }
         let sent = encode::open_ack(out, self.lease_ms, self.tx_sn)?;
+        // The reply cannot be fragmented either: it must fit the batch the peer announced in its INIT.
+        if sent + STREAM_LENGTH_BYTES > self.peer_batch {
+            return Err(SessionError::Decode(Refusal::LengthExceedsBatch));
+        }
         self.peer_lease_ms = lease_ms;
         self.rx_sn = initial_sn;
         self.state = State::Open;
