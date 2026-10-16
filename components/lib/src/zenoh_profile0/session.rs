@@ -695,7 +695,10 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                         _ => {}
                     }
                 }
-                (events.min(E), samples.min(E))
+                // Capped at the configuration's events, not the array behind them: a frame over it is the
+                // session's to refuse, whatever storage the caller backed it with.
+                let cap = self.params.events.min(E);
+                (events.min(cap), samples.min(cap))
             }
             Ok(Message::OpenSyn { .. } | Message::OpenAck { .. } | Message::Close { .. }) => (1, 0),
             _ => (0, 0),

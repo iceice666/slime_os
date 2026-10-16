@@ -2765,3 +2765,46 @@ fn a_refusal_while_the_configured_notices_are_full_adds_none_beyond_them() {
         "every sample accepted before the refusal is still delivered"
     );
 }
+
+/// Nine Puts in one frame, injected into `pair`: the class the link refuses them with, if it does.
+fn nine_puts_refused_as<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+    const E: usize,
+>(
+    mut pair: Pair<F, K, S, B, P, Q, E>,
+) -> Option<String> {
+    pair.open();
+    pair.declare(1, codec::KEY);
+    let puts: Vec<Vec<u8>> = (0..9).map(|_| Parts::demo(12).bytes()).collect();
+    let body = frame(pair.next_peer_sn(), &puts);
+    assert!(
+        body.len() < F - 2,
+        "the frame fits the batch, so only the event count is in question"
+    );
+    pair.inject(&body);
+    pair.pump_b(TIME).err().map(|error| class(&error))
+}
+
+#[test]
+fn a_frame_over_the_configured_events_is_refused_by_the_session_on_larger_event_storage() {
+    // HEAP declares four events a batch and eight notices. Storage for nine events, with eight or nine
+    // notices, is spare: nine Puts are still over the configuration, and the session, not the link's queue
+    // check or an endless wait, names the cause.
+    let eight: Pair<2048, 4, 5, 129, 0, 8, 9> = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    let nine: Pair<2048, 4, 5, 129, 0, 9, 9> = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    assert_eq!(
+        nine_puts_refused_as(eight).as_deref(),
+        Some("TooManyMessages"),
+        "eight notices of storage"
+    );
+    assert_eq!(
+        nine_puts_refused_as(nine).as_deref(),
+        Some("TooManyMessages"),
+        "nine notices of storage"
+    );
+}
