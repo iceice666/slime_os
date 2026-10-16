@@ -81,7 +81,7 @@ These rules bind every reviewer of a PR — a person, a review bot such as Codex
 - **Consistency.** A finding that restates an open thread is a reply there; one that contradicts an earlier round names it and the evidence that changed. A thread answered with a question or a declared decision waits for the human.
 - **Answering.** Reproduce before fixing; what does not reproduce stays open with what was tried. Declining with a reason is legitimate. Answer a whole round in one push. Re-admit once, never for a suggestion. Nothing blocking means ready. Threads hold the history; the description describes the head.
 - **Triage before fixing.** The author's reply to a round opens with one line per finding: the input that breaks it, whether it changes product behavior or only tooling, documentation or process, and the size of the fix. Fixes follow in the same push.
-- **When the author stops and asks.** The author fixes nothing in a round and asks the human in one PR comment when either holds:
+- **When the author stops and asks.** The author fixes nothing in a round and asks the human in one PR comment, linking [`HUMAN.md`](HUMAN.md), when either holds:
   - a third consecutive round raises a new finding on the same subject. The comment names the subject, the design choice that keeps producing findings, and the decision that would close the whole class (for example: require storage to equal the declared configuration instead of bounding it from below);
   - a non-blocking finding (Codex P2) lands on process or verification text or code: `scripts/`, `.tasks/`, `.devloop/`, `.agents/`, this file, or `docs/` outside `docs/architecture/`. These are collected into one follow-up comment for the human to accept or drop, not fixed in the PR.
 

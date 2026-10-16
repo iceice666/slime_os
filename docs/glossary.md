@@ -107,10 +107,12 @@ and the newest entry decides. → [work-item lifecycle](getting-started/06-work-
 evidence, or inference; recorded in PRs and work items. Hardware claims bind
 to target, revision, and binary identity.
 
-**Exam** (also *grader*). What an acceptance is judged by: the execution
-inputs file, the recipe it names, and the checker and `scripts/lib` judge that
-recipe runs. It lands in a planning PR before the implementation, so an
-implementation cannot change its own exam. → `CONTRIBUTING.md` (Spec-driven items).
+**Exam** (also *grader*). What an acceptance is judged by. For a recipe gate:
+the execution inputs file, the recipe it names, and the checker and
+`scripts/lib` judge that recipe runs; for a human gate: the gate's declaration
+in `.devloop/policy.json` and the typed observations a person supplies. It
+lands in a planning PR before the implementation, so an implementation cannot
+change its own exam. → `CONTRIBUTING.md` (Spec-driven items).
 
 **Fabric.** The typed data plane: graph-declared routes between participants,
 stream/call/operation semantics, QoS, recording. → [typed data fabric](architecture/typed-data-fabric.md).
@@ -219,9 +221,10 @@ vocabulary generated from `contracts/generation/v5/schema.zt`.
 **Root** (`slime-root`). The initial task; owns all dynamic mechanism and is
 part of the trusted computing base. → [trust model](architecture/trust-model.md).
 
-**Run key.** The identifier of one gate execution. Diagnostic receipts and
-their retained output are stored under it, so neither can be attributed to a
-different run. → `contracts/devloop-diagnostics/README.md`.
+**Run key.** The hash of an execution identity, gate, and target: a cache key
+shared by every run of the same identity, not the name of one attempt. Each
+capture gets its own diagnostic receipt, so attempts are told apart by
+receipt path. → `contracts/devloop-diagnostics/README.md`.
 
 **Shared buffer.** Root-minted, budget-bounded pages mappable by several
 holders; the only runtime object mint. → `slime-root/src/shared_buffer.rs`.

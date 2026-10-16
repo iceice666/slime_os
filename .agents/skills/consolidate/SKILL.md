@@ -41,9 +41,15 @@ git fetch origin main
 BASE=$(git log origin/main --grep='^docs(repo/consolidate)' -1 --format=%H)
 # no previous run: BASE=$(git rev-list -1 --before='14 days ago' origin/main)
 git log --format='%h %s' "$BASE"..origin/main                                 # merged PRs
-git log --diff-filter=A --name-only --format= "$BASE"..origin/main -- .tasks/terminal/   # closed items
-gh api "repos/iceice666/slime_os/pulls/<n>/comments?per_page=100"             # review threads, per PR
+git log -p --format= "$BASE"..origin/main -- .tasks/items/ \
+  | awk '/^\+\+\+ b\//{f=substr($2,3)} /^\+state: (done|cancelled)/{print f}' | sort -u   # closed items
+gh api --paginate "repos/iceice666/slime_os/pulls/<n>/comments?per_page=100"  # review threads, per PR
 ```
+
+An item closes when its `state` in `.tasks/items/` becomes `done` or
+`cancelled`; retirement into `.tasks/terminal/` is a separate, later
+workflow, so additions there are not the closures of the window. Without
+`--paginate`, `gh api` returns only the first page of threads.
 
 Read review threads in full, including the author's replies: a reply that
 says what was reproduced, what changed, and which test now fails without the
@@ -122,7 +128,8 @@ the pages with the most product change and list the rest under "Not done" for
 the next run.
 
 The description is written for a person who did not read any of the window's
-PRs. Use this shape and nothing longer:
+PRs. Use this shape and nothing longer; the last two sections are the record
+every PR carries:
 
 ```markdown
 ## What changed in the system
@@ -145,6 +152,16 @@ PRs. Use this shape and nothing longer:
 ## Not done
 
 <!-- Items or pages skipped and why. -->
+
+## Verification
+
+<!-- `just docs_check` and its observed result, and that no runtime tests
+     were run. -->
+
+## Known limits
+
+<!-- What this run did not establish: claims left unverified, threads not
+     read, pages not checked against code. -->
 ```
 
 A person answers "Needs a person" entries in the PR thread. Apply each answer

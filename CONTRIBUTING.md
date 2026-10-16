@@ -326,7 +326,8 @@ checkout or network access is required for current docs checks. Run
 
 Review conduct — what a reviewer may post, how severity is assigned, and how an
 author answers or declines a finding — is set in [AGENTS.md](AGENTS.md) under
-"Code review"; it binds people, review bots, and agents alike.
+"Code review"; it binds people, review bots, and agents alike. When an author
+stops and asks, [HUMAN.md](HUMAN.md) says how to answer.
 
 **Merge means implementation landed, not that work is complete.** Evaluate the
 item's actual exit conditions: QEMU gates, cross-architecture runs, physical
