@@ -54,6 +54,10 @@ pub struct Params {
     pub per_side: usize,
     /// The most events one received batch can yield; the session's event storage must hold them.
     pub events: usize,
+    /// The key aliases the peer may declare.
+    pub aliases: usize,
+    /// The samples the owner may hold unread; the link queues two notices for each.
+    pub samples: usize,
 }
 
 impl Params {
@@ -66,6 +70,8 @@ impl Params {
         message_limit: 0,
         per_side: 1,
         events: MAX_EVENTS,
+        aliases: 1,
+        samples: MAX_EVENTS,
     };
 
     /// The parameters a limits declaration describes.
@@ -83,6 +89,8 @@ impl Params {
             message_limit: usize::try_from(limits.message_bytes()).unwrap_or(usize::MAX),
             per_side: limits.max_subscribers,
             events: limits.events_per_batch(),
+            aliases: limits.max_keys,
+            samples: limits.outstanding_samples,
         }
     }
 }
@@ -359,7 +367,7 @@ fn subscribed_to<const S: usize, const B: usize>(subs: &SlotTable<S, B>, key: &[
 #[derive(Clone, Debug)]
 pub struct SessionOf<
     const K: usize = 1,
-    const S: usize = 1,
+    const S: usize = 2,
     const B: usize = MAX_KEY_BYTES,
     const E: usize = MAX_EVENTS,
 > {
@@ -411,7 +419,13 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
         config: &Config<'_>,
         params: Params,
     ) -> Result<Self, SessionError> {
-        if params.bounds.key > B || params.events > E {
+        // The tables must hold what the configuration declares: our own subscriber and the peer's, and the
+        // peer's aliases. A session whose storage is smaller would refuse what its limits promise.
+        if params.bounds.key > B
+            || params.events > E
+            || params.aliases > K
+            || params.per_side + 1 > S
+        {
             return Err(SessionError::InvalidConfig);
         }
         let mut scratch = [0u8; 2 * MAX_BATCH_BYTES];

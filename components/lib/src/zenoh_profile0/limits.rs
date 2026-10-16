@@ -193,6 +193,16 @@ impl Limits {
         if self.name.is_empty() || self.name.len() > 16 {
             return Err(LimitsError::Name);
         }
+        // A size is judged before any sum is made from it, so one that is far past the wire's widths is
+        // refused as a size and not as an overflow.
+        if self.payload_bytes < 1
+            || self.payload_bytes > MAX_PAYLOAD_LENGTH_BYTES
+            || self.key_bytes < 1
+            || self.key_bytes > MAX_KEY_LENGTH_BYTES
+            || self.attachment_bytes != REQUIRED_ATTACHMENT_BYTES
+        {
+            return Err(LimitsError::Size);
+        }
         if self.batch_bytes < HANDSHAKE_BYTES + STREAM_LENGTH_BYTES
             || self.batch_bytes > DATA_BYTES
             || self.declaration_bytes() > self.batch_bytes

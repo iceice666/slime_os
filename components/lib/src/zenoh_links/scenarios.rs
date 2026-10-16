@@ -2492,3 +2492,162 @@ fn an_open_ack_longer_than_the_peers_batch_is_refused_before_the_listener_opens(
         "a refused OPEN_SYN changes nothing"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Fourth review round: a refusal when the queue is full, a fragment run that overwrites a held sample,
+// capacities a link is not checked against, a default that does not fit its own demo, and arithmetic that
+// overflows before it is guarded.
+
+#[test]
+fn a_refusal_while_the_notice_queue_is_full_keeps_every_notice_already_queued() {
+    // HEAP: a queue of eight. Fill it with samples the owner has not taken, then feed garbage.
+    let mut pair: HeapPair = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    for index in 0..8 {
+        pair.send(codec::KEY, &distinct_payload(12, index), 10);
+    }
+    assert_eq!(pair.b.notices_queued(), 8);
+    pair.inject(&[0xff, 0xff, 0xff]);
+    let _ = pair.pump_b(TIME);
+    assert!(
+        pair.b.notices_queued() <= 8,
+        "the queue never holds more than it has room for"
+    );
+    let mut samples = 0;
+    while let Some(notice) = pair.b.next_notice() {
+        if let Notice::SampleStored(sample) = notice {
+            assert_eq!(
+                sample.payload(&pair.heap_b),
+                distinct_payload(12, samples),
+                "sample {samples} is intact"
+            );
+            samples += 1;
+        }
+    }
+    assert_eq!(
+        samples, 8,
+        "every sample accepted before the refusal is still delivered"
+    );
+}
+
+#[test]
+fn the_first_fragment_of_a_run_waits_for_a_cell_when_every_cell_holds_a_sample() {
+    // Exactly one cell, held by a sample whose notice is still queued: a second message must not be joined
+    // over it.
+    let mut pair: HeapPair = pair_of(&HEAP, HEAP.heap_bytes as usize / 9);
+    let _ = &mut pair;
+    let one_cell = HEAP.message_bytes() as usize;
+    let mut pair: HeapPair = pair_of(&HEAP, one_cell);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    let first = distinct_payload(5000, 1);
+    pair.send(codec::KEY, &first, 10);
+    assert_eq!(pair.b.notices_queued(), 1);
+    let second = distinct_payload(5000, 2);
+    let message = Parts::demo(5000)
+        .with(|p| p.payload = second.clone())
+        .bytes();
+    let sn = pair.next_peer_sn();
+    for body in codec::split(&message, 2048, sn).into_iter().take(1) {
+        pair.inject(&body);
+        pair.pump_b(TIME + 1).expect("the first fragment waits");
+    }
+    let Some(Notice::SampleStored(held)) = pair.b.next_notice() else {
+        panic!("the first sample is still queued");
+    };
+    assert_eq!(
+        held.payload(&pair.heap_b),
+        first,
+        "the held sample was not overwritten by the next message"
+    );
+}
+
+#[test]
+fn a_link_whose_tables_or_queue_are_smaller_than_its_configuration_is_refused() {
+    let params = Params::from_limits(&LARGE);
+    let build = |keys_and_subs: bool| {
+        let io = || Scripted {
+            rx: Rc::default(),
+            tx: Rc::default(),
+        };
+        let c = config(exam_zid(), exam_cookie(), 2000);
+        if keys_and_subs {
+            LinkOf::<Scripted, 2048, 1, 5, 129, 1024, 8, 4>::with_params(
+                io(),
+                Role::Listener,
+                &c,
+                params,
+                1,
+            )
+            .is_ok()
+        } else {
+            LinkOf::<Scripted, 2048, 4, 5, 129, 1024, 1, 4>::with_params(
+                io(),
+                Role::Listener,
+                &c,
+                params,
+                1,
+            )
+            .is_ok()
+        }
+    };
+    assert!(!build(true), "one alias slot where four are declared");
+    assert!(!build(false), "one notice where eight are held");
+    let io = || Scripted {
+        rx: Rc::default(),
+        tx: Rc::default(),
+    };
+    let c = config(exam_zid(), exam_cookie(), 2000);
+    assert!(
+        LinkOf::<Scripted, 2048, 4, 5, 129, 1024, 8, 4>::with_params(
+            io(),
+            Role::Listener,
+            &c,
+            params,
+            1
+        )
+        .is_ok(),
+        "the matching storage is built"
+    );
+}
+
+#[test]
+fn the_default_session_holds_the_demos_subscriber_of_each_side() {
+    use crate::zenoh_profile0::session::SessionOf;
+    let config = Config {
+        zid: &[1],
+        lease_ms: 2000,
+        initial_sn: 0,
+        cookie: &[1],
+    };
+    // `SessionOf` with its defaults must be able to be built for the demo and hold what the demo declares.
+    let built = SessionOf::<1, 2, 129, 4>::with_params(Role::Listener, &config, Params::DEMO);
+    type Defaulted = SessionOf;
+    let default_built = Defaulted::with_params(Role::Listener, &config, Params::DEMO);
+    assert!(built.is_ok());
+    assert!(default_built.is_ok());
+    // The declared defaults are the first release's: one alias, a slot for each side, the demo's key and events.
+    assert_eq!(
+        core::mem::size_of::<Defaulted>(),
+        core::mem::size_of::<crate::zenoh_profile0::session::Session>()
+    );
+    // A session whose subscriber table cannot hold one slot for each side is refused.
+    let too_small = SessionOf::<1, 1, 129, 4>::with_params(Role::Listener, &config, Params::DEMO);
+    assert!(
+        too_small.is_err(),
+        "one shared slot cannot hold our subscriber and the peer's"
+    );
+}
+
+#[test]
+fn a_key_size_beyond_the_arithmetic_is_refused_as_a_size_and_not_an_overflow() {
+    use crate::zenoh_profile0::limits::{LimitsError, MAX_KEY_LENGTH_BYTES};
+    let mut limits = LARGE;
+    limits.key_bytes = usize::MAX;
+    assert_eq!(limits.check(), Err(LimitsError::Size));
+    limits.key_bytes = usize::MAX - 1;
+    assert_eq!(limits.check(), Err(LimitsError::Size));
+    limits.key_bytes = MAX_KEY_LENGTH_BYTES + 1;
+    assert_eq!(limits.check(), Err(LimitsError::Size));
+}

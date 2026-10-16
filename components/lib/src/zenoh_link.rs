@@ -256,6 +256,10 @@ impl<
         if !params.fragments && params.bounds.payload > P {
             return Err(SessionError::InvalidConfig);
         }
+        // The queue holds two notices for each sample the owner may hold unread.
+        if params.samples.saturating_mul(2) > Q {
+            return Err(SessionError::InvalidConfig);
+        }
         Ok(Self {
             io,
             session: SessionOf::with_params(role, config, params)?,
@@ -343,6 +347,10 @@ impl<
     }
 
     fn push_notice(&mut self, notice: Notice<P>) {
+        // A full queue keeps what it holds: a notice that has nowhere to go is not written over the oldest.
+        if self.notice_len >= Q {
+            return;
+        }
         let at = (self.notice_head + self.notice_len) % Q;
         if let Some(slot) = self.notices.get_mut(at) {
             *slot = Some(notice);
@@ -731,6 +739,15 @@ impl<
                 return Ok(());
             }
             let heap_mode = self.session.params().fragments;
+            // The first fragment of a run is the one that claims the cell the whole message is joined into,
+            // so it counts as a sample for room even though it yields none until the last arrives.
+            let starts_run = heap_mode
+                && body
+                    .first()
+                    .copied()
+                    .is_some_and(crate::zenoh_profile0::fragment::is_fragment)
+                && !self.session.reassembling();
+            let samples = if starts_run { samples.max(1) } else { samples };
             // A heap link keeps every sample in the heap it was lent, so a sample the heap cannot hold is
             // refused before the session applies it and moves its sequence number.
             if heap_mode && samples > 0 && heap.len() < self.session.params().message_limit {
