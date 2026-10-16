@@ -12,6 +12,15 @@
 
 -
 
+## Decisions
+
+<!-- Design choices this PR makes that reach beyond it: what was chosen, the
+     alternative, and who chose it (a named person, or "agent default").
+     A person answers any "agent default" that should have been theirs.
+     Delete if none. -->
+
+-
+
 ## Verification
 
 <!-- Name exact commands/scenarios, observed result, and evidence class
@@ -21,6 +30,13 @@
 | Check / scenario | Observed result | Evidence class / scope |
 |---|---|---|
 | `just ...` | pass | direct |
+
+## New tests
+
+<!-- Test names only, one per line. A reader should learn what this PR
+     guarantees from this list alone. Delete if none. -->
+
+-
 
 ## Related
 

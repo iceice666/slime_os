@@ -20,6 +20,15 @@
 |---|---|
 | | |
 
+## Decisions
+
+<!-- Design choices this PR makes that reach beyond it: what was chosen, the
+     alternative, and who chose it (a named person, or "agent default").
+     A person answers any "agent default" that should have been theirs.
+     Delete if none. -->
+
+-
+
 ## Verification
 
 <!-- Distinguish direct observations, inherited evidence, and inference. Name
@@ -29,6 +38,13 @@
 | Evidence | What it establishes | Class / scope |
 |---|---|---|
 | `just ...` | | direct |
+
+## New tests
+
+<!-- Test names only, one per line. A reader should learn what this PR
+     guarantees from this list alone. Delete if none. -->
+
+-
 
 ## Known limits
 
