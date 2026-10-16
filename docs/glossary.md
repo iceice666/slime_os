@@ -4,6 +4,12 @@ Terms the rest of the documentation uses without redefining. Each entry gives
 the working meaning and the page or file that owns the precise one. This page
 is a lookup aid, not a source: when it disagrees with an owner, the owner wins.
 
+**Acceptance.** One named requirement of a spec-driven item. It binds a gate
+(`just-target`, `just-observations`, or a human gate) and a predicate over the
+typed observations that gate reports; the item completes only when every
+mandatory acceptance has current passing evidence.
+→ [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+
 **Admission.** The root's judgment of a decoded generation before any
 component exists: every payload hash-verified and target-qualified, the whole
 CSlot plan costed, every resource budget satisfiable. Failure is
@@ -55,6 +61,11 @@ Narrowing-only, explicitly transferred, never ambient. → [concepts/capabilitie
 **Chain.** An ordered list of serial markers a gate requires; markers within a
 chain must appear in order, chains are independent. → `scripts/lib/sel4_gate_markers.py`.
 
+**Closeout.** Moving a spec-driven item to done. `myque-closeout.yml` runs
+`just devloop complete` on `main` for each item whose recorded evidence devloop
+still accepts and opens a `.tasks`-only PR; merging an implementation never
+closes its item by itself. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md#closeout-prs).
+
 **Closure** (system-image closure). The generated record naming, by digest,
 every input an image is built from. Re-resolved before every build; a stale
 digest is `closure does not resolve`. Regenerate with
@@ -87,9 +98,19 @@ spec-driven work items. → [work-item lifecycle](getting-started/06-work-item-l
 and advances the epoch, and a client holding the old one is refused.
 → [I/O substrate](architecture/io-substrate.md).
 
+**Evidence** (devloop evidence). A recorded gate result for one acceptance,
+bound to the requirements, helpers, code closure, policy, execution inputs,
+target, image, and run epoch that were tested; changing any of them stales it,
+and the newest entry decides. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+
 **Evidence class.** Whether a claim rests on direct observation, inherited
 evidence, or inference; recorded in PRs and work items. Hardware claims bind
 to target, revision, and binary identity.
+
+**Exam** (also *grader*). What an acceptance is judged by: the execution
+inputs file, the recipe it names, and the checker and `scripts/lib` judge that
+recipe runs. It lands in a planning PR before the implementation, so an
+implementation cannot change its own exam. → `CONTRIBUTING.md` (Spec-driven items).
 
 **Fabric.** The typed data plane: graph-declared routes between participants,
 stream/call/operation semantics, QoS, recording. → [typed data fabric](architecture/typed-data-fabric.md).
@@ -111,6 +132,11 @@ The unit of deployment and rollback. → [concepts/generations](concepts/generat
 
 **Generation manifest.** The derived `.zti` rendering of a system spec that the
 generation builder consumes. An output, never edited. → `contracts/generation-manifest/v1/`.
+
+**Grader closure.** An exam's recipe, every recipe in its dependency chain, and
+the scripts and `scripts/lib` modules they run. Completion refuses unless all
+of it matches `origin/main` byte for byte. Not the system-image **Closure**.
+→ [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
 
 **Grant.** A system-spec declaration that a holder receives a capability of a
 kind, from a source, with exact rights and a transferability flag.
@@ -163,8 +189,22 @@ system spec (`slotPins`); or a marker count in `check-sel4-gate-controls.py`.
 **Plane.** One QEMU-bootable composition plus the checker that asserts its
 markers, named `sel4-<domain>`. → [add a gate](getting-started/07-add-a-gate.md).
 
+**Planning PR.** The PR class that carries a work item and its exam, plus any
+new schema the exam binds to, and no product code; it lands before the
+implementation PR. The other classes are implementation, evidence-only, and
+process. → `.agents/skills/work-item-lifecycle/SKILL.md`.
+
 **Private memory.** A component's fixed-base, growable, non-shareable,
 non-executable region, bounded by a generation quota. → [private memory](architecture/private-memory.md).
+
+**Receipt** (diagnostic receipt). The Zutai record a gate writes beside the
+bounded output of a recipe run, naming the run's identity, recipe, run key, and
+output digest so a failure's output can be found and attributed. It is not
+acceptance evidence. → `contracts/devloop-diagnostics/README.md`.
+
+**Recipe.** A `just` target, defined under `just/` or in the root `Justfile`. A
+recipe that verifies something is a **Gate**; every public recipe is listed in
+[`just` targets](reference/just-targets.md).
 
 **Release.** The detached, threshold-signed record binding a generation
 identity, parent, sequence, and target; verified by selector images before
@@ -178,6 +218,10 @@ vocabulary generated from `contracts/generation/v5/schema.zt`.
 
 **Root** (`slime-root`). The initial task; owns all dynamic mechanism and is
 part of the trusted computing base. → [trust model](architecture/trust-model.md).
+
+**Run key.** The identifier of one gate execution. Diagnostic receipts and
+their retained output are stored under it, so neither can be attributed to a
+different run. → `contracts/devloop-diagnostics/README.md`.
 
 **Shared buffer.** Root-minted, budget-bounded pages mappable by several
 holders; the only runtime object mint. → `slime-root/src/shared_buffer.rs`.
@@ -211,6 +255,11 @@ payloads too large to ride inline in an IPC message.
 **Wait set.** A userspace multiplexer over one notification: registered
 badges, endpoint slots, and a timer, dispatched in bounded order.
 → [runtime authority](architecture/runtime-authority.md).
+
+**Work item.** The canonical unit of planned work: one file under
+`.tasks/items/` with a UUID identity, managed by **MyQue**. An ordinary prose
+item closes by `myque close`; a **Spec-driven item** closes through devloop.
+→ `CONTRIBUTING.md` (Where work lives).
 
 **Zutai.** The schema and generation language every contract is written in
 (`.zt` sources, `.zti` instances), pinned as a submodule under `deps/zutai`.
