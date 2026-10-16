@@ -840,7 +840,7 @@ pub fn run(name: &str) -> String {
             limits.stack_bytes = limits.required_stack();
             limits.heap_bytes = limits.heap_needed();
             limits.check().expect("the contract admits it");
-            let mut pair: Pair<512, 1, 2, 9, 0, 2, 4> =
+            let mut pair: Pair<512, 1, 2, 9, 0, 2, 1> =
                 pair_of(&limits, limits.heap_bytes as usize);
             pair.open();
             pair.declare(1, key);
@@ -897,15 +897,18 @@ fn edge_limits(mode: Mode, batch: usize, key: usize, payload: u64, timeout: u64)
 
 type Heap4 = Pair<2048, 4, 5, 129, 0, 8, 4>;
 
+/// The arrays of a heap link declared by `edge_limits`: one key, one subscriber and one sample.
+type Edge1 = Pair<2048, 1, 2, 129, 0, 2, 1>;
+
 /// A session driven directly, with a storage of its own. Unlike a link it stays open after a refusal.
 struct Rx {
-    session: crate::zenoh_profile0::session::SessionOf<4, 5, 129>,
+    session: crate::zenoh_profile0::session::SessionOf<1, 2, 129, 1>,
     cell: Vec<u8>,
     out: Vec<u8>,
 }
 
 impl Rx {
-    fn of(pair: &Heap4, cell: usize) -> Self {
+    fn of(pair: &Edge1, cell: usize) -> Self {
         Self {
             session: pair.b.session().clone(),
             cell: std::vec![0; cell],
@@ -956,9 +959,9 @@ impl Rx {
     }
 }
 
-fn reusable_pair(timeout: u64) -> Heap4 {
+fn reusable_pair(timeout: u64) -> Edge1 {
     let limits = edge_limits(Mode::Heap, 2048, 129, 5000, timeout);
-    let mut pair: Heap4 = pair_of(&limits, 0);
+    let mut pair: Edge1 = pair_of(&limits, 0);
     pair.open();
     pair.declare(1, codec::KEY);
     pair
@@ -1059,7 +1062,7 @@ fn a_reassembly_is_measured_from_its_first_fragment_to_the_millisecond() {
     for timeout in TIMEOUTS {
         let pair = {
             let limits = edge_limits(Mode::Heap, 2048, 129, 5000, timeout);
-            let mut pair: Heap4 = pair_of(&limits, 0);
+            let mut pair: Edge1 = pair_of(&limits, 0);
             pair.open();
             pair.declare(1, codec::KEY);
             pair
@@ -1391,32 +1394,32 @@ fn heap_edge<
 
 #[test]
 fn the_smallest_batch_carries_a_fragmented_put() {
-    heap_edge::<89, 1, 2, 70, 0, 2, 4>("edge-batch-89", &"k".repeat(70), 300);
+    heap_edge::<89, 1, 2, 70, 0, 2, 1>("edge-batch-89", &"k".repeat(70), 300);
 }
 
 #[test]
 fn the_largest_batch_carries_the_longest_key() {
-    heap_edge::<4096, 1, 2, 4076, 0, 2, 4>("edge-batch-4096", &"k".repeat(4076), 16_384);
+    heap_edge::<4096, 1, 2, 4076, 0, 2, 1>("edge-batch-4096", &"k".repeat(4076), 16_384);
 }
 
 #[test]
 fn a_key_of_2028_bytes_is_declared_used_and_undeclared() {
-    heap_edge::<2048, 1, 2, 2028, 0, 2, 4>("edge-key-2028", &"k".repeat(2028), 5000);
+    heap_edge::<2048, 1, 2, 2028, 0, 2, 1>("edge-key-2028", &"k".repeat(2028), 5000);
 }
 
 #[test]
 fn a_payload_of_one_mebibyte_is_sent_and_joined() {
-    heap_edge::<4096, 1, 2, 129, 0, 2, 4>("edge-payload-1mib", &"k".repeat(129), 1 << 20);
+    heap_edge::<4096, 1, 2, 129, 0, 2, 1>("edge-payload-1mib", &"k".repeat(129), 1 << 20);
 }
 
 #[test]
 fn a_payload_of_two_mebibytes_is_sent_and_joined() {
-    heap_edge::<4096, 1, 2, 129, 0, 2, 4>("edge-payload-2mib", &"k".repeat(129), 1 << 21);
+    heap_edge::<4096, 1, 2, 129, 0, 2, 1>("edge-payload-2mib", &"k".repeat(129), 1 << 21);
 }
 
 #[test]
 fn a_payload_of_256_mebibytes_is_sent_and_joined() {
-    heap_edge::<4096, 1, 2, 129, 0, 2, 4>("edge-payload-256mib", &"k".repeat(129), 1 << 28);
+    heap_edge::<4096, 1, 2, 129, 0, 2, 1>("edge-payload-256mib", &"k".repeat(129), 1 << 28);
 }
 
 /// Sends one Put whole from `a` at the widest sequence number, and returns the FRAME body it queued.
@@ -1487,7 +1490,7 @@ fn fixed_edge<
 fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
     let key = "k".repeat(10);
     let (tail, frame) =
-        fixed_edge::<89, 1, 2, 10, 31, 2, 4>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
+        fixed_edge::<89, 1, 2, 10, 31, 2, 1>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
     assert_eq!(frame.len() + 2, 89, "the frame fills the batch exactly");
     ordered(&std::format!(
         "fixededge edge-fixed-batch-89 89 10 31 {tail}"
@@ -1498,7 +1501,7 @@ fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
 #[test]
 fn a_fixed_link_sends_a_thousand_byte_key_whole_at_the_largest_batch() {
     let key = "k".repeat(1000);
-    let (tail, frame) = fixed_edge::<4096, 1, 2, 1000, 3046, 2, 4>(
+    let (tail, frame) = fixed_edge::<4096, 1, 2, 1000, 3046, 2, 1>(
         "edge-fixed-batch-4096",
         Mode::Fixed,
         &key,
@@ -1518,9 +1521,9 @@ fn the_smallest_configuration_in_each_mode_sends_a_put_whole() {
         ("edge-minimum-heap", Mode::Heap),
     ] {
         let (tail, frame) = if mode == Mode::Fixed {
-            fixed_edge::<89, 1, 2, 1, 1, 2, 4>(name, mode, "k", 1)
+            fixed_edge::<89, 1, 2, 1, 1, 2, 1>(name, mode, "k", 1)
         } else {
-            fixed_edge::<89, 1, 2, 1, 0, 2, 4>(name, mode, "k", 1)
+            fixed_edge::<89, 1, 2, 1, 0, 2, 1>(name, mode, "k", 1)
         };
         assert_eq!(frame.len(), 48);
         line(&std::format!(
@@ -1588,12 +1591,12 @@ fn long_alias<
 
 #[test]
 fn a_key_of_2028_bytes_is_declared_as_an_alias_and_addressed_through_it() {
-    long_alias::<2048, 1, 2, 2028, 0, 2, 4>("edge-alias-long-key-2028", 2028, 1);
+    long_alias::<2048, 1, 2, 2028, 0, 2, 1>("edge-alias-long-key-2028", 2028, 1);
 }
 
 #[test]
 fn a_key_of_4076_bytes_is_addressed_through_an_alias_with_bit_15_set() {
-    long_alias::<4096, 1, 2, 4076, 0, 2, 4>("edge-alias-long-key-4076", 4076, 0x8000);
+    long_alias::<4096, 1, 2, 4076, 0, 2, 1>("edge-alias-long-key-4076", 4076, 0x8000);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1807,10 +1810,10 @@ fn peer_fixed<
 #[test]
 fn a_heap_link_sends_no_more_than_the_peer_announced() {
     for tail in [
-        peer_heap::<4096, 1, 2, 30, 0, 2, 4>(89, 1000),
-        peer_heap::<4096, 1, 2, 30, 0, 2, 4>(512, 5000),
-        peer_heap::<2048, 1, 2, 30, 0, 2, 4>(4096, 5000),
-        peer_heap::<4096, 1, 2, 30, 0, 2, 4>(2048, 9000),
+        peer_heap::<4096, 1, 2, 30, 0, 2, 1>(89, 1000),
+        peer_heap::<4096, 1, 2, 30, 0, 2, 1>(512, 5000),
+        peer_heap::<2048, 1, 2, 30, 0, 2, 1>(4096, 5000),
+        peer_heap::<4096, 1, 2, 30, 0, 2, 1>(2048, 9000),
     ] {
         ordered(&std::format!("peerbatch {tail}"));
     }
@@ -1820,11 +1823,11 @@ fn a_heap_link_sends_no_more_than_the_peer_announced() {
 #[test]
 fn a_fixed_link_sends_the_largest_message_the_smaller_batch_holds_and_refuses_one_byte_more() {
     for tail in [
-        peer_fixed::<2048, 1, 2, 30, 434, 2, 4>(512, 0),
-        peer_fixed::<2048, 1, 2, 30, 434, 2, 4>(512, 1),
-        peer_fixed::<4096, 1, 2, 30, 434, 2, 4>(89, 0),
-        peer_fixed::<4096, 1, 2, 30, 434, 2, 4>(89, 1),
-        peer_fixed::<512, 1, 2, 30, 434, 2, 4>(4096, 0),
+        peer_fixed::<2048, 1, 2, 30, 433, 2, 1>(512, 0),
+        peer_fixed::<2048, 1, 2, 30, 434, 2, 1>(512, 1),
+        peer_fixed::<4096, 1, 2, 30, 11, 2, 1>(89, 0),
+        peer_fixed::<4096, 1, 2, 30, 12, 2, 1>(89, 1),
+        peer_fixed::<512, 1, 2, 30, 433, 2, 1>(4096, 0),
     ] {
         ordered(&std::format!("peerbatch {tail}"));
     }
@@ -1837,7 +1840,7 @@ fn a_key_is_counted_in_bytes_not_characters() {
     let mut limits = edge_limits(Mode::Heap, 512, key.len(), 1500, 5000);
     limits.name = "multibyte";
     limits.check().expect("the contract admits it");
-    let mut pair: Pair<512, 1, 2, 9, 0, 2, 4> = pair_of(&limits, limits.heap_bytes as usize);
+    let mut pair: Pair<512, 1, 2, 9, 0, 2, 1> = pair_of(&limits, limits.heap_bytes as usize);
     pair.open();
     pair.declare(1, key);
     let declare = message_of(pair.b.last_sent_batch()).to_vec();
@@ -2067,12 +2070,12 @@ fn counts_of_65535_fill_the_width_of_sixteen_bits() {
     let make = |index| wide_payload(12, index);
     let heap = counts(Mode::Heap, 65_535, 65_535, 1, 12);
     let digest =
-        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 0, 2, 4>(&heap, &ids, make));
+        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 0, 2, 1>(&heap, &ids, make));
     wide_line(Mode::Heap, 65_535, 65_535, 1, 12, &digest);
     ok("wide-counts-65535-heap");
     let fixed = counts(Mode::Fixed, 65_535, 65_535, 1, 12);
     let digest =
-        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2, 4>(&fixed, &ids, make));
+        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2, 1>(&fixed, &ids, make));
     wide_line(Mode::Fixed, 65_535, 65_535, 1, 12, &digest);
     ok("wide-counts-65535-fixed");
 }
@@ -2197,10 +2200,10 @@ fn slots_run<
 
 #[test]
 fn every_slot_of_65535_is_declared_used_and_undeclared() {
-    let heap = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 0, 2, 4>(Mode::Heap));
+    let heap = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 0, 2, 1>(Mode::Heap));
     line(&heap);
     ok("wide-slots-65535-heap");
-    let fixed = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 12, 2, 4>(Mode::Fixed));
+    let fixed = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 12, 2, 1>(Mode::Fixed));
     line(&fixed);
     ok("wide-slots-65535-fixed");
 }
@@ -2250,7 +2253,7 @@ fn a_frame_of_five_declarations_is_taken_when_nine_subscribers_are_declared() {
 fn a_frame_refused_for_its_size_leaves_no_alias_behind() {
     // 40 aliases fit the tables; a frame of 17 declares more than the journal of 16 changes can undo.
     let limits = counts(Mode::Heap, 40, 40, 1, 12);
-    let mut pair: Pair<2048, 40, 41, 129, 0, 2, 4> = pair_of(&limits, limits.heap_bytes as usize);
+    let mut pair: Pair<2048, 40, 41, 129, 0, 2, 1> = pair_of(&limits, limits.heap_bytes as usize);
     pair.open();
     let before = pair.next_peer_sn();
     let aliases: Vec<Vec<u8>> = (1..=17u32).map(|id| declare_alias(id, "a/b")).collect();
@@ -2413,32 +2416,7 @@ fn a_fixed_link_whose_notice_cannot_hold_its_payload_is_refused_at_construction(
         )
     };
     assert!(matches!(build(()), Err(SessionError::InvalidConfig)));
-    // The right size is built, and one byte more is too: a notice may be larger than the payload.
-    let ok = |payload: usize| match payload {
-        1024 => LinkOf::<Scripted, 2048, 4, 5, 129, 1024, 8, 4>::with_params(
-            Scripted {
-                rx: Rc::default(),
-                tx: Rc::default(),
-            },
-            Role::Listener,
-            &config(exam_zid(), exam_cookie(), 2000),
-            params,
-            1,
-        )
-        .is_ok(),
-        _ => LinkOf::<Scripted, 2048, 4, 5, 129, 1025, 8, 4>::with_params(
-            Scripted {
-                rx: Rc::default(),
-                tx: Rc::default(),
-            },
-            Role::Listener,
-            &config(exam_zid(), exam_cookie(), 2000),
-            params,
-            1,
-        )
-        .is_ok(),
-    };
-    assert!(ok(1024) && ok(1025));
+    assert!(link_builds::<4, 5, 129, 1024, 8, 4>(params));
 }
 
 #[test]
@@ -2653,122 +2631,8 @@ fn a_key_size_beyond_the_arithmetic_is_refused_as_a_size_and_not_an_overflow() {
     assert_eq!(limits.check(), Err(LimitsError::Size));
 }
 
-#[test]
-fn a_session_backed_by_larger_tables_still_holds_the_peer_to_its_declared_counts() {
-    // LARGE declares four aliases and four events a batch; tables for five must not let the fifth in.
-    let params = Params::from_limits(&LARGE);
-    let config = Config {
-        zid: &[1],
-        lease_ms: 4_000_000_000,
-        initial_sn: 0,
-        cookie: &[1],
-    };
-    let mut listener = crate::zenoh_profile0::session::SessionOf::<5, 6, 129, 5>::with_params(
-        Role::Listener,
-        &config,
-        params,
-    )
-    .expect("larger storage is accepted");
-    let mut out = std::vec![0u8; 2048];
-    let mut buf = std::vec![0u8; 256];
-    let length = encode::init_syn(&mut buf, &[1], 2048).expect("syn");
-    listener.on_batch(&buf[..length], 0, &mut out).expect("ack");
-    let length = encode::open_syn(&mut buf, 4_000_000_000, 0, &[1]).expect("open");
-    listener
-        .on_batch(&buf[..length], 0, &mut out)
-        .expect("open");
-    let sn = listener.expected_rx_sn();
-    // Five aliases in one frame: LARGE declares four.
-    let aliases: Vec<Vec<u8>> = (1..=5u32).map(|id| declare_alias(id, "a/b")).collect();
-    let body = frame(sn, &aliases);
-    let result = listener
-        .on_batch(&body, TIME, &mut out)
-        .map(|outcome| outcome.sent);
-    assert!(
-        result.is_err(),
-        "a fifth alias exceeds the declared four: {result:?}"
-    );
-    assert_eq!(listener.aliases(), 0, "and the refused frame leaves none");
-    // Five Puts in one frame: LARGE declares four events a batch.
-    let puts: Vec<Vec<u8>> = (0..5).map(|_| Parts::demo(12).bytes()).collect();
-    let body = frame(sn, &puts);
-    let result = listener
-        .on_batch(&body, TIME, &mut out)
-        .map(|outcome| outcome.sent);
-    assert!(
-        result.is_err(),
-        "five events exceed the declared four: {result:?}"
-    );
-}
-
-#[test]
-fn a_link_with_a_longer_queue_than_declared_still_holds_no_more_than_declared() {
-    // HEAP declares eight outstanding notices; a queue of nine must not take a ninth sample.
-    let mut pair: Pair<2048, 4, 5, 129, 0, 9, 4> = pair_of(&HEAP, HEAP.heap_bytes as usize);
-    pair.open();
-    pair.declare(1, codec::KEY);
-    for index in 0..8 {
-        pair.send(codec::KEY, &distinct_payload(5000, index), 10);
-    }
-    assert_eq!(pair.b.notices_queued(), 8);
-    pair.send(codec::KEY, &distinct_payload(5000, 8), 10);
-    assert_eq!(
-        pair.b.notices_queued(),
-        8,
-        "a ninth waits for the owner; the declared bound is eight"
-    );
-    let mut seen = 0;
-    while let Some(notice) = pair.b.next_notice() {
-        if let Notice::SampleStored(sample) = notice {
-            assert_eq!(sample.payload(&pair.heap_b), distinct_payload(5000, seen));
-            seen += 1;
-        }
-    }
-    assert_eq!(seen, 8);
-    pair.run(11);
-    let Some(Notice::SampleStored(ninth)) = pair.b.next_notice() else {
-        panic!("the ninth sample arrives once there is room");
-    };
-    assert_eq!(ninth.payload(&pair.heap_b), distinct_payload(5000, 8));
-}
-
-#[test]
-fn a_refusal_while_the_configured_notices_are_full_adds_none_beyond_them() {
-    // HEAP declares eight notices; storage for nine is spare, and a refusal's Closed notice is not a ninth.
-    let mut pair: Pair<2048, 4, 5, 129, 0, 9, 4> = pair_of(&HEAP, HEAP.heap_bytes as usize);
-    pair.open();
-    pair.declare(1, codec::KEY);
-    for index in 0..8 {
-        pair.send(codec::KEY, &distinct_payload(12, index), 10);
-    }
-    assert_eq!(pair.b.notices_queued(), 8);
-    pair.inject(&[0xff, 0xff, 0xff]);
-    let _ = pair.pump_b(TIME);
-    assert_eq!(
-        pair.b.notices_queued(),
-        8,
-        "the queue stays within the configured eight"
-    );
-    let mut samples = 0;
-    while let Some(notice) = pair.b.next_notice() {
-        if let Notice::SampleStored(sample) = notice {
-            assert_eq!(
-                sample.payload(&pair.heap_b),
-                distinct_payload(12, samples),
-                "sample {samples} is intact"
-            );
-            samples += 1;
-        }
-    }
-    assert_eq!(
-        samples, 8,
-        "every sample accepted before the refusal is still delivered"
-    );
-}
-
-/// Nine Puts in one frame, injected into `pair`: the class the link refuses them with, if it does.
-fn nine_puts_refused_as<
-    const F: usize,
+/// Whether a link over exactly these arrays is built from `params`.
+fn link_builds<
     const K: usize,
     const S: usize,
     const B: usize,
@@ -2776,35 +2640,69 @@ fn nine_puts_refused_as<
     const Q: usize,
     const E: usize,
 >(
-    mut pair: Pair<F, K, S, B, P, Q, E>,
-) -> Option<String> {
-    pair.open();
-    pair.declare(1, codec::KEY);
-    let puts: Vec<Vec<u8>> = (0..9).map(|_| Parts::demo(12).bytes()).collect();
-    let body = frame(pair.next_peer_sn(), &puts);
-    assert!(
-        body.len() < F - 2,
-        "the frame fits the batch, so only the event count is in question"
-    );
-    pair.inject(&body);
-    pair.pump_b(TIME).err().map(|error| class(&error))
+    params: Params,
+) -> bool {
+    LinkOf::<Scripted, 2048, K, S, B, P, Q, E>::with_params(
+        Scripted {
+            rx: Rc::default(),
+            tx: Rc::default(),
+        },
+        Role::Listener,
+        &config(exam_zid(), exam_cookie(), 2000),
+        params,
+        1,
+    )
+    .is_ok()
 }
 
 #[test]
-fn a_frame_over_the_configured_events_is_refused_by_the_session_on_larger_event_storage() {
-    // HEAP declares four events a batch and eight notices. Storage for nine events, with eight or nine
-    // notices, is spare: nine Puts are still over the configuration, and the session, not the link's queue
-    // check or an endless wait, names the cause.
-    let eight: Pair<2048, 4, 5, 129, 0, 8, 9> = pair_of(&HEAP, HEAP.heap_bytes as usize);
-    let nine: Pair<2048, 4, 5, 129, 0, 9, 9> = pair_of(&HEAP, HEAP.heap_bytes as usize);
-    assert_eq!(
-        nine_puts_refused_as(eight).as_deref(),
-        Some("TooManyMessages"),
-        "eight notices of storage"
+fn a_link_whose_storage_is_larger_than_its_configuration_is_refused() {
+    // LARGE declares four aliases, a subscriber table for four peers and ours, a 129-byte key, a 1024-byte
+    // payload, eight notices and four events a batch; each array is one more than that in turn.
+    let params = Params::from_limits(&LARGE);
+    assert!(
+        link_builds::<4, 5, 129, 1024, 8, 4>(params),
+        "the exact storage"
     );
-    assert_eq!(
-        nine_puts_refused_as(nine).as_deref(),
-        Some("TooManyMessages"),
-        "nine notices of storage"
+    assert!(
+        !link_builds::<5, 5, 129, 1024, 8, 4>(params),
+        "one alias slot more"
     );
+    assert!(
+        !link_builds::<4, 6, 129, 1024, 8, 4>(params),
+        "one subscriber slot more"
+    );
+    assert!(
+        !link_builds::<4, 5, 130, 1024, 8, 4>(params),
+        "one key byte more"
+    );
+    assert!(
+        !link_builds::<4, 5, 129, 1025, 8, 4>(params),
+        "one payload byte more"
+    );
+    assert!(
+        !link_builds::<4, 5, 129, 1024, 9, 4>(params),
+        "one notice more"
+    );
+    assert!(
+        !link_builds::<4, 5, 129, 1024, 8, 5>(params),
+        "one event more"
+    );
+}
+
+#[test]
+fn a_session_whose_tables_are_larger_than_its_configuration_is_refused() {
+    use crate::zenoh_profile0::session::SessionOf;
+    let config = Config {
+        zid: &[1],
+        lease_ms: 2000,
+        initial_sn: 0,
+        cookie: &[1],
+    };
+    let params = Params::from_limits(&LARGE);
+    assert!(SessionOf::<4, 5, 129, 4>::with_params(Role::Listener, &config, params).is_ok());
+    assert!(SessionOf::<5, 5, 129, 4>::with_params(Role::Listener, &config, params).is_err());
+    assert!(SessionOf::<4, 6, 129, 4>::with_params(Role::Listener, &config, params).is_err());
+    assert!(SessionOf::<4, 5, 130, 4>::with_params(Role::Listener, &config, params).is_err());
+    assert!(SessionOf::<4, 5, 129, 5>::with_params(Role::Listener, &config, params).is_err());
 }

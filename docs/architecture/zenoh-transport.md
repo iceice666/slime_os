@@ -52,7 +52,9 @@ payload, 64-byte cookie, one subscriber, four outstanding samples and three retr
 and `Link`, `Session` and `decode_batch` still mean exactly that. A link may instead
 be built from a named configuration that `contracts/zenoh-link-limits/v1` judges
 (batch, key, payload, key and subscriber counts, outstanding samples, stack and heap),
-in one of two modes:
+in one of two modes. The arrays of a link and its session equal what the configuration
+declares: storage larger or smaller than that is refused at construction as
+`InvalidConfig`.
 
 - **fixed**: no heap, every buffer an array sized from the configuration, and a message
   must fit one batch. A Put that does not fit is refused as `over-bound`, and a

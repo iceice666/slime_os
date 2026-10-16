@@ -250,14 +250,12 @@ impl<
         if params.bounds.batch + STREAM_LENGTH_BYTES != FRAMED {
             return Err(SessionError::InvalidConfig);
         }
-        // A fixed link copies each payload into its notice, so a notice smaller than the declared payload
-        // would cut a valid sample short without a word. A heap link keeps samples in the heap and its
-        // notices carry none.
-        if !params.fragments && params.bounds.payload > P {
-            return Err(SessionError::InvalidConfig);
-        }
-        // The queue holds two notices for each sample the owner may hold unread.
-        if params.samples.saturating_mul(2) > Q {
+        // The storage is exactly what the configuration declares. A fixed link copies each payload into its
+        // notice, so the notice holds the declared payload; a heap link keeps samples in the heap and its
+        // notices carry none. The queue holds two notices for each sample the owner may hold unread.
+        if (!params.fragments && params.bounds.payload != P)
+            || params.samples.saturating_mul(2) != Q
+        {
             return Err(SessionError::InvalidConfig);
         }
         Ok(Self {
@@ -348,8 +346,7 @@ impl<
 
     fn push_notice(&mut self, notice: Notice<P>) {
         // A full queue keeps what it holds: a notice that has nowhere to go is not written over the oldest.
-        // Full is the configured count, not the storage behind it.
-        if self.notice_len >= self.notice_cap() {
+        if self.notice_len >= Q {
             return;
         }
         let at = (self.notice_head + self.notice_len) % Q;
@@ -359,14 +356,8 @@ impl<
         }
     }
 
-    /// The notices the configuration lets the owner leave unread: two for each outstanding sample. The
-    /// queue may be longer, but a heap link reserves the cell past them for the message being joined.
-    fn notice_cap(&self) -> usize {
-        Q.min(self.session.params().samples.saturating_mul(2))
-    }
-
     fn notice_room(&self, needed: usize) -> bool {
-        self.notice_cap().saturating_sub(self.notice_len) >= needed
+        Q - self.notice_len >= needed
     }
 
     /// Frames `batch` into the send slot, which must be free.

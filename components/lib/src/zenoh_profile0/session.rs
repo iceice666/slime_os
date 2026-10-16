@@ -210,8 +210,6 @@ pub enum Event<'a> {
 pub struct Events<'a, const E: usize = MAX_EVENTS> {
     items: [Option<Event<'a>>; E],
     len: usize,
-    /// The most events the configuration lets one batch yield; the storage may hold more.
-    limit: usize,
 }
 
 impl<'a, const E: usize> Events<'a, E> {
@@ -219,14 +217,10 @@ impl<'a, const E: usize> Events<'a, E> {
         Self {
             items: [None; E],
             len: 0,
-            limit: E,
         }
     }
 
     fn push(&mut self, event: Event<'a>) -> Result<(), SessionError> {
-        if self.len >= self.limit {
-            return Err(SessionError::TooManyMessages);
-        }
         let slot = self
             .items
             .get_mut(self.len)
@@ -425,12 +419,13 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
         config: &Config<'_>,
         params: Params,
     ) -> Result<Self, SessionError> {
-        // The tables must hold what the configuration declares: our own subscriber and the peer's, and the
-        // peer's aliases. A session whose storage is smaller would refuse what its limits promise.
-        if params.bounds.key > B
-            || params.events > E
-            || params.aliases > K
-            || params.per_side + 1 > S
+        // The storage is exactly what the configuration declares: the peer's aliases, our own subscriber
+        // and the peer's, the key length and the events a batch yields. Smaller refuses what the limits
+        // promise and larger leaves a bound that only the array enforces.
+        if params.bounds.key != B
+            || params.events != E
+            || params.aliases != K
+            || params.per_side + 1 != S
         {
             return Err(SessionError::InvalidConfig);
         }
@@ -695,10 +690,7 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                         _ => {}
                     }
                 }
-                // Capped at the configuration's events, not the array behind them: a frame over it is the
-                // session's to refuse, whatever storage the caller backed it with.
-                let cap = self.params.events.min(E);
-                (events.min(cap), samples.min(cap))
+                (events.min(E), samples.min(E))
             }
             Ok(Message::OpenSyn { .. } | Message::OpenAck { .. } | Message::Close { .. }) => (1, 0),
             _ => (0, 0),
@@ -874,7 +866,6 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
         let mut journal = [None; JOURNAL];
         let mut used = 0;
         let mut events = Events::empty();
-        events.limit = self.params.events;
         match self.apply_frame(&frame, &mut journal, &mut used, &mut events) {
             Ok(()) => {
                 for change in journal.iter().take(used).flatten() {
@@ -988,9 +979,6 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                         return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
                     }
                     room(used)?;
-                    if self.aliases.len() >= self.params.aliases {
-                        return Err(SessionError::Decode(Refusal::OverBound));
-                    }
                     let at =
                         self.aliases
                             .insert(u64::from(id), key.as_bytes())
