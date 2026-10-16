@@ -1,6 +1,6 @@
 ---
 name: consolidate
-description: Weekly consolidation ("dream") of what the project learned into its owning documentation — reads the work items completed, PRs merged, and review threads since the last run, folds what they established into `docs/architecture/`, `docs/glossary.md`, and proposed `docs/decisions/`, marks claims no test, contract, or decision owns, and opens one documentation PR whose description is the human-readable digest of the week. Use when asked to consolidate, dream, write the weekly digest, or catch the documentation up after a batch of items closed.
+description: Weekly consolidation ("dream") of what the project learned into its owning documentation — reads the work items completed, PRs merged, and review threads since the last run, folds what they established into `docs/architecture/`, `docs/glossary.md`, and proposed `docs/decisions/`, reports claims no test, contract, or decision owns instead of adding them, and opens one documentation PR whose description is the human-readable digest of the week. Use when asked to consolidate, dream, write the weekly digest, or catch the documentation up after a batch of items closed.
 ---
 
 # Consolidation
@@ -46,6 +46,15 @@ The window runs from the merge commit of the previous consolidation PR (title
 prefix `docs(repo/consolidate)`), exclusive, to `origin/main`. With no
 previous run, it covers the last 14 days.
 
+Work the previous run deferred is part of this window. Read the previous
+consolidation PR's `## Not done` section
+(`gh pr list --state merged --search 'in:title "docs(repo/consolidate)"'
+--json number,title,mergedAt,body`, then take the most recently merged one
+whose title starts with `docs(repo/consolidate)`). Every line marked
+`Deferred:` names an item, PR, or page to process in this run as if it
+were inside the window. Lines that give a reason it will never be done (a
+cancelled item, a process PR) are not carried.
+
 ```sh
 git fetch origin main
 BASE=$(git log origin/main --grep='^docs(repo/consolidate)' -1 --format=%H)
@@ -72,8 +81,23 @@ that only repeat an inline finding or are tool boilerplate.
 **Closed items.** An item closes when its `state` in `.tasks/items/` becomes
 `done` or `cancelled`. Retirement into `.tasks/terminal/` is a separate,
 later workflow, so new files there do not show what closed in this window.
-- A `done` item has completed through devloop, and its requirements are
-  candidates for claims (Pass 1).
+Retirement runs daily and deletes the item file, keeping only a summary
+in the terminal record. Its `history.commit` points into the history
+archive, not this repository. To read a retired item's requirements and
+evidence, recover the file from `main` as it was just before retirement:
+
+```sh
+c=$(git log -1 --format=%H --diff-filter=D origin/main -- "$path")
+git show "$c^:$path"
+```
+
+- A `done` spec-driven item has completed through devloop, and its
+  requirements are candidates for claims (Pass 1).
+- A `done` legacy prose item (pre-cutoff, with no spec-driven body) closed
+  through `myque close` with no acceptances. Its `## Closure evidence`
+  section is what it observed. A property stated there is a candidate claim
+  only if the section names the test or recipe that observed it; otherwise
+  it goes under "Needs a person" as unverified.
 - A `cancelled` item never completed. It produces no claim, even if it
   recorded passing evidence before it was cancelled. List it under "Not
   done" with the item that superseded it, if any.
@@ -114,6 +138,10 @@ the human relayed the findings in one comment; read the body's Known limits
 and verification sections for test names. A stop-and-ask handoff and a
 human's `Decision:` answer are usually conversation comments.
 
+Read the `## Decisions` section of every window PR's body, product or
+process. A durable choice is often recorded there, without the `Decision:`
+token, which is reserved for a human's answer in a thread.
+
 ## Pass 1: ingest
 
 For each `done` item and each product PR in the window:
@@ -121,10 +149,11 @@ For each `done` item and each product PR in the window:
 1. **Find the owning page.** Take the code paths that carry the item's or
    PR's behavior change. Skip paths changed only mechanically (a renamed
    macro, a moved import, regenerated outputs); a PR that touched 30 files
-   to rename one call usually has one owning page. Find their row in `docs/task-to-file.md`, then the `docs/architecture/`
-   page that cites that row's starting file or follow-on files (search
-   `docs/architecture/` for the path), using the index in
-   `docs/architecture/README.md` to choose between candidates. The page that
+   to rename one call usually has one owning page. Find their row in
+   `docs/task-to-file.md`, then the `docs/architecture/` page that cites
+   that row's starting file or follow-on files (search `docs/architecture/`
+   for the path), using the index in `docs/architecture/README.md` to
+   choose between candidates. The page that
    names the code as its owner wins over one that only mentions it. If no
    page owns the subsystem, list it under "Needs a person" with the page it
    would most plausibly belong to. Do not create a page without that
@@ -140,7 +169,13 @@ For each `done` item and each product PR in the window:
      and an `inputs:` digest, not the recipe: the digest is the SHA-256 of
      a `.devloop/inputs/*.json` file
      (`shasum -a 256 .devloop/inputs/*.json | grep <digest>`), and that
-     file's `justTarget` is the recipe;
+     file's `justTarget` is the recipe. A passing recipe proves only that it
+     exited successfully. Before citing it, find where it asserts this
+     property: a host test, a serial marker or chain in the plane script or
+     `scripts/lib/sel4_gate_markers.py`, or a check in the judge it runs.
+     Cite that assertion with the recipe. If nothing in the recipe asserts
+     it, the requirement is not a claim; it goes under "Needs a person" as
+     unverified;
    - a review finding fixed with a test, owned by that test. Decide whether
      it states a lasting property or a one-off defect, and promote only the
      lasting ones.
@@ -153,11 +188,12 @@ For each `done` item and each product PR in the window:
    `## Limitations`: a PR's "Known limits" section, a limit the item states,
    or a thread where the human declared one with `Decision:`. A section that
    plays that role under another name (for example `## Qualification
-   limits`) counts; create `## Limitations` only if the page has neither. A case a review raised and the author
-   declined as "outside the item" is an unclaimed follow-up proposal, not
-   evidence the product lacks the behavior. Check the code before writing
-   anything about it. If the code defines the behavior, it is not a
-   limitation; if you cannot tell, list it under "Needs a person".
+   limits`) counts; create `## Limitations` only if the page has neither.
+   A case a review raised and the author declined as "outside the item" is
+   an unclaimed follow-up proposal, not evidence the product lacks the
+   behavior. Check the code before writing anything about it. If the code
+   defines the behavior, it is not a limitation; if you cannot tell, list
+   it under "Needs a person".
 5. **Decisions.** A design choice with consequences beyond its PR (for
    example, "storage may exceed the declared configuration") and no record in
    `docs/decisions/` gets a proposed record in the format
@@ -176,12 +212,13 @@ only for vocabulary (Pass 2) and for decisions about the product.
 
 Lint the pages this run edits, the pages that own the code carrying the
 window's product behavior changes (the same paths as Pass 1 step 1), and the
-glossary. Name any other page left unchecked under
-"Known limits".
+glossary. Name any other page left unchecked under "Known limits".
 
 - **Unowned claims.** `docs/architecture/README.md` requires every behavior
-  claim to point to its owner. Mark any claim with no implementation,
-  contract, reference, or gate pointer as unverified.
+  claim to point to its owner, so this run never adds a claim without one.
+  An existing claim with no implementation, contract, reference, or gate
+  pointer is left as it is and listed under "Needs a person", with the
+  options of finding its owner or removing it.
 - **Broken owners.** A cited test name, path, recipe, or record that no
   longer exists. Search for it before reporting; a rename is fixed in place.
 - **Contradictions.** Between two pages, or between a page and the code the
@@ -205,16 +242,17 @@ Follow the page's existing idiom for owners. A page with an owners list or
 a verification section, under whatever heading (`Owners:`, `Current
 owners:`, `## Bounds and verification`), gets new owners there, and its
 claims read like its existing ones. Name the test next to the claim it owns
-in that list, so the link between them survives. Use the per-claim form only on pages without an
-idiom:
+in that list, so the link between them survives. Use the per-claim form
+only on pages without an idiom:
 
 ```markdown
 - A refused frame leaves no key alias declared.
   Owner: `a_frame_refused_for_its_size_leaves_no_alias_behind`
   (`components/lib/src/zenoh_links/scenarios.rs`).
-- ⚠ Unverified: link storage may exceed the declared configuration.
-  No test or decision record owns this.
 ```
+
+A claim with no owner does not go on the page. It goes under "Needs a
+person" in the PR description, until a person names an owner or drops it.
 
 Owners are tests, contracts, code paths, recipes, or decision records. Do not
 cite PR numbers or describe review history on the page: `change-records`
@@ -225,19 +263,20 @@ history of this run goes.
 
 Use branch `consolidate/<YYYY-MM-DD>`, dated with the committer date of
 `origin/main`, and title `docs(repo/consolidate): <first date>–<last date>`,
-where the dates are the committer dates of `BASE` and `origin/main`. This is a process PR with no
-work item.
+where the dates are the committer dates of `BASE` and `origin/main`. This
+is a process PR with no work item.
 
 Run `just docs_check` and `just typos` before opening it, in a checkout whose
 `deps/zutai` submodule is initialized; maintained docs link into it.
 
 Keep the diff under about 300 lines. If the window produced more,
-consolidate the pages with the most product change and list the rest under
-"Not done" for the next run.
+consolidate the pages with the most product change. List the rest under
+"Not done", each line starting with `Deferred:`, so the next run picks it
+up.
 
 The description is written for a person who did not read any of the window's
-PRs. Use this shape and nothing longer; the last two sections are the record
-every PR carries:
+PRs. Use this shape and nothing longer; the last three sections are the
+record every PR carries:
 
 ```markdown
 ## What changed in the system
@@ -261,7 +300,14 @@ every PR carries:
 
 ## Not done
 
-<!-- Cancelled items, items or pages skipped, threads not read, and why. -->
+<!-- Cancelled items, items or pages skipped, threads not read, and why.
+     Start a line with `Deferred:` when the next run must pick it up. -->
+
+## Risk
+
+<!-- What a reader of the touched pages could now believe wrongly if a claim
+     here is wrong, and which claims rest on an assertion this run found but
+     did not run. "None beyond Needs a person" is an answer. -->
 
 ## Verification
 
@@ -277,6 +323,7 @@ every PR carries:
 A person answers "Needs a person" entries in the PR thread. Apply each answer
 in the same PR:
 - an accepted decision changes its record to `accepted`;
-- a claim the person drops is removed;
-- a claim they keep without an owner stays marked unverified, and becomes a
-  follow-up item they choose whether to admit.
+- a claim the person drops stays out of the page, or is removed if it was
+  already there;
+- a claim the person keeps but no one can own stays out of the page, and
+  becomes a follow-up item they choose whether to admit.
