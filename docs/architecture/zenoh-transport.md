@@ -12,8 +12,12 @@ Owners:
 - wire vocabulary and bounds: `contracts/zenoh-profile/v1/` (generated
   `components/proto/src/zenoh_profile.rs`); the wire records themselves belong
   to eclipse-zenoh wire version `0x09` and are not declared here;
-- decoder and `StreamFramer`: `components/lib/src/zenoh_profile0.rs`; encoder:
+- decoder and `StreamFramerOf`: `components/lib/src/zenoh_profile0.rs`; encoder:
   `zenoh_profile0/encode.rs`; session machine: `zenoh_profile0/session.rs`;
+- link configurations: `contracts/zenoh-link-limits/v1/` judges a named configuration, and
+  `zenoh_profile0/limits.rs` states the same arithmetic in Rust; FRAGMENT:
+  `zenoh_profile0/fragment.rs`; reassembly into storage the component lends:
+  `zenoh_profile0/reassembly.rs`; slot tables: `zenoh_profile0/tables.rs`;
 - classic CDR for `Counter`: `components/lib/src/ros_cdr.rs`;
 - transport runtime: `components/lib/src/zenoh_link.rs`;
 - the nodes' shared exchange logic: `components/lib/src/zenoh_node.rs`;
@@ -42,25 +46,47 @@ names an alias this side declared, and it declares none, so it is `invalid-keyex
 expressions, other resolutions, unknown extensions and messages. A second alias is
 refused as over-bound and an undeclared one as `invalid-keyexpr`.
 
-Bounds are enforced before any byte is taken and equal the demo contract's: a
-512-byte batch, 129-byte key expression, 33-byte attachment, 12-byte payload,
-64-byte cookie, one subscriber, four outstanding samples and three retries.
-Nothing in these modules allocates.
+Bounds are enforced before any byte is taken. The first release's are the demo
+contract's: a 512-byte batch, 129-byte key expression, 33-byte attachment, 12-byte
+payload, 64-byte cookie, one subscriber, four outstanding samples and three retries,
+and `Link`, `Session` and `decode_batch` still mean exactly that. A link may instead
+be built from a named configuration that `contracts/zenoh-link-limits/v1` judges
+(batch, key, payload, key and subscriber counts, outstanding samples, stack and heap),
+in one of two modes:
+
+- **fixed**: no heap, every buffer an array sized from the configuration, and a message
+  must fit one batch. A Put that does not fit is refused as `over-bound`, and a
+  FRAGMENT is refused as `unsupported-message` whatever its form;
+- **heap**: the owning component lends the storage a fragmented message is joined into
+  (`LinkOf::pump_with`), and a Put larger than a batch is sent and received as reliable
+  `FRAGMENT`s. One message is reassembled at a time, a run's first fragment must be the
+  session's next expected sequence number, a gap is `fragment-sequence`, a run that
+  outlives its declared timeout is `reassembly-timeout`, and the joined message is held
+  to what a whole-frame Put is held to. Best-effort fragments and fragments with
+  extensions are still refused.
+
+What a link sends is bounded by the smaller of its own batch and the one the peer
+announced in its `INIT`. Nothing in these modules allocates.
 
 ## Layers
 
 | Layer | What it owns | What it does not own |
 | --- | --- | --- |
-| Decoder, encoder | Bytes to and from `Message`; every length checked against its bound first; decoded values borrow from the batch | Session state, time, the link |
-| Session machine | Handshake, cookie, frame sequence numbers, lease, subscriber declaration and delivery; time is an argument | I/O, allocation, any clock capability |
+| Decoder, encoder | Bytes to and from `Message`, under the `Bounds` they are given; every length checked against its bound first; decoded values borrow from the batch | Session state, time, the link |
+| Fragment codec, reassembly | Cutting a message into FRAGMENT bodies, reading one, joining a run into lent storage with a deadline measured from its first fragment | The session's sequence number, any clock, any memory of its own |
+| Session machine | Handshake, cookie, frame sequence numbers, lease, subscriber and alias tables, delivery, the effective batch; time is an argument | I/O, allocation, any clock capability |
 | `Link` over `ByteLink` | One framed batch awaiting send, partial writes, backpressure, the retry limit, reassembly, notices, generation-checked handles | A socket or a capability: the node passes it the connection the generation granted |
 | Node exchange (`zenoh_node`) | The publisher and subscriber control flow as steppable state machines, the console lines, the service-reply-to-error mapping, the denied requests | Bindings, the connection, the console: those are the component's |
 | Node components | Their bindings, the service connection, the clock and the console, handed to `zenoh_node` through two small traits | Any control flow worth testing |
 
-The session keeps two subscriber slots. The *local* slot is the subscription
-this side declared; a received `PUSH` is delivered only to its key. The *peer*
-slot is the subscription the other side declared; a `Put` this side sends must
-name its key. A publisher therefore learns the subscriber's key from its
+The session keeps slot tables of the sizes its type states (`SessionOf<K, S, B, E>`:
+`K` key aliases, `S` subscribers of both sides, keys of up to `B` bytes, and `E`
+events one batch can yield; `Session` is the first release's one alias and one
+subscriber of each side). A subscriber *this side* declared is delivered to: a
+received `PUSH` reaches only its key. A subscriber *the peer* declared is published
+to: a `Put` this side sends must name its key. A `FRAME`'s changes to the tables are
+journaled and undone if a later message in it is refused, and a frame that changes
+more than the journal holds is refused before it changes anything. A publisher therefore learns the subscriber's key from its
 declaration before it may publish, and a subscriber never accepts a `Put` for a
 key it did not declare. Frames the session sends use the sender key mapping,
 as the upstream encoder writes them.
@@ -90,6 +116,12 @@ that wants the link gone after a refusal says so.
   oversized prefix is refused before its body. A received batch is never dropped:
   while the send slot or the notice queue is full the batch stays in the
   framer, and a full buffer with no complete batch is `ReceiveQueueFull`.
+- A heap link takes its storage on every `pump_with`, cut into cells of one message
+  each. A sample, whole or fragmented, stays in its cell until its notice is taken, so
+  a batch waits until the queue has room for every notice it can raise and, for each
+  sample, a free cell. `LinkOf` sizes its buffers and notice queue from its type; a Put
+  larger than one frame is sent a fragment per `publish_part`, resuming where the last
+  call left off.
 - A pass that raised notices ends there, so `last_received_batch` names the batch
   behind the notices the owner is about to take; `last_sent_batch` names the
   batch most recently queued. Nodes print both as evidence.
@@ -155,6 +187,12 @@ concurrently and a line built from several writes can be interleaved.
 - `just zenoh_cdr_check` — the demo fixture's 4 samples and 7 malformed inputs;
 - `just zenoh_transport_check` — 6 scenarios and 7 refusals over a scripted link;
 - `just zenoh_composition_check` — 15 authority facts on the derived manifest;
+- `just zenoh_stock_check` — the session against the batches a stock eclipse-zenoh
+  1.0.0 peer put on a TCP stream;
+- `just zenoh_links_check` — a link built from each named configuration: the stock
+  peer's fragments reproduced byte for byte, payloads up to 256 MiB reassembled, the
+  tables and notice queue filled to their limits at 9, 256, 65535 and 65536, and 94
+  refusals by name and class, each judged on a link and on its session;
 - `just zenoh_xcheck_check` — the codec and session against the real eclipse-zenoh 1.0.0
   crates: the 17 corpus batches as upstream's encoder produces them, a 6000-case sweep
   (5993 compared, 7 refused as a non-canonical Zenoh ID, none differing), our decoder
