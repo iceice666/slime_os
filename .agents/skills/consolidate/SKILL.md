@@ -43,13 +43,17 @@ BASE=$(git log origin/main --grep='^docs(repo/consolidate)' -1 --format=%H)
 git log --format='%h %s' "$BASE"..origin/main                                 # merged PRs
 git log -p --format= "$BASE"..origin/main -- .tasks/items/ \
   | awk '/^\+\+\+ b\//{f=substr($2,3)} /^\+state: (done|cancelled)/{print f}' | sort -u   # closed items
-gh api --paginate "repos/iceice666/slime_os/pulls/<n>/comments?per_page=100"  # review threads, per PR
+gh api --paginate "repos/iceice666/slime_os/pulls/<n>/comments?per_page=100"  # inline review threads, per PR
+gh api --paginate "repos/iceice666/slime_os/issues/<n>/comments?per_page=100" # conversation comments, per PR
 ```
 
 An item closes when its `state` in `.tasks/items/` becomes `done` or
 `cancelled`; retirement into `.tasks/terminal/` is a separate, later
 workflow, so additions there are not the closures of the window. Without
-`--paginate`, `gh api` returns only the first page of threads.
+`--paginate`, `gh api` returns only the first page of threads. Inline
+review threads and conversation comments are separate endpoints; a
+stop-and-ask handoff and the human's `Decision:` answer are usually
+conversation comments.
 
 Read review threads in full, including the author's replies: a reply that
 says what was reproduced, what changed, and which test now fails without the
@@ -64,7 +68,11 @@ For each item closed and each product PR merged in the window:
    move on; do not create a page without that decision.
 2. **Boundary.** If the page no longer describes what the code accepts and
    refuses, correct it.
-3. **Invariants.** For each review finding that was fixed with a test, decide
+3. **Invariants.** For each closed spec-driven item, read its requirements,
+   acceptances, and the tests or recipes its evidence names: a requirement
+   with passing evidence is a lasting property whether or not any review
+   touched it, and becomes a claim owned by that test or recipe. For each
+   review finding that was fixed with a test, decide
    whether it states a lasting property of the subsystem (a refused input
    changes no state; a queue never holds more than its declared capacity) or
    a one-off defect. Lasting properties are added to the page as claims
