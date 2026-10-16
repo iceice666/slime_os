@@ -435,6 +435,7 @@ CODE_IDENTITY_EXEMPT = (
     "AGENTS.md",
     "CLAUDE.md",
     "CONTRIBUTING.md",
+    "HUMAN.md",
     "README.md",
 )
 

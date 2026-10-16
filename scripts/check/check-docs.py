@@ -40,6 +40,7 @@ REQUIRED_ACTIVE_DOCUMENTS = (
     "README.md",
     "AGENTS.md",
     "CONTRIBUTING.md",
+    "HUMAN.md",
     "docs/README.md",
     "roadmap/README.md",
     ".github/PULL_REQUEST_TEMPLATE/change.md",

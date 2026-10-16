@@ -98,6 +98,10 @@ Before posting, read every open and resolved thread.
 - **Declining is legitimate.** When a finding is outside the item's scope,
   contradicts the landed spec, or asks for what the PR cannot carry, reply
   with the reason and leave the thread for the human.
+- **Triage before fixing.** The author's reply to a round opens with one
+  line per finding: the input that breaks it, whether it changes product
+  behavior or only tooling, documentation or process, and the size of the
+  fix. Fixes follow in the same push.
 - **One push per round.** Answer every thread of a round in one push rather
   than one push per finding, since each push starts another round.
 - **Re-admit once.** Do not re-admit the item to satisfy a suggestion;
@@ -110,3 +114,23 @@ Before posting, read every open and resolved thread.
   is and does not accumulate a per-round changelog.
 - An agent's or bot's review is review, not verification evidence; do not
   list "independent review: no blockers" in the PR's verification table.
+
+## When the author stops and asks
+
+The author fixes nothing in a round and asks the human in one PR comment,
+linking [`HUMAN.md`](../../../HUMAN.md), when either holds:
+
+- A third consecutive round raises a new finding on the same subject. The
+  comment names the subject, the design choice that keeps producing
+  findings, and the decision that would close the whole class (for example:
+  require storage to equal the declared configuration instead of bounding it
+  from below).
+- A non-blocking finding (Codex P2) lands on process or verification text or
+  code: `scripts/`, `.tasks/`, `.devloop/`, `.agents/`, `AGENTS.md`, or
+  `docs/` outside `docs/architecture/`. These are collected into one
+  follow-up comment for the human to accept or drop, not fixed in the PR.
+
+The comment offers two or three options with their cost and a
+recommendation, so the human can answer `Decision: <option>. Because
+<reason>.` That answer is a declared decision under consistency across
+rounds; a finding that follows from it is not re-raised.
