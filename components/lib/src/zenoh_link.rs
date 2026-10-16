@@ -348,7 +348,8 @@ impl<
 
     fn push_notice(&mut self, notice: Notice<P>) {
         // A full queue keeps what it holds: a notice that has nowhere to go is not written over the oldest.
-        if self.notice_len >= Q {
+        // Full is the configured count, not the storage behind it.
+        if self.notice_len >= self.notice_cap() {
             return;
         }
         let at = (self.notice_head + self.notice_len) % Q;

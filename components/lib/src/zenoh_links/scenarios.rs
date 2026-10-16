@@ -2731,3 +2731,37 @@ fn a_link_with_a_longer_queue_than_declared_still_holds_no_more_than_declared() 
     };
     assert_eq!(ninth.payload(&pair.heap_b), distinct_payload(5000, 8));
 }
+
+#[test]
+fn a_refusal_while_the_configured_notices_are_full_adds_none_beyond_them() {
+    // HEAP declares eight notices; storage for nine is spare, and a refusal's Closed notice is not a ninth.
+    let mut pair: Pair<2048, 4, 5, 129, 0, 9, 4> = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    for index in 0..8 {
+        pair.send(codec::KEY, &distinct_payload(12, index), 10);
+    }
+    assert_eq!(pair.b.notices_queued(), 8);
+    pair.inject(&[0xff, 0xff, 0xff]);
+    let _ = pair.pump_b(TIME);
+    assert_eq!(
+        pair.b.notices_queued(),
+        8,
+        "the queue stays within the configured eight"
+    );
+    let mut samples = 0;
+    while let Some(notice) = pair.b.next_notice() {
+        if let Notice::SampleStored(sample) = notice {
+            assert_eq!(
+                sample.payload(&pair.heap_b),
+                distinct_payload(12, samples),
+                "sample {samples} is intact"
+            );
+            samples += 1;
+        }
+    }
+    assert_eq!(
+        samples, 8,
+        "every sample accepted before the refusal is still delivered"
+    );
+}
