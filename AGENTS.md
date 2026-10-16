@@ -42,6 +42,8 @@ Files beginning with `@generated`, files under `boot-contracts/src/generated/`, 
 and every closure under `contracts/system-image-closure/v2/` are outputs, not sources. Change the matching `contracts/.../schema.zt`, `gen_rust.zt`, or system-spec authoring source (`sources/*.zt` for mapped outputs, otherwise
 `systems/*.zti`), then run the matching `scripts/generate/generate-*-bindings.py` / `just *_gen` / `generate-generation-from-spec.py` / `generate-system-image-closures.py`. `components/build-support` generates nothing from a manifest: B70 replaced build-time command tables and the per-plane fabric profile with root-served runtime queries, so a component reads its composition, ceilings, and graph rows from the authenticated generation it is running inside.
 
+A closure's release inputs are listed in `scripts/generate/generate-system-image-closures.py` and include the whole `just/` tree and `Justfile`, so adding or editing any recipe changes every closure's identity. `scripts/check/` and `scripts/lib/` are not inputs except the files `RELEASE_INPUTS` names by path (today `scripts/lib/elf_delivery.py` and the two builders under `scripts/build/`); read that table before assuming a script change leaves the closures current. A PR that touches `just/` regenerates the closures (`python3 scripts/generate/generate-system-image-closures.py`) and refreshes the test-run records (`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`, or `just system_test_run_bless` when an execution declaration changed) in its own derived commit within the same PR; leaving them for a later commit leaves `python3 scripts/generate/generate-system-image-closures.py --check` refusing the tree.
+
 ### Navigation traps
 
 - `slime-root/src/lib.rs` exposes the mechanism modules host tests compile; the product binary in `slime-root/src/main.rs` links those same modules.
@@ -50,81 +52,42 @@ and every closure under `contracts/system-image-closure/v2/` are outputs, not so
 
 ## Commands
 
-Use the Justfile targets from the repository root:
+Use the Justfile targets from the repository root. The full list, one row per target with what it proves, is [`docs/reference/just-targets.md`](docs/reference/just-targets.md); these are the ones every task touches:
 
 - `just run` — boot the current seL4 QEMU product image.
 - `just test` — run the root/product behavioral aggregate.
 - `just generation_check` — build and validate the deterministic seL4 generation.
-- `just contracts_check` — validate generation manifest contracts.
-- `just system_spec_check` — validate system specs and refuse a derived composition manifest that drifted from its spec.
-- `just sel4_root_boot_check` — root admission, allocator, timer, fault isolation, cleanup, and ready path.
-- `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
-- `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
-- `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
-- `just sel4_fabric_aggregate_check` — both aggregate schedules booted twice over one composition; compares per-participant semantic fields while exempting arrival ordinals and designated poll-sampled high-water counters, not byte-identical serial traces.
-- `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
-- `just zenoh_encoder_check` / `zenoh_session_check` / `zenoh_cdr_check` / `zenoh_transport_check` — the host slices of the Zenoh Profile 0 transport, each judged from bytes this repository did not write; they run in about a second once built.
-- `just zenoh_composition_check` — the derived `sel4-zenoh` composition grants the two demo nodes exactly the declared authority, judged against 15 mutations.
-- `just rpi5_ros2_zenoh_check` — R0's exchange under AArch64 QEMU: the composition and host recipes, then two node components exchange the declared topic over Zenoh Profile 0, each reported batch judged byte for byte against the host wire reference. Explicit, not part of `all`; see [`docs/architecture/zenoh-transport.md`](docs/architecture/zenoh-transport.md).
-- `just docs_check` — validate maintained local links/fragments, canonical UUID references, and current command references without network or an archive checkout.
-- `just tasks_check` — real `myque check` plus backlog-first policy, the spec-driven mandate for post-cutoff identities, terminal-record readability, devloop validation of every spec-driven body, and negative controls; offline, with no historical index dependency.
-- `just tasks_list` / `just tasks_next` / `just tasks_graph` — the work-item store's generated views. Never authoritative; `.tasks/` is.
-- `just devloop <args>` — the pinned devloop, run against this repository's `deps/zutai` build and [`.devloop/policy.json`](.devloop/policy.json): `admit`, `validate`, `start`, `gate`, `human`, `eligible`, `complete`, `render`, all by canonical UUID. This is how new work is created and closed; `just devloop gate <ITEM> <ACCEPTANCE> --inputs <file>` runs a declared recipe when the acceptance binds the `just-target` or `just-observations` gate and `<file>` names it as `{"justTarget": "<recipe>"}`.
-- `just x86_64_sel4_image_check` — P6.1's x86-64 admission: exact target profiles, pinned pc99 kernel/toolchain inputs, and a byte-identical rebuild, with no boot claim.
-- `just x86_64_sel4_root_boot_check` — P6.3's root, component runtime, child loader, fault, thread-context, and timer markers on pc99.
-- `just x86_64_qemu_check` — P6.4's corpus on pc99: root boot, wait-set, sample, product graph, boot layouts, and portability.
-- `just framework_media_check` — P6.5's deterministic raw GPT/FAT32 image: byte-identical rebuild, malformed/drifted/unsafe-target refusals, and a boot of the exact raw bytes under pinned q35/OVMF.
-- `just framework_cpu_boot_check` — P6.6's physical claim. Proves the observation validator refuses forged evidence, then reports the recorded boot from `evidence/framework-cpu-boot/`. It cannot manufacture an observation: `framework_cpu_boot_prepare` writes the image and hashes the protected internal region, the cold boots are an operator's power cycle, and `framework_cpu_boot_verify` re-hashes and judges the operator's record. QEMU cannot close it.
-- `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
-- `just lint_all` — run clippy with warnings denied for components, boot-contracts, and seL4 product crates.
-- `just deny` — dependency advisories, bans, licenses, and source pinning.
-- `just machete` — unused-dependency scan of workspace crates.
-- `just miri` — UB check of host-testable crates.
-- `just test_host` — host-side unit tests for boot-contracts and slime-proto.
-- `just test_sel4_root` — `slime-root`'s host unit tests, with the count asserted in `just/quality.just` (B23); raise it deliberately when adding tests. Requires the installed seL4 prefix.
-- `just ruff` — Python lint for `scripts/`.
-- `just typos` — spell-check sources and docs.
+- `just contracts_check` — validate generation manifest contracts and generated bindings.
+- `just tasks_check` — `myque check` plus backlog-first, the spec-driven mandate, and devloop validation of every spec-driven body; offline.
+- `just devloop <args>` — the pinned devloop (`admit`, `validate`, `start`, `gate`, `human`, `eligible`, `complete`, `render`, by canonical UUID) against [`.devloop/policy.json`](.devloop/policy.json). This is how new work is created and closed.
+- `just docs_check` — maintained links, fragments, canonical UUID references, and command references, without network.
+- `just fmt_check_all` / `just lint_all` / `just ruff` / `just typos` — formatting, clippy with warnings denied, Python lint, spell-check.
+
+Explicit hardware and physical-boot targets (`rpi5_ros2_zenoh_check`, `framework_cpu_boot_check`, the `x86_64_*` and `framework_media_*` recipes) are in no aggregate; `framework_cpu_boot_check` cannot manufacture an observation and QEMU cannot close it.
 
 ## Work items, backlog, and roadmap
 
-`.tasks/` is the canonical record of work-item identity, state, hierarchy, and dependencies, managed by [MyQue](https://github.com/mozufu/myque) at the `work-item/v2` envelope. Active work is `.tasks/items/<UUID>.md`; a done or cancelled item may be *retired* to a minimal `.tasks/terminal/<UUID>.json` record after its exact final bytes are retained in Git, and its identity, relationships, and readiness still resolve offline from that record. Canonical identity is the UUID; a cancelled, unknown, or corrupt identity is never done. Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: they are optional, they may change, and no checker, devlog reference, dependency edge, or generated view may resolve through them. Do not allocate an id by scanning for the next number, and do not create a persistent relationship using a human key — use `myque` to create and mutate items, which allocates a UUIDv7 locally and writes relationships as UUIDs.
+`.tasks/` is the canonical store, managed by MyQue; identity is the UUID, human keys are display aliases. New work is spec-driven: create it with `just devloop admit`, never `myque new`, and gate, record evidence for, and close it with `just devloop`. Backlog defects (`backlog` tag) are resolved, deferred, or blocked before any milestone work starts. A product or grader change implements an item already on `main`: planning PR first, implementation PR second, and `scripts/check/check-pr-scope.py` refuses product code in a planning PR. An implementation branch cannot rewrite the checker that grades it, so a checker repair is itself a planning change whose acceptances bind elsewhere. Merging fresh passing evidence is a closeout request. Do not run `just devloop complete` for a merged implementation; `myque-closeout.yml` proposes it from `main`.
 
-An item's frontmatter is an open record: MyQue owns an enumerated key set and preserves every other top-level namespace verbatim. `devloop` is this repository's only consumer namespace. An item that carries it is *spec-driven*: its body after the title is exactly one fenced `zti` [`dev-spec/v1`](https://github.com/mozufu/devloop) payload under devloop's `fenced-zti/v1` profile, and its record carries the profile, pinned schema and helper identities, requirements digest, admission identity, and evidence. `just tasks_check` validates those bodies through devloop — which owns that format — while `myque check` still owns store validity. Admit, start, gate, and complete such work with `just devloop`; gate identities and their declared typed observations live in [`.devloop/policy.json`](.devloop/policy.json), never in requirement text. The `just-target` gate is the general one: it takes the recipe name from the execution inputs and reports a single `passed` boolean, so an acceptance can bind to any published `just` target without a bespoke adapter. Prefer `just-observations` when a requirement is a count rather than a pass: the same recipe runs, its checker reports typed observations through `scripts/lib/devloop_observations.py` (cases observed, negative controls refused, bytes delivered, stale handles rejected), and the acceptance's predicate names the expected number. That number is the planning item's to state, and the checker that produces it must be under `codePaths`; [`.devloop/examples/`](.devloop/examples/) holds a worked spec. `just tasks_check` also refuses a tracked file that no `codePaths` entry covers unless `check-work-items.py` exempts it by decision, so a checker, recipe, pin, or fixture cannot change without staling evidence recorded against it. Execution inputs live in `.devloop/inputs/<item>.json` and land with the planning item: at `eligible` and `complete`, approval refuses unless that file, the recipe closure it names, and the scripts and `scripts/lib` modules those recipes run match `origin/main` byte for byte, so an implementation branch cannot rewrite the checker that grades it. **A spec-driven body is mandatory for new work.** Every item whose canonical UUIDv7 identity is at or after `2026-10-01T00:00:00Z` must carry a `devloop` record, with no exemption by kind, tag, or state; `just tasks_check` refuses the store otherwise, so create such work with `just devloop admit`, never `myque new`. Items created before that instant — including every legacy `work-item/v1` item — remain valid prose and never become subject, even if reopened. Each devloop validation compiles and links a native binary, so `just tasks_check` costs seconds once an item is spec-driven; a direct `myque close` without `--expected` bypasses devloop's eligibility boundary by design. [`docs/getting-started/06-work-item-lifecycle.md`](docs/getting-started/06-work-item-lifecycle.md) walks both lifecycles command by command, and [`docs/decisions/spec-driven-work-item-bodies.md`](docs/decisions/spec-driven-work-item-bodies.md) records what this repository owns and what it defers.
+The full lifecycle — store rules, spec-driven bodies and gates, closure pinning, backlog-first, what each PR class may carry, evidence-only PRs, the author-restatement pause, history and `roadmap/` — is [`.agents/skills/work-item-lifecycle/SKILL.md`](.agents/skills/work-item-lifecycle/SKILL.md). Read it before any `just devloop` or `myque` command or before opening a PR that touches `.tasks/`, `.devloop/`, or a checker. [`CONTRIBUTING.md`](CONTRIBUTING.md) owns the human-facing PR workflow.
 
-Backlog defects are the items tagged `backlog`. Resolve, defer, or block every open one before starting a new track milestone; a green verification suite is a precondition for milestone work, not a milestone itself. `deferred` means postponed by decision and `blocked` means waiting on something outside this repository — both satisfy the rule, `open` and `active` do not. `just tasks_check` enforces that ordering and validates the store, and `just tasks_next` lists what is actionable. A new defect is spec-driven like any other new work: admit it with `just devloop admit <spec>.zti --title "<title>" --kind bug` and add `--tag backlog`, then close it with `just devloop complete`. A pre-cutoff defect was created with `myque new` and still closes with `myque close`, which records the closure date; either way record the exit condition that was *observed* in the item's body — a milestone closes on observed evidence, never on implementation status alone.
+## Code review
 
-A product or grader change implements a canonical item that is already on `main`; land a work-item-only planning PR first, then the implementation PR. A PR that adds a work item may carry that item's exam — inputs, recipe, checker — and a *new* `contracts/<name>/v<N>/schema.zt` the exam binds to, but never product code: not `gen_rust.zt`, generated bindings, system specs, or a modified schema; `scripts/check/check-pr-scope.py` refuses the mix in CI. A PR confined to CI workflows outside `codePaths`, `CONTRIBUTING.md`, this file, `docs/`, or other paths outside `.devloop/policy.json`'s `codePaths` is a process change and needs no item. The CI, MyQue projection, closeout and retirement workflow files are covered by `codePaths` so their edits stale shared-tool evidence and require landed-item ownership. Never use GitHub auto-close keywords (`Closes`, `Fixes`, `Resolves`) against projected Issues, and never hand-edit `myque:*` markers or the `myque-gh` PR trailer. Within the product tree or grader closure, only a genuine typo, broken link, format-only change, or mechanical maintenance with no behavioral or project-state consequence skips the landed-item requirement; judge semantics, not line count. Do not run `just devloop complete` for a merged implementation: `myque-closeout.yml` proposes that transition from `main`. [`CONTRIBUTING.md`](CONTRIBUTING.md) owns the full PR workflow.
+These rules bind every reviewer of a PR — a person, a review bot such as Codex, or an agent asked to review — and the author answering the review. A review's job is to find where the diff, the checker it binds, and the landed work item disagree, and to say so with a file and line.
 
-**Author restatement is paused.** A separate author-written explanation is not a merge prerequisite. PRs still state the change, claim, risks, exact verification, and known limits, and reviewers check those claims against the diff and observed evidence. Do not invent an author quote or label agent-written text as "In the author's words". The pause does not waive planning-first ownership, acceptance evidence, review, CI, or human authorization.
+- **The item bounds the review.** Read the work item, the PR description, and the existing threads before the diff. A process PR has no item; there the rules in this file the PR claims to follow, and the claims its description makes, are what a finding is checked against. A finding names what it breaks — an item requirement or acceptance, a stated invariant, or a rule in this file — the file and line, and the input that produces the wrong result. A case the acceptance rationale does not claim is a follow-up proposal in one comment, not a finding; a declared known limit is a decision to weigh, not a gap.
+- **Severity states a consequence.** Blocking only when a gate can pass while its claim is false, a refused input is accepted, an authority, lifetime, or determinism rule is broken, a boundary-crossing format has no Zutai contract, or the recipe cannot pass as landed. A local defect is non-blocking. Style, alternatives, and hardening the item does not require are suggestions, labelled, never blocking, never re-raised. What the PR cannot carry goes to the planning process in one comment.
+- **One review per head.** A later head gets the delta and the threads it answers, not a fresh pass over the whole diff. More than ten findings means a structural problem: name it, give the strongest, stop. Never duplicate a finding another tool posted.
+- **Consistency.** A finding that restates an open thread is a reply there; one that contradicts an earlier round names it and the evidence that changed. A thread answered with a question or a declared decision waits for the human.
+- **Answering.** Reproduce before fixing; what does not reproduce stays open with what was tried. Declining with a reason is legitimate. Answer a whole round in one push. Re-admit once, never for a suggestion. Nothing blocking means ready. Threads hold the history; the description describes the head.
 
-The old frozen backlog index is archived, not a live obligation. New and reopened defects belong only to the canonical store. Historical evidence uses the repository identity, full commit, and original path described in [`docs/history.md`](docs/history.md); archived task snapshots never participate in current validation or projection.
+[`.agents/skills/pr-review/SKILL.md`](.agents/skills/pr-review/SKILL.md) is the full text; [`.agents/skills/spec-review/SKILL.md`](.agents/skills/spec-review/SKILL.md) is the procedure for an implementation PR against a spec-driven item.
 
-`roadmap/` retains explicitly identified unextracted requirements and their surrounding historical context. Its classification index routes extracted subjects to `docs/architecture/` and `docs/plans/`; update those owners rather than maintaining parallel milestone prose. State, hierarchy, and dependencies belong only to the store.
+## Change records and documentation
 
-## Change records and historical investigations
+The commit and PR record the change, claim, risk, exact verification, and known limits; the work item records scope, state, and observed exit conditions; ordinary changes need no devlog. A behavior change at a contract, wire, or operating boundary updates the owning `docs/architecture/` page in the same PR. Durable cross-module choices go to [`docs/decisions/`](docs/decisions/README.md), unimplemented designs to [`docs/plans/`](docs/plans/README.md), historical investigations to the [`slime_os-history` archive](docs/history.md).
 
-Ordinary features, bug fixes, refactors, and milestone completions do not require a separate devlog entry. The commit and PR record the change, claim, risk, review surface, exact verification, and known limits; the canonical work item records scope, state, and the exit conditions actually observed. Distinguish direct observations from inherited evidence and unobserved inference, and bind hardware or image claims to the target, revision, and binary identity that was tested.
-
-Update the owning current documentation when a contract, operating procedure, or limitation changes. Put long-lived cross-module choices in [`docs/decisions/`](docs/decisions/README.md) when they need a durable record; put unimplemented designs and qualification requirements in [`docs/plans/`](docs/plans/README.md); keep exploratory directions in [`docs/directions/`](docs/directions/README.md); keep local invariants beside the implementation. A decision record states context, the decision, alternatives and trade-offs, consequences, revisit conditions, status (`proposed`, `accepted`, or `superseded`), and relevant work-item UUIDs and code references. Moving an old proposal never makes it accepted. The accepted ownership split is recorded in [`docs/decisions/development-record-ownership.md`](docs/decisions/development-record-ownership.md).
-
-Historical investigations and raw evidence live in the private [`slime_os-history` archive](docs/history.md). Preserve observed results and bytes; new exceptional investigations belong there, not in the product tree. Ordinary changes require neither an investigation nor a complete transcript. Product checks validate current local knowledge, not archived entries against today's recipes or tasks.
-
-## Documentation ownership
-
-A comment should state what must remain true, not argue that the author was right.
-
-Keep implementation comments for correctness or safety invariants not evident
-from types or code, ownership and ordering requirements, ABI constraints,
-capability or security boundaries, platform constraints, and why an apparently
-simpler local implementation would violate a current invariant. Do not put
-investigation history, failed approaches, reviewer findings, mutation campaigns,
-historical alternatives, speculative designs, verification results, or narration
-of the code in implementation comments.
-
-Place local invariants beside the implementation and stable subsystem rationale
-in the owning `docs/` or contract documentation. Prefer one to three precise
-sentences over defensive paragraphs. Historical investigation records explain
-how an older conclusion was reached and are referenced rather than duplicated.
+A comment should state what must remain true, not argue that the author was right: invariants, ordering, ABI, capability boundaries, and why the simpler local form would break a current invariant — never investigation history, reviewer findings, or verification results. [`.agents/skills/change-records/SKILL.md`](.agents/skills/change-records/SKILL.md) holds the record ownership table, the decision-record template, and the comment rules in full.
 
 ## Development rules
 
@@ -138,31 +101,14 @@ how an older conclusion was reached and are referenced rather than duplicated.
 
 ## Verification code discipline
 
-Do not create a new `scripts/check/check-*.py` merely because a change adds an
-invariant or roadmap gate. Identify the verification mechanism that owns the
-invariant, extend its checker when one exists, and add a case or module when
-execution and evidence collection are shared. Add a top-level checker only for a
-genuinely new mechanism or independently reusable boundary, such as a different
-execution environment, distinct input/output protocol, stable subsystem boundary
-with multiple checks, independent reuse, or materially different semantics.
-
-Roadmap items, backlog IDs, compositions, individual regressions, and individual
-QEMU planes do not by themselves justify top-level checker executables. Public
-`just` targets remain narrow and descriptive; several targets may invoke one
-checker with different cases.
-
-For seL4 planes, the shared mechanism lives in `scripts/lib/sel4_plane.py`
-(QEMU invocation, transcript collection, common failures, control and mutation
-machinery) and `scripts/lib/sel4_gate_markers.py` (marker chains and ordering).
-Each `scripts/check/check-sel4-*-plane.py` owns only its concrete expectations
-for boot, lifecycle, fabric, IO, storage, and similar domains. Move repeated
-QEMU or transcript handling into those libraries rather than copying it into a
-new plane script. Extract only observed repetition; do not build a generic
-class-heavy test framework, and keep existing public gates.
+Extend the checker that owns an invariant; add a top-level `scripts/check/check-*.py` only for a genuinely new mechanism or reusable boundary, never for a roadmap item, composition, or single plane. seL4 plane mechanism lives in `scripts/lib/sel4_plane.py` and `scripts/lib/sel4_gate_markers.py`; a plane script owns only its expectations. An independent judge is at least as strict as the code it judges on every boundary it claims, every positive assertion has a negative control, and a pinned external artifact is re-verified by hash on every run. [`.agents/skills/verification-checkers/SKILL.md`](.agents/skills/verification-checkers/SKILL.md) is the full rule set; read it before touching `scripts/check/`, `scripts/lib/sel4_*`, an exam judge, or a `just` recipe.
 
 ## Verification
 
 - For root or userspace behavior changes, regenerate the system-image closures (`python3 scripts/generate/generate-system-image-closures.py`), then run the narrowest seL4 QEMU path that exercises the changed behavior. The generator refuses a tree holding gitignored files; a closure digest is a raw filesystem walk, so ignored build output would record bytes no clone reproduces.
 - For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
 - For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing.
+- For a behavior change at a contract, wire, or operating boundary, update the owning `docs/architecture/` page in the same PR; a diff that reverses what that page states is incomplete.
+- Verify on a clean tree or a dedicated worktree. If the working tree holds changes the PR does not carry, say so in the PR description; a check that passed with foreign edits present proves nothing about the PR alone.
+- Report only observed commands and results as verification. A review by an agent or bot is review, not evidence: it does not belong in the verification table.
 - For documentation-only changes, state that no runtime tests were run.
