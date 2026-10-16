@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-b40-wrong-slot";
-  baseClosureIdentity = "4c9d4cb12d99d57a256266fd4ac5edbb0ece7ef69c1ac379df00fc5bcfda2653";
+  baseClosureIdentity = "51400cc770c146bc89b410981770fe08038c1f383e6eb57238c4a91e8e1ac5f2";
   mutation = "wrong_slot";
   expectedRefusal = "CSpaceMismatch";
 }
