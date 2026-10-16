@@ -188,9 +188,10 @@ pub struct LinkOf<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize = MAX_EVENTS,
 > {
     io: L,
-    session: SessionOf<K, S, B>,
+    session: SessionOf<K, S, B, E>,
     framer: StreamFramerOf<FRAMED>,
     send: [u8; FRAMED],
     send_len: usize,
@@ -211,7 +212,8 @@ pub struct LinkOf<
 
 /// The first release's link: a 512-byte batch, one alias and one subscriber of each side, a 129-byte key
 /// and a 12-byte payload.
-pub type Link<L> = LinkOf<L, DEMO_FRAMED, 1, 2, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, DEMO_NOTICES>;
+pub type Link<L> =
+    LinkOf<L, DEMO_FRAMED, 1, 2, MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, DEMO_NOTICES, MAX_EVENTS>;
 
 impl<L: ByteLink> Link<L> {
     /// A link in its generation under the first release's parameters, with a fresh session and
@@ -234,7 +236,8 @@ impl<
     const B: usize,
     const P: usize,
     const Q: usize,
-> LinkOf<L, FRAMED, K, S, B, P, Q>
+    const E: usize,
+> LinkOf<L, FRAMED, K, S, B, P, Q, E>
 {
     /// A link in its generation, declared by `params`.
     pub fn with_params(
@@ -283,7 +286,7 @@ impl<
         self.tap_received.get()
     }
 
-    pub fn session(&self) -> &SessionOf<K, S, B> {
+    pub fn session(&self) -> &SessionOf<K, S, B, E> {
         &self.session
     }
 
@@ -479,7 +482,7 @@ impl<
 
     /// Turns a session's events into notices. A heap link keeps every sample in the heap the owner lent,
     /// whether it arrived whole or in fragments, so its notices carry no payload of their own.
-    fn absorb(&mut self, outcome: &Outcome<'_>, heap: &mut [u8]) {
+    fn absorb(&mut self, outcome: &Outcome<'_, E>, heap: &mut [u8]) {
         for event in outcome.events.iter() {
             let notice = match *event {
                 Event::HandshakeComplete => Notice::HandshakeComplete,

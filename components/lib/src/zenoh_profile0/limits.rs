@@ -169,6 +169,18 @@ impl Limits {
         (NOTICES_PER_SAMPLE as u64 * self.outstanding_samples as u64 + 1) * self.message_bytes()
     }
 
+    /// The most events one received batch can yield: one for each outstanding sample, and no more than
+    /// the batch has room for. The smallest message that raises an event is four bytes, so a batch of
+    /// `n` bytes holds fewer than `n / 4`.
+    pub const fn events_per_batch(&self) -> usize {
+        let room = self.batch_bytes / 4;
+        if self.outstanding_samples < room {
+            self.outstanding_samples
+        } else {
+            room
+        }
+    }
+
     /// What a fixed link needs of its batch: the message, a frame header and a five-byte sequence
     /// number, and the two-byte stream length.
     pub const fn fixed_need(&self) -> u64 {

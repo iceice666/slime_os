@@ -52,6 +52,8 @@ pub struct Params {
     /// Subscribers the peer may declare. The session also holds one of its own, so its subscriber
     /// table has one more slot than this.
     pub per_side: usize,
+    /// The most events one received batch can yield; the session's event storage must hold them.
+    pub events: usize,
 }
 
 impl Params {
@@ -63,6 +65,7 @@ impl Params {
         timeout_ms: 0,
         message_limit: 0,
         per_side: 1,
+        events: MAX_EVENTS,
     };
 
     /// The parameters a limits declaration describes.
@@ -79,6 +82,7 @@ impl Params {
             timeout_ms: limits.reassembly_timeout_ms,
             message_limit: usize::try_from(limits.message_bytes()).unwrap_or(usize::MAX),
             per_side: limits.max_subscribers,
+            events: limits.events_per_batch(),
         }
     }
 }
@@ -193,17 +197,17 @@ pub enum Event<'a> {
     },
 }
 
-/// Up to [`MAX_EVENTS`] events, in the order they happened.
+/// Up to `E` events, in the order they happened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Events<'a> {
-    items: [Option<Event<'a>>; MAX_EVENTS],
+pub struct Events<'a, const E: usize = MAX_EVENTS> {
+    items: [Option<Event<'a>>; E],
     len: usize,
 }
 
-impl<'a> Events<'a> {
+impl<'a, const E: usize> Events<'a, E> {
     const fn empty() -> Self {
         Self {
-            items: [None; MAX_EVENTS],
+            items: [None; E],
             len: 0,
         }
     }
@@ -237,13 +241,13 @@ impl<'a> Events<'a> {
 
 /// The result of one accepted call: the batch body written, if any, and events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Outcome<'a> {
+pub struct Outcome<'a, const E: usize = MAX_EVENTS> {
     /// Length of the batch body written at the start of the lent storage; 0 means nothing to send.
     pub sent: usize,
-    pub events: Events<'a>,
+    pub events: Events<'a, E>,
 }
 
-impl<'a> Outcome<'a> {
+impl<'a, const E: usize> Outcome<'a, E> {
     const fn nothing() -> Self {
         Self {
             sent: 0,
@@ -324,12 +328,12 @@ fn table_error(error: InsertError, full: SessionError) -> SessionError {
 }
 
 /// Delivers a Put to this side's subscriber when it names a key one of them declared.
-fn deliver<'a, const S: usize, const B: usize>(
+fn deliver<'a, const S: usize, const B: usize, const E: usize>(
     subs: &SlotTable<S, B>,
     key: &[u8],
     attachment: crate::zenoh_profile0::Attachment<'a>,
     payload: &'a [u8],
-    events: &mut Events<'a>,
+    events: &mut Events<'a, E>,
 ) -> Result<(), SessionError> {
     if !subscribed_to(subs, key) {
         return Err(SessionError::UndeclaredKey);
@@ -353,7 +357,12 @@ fn subscribed_to<const S: usize, const B: usize>(subs: &SlotTable<S, B>, key: &[
 /// A session over `K` key aliases and `S` subscribers of each side, keys of up to `B` bytes. The
 /// defaults are the first release's.
 #[derive(Clone, Debug)]
-pub struct SessionOf<const K: usize = 1, const S: usize = 1, const B: usize = MAX_KEY_BYTES> {
+pub struct SessionOf<
+    const K: usize = 1,
+    const S: usize = 1,
+    const B: usize = MAX_KEY_BYTES,
+    const E: usize = MAX_EVENTS,
+> {
     role: Role,
     state: State,
     params: Params,
@@ -387,9 +396,9 @@ pub struct SessionOf<const K: usize = 1, const S: usize = 1, const B: usize = MA
 }
 
 /// The first release's session.
-pub type Session = SessionOf<1, 2, MAX_KEY_BYTES>;
+pub type Session = SessionOf<1, 2, MAX_KEY_BYTES, MAX_EVENTS>;
 
-impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
+impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K, S, B, E> {
     /// A session with the first release's parameters, in [`State::Idle`], or
     /// [`SessionError::InvalidConfig`] when the encoder could not announce `config`.
     pub fn new(role: Role, config: &Config<'_>) -> Result<Self, SessionError> {
@@ -402,7 +411,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         config: &Config<'_>,
         params: Params,
     ) -> Result<Self, SessionError> {
-        if params.bounds.key > B {
+        if params.bounds.key > B || params.events > E {
             return Err(SessionError::InvalidConfig);
         }
         let mut scratch = [0u8; 2 * MAX_BATCH_BYTES];
@@ -499,14 +508,14 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         self.reassembly.is_open()
     }
 
-    /// The subscribers held, of both sides.
-    pub const fn subscribers(&self) -> usize {
-        self.local_n + self.remote_n
-    }
-
     /// The key aliases the peer declared.
     pub const fn aliases(&self) -> usize {
         self.aliases.len()
+    }
+
+    /// The subscribers held, of both sides.
+    pub const fn subscribers(&self) -> usize {
+        self.local_n + self.remote_n
     }
 
     fn first_of(&self, side: u64) -> Option<(u32, &[u8])> {
@@ -594,7 +603,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         &mut self,
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Connector || self.state != State::Idle {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -614,7 +623,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         batch: &'a [u8],
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         self.on_batch_with(batch, now_ms, out, &mut [])
     }
 
@@ -627,7 +636,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         now_ms: u64,
         out: &mut [u8],
         cell: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Closed {
             return Err(SessionError::Closed);
         }
@@ -678,7 +687,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         message: Message<'a>,
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Closed {
             return Err(SessionError::Closed);
         }
@@ -712,7 +721,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         &mut self,
         batch_size: u16,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Listener || self.state != State::Idle {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -732,7 +741,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         cookie: &[u8],
         batch_size: u16,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Connector || self.state != State::AwaitInitAck {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -754,7 +763,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         initial_sn: u32,
         cookie: &[u8],
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Listener || self.state != State::AwaitOpenSyn {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -772,7 +781,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         &mut self,
         lease_ms: u64,
         initial_sn: u32,
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Connector || self.state != State::AwaitOpenAck {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -784,14 +793,14 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
 
     /// Traffic that renews the lease, and nothing else. Before OPEN it would refresh a handshake
     /// that has not finished, so it is refused there and the session is left as it was.
-    fn on_keep_alive<'a>(&mut self) -> Result<Outcome<'a>, SessionError> {
+    fn on_keep_alive<'a>(&mut self) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
             return Err(SessionError::UnexpectedMessage);
         }
         Ok(Outcome::nothing())
     }
 
-    fn on_close<'a>(&mut self, reason: u8) -> Result<Outcome<'a>, SessionError> {
+    fn on_close<'a>(&mut self, reason: u8) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Idle {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -815,7 +824,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
 
     /// A frame is applied whole or not at all: every table change it makes is journaled and undone if a
     /// later message in it is refused, and the sequence number commits only after all were accepted.
-    fn on_frame<'a>(&mut self, frame: Frame<'a>) -> Result<Outcome<'a>, SessionError> {
+    fn on_frame<'a>(&mut self, frame: Frame<'a>) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -863,21 +872,29 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         frame: &Frame<'a>,
         journal: &mut [Option<Change>; JOURNAL],
         used: &mut usize,
-        events: &mut Events<'a>,
+        events: &mut Events<'a, E>,
     ) -> Result<(), SessionError> {
-        let mut note = |change: Change| -> Result<(), SessionError> {
-            let slot = journal
-                .get_mut(*used)
-                .ok_or(SessionError::TooManyMessages)?;
-            *slot = Some(change);
-            *used += 1;
-            Ok(())
-        };
+        // Room in the journal is claimed before a table is changed, so a frame that could not be undone
+        // is refused before it does anything.
+        fn room(used: &usize) -> Result<(), SessionError> {
+            if *used < JOURNAL {
+                Ok(())
+            } else {
+                Err(SessionError::TooManyMessages)
+            }
+        }
+        fn note(journal: &mut [Option<Change>; JOURNAL], used: &mut usize, change: Change) {
+            if let Some(slot) = journal.get_mut(*used) {
+                *slot = Some(change);
+                *used += 1;
+            }
+        }
         for network in frame.messages() {
             match network {
                 Network::DeclareSubscriber { id, key, .. } => {
+                    room(used)?;
                     let at = self.take_remote(u64::from(id), key.as_bytes())?;
-                    note(Change::Subscribed(at))?;
+                    note(journal, used, Change::Subscribed(at));
                     events.push(Event::SubscriberDeclared { id })?;
                 }
                 Network::DeclareSubscriberAlias {
@@ -885,6 +902,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                     mapping,
                     alias: named,
                 } => {
+                    room(used)?;
                     let held = resolve(&self.aliases, named, mapping)?;
                     let mut copy = [0u8; B];
                     let key = copy
@@ -892,10 +910,11 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                         .ok_or(SessionError::Decode(Refusal::OverBound))?;
                     key.copy_from_slice(held);
                     let at = self.take_remote(u64::from(id), key)?;
-                    note(Change::Subscribed(at))?;
+                    note(journal, used, Change::Subscribed(at));
                     events.push(Event::SubscriberDeclared { id })?;
                 }
                 Network::UndeclareSubscriber { id, key, .. } => {
+                    room(used)?;
                     let at = self
                         .subs
                         .find(u64::from(id))
@@ -907,7 +926,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                         .ok_or(SessionError::UnknownSubscriber)?;
                     self.subs.defer_remove(at);
                     self.remote_n -= 1;
-                    note(Change::Unsubscribed(at))?;
+                    note(journal, used, Change::Unsubscribed(at));
                     events.push(Event::SubscriberUndeclared { id })?;
                 }
                 Network::PushPut {
@@ -931,13 +950,14 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
                     if self.aliases.find(u64::from(id)).is_some() {
                         return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
                     }
+                    room(used)?;
                     let at =
                         self.aliases
                             .insert(u64::from(id), key.as_bytes())
                             .map_err(|error| {
                                 table_error(error, SessionError::Decode(Refusal::OverBound))
                             })?;
-                    note(Change::Alias(at))?;
+                    note(journal, used, Change::Alias(at));
                 }
                 Network::Oam | Network::DeclareFinal => {}
             }
@@ -953,7 +973,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         batch: &[u8],
         now_ms: u64,
         cell: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -994,7 +1014,11 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
     /// Closes the session with a CLOSE batch once `now_ms` is past the lease deadline. An open
     /// session that has sent nothing for a quarter of its own announced lease writes a KEEP_ALIVE; before
     /// OPEN, or while the lent storage cannot take one, it only accepts and does nothing.
-    pub fn tick<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    pub fn tick<'a>(
+        &mut self,
+        now_ms: u64,
+        out: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
         let expired = self.expire(now_ms, out)?;
         if expired.sent != 0 {
             self.now_ms = self.now_ms.max(now_ms);
@@ -1017,7 +1041,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         &mut self,
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         let outcome = self.expire(now_ms, out)?;
         self.now_ms = self.now_ms.max(now_ms);
         Ok(outcome)
@@ -1025,7 +1049,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
 
     /// The expiry check without the clock: a refused call must leave the session as it was, so
     /// the callers advance `now_ms` only after the whole operation has succeeded.
-    fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a, E>, SessionError> {
         // A run whose last fragment never came is refused once its deadline has passed and its storage is
         // released; the session itself stays open.
         if self.reassembly.expired(now_ms) {
@@ -1054,7 +1078,11 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
     }
 
     /// Closes the session locally with a CLOSE batch carrying `reason`.
-    pub fn close<'a>(&mut self, reason: u8, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    pub fn close<'a>(
+        &mut self,
+        reason: u8,
+        out: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Closed {
             return Err(SessionError::Closed);
         }
@@ -1077,7 +1105,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         &mut self,
         out: &mut [u8],
         build: impl FnOnce(&mut FrameEncoder<'_>) -> Result<(), EncodeError>,
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
             return Err(SessionError::NotOpen);
         }
@@ -1097,7 +1125,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         id: u32,
         key: &str,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.local_n >= 1 || self.subs.find(LOCAL | u64::from(id)).is_some() {
             return Err(SessionError::SubscriberLimit);
         }
@@ -1117,7 +1145,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         id: u32,
         key: &str,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         let at = self
             .subs
             .find(LOCAL | u64::from(id))
@@ -1170,7 +1198,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         attachment: &[u8],
         payload: &[u8],
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         self.check_put(key, attachment, payload.len())?;
         if self.state == State::Open && !self.put_fits_one_frame(key, attachment, payload.len()) {
             return Err(if self.params.fragments {
@@ -1194,7 +1222,7 @@ impl<const K: usize, const S: usize, const B: usize> SessionOf<K, S, B> {
         payload: &[u8],
         at: usize,
         out: &mut [u8],
-    ) -> Result<(Outcome<'a>, Option<usize>), SessionError> {
+    ) -> Result<(Outcome<'a, E>, Option<usize>), SessionError> {
         if self.state != State::Open {
             return Err(SessionError::NotOpen);
         }

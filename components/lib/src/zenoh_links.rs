@@ -12,11 +12,13 @@ fn line(text: &str) {
 }
 
 /// The scenarios whose assertions held, in the order they finished. `ok` lines are printed together, in
-/// the order the exam pins, by the last test, so a scenario that did not finish prints none and fails it.
+/// the order the exam pins, by the closing test, so a scenario that did not finish prints none and fails it.
 static FINISHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static FINISHED_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
 fn ok(name: &str) {
     FINISHED.lock().expect("registry").push(name.into());
+    FINISHED_CHANGED.notify_all();
 }
 
 /// Lines whose order the exam pins within their kind, held until the last test prints them in that
@@ -348,9 +350,10 @@ struct Pair<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 > {
-    a: LinkOf<Scripted, F, K, S, B, P, Q>,
-    b: LinkOf<Scripted, F, K, S, B, P, Q>,
+    a: LinkOf<Scripted, F, K, S, B, P, Q, E>,
+    b: LinkOf<Scripted, F, K, S, B, P, Q, E>,
     ha: LinkHandle,
     hb: LinkHandle,
     a_to_b: Rc<RefCell<Pipe>>,
@@ -365,7 +368,7 @@ struct Pair<
     ack: Vec<u8>,
 }
 
-type HeapPair = Pair<2048, 4, 5, 129, 0, 8>;
+type HeapPair = Pair<2048, 4, 5, 129, 0, 8, 4>;
 
 fn pair_of<
     const F: usize,
@@ -374,10 +377,11 @@ fn pair_of<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     limits: &Limits,
     heap: usize,
-) -> Pair<F, K, S, B, P, Q> {
+) -> Pair<F, K, S, B, P, Q, E> {
     pair_params(Params::from_limits(limits), heap)
 }
 
@@ -388,10 +392,11 @@ fn pair_params<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     params: Params,
     heap: usize,
-) -> Pair<F, K, S, B, P, Q> {
+) -> Pair<F, K, S, B, P, Q, E> {
     pair_sn(params, heap, 1000)
 }
 
@@ -403,11 +408,12 @@ fn pair_sn<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     params: Params,
     heap: usize,
     a_sn: u32,
-) -> Pair<F, K, S, B, P, Q> {
+) -> Pair<F, K, S, B, P, Q, E> {
     pair_with(params, heap, a_sn, 2000)
 }
 
@@ -428,12 +434,13 @@ fn pair_with<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     params: Params,
     heap: usize,
     a_sn: u32,
     b_sn: u32,
-) -> Pair<F, K, S, B, P, Q> {
+) -> Pair<F, K, S, B, P, Q, E> {
     let a_to_b = Rc::new(RefCell::new(Pipe::default()));
     let b_to_a = Rc::new(RefCell::new(Pipe::default()));
     let a = LinkOf::with_params(
@@ -475,8 +482,15 @@ fn pair_with<
     }
 }
 
-impl<const F: usize, const K: usize, const S: usize, const B: usize, const P: usize, const Q: usize>
-    Pair<F, K, S, B, P, Q>
+impl<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+    const E: usize,
+> Pair<F, K, S, B, P, Q, E>
 {
     /// Pumps both ends until neither moves a byte or reads a batch.
     fn run(&mut self, now: u64) {
@@ -862,10 +876,21 @@ const OK_ORDER: [&str; 56] = [
     "boundary-at-sequence-width-changes",
 ];
 
-/// Sorts after every other test of the module, which `--test-threads=1` runs in name order.
+/// Sorts after every other test of the module, so a runner that starts tests in name order has started
+/// them all before this one. It then waits for the scenarios still running on other threads, which a
+/// single-threaded run has already finished and a parallel one may not have.
 #[test]
 fn zz_every_scenario_finished_and_is_reported_in_the_exams_order() {
-    let finished = FINISHED.lock().expect("registry").clone();
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(900);
+    let (guard, _) = FINISHED_CHANGED
+        .wait_timeout_while(FINISHED.lock().expect("registry"), PATIENCE, |finished| {
+            !OK_ORDER
+                .iter()
+                .all(|name| finished.iter().any(|f| f == name))
+        })
+        .expect("registry");
+    let finished = guard.clone();
+    drop(guard);
     let mut sorted = finished.clone();
     sorted.sort();
     sorted.dedup();

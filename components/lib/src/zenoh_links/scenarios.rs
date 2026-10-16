@@ -117,8 +117,15 @@ fn class(error: &Error) -> String {
     }
 }
 
-impl<const F: usize, const K: usize, const S: usize, const B: usize, const P: usize, const Q: usize>
-    Pair<F, K, S, B, P, Q>
+impl<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+    const E: usize,
+> Pair<F, K, S, B, P, Q, E>
 {
     /// Puts one batch body on the stream `b` reads, behind its stream length.
     fn inject(&self, body: &[u8]) {
@@ -283,7 +290,7 @@ fn fragment(more: bool, sn: u32, data: &[u8]) -> Vec<u8> {
 }
 
 fn fixed_row(body: &[u8]) -> String {
-    let mut pair: Pair<2048, 4, 5, 129, 1024, 8> = pair_of(&LARGE, 0);
+    let mut pair: Pair<2048, 4, 5, 129, 1024, 8, 4> = pair_of(&LARGE, 0);
     pair.open();
     pair.declare(1, codec::KEY);
     pair.refused(&[(body.to_vec(), TIME)], None, true)
@@ -297,13 +304,14 @@ fn limit_row<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
-    mut pair: Pair<F, K, S, B, P, Q>,
+    mut pair: Pair<F, K, S, B, P, Q, E>,
     count: usize,
     aliases: bool,
 ) -> String {
     pair.open();
-    let make = |pair: &Pair<F, K, S, B, P, Q>, id: u32| {
+    let make = |pair: &Pair<F, K, S, B, P, Q, E>, id: u32| {
         let sn = pair.next_peer_sn();
         if aliases {
             frame(sn, &[declare_alias(id, codec::KEY)])
@@ -515,7 +523,7 @@ pub fn run(name: &str) -> String {
             Parts::full(b"a/b", 16_385).bytes(),
         ),
         "demo-refuses-payload-13-bytes" => {
-            let mut pair: Pair<514, 1, 2, 129, 12, 8> = pair_params(Params::DEMO, 0);
+            let mut pair: Pair<514, 1, 2, 129, 12, 8, 4> = pair_params(Params::DEMO, 0);
             pair.open();
             pair.declare(1, codec::KEY);
             let attachment = encode::attachment(1, 1001, &codec::GID).expect("attachment");
@@ -532,7 +540,7 @@ pub fn run(name: &str) -> String {
             pair.refused(&[(frame(sn, &[Parts::demo(13).bytes()]), TIME)], None, true)
         }
         "large-refuses-payload-1025-bytes" => {
-            let mut pair: Pair<2048, 4, 5, 129, 1024, 8> = pair_of(&LARGE, 0);
+            let mut pair: Pair<2048, 4, 5, 129, 1024, 8, 4> = pair_of(&LARGE, 0);
             pair.open();
             pair.declare(1, codec::KEY);
             let sn = pair.next_peer_sn();
@@ -775,44 +783,44 @@ pub fn run(name: &str) -> String {
         ),
 
         // The tables hold what the configuration declares and refuse the next.
-        "fifth-subscriber" => limit_row::<2048, 4, 5, 129, 0, 8>(pair_of(&HEAP, 0), 4, false),
-        "fifth-alias" => limit_row::<2048, 4, 5, 129, 0, 8>(pair_of(&HEAP, 0), 4, true),
-        "tenth-subscriber-in-nine" => limit_row::<2048, 9, 10, 129, 0, 18>(
+        "fifth-subscriber" => limit_row::<2048, 4, 5, 129, 0, 8, 4>(pair_of(&HEAP, 0), 4, false),
+        "fifth-alias" => limit_row::<2048, 4, 5, 129, 0, 8, 4>(pair_of(&HEAP, 0), 4, true),
+        "tenth-subscriber-in-nine" => limit_row::<2048, 9, 10, 129, 0, 18, 9>(
             pair_of(&counts(Mode::Heap, 9, 9, 9, 1024), 0),
             9,
             false,
         ),
-        "tenth-alias-in-nine" => limit_row::<2048, 9, 10, 129, 0, 18>(
+        "tenth-alias-in-nine" => limit_row::<2048, 9, 10, 129, 0, 18, 9>(
             pair_of(&counts(Mode::Heap, 9, 9, 9, 1024), 0),
             9,
             true,
         ),
-        "tenth-subscriber-in-nine-fixed" => limit_row::<2048, 9, 10, 129, 1024, 18>(
+        "tenth-subscriber-in-nine-fixed" => limit_row::<2048, 9, 10, 129, 1024, 18, 9>(
             pair_of(&counts(Mode::Fixed, 9, 9, 9, 1024), 0),
             9,
             false,
         ),
-        "tenth-alias-in-nine-fixed" => limit_row::<2048, 9, 10, 129, 1024, 18>(
+        "tenth-alias-in-nine-fixed" => limit_row::<2048, 9, 10, 129, 1024, 18, 9>(
             pair_of(&counts(Mode::Fixed, 9, 9, 9, 1024), 0),
             9,
             true,
         ),
-        "257th-subscriber-in-256-heap" => limit_row::<2048, 256, 257, 129, 0, 512>(
+        "257th-subscriber-in-256-heap" => limit_row::<2048, 256, 257, 129, 0, 512, 256>(
             pair_of(&counts(Mode::Heap, 256, 256, 256, 12), 0),
             256,
             false,
         ),
-        "257th-alias-in-256-heap" => limit_row::<2048, 256, 257, 129, 0, 512>(
+        "257th-alias-in-256-heap" => limit_row::<2048, 256, 257, 129, 0, 512, 256>(
             pair_of(&counts(Mode::Heap, 256, 256, 256, 12), 0),
             256,
             true,
         ),
-        "257th-subscriber-in-256-fixed" => limit_row::<2048, 256, 257, 129, 12, 512>(
+        "257th-subscriber-in-256-fixed" => limit_row::<2048, 256, 257, 129, 12, 512, 256>(
             pair_of(&counts(Mode::Fixed, 256, 256, 256, 12), 0),
             256,
             false,
         ),
-        "257th-alias-in-256-fixed" => limit_row::<2048, 256, 257, 129, 12, 512>(
+        "257th-alias-in-256-fixed" => limit_row::<2048, 256, 257, 129, 12, 512, 256>(
             pair_of(&counts(Mode::Fixed, 256, 256, 256, 12), 0),
             256,
             true,
@@ -832,7 +840,8 @@ pub fn run(name: &str) -> String {
             limits.stack_bytes = limits.required_stack();
             limits.heap_bytes = limits.heap_needed();
             limits.check().expect("the contract admits it");
-            let mut pair: Pair<512, 1, 2, 9, 0, 2> = pair_of(&limits, limits.heap_bytes as usize);
+            let mut pair: Pair<512, 1, 2, 9, 0, 2, 4> =
+                pair_of(&limits, limits.heap_bytes as usize);
             pair.open();
             pair.declare(1, key);
             let over = std::format!("{key}x");
@@ -886,7 +895,7 @@ fn edge_limits(mode: Mode, batch: usize, key: usize, payload: u64, timeout: u64)
     limits
 }
 
-type Heap4 = Pair<2048, 4, 5, 129, 0, 8>;
+type Heap4 = Pair<2048, 4, 5, 129, 0, 8, 4>;
 
 /// A session driven directly, with a storage of its own. Unlike a link it stays open after a refusal.
 struct Rx {
@@ -1198,11 +1207,11 @@ fn the_link_fits_the_stack_its_configuration_declares() {
         (DEMO, core::mem::size_of::<Link<Scripted>>()),
         (
             LARGE,
-            core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 1024, 8>>(),
+            core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 1024, 8, 4>>(),
         ),
         (
             HEAP,
-            core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 0, 8>>(),
+            core::mem::size_of::<LinkOf<Scripted, 2048, 4, 5, 129, 0, 8, 4>>(),
         ),
     ];
     for (limits, size) in measured {
@@ -1228,7 +1237,7 @@ fn the_link_fits_the_stack_its_configuration_declares() {
 
 #[test]
 fn the_first_releases_link_is_unchanged() {
-    let mut pair: Pair<514, 1, 2, 129, 12, 8> = pair_params(Params::DEMO, 0);
+    let mut pair: Pair<514, 1, 2, 129, 12, 8, 4> = pair_params(Params::DEMO, 0);
     assert_eq!(Params::DEMO.announced, 512);
     assert_eq!(Params::DEMO.bounds, Bounds::DEMO);
     pair.open();
@@ -1243,7 +1252,7 @@ fn the_first_releases_link_is_unchanged() {
 
 #[test]
 fn a_large_link_delivers_its_whole_declared_payload() {
-    let mut pair: Pair<2048, 4, 5, 129, 1024, 8> = pair_of(&LARGE, 0);
+    let mut pair: Pair<2048, 4, 5, 129, 1024, 8, 4> = pair_of(&LARGE, 0);
     pair.open();
     pair.declare(1, codec::KEY);
     pair.send(codec::KEY, &codec::payload(1024), 10);
@@ -1256,7 +1265,7 @@ fn a_large_link_delivers_its_whole_declared_payload() {
 
 #[test]
 fn four_keys_and_four_subscribers_are_held() {
-    let mut pair: Pair<2048, 4, 5, 129, 1024, 8> = pair_of(&LARGE, 0);
+    let mut pair: Pair<2048, 4, 5, 129, 1024, 8, 4> = pair_of(&LARGE, 0);
     pair.open();
     for id in 1..=4u32 {
         let sn = pair.next_peer_sn();
@@ -1331,6 +1340,7 @@ fn heap_edge<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     name: &str,
     key: &str,
@@ -1338,7 +1348,7 @@ fn heap_edge<
 ) {
     let limits = edge_limits(Mode::Heap, F, key.len(), payload_len as u64, 5000);
     limits.check().expect("the contract admits it");
-    let mut pair: Pair<F, K, S, B, P, Q> = pair_of(&limits, limits.heap_bytes as usize);
+    let mut pair: Pair<F, K, S, B, P, Q, E> = pair_of(&limits, limits.heap_bytes as usize);
     pair.open();
     pair.declare(1, key);
     let payload = codec::payload(payload_len);
@@ -1381,32 +1391,32 @@ fn heap_edge<
 
 #[test]
 fn the_smallest_batch_carries_a_fragmented_put() {
-    heap_edge::<89, 1, 2, 70, 0, 2>("edge-batch-89", &"k".repeat(70), 300);
+    heap_edge::<89, 1, 2, 70, 0, 2, 4>("edge-batch-89", &"k".repeat(70), 300);
 }
 
 #[test]
 fn the_largest_batch_carries_the_longest_key() {
-    heap_edge::<4096, 1, 2, 4076, 0, 2>("edge-batch-4096", &"k".repeat(4076), 16_384);
+    heap_edge::<4096, 1, 2, 4076, 0, 2, 4>("edge-batch-4096", &"k".repeat(4076), 16_384);
 }
 
 #[test]
 fn a_key_of_2028_bytes_is_declared_used_and_undeclared() {
-    heap_edge::<2048, 1, 2, 2028, 0, 2>("edge-key-2028", &"k".repeat(2028), 5000);
+    heap_edge::<2048, 1, 2, 2028, 0, 2, 4>("edge-key-2028", &"k".repeat(2028), 5000);
 }
 
 #[test]
 fn a_payload_of_one_mebibyte_is_sent_and_joined() {
-    heap_edge::<4096, 1, 2, 129, 0, 2>("edge-payload-1mib", &"k".repeat(129), 1 << 20);
+    heap_edge::<4096, 1, 2, 129, 0, 2, 4>("edge-payload-1mib", &"k".repeat(129), 1 << 20);
 }
 
 #[test]
 fn a_payload_of_two_mebibytes_is_sent_and_joined() {
-    heap_edge::<4096, 1, 2, 129, 0, 2>("edge-payload-2mib", &"k".repeat(129), 1 << 21);
+    heap_edge::<4096, 1, 2, 129, 0, 2, 4>("edge-payload-2mib", &"k".repeat(129), 1 << 21);
 }
 
 #[test]
 fn a_payload_of_256_mebibytes_is_sent_and_joined() {
-    heap_edge::<4096, 1, 2, 129, 0, 2>("edge-payload-256mib", &"k".repeat(129), 1 << 28);
+    heap_edge::<4096, 1, 2, 129, 0, 2, 4>("edge-payload-256mib", &"k".repeat(129), 1 << 28);
 }
 
 /// Sends one Put whole from `a` at the widest sequence number, and returns the FRAME body it queued.
@@ -1417,8 +1427,9 @@ fn whole_frame<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
-    pair: &mut Pair<F, K, S, B, P, Q>,
+    pair: &mut Pair<F, K, S, B, P, Q, E>,
     key: &str,
     payload: &[u8],
 ) -> Vec<u8> {
@@ -1438,6 +1449,7 @@ fn fixed_edge<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     name: &str,
     mode: Mode,
@@ -1447,7 +1459,8 @@ fn fixed_edge<
     let limits = edge_limits(mode, F, key.len(), payload_len as u64, 5000);
     limits.check().expect("the contract admits it");
     let params = Params::from_limits(&limits);
-    let mut pair: Pair<F, K, S, B, P, Q> = pair_sn(params, limits.heap_bytes as usize, 0xFFFF_FFFF);
+    let mut pair: Pair<F, K, S, B, P, Q, E> =
+        pair_sn(params, limits.heap_bytes as usize, 0xFFFF_FFFF);
     pair.open();
     pair.declare(1, key);
     let payload = codec::payload(payload_len);
@@ -1474,7 +1487,7 @@ fn fixed_edge<
 fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
     let key = "k".repeat(10);
     let (tail, frame) =
-        fixed_edge::<89, 1, 2, 10, 31, 2>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
+        fixed_edge::<89, 1, 2, 10, 31, 2, 4>("edge-fixed-batch-89", Mode::Fixed, &key, 31);
     assert_eq!(frame.len() + 2, 89, "the frame fills the batch exactly");
     ordered(&std::format!(
         "fixededge edge-fixed-batch-89 89 10 31 {tail}"
@@ -1485,8 +1498,12 @@ fn a_fixed_link_sends_the_largest_message_its_smallest_batch_holds() {
 #[test]
 fn a_fixed_link_sends_a_thousand_byte_key_whole_at_the_largest_batch() {
     let key = "k".repeat(1000);
-    let (tail, frame) =
-        fixed_edge::<4096, 1, 2, 1000, 3046, 2>("edge-fixed-batch-4096", Mode::Fixed, &key, 3046);
+    let (tail, frame) = fixed_edge::<4096, 1, 2, 1000, 3046, 2, 4>(
+        "edge-fixed-batch-4096",
+        Mode::Fixed,
+        &key,
+        3046,
+    );
     assert_eq!(frame.len() + 2, 4096, "the frame fills the batch exactly");
     ordered(&std::format!(
         "fixededge edge-fixed-batch-4096 4096 1000 3046 {tail}"
@@ -1501,9 +1518,9 @@ fn the_smallest_configuration_in_each_mode_sends_a_put_whole() {
         ("edge-minimum-heap", Mode::Heap),
     ] {
         let (tail, frame) = if mode == Mode::Fixed {
-            fixed_edge::<89, 1, 2, 1, 1, 2>(name, mode, "k", 1)
+            fixed_edge::<89, 1, 2, 1, 1, 2, 4>(name, mode, "k", 1)
         } else {
-            fixed_edge::<89, 1, 2, 1, 0, 2>(name, mode, "k", 1)
+            fixed_edge::<89, 1, 2, 1, 0, 2, 4>(name, mode, "k", 1)
         };
         assert_eq!(frame.len(), 48);
         line(&std::format!(
@@ -1521,6 +1538,7 @@ fn long_alias<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     name: &str,
     length: usize,
@@ -1530,7 +1548,7 @@ fn long_alias<
     let key = "k".repeat(length);
     let limits = edge_limits(Mode::Heap, F, length, 5000, 5000);
     limits.check().expect("the contract admits it");
-    let mut pair: Pair<F, K, S, B, P, Q> = pair_sn(
+    let mut pair: Pair<F, K, S, B, P, Q, E> = pair_sn(
         Params::from_limits(&limits),
         limits.heap_bytes as usize,
         ALIAS_SN,
@@ -1570,12 +1588,12 @@ fn long_alias<
 
 #[test]
 fn a_key_of_2028_bytes_is_declared_as_an_alias_and_addressed_through_it() {
-    long_alias::<2048, 1, 2, 2028, 0, 2>("edge-alias-long-key-2028", 2028, 1);
+    long_alias::<2048, 1, 2, 2028, 0, 2, 4>("edge-alias-long-key-2028", 2028, 1);
 }
 
 #[test]
 fn a_key_of_4076_bytes_is_addressed_through_an_alias_with_bit_15_set() {
-    long_alias::<4096, 1, 2, 4076, 0, 2>("edge-alias-long-key-4076", 4076, 0x8000);
+    long_alias::<4096, 1, 2, 4076, 0, 2, 4>("edge-alias-long-key-4076", 4076, 0x8000);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1593,15 +1611,23 @@ struct Solo<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 > {
-    link: LinkOf<Scripted, F, K, S, B, P, Q>,
+    link: LinkOf<Scripted, F, K, S, B, P, Q, E>,
     h: LinkHandle,
     into: Rc<RefCell<Pipe>>,
     out: Rc<RefCell<Pipe>>,
 }
 
-impl<const F: usize, const K: usize, const S: usize, const B: usize, const P: usize, const Q: usize>
-    Solo<F, K, S, B, P, Q>
+impl<
+    const F: usize,
+    const K: usize,
+    const S: usize,
+    const B: usize,
+    const P: usize,
+    const Q: usize,
+    const E: usize,
+> Solo<F, K, S, B, P, Q, E>
 {
     fn new(params: Params, link_sn: u32) -> Self {
         let into = Rc::new(RefCell::new(Pipe::default()));
@@ -1697,6 +1723,7 @@ fn peer_heap<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     peer: usize,
     payload_len: usize,
@@ -1704,7 +1731,7 @@ fn peer_heap<
     let effective = F.min(peer);
     let limits = edge_limits(Mode::Heap, F, PEER_KEY.len(), payload_len as u64, 5000);
     limits.check().expect("the contract admits it");
-    let mut solo: Solo<F, K, S, B, P, Q> = Solo::new(Params::from_limits(&limits), 1000);
+    let mut solo: Solo<F, K, S, B, P, Q, E> = Solo::new(Params::from_limits(&limits), 1000);
     let syn = solo.meet(peer);
     let payload = codec::payload(payload_len);
     let attachment = codec::attachment();
@@ -1742,6 +1769,7 @@ fn peer_fixed<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     peer: usize,
     over: usize,
@@ -1750,7 +1778,7 @@ fn peer_fixed<
     let payload_len = fixed_max_payload(effective, PEER_KEY.len()) + over;
     let limits = edge_limits(Mode::Fixed, F, PEER_KEY.len(), payload_len as u64, 5000);
     limits.check().expect("the contract admits it");
-    let mut solo: Solo<F, K, S, B, P, Q> = Solo::new(Params::from_limits(&limits), 0xFFFF_FFFF);
+    let mut solo: Solo<F, K, S, B, P, Q, E> = Solo::new(Params::from_limits(&limits), 0xFFFF_FFFF);
     let syn = solo.meet(peer);
     let payload = codec::payload(payload_len);
     let attachment = codec::attachment();
@@ -1779,10 +1807,10 @@ fn peer_fixed<
 #[test]
 fn a_heap_link_sends_no_more_than_the_peer_announced() {
     for tail in [
-        peer_heap::<4096, 1, 2, 30, 0, 2>(89, 1000),
-        peer_heap::<4096, 1, 2, 30, 0, 2>(512, 5000),
-        peer_heap::<2048, 1, 2, 30, 0, 2>(4096, 5000),
-        peer_heap::<4096, 1, 2, 30, 0, 2>(2048, 9000),
+        peer_heap::<4096, 1, 2, 30, 0, 2, 4>(89, 1000),
+        peer_heap::<4096, 1, 2, 30, 0, 2, 4>(512, 5000),
+        peer_heap::<2048, 1, 2, 30, 0, 2, 4>(4096, 5000),
+        peer_heap::<4096, 1, 2, 30, 0, 2, 4>(2048, 9000),
     ] {
         ordered(&std::format!("peerbatch {tail}"));
     }
@@ -1792,11 +1820,11 @@ fn a_heap_link_sends_no_more_than_the_peer_announced() {
 #[test]
 fn a_fixed_link_sends_the_largest_message_the_smaller_batch_holds_and_refuses_one_byte_more() {
     for tail in [
-        peer_fixed::<2048, 1, 2, 30, 434, 2>(512, 0),
-        peer_fixed::<2048, 1, 2, 30, 434, 2>(512, 1),
-        peer_fixed::<4096, 1, 2, 30, 434, 2>(89, 0),
-        peer_fixed::<4096, 1, 2, 30, 434, 2>(89, 1),
-        peer_fixed::<512, 1, 2, 30, 434, 2>(4096, 0),
+        peer_fixed::<2048, 1, 2, 30, 434, 2, 4>(512, 0),
+        peer_fixed::<2048, 1, 2, 30, 434, 2, 4>(512, 1),
+        peer_fixed::<4096, 1, 2, 30, 434, 2, 4>(89, 0),
+        peer_fixed::<4096, 1, 2, 30, 434, 2, 4>(89, 1),
+        peer_fixed::<512, 1, 2, 30, 434, 2, 4>(4096, 0),
     ] {
         ordered(&std::format!("peerbatch {tail}"));
     }
@@ -1809,7 +1837,7 @@ fn a_key_is_counted_in_bytes_not_characters() {
     let mut limits = edge_limits(Mode::Heap, 512, key.len(), 1500, 5000);
     limits.name = "multibyte";
     limits.check().expect("the contract admits it");
-    let mut pair: Pair<512, 1, 2, 9, 0, 2> = pair_of(&limits, limits.heap_bytes as usize);
+    let mut pair: Pair<512, 1, 2, 9, 0, 2, 4> = pair_of(&limits, limits.heap_bytes as usize);
     pair.open();
     pair.declare(1, key);
     let declare = message_of(pair.b.last_sent_batch()).to_vec();
@@ -1882,8 +1910,9 @@ fn payload_of<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
-    pair: &mut Pair<F, K, S, B, P, Q>,
+    pair: &mut Pair<F, K, S, B, P, Q, E>,
 ) -> Vec<u8> {
     match pair.b.next_notice().expect("a notice") {
         Notice::SampleStored(sample) => sample.payload(&pair.heap_b).to_vec(),
@@ -1902,6 +1931,7 @@ fn filled<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     limits: &Limits,
     ids: &[u32],
@@ -1910,7 +1940,7 @@ fn filled<
     let held = 2 * limits.outstanding_samples;
     let heap = limits.mode == Mode::Heap;
     let size = limits.payload_bytes as usize;
-    let mut pair: Pair<F, K, S, B, P, Q> = pair_of(limits, limits.heap_bytes as usize);
+    let mut pair: Pair<F, K, S, B, P, Q, E> = pair_of(limits, limits.heap_bytes as usize);
     pair.open();
     pair.declare(1, codec::KEY);
     for &id in ids {
@@ -1978,7 +2008,7 @@ fn nine_keys_subscribers_and_samples_are_held_and_read_back() {
     let heap = counts(Mode::Heap, 9, 9, 9, 1024);
     let digest = on_big_stack({
         let (heap, ids) = (heap, ids.clone());
-        move || filled::<2048, 9, 10, 129, 0, 18>(&heap, &ids, make)
+        move || filled::<2048, 9, 10, 129, 0, 18, 9>(&heap, &ids, make)
     });
     line(&std::format!(
         "counts 9 9 9 18 1024 {} {digest}",
@@ -1986,7 +2016,7 @@ fn nine_keys_subscribers_and_samples_are_held_and_read_back() {
     ));
     ok("nine-keys-subscribers-and-samples");
     let fixed = counts(Mode::Fixed, 9, 9, 9, 1024);
-    let digest = on_big_stack(move || filled::<2048, 9, 10, 129, 1024, 18>(&fixed, &ids, make));
+    let digest = on_big_stack(move || filled::<2048, 9, 10, 129, 1024, 18, 9>(&fixed, &ids, make));
     line(&std::format!(
         "countsfixed 9 9 9 18 1024 {} {digest}",
         fixed.stack_bytes
@@ -2019,12 +2049,13 @@ fn counts_of_256_cross_the_width_of_a_byte() {
     let heap = counts(Mode::Heap, 256, 256, 256, 12);
     let digest = on_big_stack({
         let ids = ids.clone();
-        move || filled::<2048, 256, 257, 129, 0, 512>(&heap, &ids, make)
+        move || filled::<2048, 256, 257, 129, 0, 512, 256>(&heap, &ids, make)
     });
     wide_line(Mode::Heap, 256, 256, 256, 12, &digest);
     ok("wide-counts-256-heap");
     let fixed = counts(Mode::Fixed, 256, 256, 256, 12);
-    let digest = on_big_stack(move || filled::<2048, 256, 257, 129, 12, 512>(&fixed, &ids, make));
+    let digest =
+        on_big_stack(move || filled::<2048, 256, 257, 129, 12, 512, 256>(&fixed, &ids, make));
     wide_line(Mode::Fixed, 256, 256, 256, 12, &digest);
     ok("wide-counts-256-fixed");
 }
@@ -2035,12 +2066,13 @@ fn counts_of_65535_fill_the_width_of_sixteen_bits() {
     let ids = [1u32, 65_535];
     let make = |index| wide_payload(12, index);
     let heap = counts(Mode::Heap, 65_535, 65_535, 1, 12);
-    let digest = on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 0, 2>(&heap, &ids, make));
+    let digest =
+        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 0, 2, 4>(&heap, &ids, make));
     wide_line(Mode::Heap, 65_535, 65_535, 1, 12, &digest);
     ok("wide-counts-65535-heap");
     let fixed = counts(Mode::Fixed, 65_535, 65_535, 1, 12);
     let digest =
-        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2>(&fixed, &ids, make));
+        on_big_stack(move || filled::<2048, 65_535, 65_536, 129, 12, 2, 4>(&fixed, &ids, make));
     wide_line(Mode::Fixed, 65_535, 65_535, 1, 12, &digest);
     ok("wide-counts-65535-fixed");
 }
@@ -2049,11 +2081,13 @@ fn counts_of_65535_fill_the_width_of_sixteen_bits() {
 fn counts_of_65536_samples_hold_131072_notices_each_a_distinct_index() {
     let make = |index| wide_payload(4, index);
     let heap = counts(Mode::Heap, 1, 1, 65_536, 4);
-    let digest = on_big_stack(move || filled::<2048, 1, 2, 129, 0, 131_072>(&heap, &[1], make));
+    let digest =
+        on_big_stack(move || filled::<2048, 1, 2, 129, 0, 131_072, 512>(&heap, &[1], make));
     wide_line(Mode::Heap, 1, 1, 65_536, 4, &digest);
     ok("wide-counts-65536-samples-heap");
     let fixed = counts(Mode::Fixed, 1, 1, 65_536, 4);
-    let digest = on_big_stack(move || filled::<2048, 1, 2, 129, 4, 131_072>(&fixed, &[1], make));
+    let digest =
+        on_big_stack(move || filled::<2048, 1, 2, 129, 4, 131_072, 512>(&fixed, &[1], make));
     wide_line(Mode::Fixed, 1, 1, 65_536, 4, &digest);
     ok("wide-counts-65536-samples-fixed");
 }
@@ -2084,12 +2118,13 @@ fn slots_run<
     const B: usize,
     const P: usize,
     const Q: usize,
+    const E: usize,
 >(
     mode: Mode,
 ) -> String {
     use boot_contracts::sha256::Sha256;
     let limits = counts(mode, 65_535, 65_535, 1, 12);
-    let mut pair: Pair<F, K, S, B, P, Q> = pair_of(&limits, limits.heap_bytes as usize);
+    let mut pair: Pair<F, K, S, B, P, Q, E> = pair_of(&limits, limits.heap_bytes as usize);
     pair.open();
     let (mut declared, mut used, mut removed) = (Sha256::new(), Sha256::new(), Sha256::new());
     for index in 0..65_535u32 {
@@ -2162,10 +2197,90 @@ fn slots_run<
 
 #[test]
 fn every_slot_of_65535_is_declared_used_and_undeclared() {
-    let heap = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 0, 2>(Mode::Heap));
+    let heap = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 0, 2, 4>(Mode::Heap));
     line(&heap);
     ok("wide-slots-65535-heap");
-    let fixed = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 12, 2>(Mode::Fixed));
+    let fixed = on_big_stack(|| slots_run::<2048, 65_535, 65_536, 129, 12, 2, 4>(Mode::Fixed));
     line(&fixed);
     ok("wide-slots-65535-fixed");
+}
+
+// ---------------------------------------------------------------------------------------------
+// A FRAME may carry as many messages as the configuration declares, not the demo's four.
+
+/// Counts of a nine-sample configuration, the smallest the exam admits with more than four samples.
+fn frame_of_puts(pair: &mut Pair<2048, 9, 10, 129, 0, 18, 9>, count: usize) -> Vec<u8> {
+    let sn = pair.next_peer_sn();
+    let puts: Vec<Vec<u8>> = (0..count).map(|_| Parts::demo(12).bytes()).collect();
+    frame(sn, &puts)
+}
+
+#[test]
+fn a_frame_of_five_puts_is_delivered_when_nine_samples_are_declared() {
+    let limits = counts(Mode::Heap, 9, 9, 9, 12);
+    let mut pair: Pair<2048, 9, 10, 129, 0, 18, 9> = pair_of(&limits, limits.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    let body = frame_of_puts(&mut pair, 5);
+    pair.inject(&body);
+    pair.pump_b(TIME)
+        .expect("five Puts in one frame are within nine samples");
+    assert_eq!(pair.b.notices_queued(), 5);
+}
+
+#[test]
+fn a_frame_of_five_declarations_is_taken_when_nine_subscribers_are_declared() {
+    let limits = counts(Mode::Heap, 9, 9, 9, 12);
+    let mut pair: Pair<2048, 9, 10, 129, 0, 18, 9> = pair_of(&limits, limits.heap_bytes as usize);
+    pair.open();
+    let sn = pair.next_peer_sn();
+    let declarations: Vec<Vec<u8>> = (1..=5u32)
+        .map(|id| {
+            let framed = subscriber_frame(pair.bounds, 0, id, &std::format!("k/{id}"));
+            framed[2..].to_vec()
+        })
+        .collect();
+    pair.inject(&frame(sn, &declarations));
+    pair.pump_b(TIME)
+        .expect("five declarations in one frame are within nine subscribers");
+    assert_eq!(pair.b.session().subscribers(), 5);
+}
+
+#[test]
+fn a_frame_refused_for_its_size_leaves_no_alias_behind() {
+    // 40 aliases fit the tables; a frame of 17 declares more than the journal of 16 changes can undo.
+    let limits = counts(Mode::Heap, 40, 40, 1, 12);
+    let mut pair: Pair<2048, 40, 41, 129, 0, 2, 4> = pair_of(&limits, limits.heap_bytes as usize);
+    pair.open();
+    let before = pair.next_peer_sn();
+    let aliases: Vec<Vec<u8>> = (1..=17u32).map(|id| declare_alias(id, "a/b")).collect();
+    let body = frame(before, &aliases);
+    let mut session = pair.b.session().clone();
+    let mut out = std::vec![0u8; 2048];
+    match session.on_batch(&body, TIME, &mut out) {
+        Err(error) => {
+            assert_eq!(session_class(&error), "TooManyMessages");
+            assert_eq!(
+                session.expected_rx_sn(),
+                before,
+                "a refused frame does not move the sequence number"
+            );
+            assert_eq!(
+                session.aliases(),
+                0,
+                "a refused frame leaves no alias behind"
+            );
+            // The same sequence number is still expected, so a frame that names the 17th alias is refused.
+            let named = frame(before, &[Parts::alias(17, 12).bytes()]);
+            assert!(
+                session.on_batch(&named, TIME, &mut out).is_err(),
+                "the 17th alias was never declared"
+            );
+        }
+        Ok(_) => assert_eq!(
+            session.aliases(),
+            17,
+            "an accepted frame declares every alias"
+        ),
+    }
 }
