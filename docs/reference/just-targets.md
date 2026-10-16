@@ -95,6 +95,7 @@ For how the planes work and how to add one, read
 | `just private_memory_phase3_check` | One recipe covering every phase-3 acceptance. |
 | `just private_memory_phase4_check` | One recipe covering the phase-4 surface: the adaptive planes on both reference architectures, their over-guaranteed negative control, and the whole fixed and demand-backed surface underneath them. |
 | `just private_memory_phase5_check` | MEM-ADAPTIVE's qualification: the inventory matrix on both reference architectures over the whole phase-4 surface. |
+| `just pr_scope_check` | The pull-request scope classes and their refusals on synthetic diffs, then a compile of every `contracts/**/schema.zt`; CI judges a real base..head with the same classes. |
 | `just private_memory_policy_check` | Formatting, lint, and host tests plus the private-memory policy planes. |
 | `just ruff` | `ruff check scripts/` |
 | `just ruff_fix` | `ruff check scripts/ --fix` |
@@ -141,11 +142,13 @@ For how the planes work and how to add one, read
 | `just system_composition_closure_check` | Render `contracts/composition-inventory/v1`'s host constants. |
 | `just system_image_builder_check` | Resolution checks each closure's committed prefix against `sel4/pins.toml`; no installed platform build or published SDK record is needed for that check. |
 | `just system_image_closure_aggregate_check` | Every shipped or tested image traces to exactly one closure, and every closure is exercised by an owning gate. |
+| `just system_image_closure_gates_check` | Every gate that consumes the committed closure corpus, on one tree: freshness, resolution and its controls, the frozen test-run records and their inventory controls, the scenario and root-role arms, and image/closure ownership. Editing this recipe changes the `just-recipes` closure input. |
 | `just system_image_closure_check` | Render `contracts/system-image-closure/v2` host constants. |
 | `just system_image_scenario_check` | CP14 scenario-identity gate. |
 | `just system_spec_check` | Validate every system spec and refuse a derived composition manifest that drifted from it. |
 | `just system_test_run_baseline_check` | One execution identity covers the declaration/closure boundary and its quality gates. |
 | `just system_test_run_bless` | Generate `contracts/system-test-run/v1` records from each plane gate's execution inputs. |
+| `just system_test_run_inventory_check` | Run discovery and per-arm extraction controls, then the complete frozen-record gate. |
 | `just system_test_run_check` | Execution-only inputs — disks, devices, injected faults, timeouts, marker contracts — are declared per plane and frozen, so a timeout or a disk cannot change without a reviewed record change. |
 
 ## generate
@@ -162,6 +165,7 @@ For how the planes work and how to add one, read
 | `just component_sdk_release_gen` | Render `contracts/component-sdk-release/v1`'s host constants. |
 | `just cpu_boot_observation_gen` | Render `contracts/cpu-boot-observation/v1`'s host constants. |
 | `just fabric_graph_gen` | Aggregate: `boot_gen`. |
+| `just entropy_gen` | `python3 scripts/generate/generate-entropy-bindings.py` |
 | `just fabric_ring_gen` | `python3 scripts/generate/generate-fabric-ring-bindings.py` |
 | `just fabric_stream_gen` | `python3 scripts/generate/generate-fabric-stream-bindings.py` |
 | `just fabric_trace_gen` | `python3 scripts/generate/generate-fabric-trace-bindings.py` |
@@ -182,6 +186,7 @@ For how the planes work and how to add one, read
 | `just spawn_gen` | `python3 scripts/generate/generate-spawn-bindings.py` |
 | `just store_gen` | `python3 scripts/generate/generate-store-bindings.py` |
 | `just syscall_abi_gen` | The `label -> operation` pairs the contract declared, from its own table. |
+| `just zenoh_profile_gen` | `python3 scripts/generate/generate-zenoh-profile-bindings.py` |
 | `just zenoh_stock_gen` | Render the captured stock-peer batches as the Rust constants `zenoh_stock::` reads, from `contracts/zenoh-stock-fixtures/v1`. |
 
 ## planes / mechanism
@@ -316,6 +321,7 @@ For how the planes work and how to add one, read
 | `just zenoh_cdr_check` | Classic-CDR codec reproduces the demo fixture's four Counter samples, recomputed from their field values, and refuses seven malformed inputs; fails until the codec lands. |
 | `just zenoh_transport_check` | Zenoh transport runtime over a scripted byte link: six scenarios (split and coalesced batches, backpressure, peer close, restart) and seven refusals; fails until the runtime lands. |
 | `just zenoh_stock_check` | A stock eclipse-zenoh 1.0.0 peer's captured batches taken by the Profile 0 session on the plain demo topic, with the refusal corpus pinned by name and digest and the retained decoder, session, encoder and link tests required by name; explicit, in no aggregate, and fails until the session accepts a stock peer. |
+| `just zenoh_xcheck_check` | The codec and session against the real eclipse-zenoh 1.0.0 crates: the corpus as upstream's encoder produces it, a 6000-case sweep in both directions, one full session and the Zenoh ID edge cases. Needs the crates from a registry, so it is explicit and not in CI. |
 | `just zenoh_links_check` | A Zenoh Profile 0 link declared by a named configuration in a fixed mode or a heap mode, judged against the fragments a stock eclipse-zenoh 1.0.0 peer wrote (reproduced byte for byte by `scripts/lib/zenoh_fragment.py`), `contracts/zenoh-link-limits/v1`, the edge between a whole message and a fragmented one, and each refusal, with the stock-peer exam's retained tests required by name. Explicit; fails until the link takes fragments. |
 | `just zenoh_composition_check` | The derived `sel4-zenoh` composition grants the two nodes exactly the demo's authority, judged against 15 mutations of an honest composition; fails until the composition lands. |
 | `just zenoh_external_check` | The demo's guest connects out over a virtio NIC to a stock `eclipse-zenoh==1.0.0` listener on the host, built from a hash-pinned wheel: the listener's own record of the four samples, a packet capture holding exactly one TCP connection to `10.0.2.2:17447` and no DNS, UDP or ICMP, and the guest's report are judged against one another and the host wire reference; needs the wheel from a registry, so explicit and in no aggregate; fails until the `sel4-zenoh-external` composition lands. |
