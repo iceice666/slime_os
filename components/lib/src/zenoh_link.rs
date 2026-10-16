@@ -358,8 +358,14 @@ impl<
         }
     }
 
+    /// The notices the configuration lets the owner leave unread: two for each outstanding sample. The
+    /// queue may be longer, but a heap link reserves the cell past them for the message being joined.
+    fn notice_cap(&self) -> usize {
+        Q.min(self.session.params().samples.saturating_mul(2))
+    }
+
     fn notice_room(&self, needed: usize) -> bool {
-        Q - self.notice_len >= needed
+        self.notice_cap().saturating_sub(self.notice_len) >= needed
     }
 
     /// Frames `batch` into the send slot, which must be free.

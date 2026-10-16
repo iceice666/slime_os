@@ -210,6 +210,8 @@ pub enum Event<'a> {
 pub struct Events<'a, const E: usize = MAX_EVENTS> {
     items: [Option<Event<'a>>; E],
     len: usize,
+    /// The most events the configuration lets one batch yield; the storage may hold more.
+    limit: usize,
 }
 
 impl<'a, const E: usize> Events<'a, E> {
@@ -217,10 +219,14 @@ impl<'a, const E: usize> Events<'a, E> {
         Self {
             items: [None; E],
             len: 0,
+            limit: E,
         }
     }
 
     fn push(&mut self, event: Event<'a>) -> Result<(), SessionError> {
+        if self.len >= self.limit {
+            return Err(SessionError::TooManyMessages);
+        }
         let slot = self
             .items
             .get_mut(self.len)
@@ -865,6 +871,7 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
         let mut journal = [None; JOURNAL];
         let mut used = 0;
         let mut events = Events::empty();
+        events.limit = self.params.events;
         match self.apply_frame(&frame, &mut journal, &mut used, &mut events) {
             Ok(()) => {
                 for change in journal.iter().take(used).flatten() {
@@ -978,6 +985,9 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                         return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
                     }
                     room(used)?;
+                    if self.aliases.len() >= self.params.aliases {
+                        return Err(SessionError::Decode(Refusal::OverBound));
+                    }
                     let at =
                         self.aliases
                             .insert(u64::from(id), key.as_bytes())

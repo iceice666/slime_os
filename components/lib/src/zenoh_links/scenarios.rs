@@ -2286,7 +2286,8 @@ fn a_frame_refused_for_its_size_leaves_no_alias_behind() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Second review round: a sample the heap cannot keep, a reply the peer cannot take, and an over-cap frame.
+// A heap link never loses a sample it accepted, a handshake reply fits the batch the peer announced, and a
+// frame over the events a batch may yield is refused by the session that names the cause.
 
 #[test]
 fn a_heap_link_without_a_cell_refuses_a_whole_sample_it_cannot_keep() {
@@ -2390,8 +2391,8 @@ fn a_frame_over_the_events_a_batch_may_yield_is_refused_by_the_session_for_its_o
 }
 
 // ---------------------------------------------------------------------------------------------
-// Third review round: a fixed link whose notice array is smaller than its payload, and an OPEN_ACK
-// the peer cannot take.
+// A fixed link's notice holds its configuration's whole payload, and every handshake reply, the OPEN_ACK
+// included, fits the batch the peer announced.
 
 #[test]
 fn a_fixed_link_whose_notice_cannot_hold_its_payload_is_refused_at_construction() {
@@ -2494,9 +2495,9 @@ fn an_open_ack_longer_than_the_peers_batch_is_refused_before_the_listener_opens(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Fourth review round: a refusal when the queue is full, a fragment run that overwrites a held sample,
-// capacities a link is not checked against, a default that does not fit its own demo, and arithmetic that
-// overflows before it is guarded.
+// A full notice queue keeps what it holds, a fragment run waits for a free cell, a link's storage matches
+// its configuration, the default session holds the demo's subscribers, and a size past the wire's width is
+// refused as a size.
 
 #[test]
 fn a_refusal_while_the_notice_queue_is_full_keeps_every_notice_already_queued() {
@@ -2650,4 +2651,83 @@ fn a_key_size_beyond_the_arithmetic_is_refused_as_a_size_and_not_an_overflow() {
     assert_eq!(limits.check(), Err(LimitsError::Size));
     limits.key_bytes = MAX_KEY_LENGTH_BYTES + 1;
     assert_eq!(limits.check(), Err(LimitsError::Size));
+}
+
+#[test]
+fn a_session_backed_by_larger_tables_still_holds_the_peer_to_its_declared_counts() {
+    // LARGE declares four aliases and four events a batch; tables for five must not let the fifth in.
+    let params = Params::from_limits(&LARGE);
+    let config = Config {
+        zid: &[1],
+        lease_ms: 4_000_000_000,
+        initial_sn: 0,
+        cookie: &[1],
+    };
+    let mut listener = crate::zenoh_profile0::session::SessionOf::<5, 6, 129, 5>::with_params(
+        Role::Listener,
+        &config,
+        params,
+    )
+    .expect("larger storage is accepted");
+    let mut out = std::vec![0u8; 2048];
+    let mut buf = std::vec![0u8; 256];
+    let length = encode::init_syn(&mut buf, &[1], 2048).expect("syn");
+    listener.on_batch(&buf[..length], 0, &mut out).expect("ack");
+    let length = encode::open_syn(&mut buf, 4_000_000_000, 0, &[1]).expect("open");
+    listener
+        .on_batch(&buf[..length], 0, &mut out)
+        .expect("open");
+    let sn = listener.expected_rx_sn();
+    // Five aliases in one frame: LARGE declares four.
+    let aliases: Vec<Vec<u8>> = (1..=5u32).map(|id| declare_alias(id, "a/b")).collect();
+    let body = frame(sn, &aliases);
+    let result = listener
+        .on_batch(&body, TIME, &mut out)
+        .map(|outcome| outcome.sent);
+    assert!(
+        result.is_err(),
+        "a fifth alias exceeds the declared four: {result:?}"
+    );
+    assert_eq!(listener.aliases(), 0, "and the refused frame leaves none");
+    // Five Puts in one frame: LARGE declares four events a batch.
+    let puts: Vec<Vec<u8>> = (0..5).map(|_| Parts::demo(12).bytes()).collect();
+    let body = frame(sn, &puts);
+    let result = listener
+        .on_batch(&body, TIME, &mut out)
+        .map(|outcome| outcome.sent);
+    assert!(
+        result.is_err(),
+        "five events exceed the declared four: {result:?}"
+    );
+}
+
+#[test]
+fn a_link_with_a_longer_queue_than_declared_still_holds_no_more_than_declared() {
+    // HEAP declares eight outstanding notices; a queue of nine must not take a ninth sample.
+    let mut pair: Pair<2048, 4, 5, 129, 0, 9, 4> = pair_of(&HEAP, HEAP.heap_bytes as usize);
+    pair.open();
+    pair.declare(1, codec::KEY);
+    for index in 0..8 {
+        pair.send(codec::KEY, &distinct_payload(5000, index), 10);
+    }
+    assert_eq!(pair.b.notices_queued(), 8);
+    pair.send(codec::KEY, &distinct_payload(5000, 8), 10);
+    assert_eq!(
+        pair.b.notices_queued(),
+        8,
+        "a ninth waits for the owner; the declared bound is eight"
+    );
+    let mut seen = 0;
+    while let Some(notice) = pair.b.next_notice() {
+        if let Notice::SampleStored(sample) = notice {
+            assert_eq!(sample.payload(&pair.heap_b), distinct_payload(5000, seen));
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 8);
+    pair.run(11);
+    let Some(Notice::SampleStored(ninth)) = pair.b.next_notice() else {
+        panic!("the ninth sample arrives once there is room");
+    };
+    assert_eq!(ninth.payload(&pair.heap_b), distinct_payload(5000, 8));
 }
