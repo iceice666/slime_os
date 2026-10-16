@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-private-memory-fail-large-map";
-  imageClosureIdentity = "03ccb332133f8095c716e4753b97e35d25a32fa260eb848d8a568e205de2676c";
+  imageClosureIdentity = "0d72f645690505f9bf74687d9673e687f28a5870682b0ba649259ebe08d0a0a8";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
