@@ -44,8 +44,8 @@ POWERBOX_CONTRACT = ROOT / "contracts" / "powerbox" / "v1"
 POWERBOX_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-powerbox-bindings.py"
 BOOT_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-boot-bindings.py"
 # Retained wire-format history. Nothing generates from these — `boot_gen` wires
-# only v5 — but the format's history is part of the contract (see
-# `check-generation-v5.py`), so they are type-checked rather than left to rot.
+# only v5 — but the format's history is part of the contract, so they are
+# type-checked rather than left to rot.
 # B64: v4 was the one retained version no gate touched, so it could have stopped
 # parsing without anything noticing.
 GENERATION_V2_CONTRACT = ROOT / "contracts" / "generation" / "v2"
@@ -134,7 +134,6 @@ FABRIC_TRACE_BINDING_GENERATOR = (
 )
 DATA_FABRIC_PROFILE_CONTRACT = ROOT / "contracts" / "data-fabric-profile" / "v1"
 NORMALIZED_INTERFACE_SCHEMAS_CONTRACT = ROOT / "contracts" / "normalized-interface-schemas" / "v1"
-RPI5_ROS2_DEMO_CONTRACT = ROOT / "contracts" / "rpi5-ros2-demo" / "v1"
 
 SLOT_PIN_REASON_CHECK = load_script(
     "generation_manifest_slot_pin_reasons", "check/contracts/slot_pin_reasons.py"
@@ -439,13 +438,6 @@ run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "gen_rust.zt"))
-run("check", str(RPI5_ROS2_DEMO_CONTRACT / "schema.zt"))
-run("check", str(RPI5_ROS2_DEMO_CONTRACT / "check.zt"))
-subprocess.run(
-    [sys.executable, str(ROOT / "scripts" / "check" / "check-rpi5-ros2-demo-contract.py")],
-    cwd=ROOT,
-    check=True,
-)
 
 
 for contract in (
@@ -503,5 +495,5 @@ print(
     "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
     "fabric-call, fabric-operation, fabric-visibility, fabric-trace, "
     "component-spec, system-spec, component-sdk-release, system-image-closure, "
-    "system-test-run, and rpi5-ros2-demo contracts passed"
+    "and system-test-run contracts passed"
 )

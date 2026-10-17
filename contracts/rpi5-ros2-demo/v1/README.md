@@ -14,7 +14,7 @@ Format 1 selects:
 
 ## Validation levels
 
-Zutai decoding validates the closed record shape. `scripts/check/check-rpi5-ros2-demo-contract.py` owns semantic admission:
+Zutai decoding validates the closed record shape. Format 1's semantic-admission checker has been retired; while it ran, it enforced:
 
 - `formatVersion`, contract id, target, board, revision set, firmware, ROS profile, and DDS profile are exact closed values;
 - every count, string, payload, RTPS record, fragment, queue, history, retry, trace, log, and capability list is bounded before activation;
@@ -29,8 +29,6 @@ No format-1 reader may select a nearby target, firmware, or profile. Unknown req
 
 RP0 fixes the demo contract; it does not claim that the kernel, DDS runtime, AArch64 QEMU path, or physical board path exists yet. RP1-RP8 and R0 implement and observe those claims. DDS Security, dynamic LAN discovery, multicast, wildcard destinations, services/actions, arbitrary ROS packages, Python, filesystems, parameters, Wi-Fi, GPU, and internal-storage writes are outside Profile 0.
 
-Run the focused gate with:
+## Retired
 
-```sh
-just rpi5_ros2_demo_contract_check
-```
+Format 1 is retired: no component, system spec, or composition emits or reads it, its checker and recipe are removed, and this directory is deleted by the retirement work item `01a14829-ac45-7929-8647-b82f2d7c6999`. [Format 2](../v2/README.md) is the Raspberry Pi 5 ROS 2 demo contract.

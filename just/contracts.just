@@ -53,7 +53,11 @@ generation_v5_check shard_index="0" shard_count="1":
     python3 scripts/check/check-generation-v5.py --shard-index {{ shard_index }} --shard-count {{ shard_count }}
 
 [group('contracts')]
-contracts_check: contracts_source_check generation_v5_check
+generation_corpus_check shard_index="0" shard_count="1":
+    python3 scripts/check/check-generation-corpus.py --shard-index {{ shard_index }} --shard-count {{ shard_count }}
+
+[group('contracts')]
+contracts_check: contracts_source_check generation_corpus_check
 
 [group('contracts')]
 architecture_contract_check: contracts_check

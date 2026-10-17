@@ -1,8 +1,4 @@
 [group('hardware')]
-rpi5_ros2_demo_contract_check:
-    python3 scripts/check/check-rpi5-ros2-demo-contract.py
-
-[group('hardware')]
 rpi5_ros2_demo_contract_v2_check:
     python3 scripts/check/check-rpi5-ros2-demo-contract-v2.py
 
@@ -86,7 +82,7 @@ zenoh_external_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm zenoh-external
 
 [group('hardware')]
-rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check rpi5_ros2_demo_contract_v2_check
+rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_v2_check
     python3 scripts/check/check-rpi5-artifacts.py
 
 # Uses the board-specific bcm2712 prefix, target directory, generation, image,

@@ -126,11 +126,12 @@ For how the planes work and how to add one, read
 | `just capability_rights_model_check` | Model-check the capability-rights model. |
 | `just component_spec_check` | Aggregate: `contracts_check`, `component_spec_validation_check`. |
 | `just component_spec_validation_check` | CP0 component-specification model gate. |
-| `just contracts_check` | Aggregate: `contracts_source_check`, `generation_v5_check`. |
+| `just contracts_check` | Aggregate: `contracts_source_check`, `generation_corpus_check`. |
 | `just contracts_source_check` | Type-check every contract schema and renderer and refuse stale generated bindings (`check-contracts.py`). |
 | `just data_fabric_profile_check` | C8.9 typed full-profile and resource-bound closure gate. |
 | `just data_fabric_trace_check` | Refuse stale fabric-trace bindings. |
 | `just fabric_manifest_check` | C8.2 fabric-graph generation admission gate. |
+| `just generation_corpus_check shard_index shard_count` | Every seL4 manifest the generation builder declares still builds, optionally one round-robin shard of the corpus. |
 | `just generation_v5_check shard_index shard_count` | Every generation this repository builds is v5, and nothing still writes v4. |
 | `just interface_schema_check` | Validate `contracts/interface-schema/v1` and its normalized outputs. |
 | `just io_model_check` | Aggregate: `io_queue_model_check`, `io_resource_model_check`. |
@@ -314,7 +315,6 @@ For how the planes work and how to add one, read
 | `just rpi5_artifact_check` | RP1 exact-profile executable closure and deterministic artifact gate. |
 | `just rpi5_boot_check serial` | Physical gate: require ordered boot evidence from the pinned build on UART10. |
 | `just rpi5_media_check` | Flatten via the media builder: objcopy drops the sectionless loader payload. |
-| `just rpi5_ros2_demo_contract_check` | RP0 target-qualified Raspberry Pi 5 ROS 2 demo contract gate. |
 | `just rpi5_ros2_demo_contract_v2_check` | RP0 format-2 Raspberry Pi 5 ROS 2 demo contract gate. |
 | `just zenoh_encoder_check` | Zenoh Profile 0 encoder reproduces every upstream-encoded batch in the decoder corpus byte for byte, after the host wire reference proves itself against the same corpus, and refuses seven named bad inputs; fails until the encoder lands. |
 | `just zenoh_session_check` | Zenoh Profile 0 session machine completes five named scenarios and refuses seven named inputs, as pure state transitions with injected time; fails until the session machine lands. |
