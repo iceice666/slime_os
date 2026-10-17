@@ -273,21 +273,21 @@ fn write_payload(
         match transfer_window::read_staged_array_with(window, words[1], words, scratch, buffer) {
             Ok(frame) => frame,
             Err(error) => {
-                sel4::debug_println!("SLIME_ROOT console staging refused: {error:?}");
+                crate::diagnostic_println!("SLIME_ROOT console staging refused: {error:?}");
                 return;
             }
         };
     let bytes = frame.bytes();
-    // One `debug_print!` for the whole payload, not `debug_println!`: the
-    // component's bytes carry their own newline, and adding one would reflow
-    // every marker the transcripts record.
-    if let Ok(text) = core::str::from_utf8(bytes) {
-        sel4::debug_print!("{text}");
+    // The payload is emitted as one record exactly as staged: the component's
+    // bytes carry their own newline, and adding one would reflow every marker
+    // the transcripts record.
+    if core::str::from_utf8(bytes).is_ok() {
+        let _ = crate::diagnostic::write(bytes);
     } else {
         // Not text. Refused explicitly rather than printed lossily, so a
         // component cannot inject bytes the transcript readers would
         // misinterpret.
-        sel4::debug_println!("SLIME_ROOT console refused non-utf8 bytes={}", bytes.len());
+        crate::diagnostic_println!("SLIME_ROOT console refused non-utf8 bytes={}", bytes.len());
     }
 }
 

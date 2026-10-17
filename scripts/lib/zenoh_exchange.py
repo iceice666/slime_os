@@ -41,6 +41,9 @@ DENIALS = (
     (PUBLISHER, "scouting"),
     (SUBSCRIBER, "connect"),
 )
+# The nodes attempt their denied requests during setup, before either opens its session, so a
+# denial is judged to precede the node's own session-open and nothing is judged about which node
+# gets the CPU first.
 SUCCESS = "[rpi5-ros2-demo] success profile=rpi5-ros2-demo-v2 samples=4"
 RECEIVED = "[rpi5-ros2-demo] received count=4 sequences=0,1,2,3 values=10,20,30,40"
 
@@ -253,9 +256,15 @@ def synthesize_transcript(contract: dict) -> list[str]:
     """What an honest pair of nodes prints, with batches from the reference encoder."""
     key = contract["key"]
     lines = [
-        f"[{PUBLISHER}] session open role=connector initial_sn=0 lease_ms=2000",
+        # Setup: each node attempts what it was not granted. Which node runs first is scheduling.
+        f"[{SUBSCRIBER}] denial class=connect refused=1",
+        f"[{PUBLISHER}] denial class=undeclared-endpoint refused=1",
+        f"[{PUBLISHER}] denial class=listen refused=1",
+        f"[{PUBLISHER}] denial class=scouting refused=1",
+        # The listener opens first in the real guest, but only the handshake is causal.
         f"[{SUBSCRIBER}] session open role=listener initial_sn=0 lease_ms=2000",
         f"[{SUBSCRIBER}] declared subscriber id=1 key={key}",
+        f"[{PUBLISHER}] session open role=connector initial_sn=0 lease_ms=2000",
         f"[{PUBLISHER}] declaration matched key={key}",
     ]
     for sequence, value, cdr in contract["samples"]:
@@ -266,14 +275,20 @@ def synthesize_transcript(contract: dict) -> list[str]:
         lines.append(f"[{SUBSCRIBER}] sample validated sequence={sequence} value={value}")
     lines += [
         RECEIVED,
-        *(f"[{who}] denial class={cls} refused=1" for who, cls in DENIALS if who == SUBSCRIBER),
         f"[{SUBSCRIBER}] undeclared subscriber id=1",
         f"[{SUBSCRIBER}] session closing samples=4",
         f"[{PUBLISHER}] session closed samples=4",
-        *(f"[{who}] denial class={cls} refused=1" for who, cls in DENIALS if who == PUBLISHER),
         SUCCESS,
     ]
     return lines
+
+
+def _at(lines: list[str], line: str, label: str) -> int:
+    """The index of an exact line, refused by name when it is absent."""
+    try:
+        return lines.index(line)
+    except ValueError:
+        raise ExchangeError(f"{label}: the line {line[:80]!r} is missing") from None
 
 
 def _one(lines: list[str], pattern: str, label: str) -> re.Match:
@@ -334,8 +349,8 @@ def judge_transcript(lines: list[str], contract: dict) -> tuple[int, int, int]:
     _one(lines, rf"\[{SUBSCRIBER}\] undeclared subscriber id=1", "undeclare before close")
     _one(lines, rf"\[{SUBSCRIBER}\] session closing samples=4", "subscriber close")
     _one(lines, rf"\[{PUBLISHER}\] session closed samples=4", "publisher close")
-    undeclared, closing = lines.index(f"[{SUBSCRIBER}] undeclared subscriber id=1"), lines.index(f"[{SUBSCRIBER}] session closing samples=4")
-    publisher_closed = lines.index(f"[{PUBLISHER}] session closed samples=4")
+    undeclared, closing = _at(lines, f"[{SUBSCRIBER}] undeclared subscriber id=1", "undeclare"), _at(lines, f"[{SUBSCRIBER}] session closing samples=4", "subscriber close")
+    publisher_closed = _at(lines, f"[{PUBLISHER}] session closed samples=4", "publisher close")
     if undeclared > closing:
         raise ExchangeError("the session closed before the subscriber was undeclared")
     if publisher_closed < closing:
@@ -348,16 +363,32 @@ def judge_transcript(lines: list[str], contract: dict) -> tuple[int, int, int]:
     if len(extra) != denials:
         raise ExchangeError("a denial the exam does not name")
     _one(lines, re.escape(SUCCESS), "success marker")
-    # Only causal order is judged: the subscriber's lines precede its CLOSE, the publisher
-    # reports its close after receiving it, and success is the publisher's last line.
+    # Only causal order is judged. Each node attempts its denied requests during setup, before it
+    # opens its session; the subscriber's undeclare precedes its close and the publisher sees the
+    # close afterwards; the samples and success follow. Which node is scheduled first is not.
+    session_open = {
+        PUBLISHER: _at(lines, f"[{PUBLISHER}] session open role=connector initial_sn={initial_sn} lease_ms=2000", "publisher session open"),
+        SUBSCRIBER: _at(lines, f"[{SUBSCRIBER}] session open role=listener initial_sn={initial_sn} lease_ms=2000", "subscriber session open"),
+    }
     for who, cls in DENIALS:
-        at = lines.index(f"[{who}] denial class={cls} refused=1")
-        if who == SUBSCRIBER and at > closing:
-            raise ExchangeError("the subscriber reported a denial after it closed")
-        if who == PUBLISHER and at < publisher_closed:
-            raise ExchangeError("the publisher reported a denial before its session closed")
-    if lines.index(SUCCESS) != len(lines) - 1 or lines.index(SUCCESS) < max(lines.index(f"[{PUBLISHER}] denial class={c} refused=1") for w, c in DENIALS if w == PUBLISHER):
-        raise ExchangeError("success was not the publisher's last line after the close and its denials")
+        at = _at(lines, f"[{who}] denial class={cls} refused=1", f"{who} {cls} denial")
+        if at > session_open[who]:
+            raise ExchangeError(f"{who} reported its {cls} denial after it opened its session")
+    declared_at = _at(lines, f"[{SUBSCRIBER}] declared subscriber id=1 key={key}", "subscriber declaration")
+    matched_at = _at(lines, f"[{PUBLISHER}] declaration matched key={key}", "publisher match")
+    if matched_at < declared_at:
+        raise ExchangeError("the publisher matched a declaration the subscriber had not made")
+    if session_open[PUBLISHER] > matched_at:
+        raise ExchangeError("the publisher matched a declaration before its session was open")
+    first_sent = next((i for i, text in enumerate(lines) if re.fullmatch(rf"\[{PUBLISHER}\] wire sent sample=0 hex=[0-9a-f]+", text)), None)
+    if first_sent is None:
+        raise ExchangeError("the publisher never sent sample 0")
+    if first_sent < matched_at:
+        raise ExchangeError("the publisher sent before the declaration matched")
+    if _at(lines, RECEIVED, "subscriber summary") < max(i for i, text in enumerate(lines) if " sample validated " in text):
+        raise ExchangeError("the subscriber summarised before it validated every sample")
+    if _at(lines, SUCCESS, "success marker") != len(lines) - 1 or lines.index(SUCCESS) < publisher_closed:
+        raise ExchangeError("success was not the last line after the publisher saw the close")
     return 4, judged, denials
 
 
@@ -409,15 +440,21 @@ def transcript_mutations(good: list[str]) -> list[tuple[str, Callable[[list[str]
         ("a wrong key expression", replace_first("slime_demo/counter", "slime_demo/other")),
         ("a wildcard key expression", replace_first("0/slime_demo/counter", "0/slime_demo/*")),
         ("a wrong validated value", replace_first("sequence=1 value=20", "sequence=1 value=21")),
-        ("a dropped denial", drop("denial class=scouting")),
+        ("a dropped scouting denial", drop("denial class=scouting")),
+        ("a dropped listen denial", drop("denial class=listen")),
+        ("a dropped connect denial", drop("denial class=connect")),
         ("an unnamed denial", lambda lines: lines + [f"[{PUBLISHER}] denial class=invented refused=1"]),
+        ("a duplicated denial", lambda lines: lines + [f"[{PUBLISHER}] denial class=scouting refused=1"]),
         ("a dropped subscriber summary", drop("received count=4")),
+        ("a summary before the last validation", swap(RECEIVED, "sample validated sequence=3")),
         ("no undeclare before close", drop("undeclared subscriber")),
         ("close before undeclare", swap("undeclared subscriber", "session closing samples=4")),
         ("publisher closes before the subscriber does", swap("[ros2-demo-publisher] session closed", "session closing samples=4")),
-        ("success before the close", swap(SUCCESS, "[ros2-demo-publisher] session closed")),
-        ("success before a publisher denial", swap(SUCCESS, "denial class=listen")),
-        ("a subscriber denial after its close", swap("[ros2-demo-subscriber] denial class=connect", "session closing samples=4")),
+        ("success before the publisher saw the close", swap(SUCCESS, "[ros2-demo-publisher] session closed")),
+        ("a denial after the node opened its session", swap("[ros2-demo-publisher] denial class=scouting", "[ros2-demo-publisher] session open")),
+        ("a subscriber denial after it opened", swap("[ros2-demo-subscriber] denial class=connect", "[ros2-demo-subscriber] session open")),
+        ("the publisher sends before the declaration matched", swap("wire sent sample=0", "declaration matched")),
+        ("the publisher matches before the subscriber declares", swap("declaration matched", "declared subscriber id=1")),
         ("a dropped success marker", drop("success profile")),
         ("a duplicated success marker", lambda lines: lines + [SUCCESS]),
         ("a wrong initial sequence", replace_first("initial_sn=0 lease_ms=2000", "initial_sn=5 lease_ms=2000")),

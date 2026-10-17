@@ -123,6 +123,27 @@ pr_scope_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# End-to-end diagnostics from a failing gate through the pinned CLI, including
+# retained output, cached failure, bounds and refusals. Explicit qualification.
+[group('quality')]
+devloop_diagnostics_check: tasks_check
+    python3 scripts/check/check-work-items.py --devloop-diagnostics
+
+# Mutation controls for the diagnostics exam; never qualifies the repair.
+[group('quality')]
+devloop_diagnostics_controls:
+    python3 scripts/check/check-work-items.py --diagnostic-controls
+
+# Linux real-CLI observation capacity, filesystem mutation and memory exam.
+# strace comes from the repository's locked nixpkgs, never an ambient fallback.
+[group('quality')]
+devloop_observation_capacity_check: tasks_check
+    nix shell --inputs-from . nixpkgs#strace --command python3 scripts/check/check-work-items.py --observation-capacity
+
+[group('quality')]
+devloop_observation_capacity_controls:
+    nix shell --inputs-from . nixpkgs#strace --command python3 scripts/check/check-work-items.py --capacity-controls
+
 # The tree the closeout script runs devloop in must contain every policy
 # codePaths entry: a real checkout of canonical main through the script's own
 # prepare function, and a bare checkout the check must refuse. Needs network;
@@ -149,7 +170,7 @@ tasks_graph:
 [group('quality')]
 [positional-arguments]
 devloop *ARGS:
-    python3 scripts/lib/devloop.py "$@"
+    python3 scripts/lib/devloop_cli.py "$@"
 
 [group('quality')]
 x86_portability_check:
@@ -399,7 +420,7 @@ test_sel4_root:
     # modules that exist there: P6's `framebuffer` and `boot_record` are gated
     # to x86-64 because the boot framebuffer is reached through an x86 extra-
     # BootInfo record, and their tests are covered by the x86-64 planes instead.
-    expected=352
+    expected=354
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

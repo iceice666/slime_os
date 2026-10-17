@@ -598,12 +598,37 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-ros2-demo-publisher]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-ros2-demo-subscriber]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-io-local-network-probe]
 opt-level = "s"
 codegen-units = 1
 debug = false
 
 [profile.release.package.slime-component-io-network-lifetime-probe]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-virtio-rng-driver]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-entropy-service]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-entropy-probe]
 opt-level = "s"
 codegen-units = 1
 debug = false

@@ -1534,21 +1534,21 @@ impl ObjectAllocator {
         }
         for index in 0..self.untyped_len {
             let region = self.untypeds[index].ok_or(AllocError::NoKernelUntyped)?;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING inventory parent={} paddr={} bytes={}",
                 region.cap.bits(),
                 region.paddr,
                 region.capacity(),
             );
             if region.watermark == region.capacity() {
-                sel4::debug_println!(
+                crate::diagnostic_println!(
                     "SLIME_BACKING infrastructure parent={} anchor={} paddr={} bytes={}",
                     region.cap.bits(),
                     empty.start,
                     region.paddr,
                     region.capacity(),
                 );
-                sel4::debug_println!(
+                crate::diagnostic_println!(
                     "SLIME_ROOT infrastructure parent={} paddr={} bytes={} reserved_slots={}",
                     region.cap.bits(),
                     region.paddr,
@@ -1675,12 +1675,12 @@ impl ObjectAllocator {
                 .map_err(|()| AllocError::NoKernelUntyped)?;
         }
         self.slots.admit(remaining)?;
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT cspace expanded base={} infrastructure_caps={}",
             expanded,
             destination - expanded,
         );
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ROOT metadata bootstrap objects={} alignment={} remaining={}",
             self.infrastructure.object_bytes(),
             self.infrastructure.alignment_bytes(),
@@ -1723,7 +1723,7 @@ impl ObjectAllocator {
             .as_mut()
             .expect("adopted source")
             .watermark = source.capacity();
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_BACKING infrastructure_tail parent={} paddr={} bytes={}",
             source.cap.bits(),
             source.paddr + source.watermark,
@@ -2151,7 +2151,7 @@ impl ObjectAllocator {
             self.infrastructure_slot_next = end;
             self.expanded_leaves += 1;
             #[cfg(slime_cspace_expanded)]
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_ROOT cspace leaf base={} slots={} beyond_initial={}",
                 base,
                 crate::root_cspace::LEAF_SLOTS,
@@ -2257,14 +2257,14 @@ impl ObjectAllocator {
         self.live_objects += 1;
         self.bytes_allocated += 1usize << size_bits;
         self.live_bytes += 1usize << size_bits;
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_BACKING consume source=ordinary parent={} slot={} paddr={} bytes={} count=1",
             region.cap.bits(),
             slot_index,
             paddr,
             1usize << size_bits,
         );
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ALLOC global region={} parent={} slot={} prior={} start={} end={} bytes={} gap={}",
             region_index,
             region.cap.bits(),
@@ -2402,7 +2402,7 @@ impl ObjectAllocator {
         self.live_objects += 1;
         self.bytes_allocated += 1usize << size_bits;
         self.live_bytes += 1usize << size_bits;
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_BACKING consume source=ordinary parent={} slot={} paddr={} bytes={} count=1",
             region.cap.bits(),
             slot,
@@ -2509,7 +2509,7 @@ impl ObjectAllocator {
         self.bytes_allocated += total;
         self.live_bytes += total;
         self.last_paddr = paddr + (count - 1) * page_bytes;
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_BACKING consume source=ordinary parent={} slot={} paddr={} bytes={} count={}",
             region.cap.bits(),
             first,
@@ -2749,7 +2749,7 @@ impl ObjectAllocator {
             // through `extent_buddy`'s injected operations instead.
             #[cfg(not(test))]
             return self.acquire_split_extent(size_bits).map_err(|split| {
-                sel4::debug_println!(
+                crate::diagnostic_println!(
                     "SLIME_MEM extent split refused size_bits={size_bits} error={split:?}"
                 );
                 match split {
@@ -3328,7 +3328,9 @@ impl ObjectAllocator {
         });
         if let Some(guard) = guard {
             self.release_task_arena(guard)?;
-            sel4::debug_println!("SLIME_MEM stress fragmented guards=4 bytes=16777216 released=1");
+            crate::diagnostic_println!(
+                "SLIME_MEM stress fragmented guards=4 bytes=16777216 released=1"
+            );
         }
         let mut previous = None;
         let mut discontinuities = 0;
@@ -3344,7 +3346,7 @@ impl ObjectAllocator {
             previous = Some(extent.paddr);
         }
         let reused = self.extents_reused - reused_before;
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM stress backing attempt={attempt} data_extents={data} discontinuities={discontinuities} reused={reused}"
         );
         result
@@ -3366,7 +3368,7 @@ impl ObjectAllocator {
                 let actual = self.free_slots();
                 let reserved = self.slots.reserve_stress_pressure(count.saturating_sub(1));
                 let effective = self.free_slots();
-                sel4::debug_println!(
+                crate::diagnostic_println!(
                     "SLIME_MEM stress construction case=slots attempt={attempt} actual={actual} effective={effective} required={count} reserved={reserved}"
                 );
             }

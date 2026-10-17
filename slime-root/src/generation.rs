@@ -8,6 +8,7 @@
 use boot_contracts::block_authority::{self, BlockAuthority};
 use boot_contracts::clock_authority::{self, ClockAuthority};
 use boot_contracts::component_image::{self, ComponentTargetError};
+use boot_contracts::entropy_authority::{self, EntropyAuthority};
 use boot_contracts::fabric_graph::{self, FabricGraph, MAX_INTERPOSITION_HOPS};
 use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
@@ -739,6 +740,19 @@ pub(crate) fn network_interface_object<'a>(
             && object.bytes[..network_interface::MAGIC.len()] == network_interface::MAGIC
         {
             return Some(NetworkInterfaces::decode(object.bytes));
+        }
+    }
+    None
+}
+/// Locate the authenticated entropy-authority table. Decoded only to bound and
+/// page authenticated bytes; budgets and streams belong to the entropy service.
+pub(crate) fn entropy_authority_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<EntropyAuthority<'a>, entropy_authority::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE && object.bytes.starts_with(&entropy_authority::MAGIC) {
+            return Some(EntropyAuthority::decode(object.bytes));
         }
     }
     None

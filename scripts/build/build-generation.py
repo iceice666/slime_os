@@ -125,6 +125,7 @@ from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT
 from generation_resources import (
     build_block_ring_authority,
     build_clock_authority,
+    build_entropy_authority,
     build_instance_lifetime,
     instance_lifetime_identity,  # noqa: F401 -- read by check-system-spec.py through this module
     build_io_resource_budget,
@@ -3104,6 +3105,11 @@ def build_sel4_generation(
         payloads["network-application"] = build_network_applications(manifest)
     elif declared_network_applications:
         fail("networkApplications declared without a network-application resource object")
+    declared_entropy_authority = manifest.get("entropyAuthority") or []
+    if "entropy-authority" in object_ids:
+        payloads["entropy-authority"] = build_entropy_authority(manifest)
+    elif declared_entropy_authority:
+        fail("entropyAuthority declared without an entropy-authority resource object")
     declared_block_rings = manifest.get("blockRingAuthority") or []
     if "block-ring-authority" in object_ids:
         payloads["block-ring-authority"] = build_block_ring_authority(declared_block_rings)

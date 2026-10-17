@@ -23,9 +23,9 @@ impl ObjectAllocator {
     /// Snapshot disjoint backing owners without treating parent capabilities
     /// as additional physical memory alongside their children.
     pub fn report_backing_snapshot(&self, phase: &str) {
-        sel4::debug_println!("SLIME_BACKING snapshot phase={phase} begin");
+        crate::diagnostic_println!("SLIME_BACKING snapshot phase={phase} begin");
         for region in self.untypeds[..self.untyped_len].iter().flatten() {
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING ordinary parent={} paddr={} bytes={} used={}",
                 region.cap.bits(),
                 region.paddr,
@@ -34,7 +34,7 @@ impl ObjectAllocator {
             );
         }
         for region in self.preserved.iter() {
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING retained parent={} paddr={} bytes={} used={}",
                 region.cap.bits(),
                 region.paddr,
@@ -44,7 +44,7 @@ impl ObjectAllocator {
         }
         // A split record's bytes are its two children's, which are listed.
         for extent in self.extents.iter().flatten().filter(|extent| !extent.split) {
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING task_extent parent={} bytes={} active={}",
                 extent.parent.bits(),
                 1usize << extent.size_bits,
@@ -52,7 +52,7 @@ impl ObjectAllocator {
             );
         }
         self.shared_backing.report_backing_snapshot();
-        sel4::debug_println!("SLIME_BACKING snapshot phase={phase} end");
+        crate::diagnostic_println!("SLIME_BACKING snapshot phase={phase} end");
     }
 
     /// Consume a whole preserved leaf. Keeping its parent capability alive and
@@ -141,7 +141,7 @@ impl ObjectAllocator {
                         declared: self.preserved.len() + 1,
                     });
                 }
-                sel4::debug_println!(
+                crate::diagnostic_println!(
                     "SLIME_BACKING split parent={} child={} paddr={} bytes={}",
                     parent.cap.bits(),
                     slot,
@@ -201,14 +201,14 @@ impl ObjectAllocator {
         self.live_objects += 1;
         self.bytes_allocated += 1usize << bits;
         self.live_bytes += 1usize << bits;
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_BACKING consume source=preserved parent={} slot={} paddr={} bytes={} count=1",
             leaf.cap.bits(),
             destination,
             leaf.paddr,
             1usize << bits,
         );
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_ALLOC preserved parent={} slot={} paddr={} bytes={}",
             leaf.cap.bits(),
             destination,
@@ -278,7 +278,7 @@ impl ObjectAllocator {
                 });
             }
             #[cfg(not(test))]
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING preserve parent={} child={} paddr={} bytes={}",
                 region.cap.bits(),
                 slot,

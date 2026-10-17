@@ -64,16 +64,20 @@ jobs:
             keep-env-derivations = true
             keep-outputs = true
 
-      # Keyed on the flake alone: the projection shell builds myque-gh through
-      # GHC and the pinned Zutai toolchain through cargo when cold.
+      # Shared with work-item CI, closeout and retirement. The key binds both
+      # the flake and local tool derivations; every consumer uses this shell.
       - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: >-
-            projection-${{ runner.os }}-${{ runner.arch }}-${{
+            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
               hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
             }}
-          restore-prefixes-first-match: projection-${{ runner.os }}-${{ runner.arch }}-
+          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 5G
+
+      # Keep the shell closure rooted through cache-nix-action's post-job GC/save.
+      - name: Root shared tool environment
+        run: nix develop .#projection --profile "$RUNNER_TEMP/projection-profile" --command true
 
       # Slime OS runs the projection itself rather than through myque-gh's
       # reusable workflow: a spec-driven item's description is rendered by
@@ -93,5 +97,5 @@ jobs:
           --source-branch main
           --project 'state = open or state = active or state = blocked or state = deferred'
           --body-renderer python3
-          --body-renderer-arg scripts/lib/devloop.py
+          --body-renderer-arg scripts/lib/devloop_cli.py
           --body-renderer-arg render

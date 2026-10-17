@@ -1025,6 +1025,101 @@ def build_instance_lifetime(manifest: dict) -> bytes:
     )
 
 
+ENTROPY_SERVICE_INSTANCE = "entropy-service"
+ENTROPY_DRIVER_INSTANCE = "virtio-rng-driver"
+ENTROPY_SOURCES = {
+    "hardware": wire_contracts.ENTROPY_AUTHORITY_SOURCE_HARDWARE,
+    "seeded": wire_contracts.ENTROPY_AUTHORITY_SOURCE_SEEDED,
+}
+
+
+def entropy_authority_holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching `boot_contracts::entropy_authority`."""
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-entropy-authority-holder-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def entropy_holder_grant(holder: str) -> str:
+    """The one endpoint a holder draws through, named for it."""
+    return f"{holder}-entropy"
+
+
+def build_entropy_authority(manifest: dict) -> bytes:
+    """Encode the entropy-authority resource object (entropy-authority/v1).
+
+    A row is only meaningful together with the endpoint it draws through, so
+    the grant table is judged here as well: every endpoint the service receives
+    is exactly one row's non-transferable send/recv channel, and every row has
+    exactly one.
+    """
+    c = wire_contracts
+    declarations = manifest.get("entropyAuthority") or []
+    if len(declarations) > c.MAX_ENTROPY_AUTHORITY_HOLDERS:
+        fail("entropy authority exceeds its holder bound")
+    instances = {entry["name"] for entry in manifest["instances"]}
+    if declarations and ENTROPY_SERVICE_INSTANCE not in instances:
+        fail("entropy authority: no entropy-service instance reads the table")
+    holders = [entry.get("holder") for entry in declarations]
+    if len(set(holders)) != len(holders):
+        fail("entropy authority: duplicate holder")
+    channels: dict[str, int] = {holder: 0 for holder in holders}
+    for grant in manifest["grants"]:
+        # The service's own `entropy-source` channel runs service -> driver, so
+        # every endpoint *received* by the service is a holder's draw channel.
+        if grant["capabilityKind"] != "endpoint" or grant["target"] != ENTROPY_SERVICE_INSTANCE:
+            continue
+        source = grant["source"]
+        if source not in channels:
+            fail(f"entropy authority: endpoint {grant['name']} reaches the service from a holder with no row")
+        if grant["name"] != entropy_holder_grant(source):
+            fail(f"entropy authority: endpoint {grant['name']} is not named {entropy_holder_grant(source)}")
+        if grant["transferable"] is not False:
+            fail(f"entropy authority: endpoint {grant['name']} is transferable")
+        if not isinstance(grant["rights"], list) or sorted(grant["rights"]) != ["recv", "send"]:
+            fail(f"entropy authority: endpoint {grant['name']} rights are not exactly send and recv")
+        channels[source] += 1
+    entries = []
+    for declaration in declarations:
+        holder = declaration.get("holder")
+        if not isinstance(holder, str) or holder not in instances:
+            fail(f"entropy authority: holder {holder!r} is not a declared instance")
+        if holder in (ENTROPY_SERVICE_INSTANCE, ENTROPY_DRIVER_INSTANCE):
+            fail(f"entropy authority: {holder} may not hold an entropy row")
+        encoded = holder.encode("utf-8")
+        if not 1 <= len(encoded) <= c.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES or not all(0x21 <= byte <= 0x7E for byte in encoded):
+            fail(f"entropy authority: holder name {holder!r} is not 1..32 printable ASCII bytes")
+        source = declaration.get("source")
+        if source not in ENTROPY_SOURCES:
+            fail(f"entropy authority: {holder} has unknown source {source!r}")
+        budget = declaration.get("byteBudget")
+        if not isinstance(budget, int) or isinstance(budget, bool) or not 1 <= budget <= c.ENTROPY_AUTHORITY_MAX_BYTE_BUDGET:
+            fail(f"entropy authority: {holder} byteBudget outside 1..{c.ENTROPY_AUTHORITY_MAX_BYTE_BUDGET}")
+        if source == "hardware":
+            if "seed" in declaration:
+                fail(f"entropy authority: hardware row {holder} declares a seed")
+            seed = bytes(c.ENTROPY_AUTHORITY_SEED_BYTES)
+        else:
+            text = declaration.get("seed")
+            if not isinstance(text, str) or len(text) != 2 * c.ENTROPY_AUTHORITY_SEED_BYTES or any(
+                character not in "0123456789abcdef" for character in text
+            ):
+                fail(f"entropy authority: seeded row {holder} seed is not 64 lowercase hex digits")
+            seed = bytes.fromhex(text)
+        if channels[holder] != 1:
+            fail(f"entropy authority: {holder} has {channels[holder]} entropy endpoints, not exactly one")
+        identity = entropy_authority_holder_identity(holder)
+        entries.append((identity, c.ENTROPY_AUTHORITY_ENTRY.pack(
+            identity, encoded.ljust(c.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES, b"\0"), len(encoded),
+            ENTROPY_SOURCES[source], bytes(2), budget, seed,
+        )))
+    entries.sort(key=lambda value: value[0])
+    total_len = c.ENTROPY_AUTHORITY_HEADER_BYTES + len(entries) * c.ENTROPY_AUTHORITY_ENTRY_BYTES
+    header = c.ENTROPY_AUTHORITY_HEADER.pack(
+        c.ENTROPY_AUTHORITY_MAGIC, c.ENTROPY_AUTHORITY_VERSION, c.ENTROPY_AUTHORITY_HEADER_BYTES, 0, len(entries), total_len
+    )
+    return header + b"".join(entry for _, entry in entries)
+
+
 def scheduling_class_instance_identity(name: str) -> bytes:
     """Stable per-instance identity, matching boot_contracts::scheduling_class.
 

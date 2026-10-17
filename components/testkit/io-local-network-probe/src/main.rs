@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use slime_components::console_line::Line;
 use slime_components::network_io::{
     Connection, NetworkError, NetworkIo, NetworkNotifications, NetworkReply,
 };
@@ -72,10 +73,13 @@ fn main(_: u32) {
     if wakes == 0 {
         fail(b"no notification waits");
     }
-    debug_write(b"[io-local-network-probe] role=");
-    debug_write(role);
-    write_number(b" notification_wakes=", wakes as u64);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[io-local-network-probe] role=")
+        .bytes(role)
+        .bytes(b" notification_wakes=")
+        .decimal(wakes as u64)
+        .bytes(b"\n")
+        .emit();
     io.finish().unwrap_or_else(|_| fail(b"finish"));
     marker(role, b"loans returned=2 shutdown=1");
     exit(0)
@@ -246,9 +250,11 @@ fn remember_connection(connection: &Connection, old: Option<u64>, role: &[u8]) {
         if connection.id() == old {
             fail(b"connection identity reused");
         }
-        debug_write(b"[io-network-lifetime-probe] role=");
-        debug_write(role);
-        debug_write(b" old_handle_refused=1 fresh_identity=1\n");
+        Line::<128>::new()
+            .bytes(b"[io-network-lifetime-probe] role=")
+            .bytes(role)
+            .bytes(b" old_handle_refused=1 fresh_identity=1\n")
+            .emit();
     } else {
         for (key, value) in [
             (3, connection.id() & u32::MAX as u64),
@@ -513,22 +519,24 @@ fn recv_response_after_stall(
         }
         bounded_yield(clock);
     }
-    write_number(
-        b"[io-local-network-probe] role=publisher timeout_retries=",
-        timeouts,
-    );
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[io-local-network-probe] role=publisher timeout_retries=")
+        .decimal(timeouts)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn would_block(reply: &NetworkReply) {
     if reply.status_detail != net::STATUS_WOULD_BLOCK || reply.transferred != 0 {
-        write_number(
-            b"[io-local-network-probe] status magnitude=",
-            u64::from(reply.status_detail.unsigned_abs()),
-        );
-        write_number(b" queue=", u64::from(reply.queue_status));
-        write_number(b" capability_kind=", u64::from(reply.capability_kind));
-        debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[io-local-network-probe] status magnitude=")
+            .decimal(u64::from(reply.status_detail.unsigned_abs()))
+            .bytes(b" queue=")
+            .decimal(u64::from(reply.queue_status))
+            .bytes(b" capability_kind=")
+            .decimal(u64::from(reply.capability_kind))
+            .bytes(b"\n")
+            .emit();
         fail(b"unexpected network status");
     }
 }
@@ -540,32 +548,22 @@ fn bounded_yield(clock: &TickClock) {
     yield_now();
 }
 
+/// Emit one marker as a single record; an invalid or oversized one is refused.
 fn marker(role: &[u8], message: &[u8]) {
-    debug_write(b"[io-local-network-probe] role=");
-    debug_write(role);
-    debug_write(b" ");
-    debug_write(message);
-    debug_write(b"\n");
-}
-
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
+    Line::<256>::new()
+        .bytes(b"[io-local-network-probe] role=")
+        .bytes(role)
+        .bytes(b" ")
+        .bytes(message)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-local-network-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-local-network-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

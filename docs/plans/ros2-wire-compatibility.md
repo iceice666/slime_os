@@ -19,7 +19,7 @@ slices encoder `01a0f5fa-f704-73e0-b3a1-cd2debc429e9`, session machine
 `01a0f5fa-ff13-7667-8c59-6f4c6d312535`, transport runtime
 `01a0f5fb-0344-7bb5-9d5b-2b79bc0339a8`, nodes and composition
 `01a0f5fb-0780-754f-b2f4-e7513c86b63c`, and QEMU gate
-`01a0f5fb-0bb3-7612-9f87-30a7e8dae710`. R0 itself,
+`01a0fc73-3bcd-75c7-9ec5-0e9f84c7505b`. R0 itself,
 `01a00b4d-2400-7987-93d6-19201c397dff`, is a pre-cutoff prose item and keeps its
 record; the epic owns the remaining work because only a spec-driven item can bind
 evidence. R0 closes by hand once the epic's acceptance holds. The design and its
@@ -28,15 +28,28 @@ alternatives are in
 
 ### Present state
 
-`contracts/zenoh-profile/v1` declares the wire vocabulary, and a bounded decoder
-with its host corpus exists in `components/lib/src/zenoh_profile0.rs`. The
+The wire codec, session machine, CDR codec, transport runtime, the two node
+components and the `sel4-zenoh` composition exist; [the architecture
+page](../architecture/zenoh-transport.md) owns how they work. The
 [format-2 demo contract](../../contracts/rpi5-ros2-demo/v2/README.md) fixes the
 topic, the `Counter` type, the key expression, the 33-byte attachment, the
-bounds and the four sample byte strings. Nothing yet encodes a Zenoh message, runs
-a session, serializes CDR, owns the TCP link, runs as a node or is granted its
-authority by a composition.
+bounds and the four sample byte strings.
 
-### What will be built
+Observed under AArch64 QEMU: generation 168 is admitted with four instances,
+four samples cross one session, the batches the nodes report are byte-identical
+on both sides and equal the host reference's encoding of their own fields, and
+the graph ends `HEALTHY` with four required instances completed. The first exam
+landed with this plan ordered the two concurrent nodes against each other and
+refused that guest; the corrected exam (a chain per node plus one crossing chain)
+accepts it. See [Boundaries](#boundaries) for what is and is not observed.
+
+An earlier boot of the same sources stopped at `attach`: a non-blocking receive
+that found nothing was returned as a zero-byte message, and the attach handshake
+rejected it as malformed. That was a defect in the runtime's receive path, not in
+the Zenoh code, and it is fixed separately; the existing `--arm local` network
+plane check, which carries no Zenoh code, failed the same way until then.
+
+### What was built
 
 | Slice | Implementation | Recipe |
 | --- | --- | --- |
@@ -45,12 +58,14 @@ authority by a composition.
 | CDR codec | `components/lib/src/ros_cdr*`: classic CDR_LE for `Counter`, encoder and decoder | `zenoh_cdr_check` |
 | Transport runtime | `components/lib/src/zenoh_link*`: the session over a byte-stream trait, with reassembly, partial writes, bounded queues and a retry limit | `zenoh_transport_check` |
 | Nodes and composition | `ros2-demo-publisher` and `ros2-demo-subscriber` under `components/applications`, and the `sel4-zenoh` system spec (generation 168) with its derived manifest and closures | `zenoh_composition_check` |
-| QEMU arm | The `zenoh` arm of `check-sel4-io-network-plane.py` and its 25 markers | `rpi5_ros2_zenoh_check` |
+| QEMU arm | The `zenoh` arm of `check-sel4-io-network-plane.py` and its 36 markers | `rpi5_ros2_zenoh_check` |
 
 ### How each slice is verified
 
-Every recipe fails today, and none is in CI or an aggregate. The first column is
-what the recipe requires; the second is why a wrong implementation cannot pass.
+None of these recipes is in CI or an aggregate. The first column is what the
+recipe requires; the second is why a wrong implementation cannot pass. The host
+recipes and `zenoh_composition_check` pass, and `rpi5_ros2_zenoh_check` passes on a
+booted `sel4-zenoh` image.
 
 | Slice | The recipe requires | Why a wrong implementation fails |
 | --- | --- | --- |
@@ -59,7 +74,7 @@ what the recipe requires; the second is why a wrong implementation cannot pass.
 | CDR | 4 samples whose bytes equal the demo fixture's `cdrHex` and bytes the checker packs from the field values; 7 malformed inputs | A fixture edited to match a wrong codec still disagrees with the packed bytes |
 | Transport | 6 scenarios and 7 refusals over a scripted byte link, with the Rust filter `zenoh_link::` | No QEMU is needed, and a runtime under another path runs no test and fails |
 | Composition | 15 authority facts on the derived manifest, after 15 refused mutations | Another port or address, a missing right, listen or resolver authority, a wildcard listener, an unadmitted peer, a UDP destination and an external backend are each refused |
-| QEMU arm | The composition judge, the four host recipes, 25 markers in seven causal chains, then 4 batches (736 bytes) judged against the reference | Each reported batch must equal the reference's encoding of its own decoded fields, with the demo key, the contract's payload, an attachment sequence rising by one and one GID; 22 transcript mutations are refused first |
+| QEMU arm | The composition judge, the four host recipes, 36 markers in six chains (a chain per node and one crossing between them), then 4 batches (736 bytes) judged against the reference | Each reported batch must equal the reference's encoding of its own decoded fields, with the demo key, the contract's payload, an attachment sequence rising by one and one GID; 28 transcript mutations are refused first |
 
 Each Rust slice prints one `[zenoh-exam]` line per case it judges.
 `scripts/check/check-zenoh-profile0.py` owns the expectation and never the tests:
@@ -69,20 +84,20 @@ an independent source. Before it trusts a judge it refuses corrupted evidence
 15 for the composition and 22 for the exchange) and reports the counts to the
 `just-observations` gate.
 
-The QEMU arm's 25 markers join the network plane's pinned gate-control count
-(193 to 218), so `just sel4_gate_control_check` applies its missing, reordered and
+The QEMU arm's 36 markers join the network plane's pinned gate-control count
+(193 to 229), so `just sel4_gate_control_check` applies its missing, reordered and
 failure-marker mutations to them.
 
 ### Traceability to R0's verification list
 
 | R0 verification | Observed by |
 | --- | --- |
-| Publisher and subscriber create only their declared session, topic and direction | `zenoh_composition_check`'s authority facts and the arm's four named denials |
+| Publisher and subscriber create only their declared session, topic and direction | `zenoh_composition_check`'s authority facts and the arm's four named denials, each reported only after the reply was checked to be a denial |
 | Alternate domain, key, endpoint, port or direction fails | The composition mutations and the transcript's wrong-key and wildcard-key controls |
 | Messages serialize to the pinned CDR bytes and cross the session with deterministic values | `zenoh_cdr_check` and the arm's byte-for-byte comparison |
 | Malformed lengths, headers, LEB128, key expressions, attachments and CDR alignment fail before allocation | The decoder corpus (landed with the decoder), `zenoh_encoder_check`'s refusals, `zenoh_cdr_check` and `zenoh_transport_check` |
-| A wildcard key, a router endpoint and a scouting attempt are rejected | The session refusals `wildcard-key-declaration` and `router-peer`, and the arm's `scouting` denial |
-| Node restart issues fresh sessions and cannot replay stale samples | `zenoh_transport_check`'s `restart-uses-fresh-session` and `stale-session-handle` |
+| A wildcard key, a router endpoint and a scouting attempt are rejected | The session refusals `wildcard-key-declaration` and `router-peer`, and the publisher's real scouting request (a UDP connect to Zenoh's multicast group) which the network service refuses; the arm requires the denial |
+| Node restart issues fresh sessions and cannot replay stale samples | `zenoh_transport_check`'s `restart-uses-fresh-session`, which asserts the predecessor's frames are refused by sequence number and deliver nothing, and `stale-session-handle` |
 | The same profile passes under AArch64 QEMU | `rpi5_ros2_zenoh_check` |
 
 ### Boundaries
@@ -96,9 +111,22 @@ failure-marker mutations to them.
   stack's own bytes.
 - Nothing here is `rmw_zenoh` interoperability, liveliness, queryables, a router,
   scouting or transport security, and nothing here is a Raspberry Pi 5 claim.
-- The checker reads `components/lib/src/zenoh_profile0/vectors.txt`, which is not on
-  `main` until the decoder lands. Until then the encoder, session, transport and
-  QEMU recipes fail on its absence.
+- **The first exam was wrong, and booting the guest showed it.** Its marker chains
+  ordered one node's lines against the other's, and its judge required the
+  publisher's denials to follow its close, while the nodes run concurrently and
+  report their denied requests during setup. No real transcript satisfied both
+  halves. The corrected exam checks causal order only and landed as its own
+  planning change; the bytes, values, teardown order and health census were never
+  in question.
+- **Keep-alive is host-tested, not exercised under QEMU.** The decoder takes message
+  id 4 and an open session sends one every quarter of the lease it announced when it
+  has sent nothing else ([`../decisions/zenoh-stock-peer.md`](../decisions/zenoh-stock-peer.md));
+  a link quiet for longer than the peer's lease is closed. The demo is well inside
+  the 2 s lease, so the behaviour is tested on the host and against a stock peer,
+  and not exercised on a quiet link under QEMU.
+- The nodes' reported batches are judged against an independent reference, but
+  the guest chooses what it prints, and the loopback backend gives no packet
+  capture.
 
 ## Owning references
 

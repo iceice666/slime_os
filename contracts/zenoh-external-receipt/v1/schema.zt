@@ -1,0 +1,137 @@
+-- What a stock eclipse-zenoh listener outside the VM reports it received.
+--
+-- `scripts/lib/zenoh_listener_peer.py` runs the pinned `eclipse-zenoh==1.0.0` Python binding in
+-- a separate process, subscribes to the demo key, and writes one record of this shape when it is
+-- done. `scripts/check/check-sel4-io-network-plane.py --arm zenoh-external` reads it back and
+-- holds it against the packet capture and the guest's transcript. It crosses a process boundary,
+-- so it is a versioned contract here and not a text format either side parses by hand.
+--
+-- The samples are what the peer's own subscriber delivered: the key it matched, the payload and
+-- the attachment bytes, as lowercase hexadecimal. The peer did not read them from the wire the
+-- exam captured; that is the point of asking it.
+
+Sample :: type {
+  key : Text;
+  payloadHex : Text;
+  attachmentHex : Text;
+};
+
+Receipt :: type {
+  formatVersion : Int;
+  peerVersion : Text;
+  listen : Text;
+  maxRemotePeers : Int;
+  samples : List Sample;
+};
+
+FromData @Sample :: derive
+FromData @Receipt :: derive
+
+formatVersion :: Int = 1;
+peerVersion :: Text = "1.0.0";
+
+-- The demo's four samples, each a key of at most 129 bytes, a payload of at most 12 bytes and the
+-- 33-byte rmw_zenoh attachment (8 + 8 + a length byte + a 16-byte GID).
+sampleCount :: Int = 4;
+maxKeyBytes :: Int = 129;
+maxPayloadBytes :: Int = 12;
+attachmentBytes :: Int = 33;
+
+-- The peer counts the remote peers it sees while it runs; the guest is one.
+minRemotePeers :: Int = 1;
+maxRemotePeers :: Int = 8;
+
+d ::= import stdlib.data;
+l ::= import stdlib.list;
+n ::= import stdlib.num;
+r ::= import stdlib.result;
+t ::= import stdlib.text;
+
+-- The record is closed. `decode` reads the fields it knows and ignores the rest, so a field the
+-- contract does not name would pass unseen; this refuses it at the top level and in every sample.
+receiptFields :: List Text = { "formatVersion"; "peerVersion"; "listen"; "maxRemotePeers"; "samples"; };
+sampleFields :: List Text = { "key"; "payloadHex"; "attachmentHex"; };
+
+member :: Text -> List Text -> Bool
+  = name names => match names { | {;} => false; | {head; ...tail} => if head == name then true else member name tail; };
+
+allMembers :: List Text -> List Text -> Bool
+  = names found => match found { | {;} => true; | {head; ...tail} => member head names && allMembers names tail; };
+
+nameOf :: d.DataField -> Text
+  = field => field.name;
+
+closedRecord :: List Text -> Data -> Bool
+  = names data => match d.asRecord data {
+    | #ok { value = fields; } => allMembers names (l.map nameOf fields);
+    | #err { error = _; } => true;
+  };
+
+allClosed :: List Data -> Bool
+  = items => match items { | {;} => true; | {head; ...tail} => closedRecord sampleFields head && allClosed tail; };
+
+closedSamples :: Data -> Bool
+  = data => match d.field "samples" data {
+    | #ok { value = value; } => match d.asList value { | #ok { value = items; } => allClosed items; | #err { error = _; } => true; };
+    | #err { error = _; } => true;
+  };
+
+closedReceipt :: Data -> Bool
+  = data => closedRecord receiptFields data && closedSamples data;
+
+-- A hex string is lowercase digit pairs: once every lowercase digit is removed nothing may remain.
+hexDigits :: List Text = { "0"; "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9"; "a"; "b"; "c"; "d"; "e"; "f"; };
+
+stripHex :: List Text -> Text -> Text
+  = digits value => match digits {
+    | {;} => value;
+    | { head; ...tail } => stripHex tail (t.replace head "" value);
+  };
+
+isHex :: Text -> Bool
+  = value => t.length (stripHex hexDigits value) == 0 && n.rem (t.length value) 2 == 0;
+
+count :: List Sample -> Int
+  = items => match items { | {;} => 0; | { _; ...rest } => 1 + count rest; };
+
+sampleOk :: Sample -> Bool
+  = s => t.length s.key >= 1 && t.length s.key <= maxKeyBytes
+    && isHex s.payloadHex && t.length s.payloadHex <= maxPayloadBytes * 2
+    && isHex s.attachmentHex && t.length s.attachmentHex == attachmentBytes * 2;
+
+allSamplesOk :: List Sample -> Bool
+  = items => match items { | {;} => true; | { head; ...rest } => sampleOk head && allSamplesOk rest; };
+
+receiptOk :: Receipt -> Bool
+  = rec => rec.formatVersion == formatVersion && rec.peerVersion == peerVersion
+    && rec.maxRemotePeers >= minRemotePeers && rec.maxRemotePeers <= maxRemotePeers
+    && count rec.samples == sampleCount && allSamplesOk rec.samples;
+
+unknownField :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a field the contract does not name"; }; };
+
+outOfBounds :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a value outside the bounds the contract declares"; }; };
+
+bounded :: Validation DecodeIssue Receipt -> Validation DecodeIssue Receipt
+  = checked => match checked {
+    | #valid { value = rec; } => if receiptOk rec then #valid { value = rec; } else r.invalidOne outOfBounds;
+    | #invalid { errors = errs; } => #invalid { errors = errs; };
+  };
+
+decodeReceipt :: Data -> Validation DecodeIssue Receipt
+  = data => if closedReceipt data then bounded (decode data) else r.invalidOne unknownField;
+
+{
+  Sample =;
+  Receipt =;
+  decodeReceipt =;
+  formatVersion =;
+  peerVersion =;
+  sampleCount =;
+  maxKeyBytes =;
+  maxPayloadBytes =;
+  attachmentBytes =;
+  minRemotePeers =;
+  maxRemotePeers =;
+}

@@ -1,13 +1,13 @@
 # Zenoh Profile 0 transport
 
-**Status:** Proposed
+**Status:** Proposed (implemented; observed under AArch64 QEMU)
 **Related work items:** epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; encoder
 `01a0f5fa-f704-73e0-b3a1-cd2debc429e9`; session machine
 `01a0f5fa-fb06-7cbd-9a39-1539785433b7`; classic-CDR codec
 `01a0f5fa-ff13-7667-8c59-6f4c6d312535`; transport runtime
 `01a0f5fb-0344-7bb5-9d5b-2b79bc0339a8`; nodes and composition
 `01a0f5fb-0780-754f-b2f4-e7513c86b63c`; QEMU gate
-`01a0f5fb-0bb3-7612-9f87-30a7e8dae710`. R0 is
+`01a0fc73-3bcd-75c7-9ec5-0e9f84c7505b`. R0 is
 `01a00b4d-2400-7987-93d6-19201c397dff`.
 
 ## Context
@@ -52,7 +52,14 @@ a Rust encoder that merely agrees with the Rust decoder fails.
 honest synthetic transcript, then on mutations of it, and the gate fails if any
 mutation is accepted. The mutation pass found a real hole while this was written: the
 first transcript judge let success precede the publisher's close. The exchange arm
-runs 22 transcript and 15 composition mutations (37) before it reads the guest.
+runs 28 transcript and 15 composition mutations (43) before it reads the guest.
+
+**Concurrent nodes are judged by causal order only.** The two nodes share one CPU and one
+console, so which prints first is scheduling. The chains are per node, plus one crossing chain
+for what a message makes true: the declaration before the match, a sample sent before it is
+received, the subscriber's close before the publisher's. Each node reports its denied requests
+during setup, before it opens its own session. A first version of the exam ordered the two
+nodes against each other and refused the real guest; booting it is what showed that.
 
 **One composition, exact authority.** `sel4-zenoh` (generation 168) contains
 `init`, `network-service` and the two nodes over the loopback backend. The
@@ -63,8 +70,8 @@ a UDP destination and an external backend are each a refused mutation.
 
 **The QEMU arm lives in the network plane checker.** It is the owner of the
 network planes, and the shared mechanism in `scripts/lib/sel4_plane.py` and
-`scripts/lib/sel4_gate_markers.py` is reused. The arm's 25 markers join the plane's
-gate-control pin (193 to 218), so the existing missing, reordered and
+`scripts/lib/sel4_gate_markers.py` is reused. The arm's 36 markers join the plane's
+gate-control pin (193 to 229), so the existing missing, reordered and
 failure-marker mutations cover it.
 
 ## Alternatives
@@ -88,10 +95,17 @@ failure-marker mutations cover it.
   capture. The arm judges the batches the nodes report handing to `send` and
   receiving from `recv`, which observes the node codecs and session at the
   service's application boundary and not the stack's own bytes.
-- The checker depends on `components/lib/src/zenoh_profile0/vectors.txt`, which is
-  not on `main` until the decoder lands. Until then the encoder, session, transport
-  and QEMU recipes fail on its absence, which is the intended state of a grader
-  landed ahead of its implementation.
+- The checker reads `components/lib/src/zenoh_profile0/vectors.txt`, which landed
+  with the decoder in the implementation change.
+- Booting the guest showed two defects in the exam this decision first landed: the
+  marker chains and the transcript judge assumed an order between the two
+  concurrently running nodes that the guest does not produce. The design above is
+  unchanged; the chains became per-node chains plus one crossing chain, and the
+  judge's denial ordering was relaxed to causal order, in a planning change of its
+  own.
+- The nodes' control flow is in `components/lib/src/zenoh_node.rs`, so the host
+  tests judge the order a node acts in and every line it prints; the components
+  hold only their bindings, the service connection, the clock and the console.
 - The Rust slices must use the module paths the recipes filter on:
   `zenoh_profile0::`, `ros_cdr::` and `zenoh_link::`. A runtime placed elsewhere
   runs no test and fails rather than reporting zero.
@@ -101,7 +115,6 @@ failure-marker mutations cover it.
 
 ## Revisit when
 
-- the decoder lands and the corpus is on `main`;
 - the network service reports bytes per connection, which would let the arm check
   the loopback stack as well as the nodes;
 - R1 admits an external `rmw_zenoh` peer, which needs a capture of a real link.

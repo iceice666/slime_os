@@ -96,6 +96,7 @@ For how the planes work and how to add one, read
 | `just private_memory_phase3_check` | One recipe covering every phase-3 acceptance. |
 | `just private_memory_phase4_check` | One recipe covering the phase-4 surface: the adaptive planes on both reference architectures, their over-guaranteed negative control, and the whole fixed and demand-backed surface underneath them. |
 | `just private_memory_phase5_check` | MEM-ADAPTIVE's qualification: the inventory matrix on both reference architectures over the whole phase-4 surface. |
+| `just pr_scope_check` | The pull-request scope classes and their refusals on synthetic diffs, then a compile of every `contracts/**/schema.zt`; CI judges a real base..head with the same classes. |
 | `just private_memory_policy_check` | Formatting, lint, and host tests plus the private-memory policy planes. |
 | `just ruff` | `ruff check scripts/` |
 | `just ruff_fix` | `ruff check scripts/ --fix` |
@@ -103,6 +104,10 @@ For how the planes work and how to add one, read
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
 | `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
+| `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |
+| `just devloop_diagnostics_controls` | The diagnostics judge's corrupted-result and actual-CLI transport controls; passing controls do not qualify the repair. |
+| `just devloop_observation_capacity_check` | Explicit Linux real-CLI raw stderr capacity, replay, filesystem mutation and measured-memory qualification, using strace from locked nixpkgs; runs `tasks_check` first. |
+| `just devloop_observation_capacity_controls` | Receipt, filesystem monitor and bounded/unbounded collector controls; never qualifies the implementation. |
 | `just tasks_graph` | `myque graph`. |
 | `just tasks_list` | `myque list` — generated view, never authoritative. |
 | `just tasks_next` | `myque next` — actionable items. |
@@ -122,11 +127,13 @@ For how the planes work and how to add one, read
 | `just capability_rights_model_check` | Model-check the capability-rights model. |
 | `just component_spec_check` | Aggregate: `contracts_check`, `component_spec_validation_check`. |
 | `just component_spec_validation_check` | CP0 component-specification model gate. |
-| `just contracts_check` | Aggregate: `contracts_source_check`, `generation_v5_check`. |
+| `just contracts_check` | Aggregate: `contracts_source_check`, `generation_corpus_check`. |
 | `just contracts_source_check` | Type-check every contract schema and renderer and refuse stale generated bindings (`check-contracts.py`). |
 | `just data_fabric_profile_check` | C8.9 typed full-profile and resource-bound closure gate. |
 | `just data_fabric_trace_check` | Refuse stale fabric-trace bindings. |
 | `just fabric_manifest_check` | C8.2 fabric-graph generation admission gate. |
+| `just generation_corpus_check shard_index shard_count` | Every seL4 manifest the generation builder declares still builds, optionally one round-robin shard of the corpus. |
+| `just generation_v5_retired_check` | Retirement of the generation v5 guard: the corpus still builds, and the guard's checker, recipe, codePaths entry, reference row and CI steps are gone. |
 | `just generation_v5_check shard_index shard_count` | Every generation this repository builds is v5, and nothing still writes v4. |
 | `just interface_schema_check` | Validate `contracts/interface-schema/v1` and its normalized outputs. |
 | `just io_model_check` | Aggregate: `io_queue_model_check`, `io_resource_model_check`. |
@@ -138,47 +145,52 @@ For how the planes work and how to add one, read
 | `just system_composition_closure_check` | Render `contracts/composition-inventory/v1`'s host constants. |
 | `just system_image_builder_check` | Resolution checks each closure's committed prefix against `sel4/pins.toml`; no installed platform build or published SDK record is needed for that check. |
 | `just system_image_closure_aggregate_check` | Every shipped or tested image traces to exactly one closure, and every closure is exercised by an owning gate. |
+| `just system_image_closure_gates_check` | Every gate that consumes the committed closure corpus, on one tree: freshness, resolution and its controls, the frozen test-run records and their inventory controls, the scenario and root-role arms, and image/closure ownership. Editing this recipe changes the `just-recipes` closure input. |
 | `just system_image_closure_check` | Render `contracts/system-image-closure/v2` host constants. |
 | `just system_image_scenario_check` | CP14 scenario-identity gate. |
 | `just system_spec_check` | Validate every system spec and refuse a derived composition manifest that drifted from it. |
 | `just system_test_run_baseline_check` | One execution identity covers the declaration/closure boundary and its quality gates. |
 | `just system_test_run_bless` | Generate `contracts/system-test-run/v1` records from each plane gate's execution inputs. |
+| `just system_test_run_inventory_check` | Run discovery and per-arm extraction controls, then the complete frozen-record gate. |
 | `just system_test_run_check` | Execution-only inputs — disks, devices, injected faults, timeouts, marker contracts — are declared per plane and frozen, so a timeout or a disk cannot change without a reviewed record change. |
 
 ## generate
 
 | Recipe | Does |
 | --- | --- |
-| `just block_gen` | `python3 scripts/generate/generate-block-bindings.py` |
+| `just block_gen` | `python3 scripts/generate/generate-bindings.py block` |
 | `just boot_gen` | Regenerate `boot-contracts/src/generated/` and `scripts/lib/boot_contracts.py` from every boot-family schema. |
 | `just boot_media_gen` | Render `contracts/boot-media/v1`'s host constants. |
 | `just bootstate_gen` | Aggregate: `boot_gen`. |
-| `just capability_transfer_gen` | `python3 scripts/generate/generate-capability-transfer-bindings.py` |
-| `just component_gen` | `python3 scripts/generate/generate-component-bindings.py` |
+| `just capability_transfer_gen` | `python3 scripts/generate/generate-bindings.py capability-transfer` |
+| `just component_gen` | `python3 scripts/generate/generate-bindings.py component` |
 | `just component_runtime_abi_gen` | The `label -> operation` pairs the contract declared, from its own output. |
 | `just component_sdk_release_gen` | Render `contracts/component-sdk-release/v1`'s host constants. |
 | `just cpu_boot_observation_gen` | Render `contracts/cpu-boot-observation/v1`'s host constants. |
 | `just fabric_graph_gen` | Aggregate: `boot_gen`. |
-| `just fabric_ring_gen` | `python3 scripts/generate/generate-fabric-ring-bindings.py` |
-| `just fabric_stream_gen` | `python3 scripts/generate/generate-fabric-stream-bindings.py` |
-| `just fabric_trace_gen` | `python3 scripts/generate/generate-fabric-trace-bindings.py` |
-| `just fabric_visibility_gen` | `python3 scripts/generate/generate-fabric-visibility-bindings.py` |
+| `just entropy_gen` | `python3 scripts/generate/generate-bindings.py entropy` |
+| `just fabric_ring_gen` | `python3 scripts/generate/generate-bindings.py fabric-ring` |
+| `just fabric_stream_gen` | `python3 scripts/generate/generate-bindings.py fabric-stream` |
+| `just fabric_trace_gen` | `python3 scripts/generate/generate-bindings.py fabric-trace` |
+| `just fabric_visibility_gen` | `python3 scripts/generate/generate-bindings.py fabric-visibility` |
 | `just generation_gen` | Aggregate: `boot_gen`. |
-| `just generation_management_gen` | `python3 scripts/generate/generate-generation-management-bindings.py` |
+| `just generation_management_gen` | `python3 scripts/generate/generate-bindings.py generation-management` |
 | `just interface_schema_gen` | `python3 scripts/generate/generate-interface-schema-bindings.py` |
-| `just io_queue_gen` | `python3 scripts/generate/generate-io-queue-bindings.py` |
+| `just io_queue_gen` | `python3 scripts/generate/generate-bindings.py io-queue` |
 | `just kernel_image_gen` | Aggregate: `boot_gen`. |
-| `just link_device_gen` | `python3 scripts/generate/generate-link-device-bindings.py` |
-| `just mavlink_heartbeat_gen` | `python3 scripts/generate/generate-mavlink-heartbeat-bindings.py` |
-| `just network_service_gen` | `python3 scripts/generate/generate-network-service-bindings.py` |
-| `just powerbox_gen` | `python3 scripts/generate/generate-powerbox-bindings.py` |
-| `just private_memory_probe_gen` | `python3 scripts/generate/generate-private-memory-probe-bindings.py` |
-| `just pwm_servo_gen` | `python3 scripts/generate/generate-pwm-servo-bindings.py` |
-| `just sample_descriptor_gen` | `python3 scripts/generate/generate-sample-descriptor-bindings.py` |
-| `just serial_device_gen` | `python3 scripts/generate/generate-serial-device-bindings.py` |
-| `just spawn_gen` | `python3 scripts/generate/generate-spawn-bindings.py` |
-| `just store_gen` | `python3 scripts/generate/generate-store-bindings.py` |
+| `just link_device_gen` | `python3 scripts/generate/generate-bindings.py link-device` |
+| `just mavlink_heartbeat_gen` | `python3 scripts/generate/generate-bindings.py mavlink-heartbeat` |
+| `just network_service_gen` | `python3 scripts/generate/generate-bindings.py network-service` |
+| `just powerbox_gen` | `python3 scripts/generate/generate-bindings.py powerbox` |
+| `just private_memory_probe_gen` | `python3 scripts/generate/generate-bindings.py private-memory-probe` |
+| `just pwm_servo_gen` | `python3 scripts/generate/generate-bindings.py pwm-servo` |
+| `just sample_descriptor_gen` | `python3 scripts/generate/generate-bindings.py sample-descriptor` |
+| `just serial_device_gen` | `python3 scripts/generate/generate-bindings.py serial-device` |
+| `just spawn_gen` | `python3 scripts/generate/generate-bindings.py spawn` |
+| `just store_gen` | `python3 scripts/generate/generate-bindings.py store` |
 | `just syscall_abi_gen` | The `label -> operation` pairs the contract declared, from its own table. |
+| `just zenoh_profile_gen` | `python3 scripts/generate/generate-bindings.py zenoh-profile` |
+| `just zenoh_stock_gen` | Render the captured stock-peer batches as the Rust constants `zenoh_stock::` reads, from `contracts/zenoh-stock-fixtures/v1`. |
 
 ## planes / mechanism
 
@@ -191,6 +203,8 @@ For how the planes work and how to add one, read
 | `just io_http_qualification_check` | Completion gate includes a fresh live observation rather than cached evidence. |
 | `just io_link_check` | IO3 gate: a supervised userspace virtio-net driver serves LinkDevice over IO0/IO1. |
 | `just io_local_check` | The loopback listen/accept arm: duplex bytes, EOF, readiness draining, authority refusals. |
+| `just console_record_check` | Actual-source root/console contention and whole local producer operations, then twenty consecutive local QEMU boots with exclusive raw captures; [qualification boundary](../plans/console-record-qualification.md). |
+| `just console_record_controls` | Console exam sensitivity controls only; not product qualification or task evidence. |
 | `just io_network_check` | All six network arms: authority, external TCP, local TCP, client lifetime, service fault, driver reset. |
 | `just io_network_driver_reset_check` | External link reset with pending payload work, epoch advance, and restart. |
 | `just io_network_lifetime_check` | Client death, socket/session reclamation, and supervised restart. |
@@ -202,7 +216,7 @@ For how the planes work and how to add one, read
 | `just io_tcp_listener_check` | One exact external listener: admitted accept, silent and reset refusals, half-close, simultaneous close and unread/unsent close judged from the wire. |
 | `just io_tcp_options_check` | Per-binding Nagle, keep-alive, hop limit and idle timeout declared in generation data and judged from the wire, with Reno selected; fails until the `sel4-io-tcp-options` composition lands. |
 | `just sel4_net_check` | The resident Slisp shell spawns http-get with a string argument on `sel4-net`; the body is judged against the controlled peer and refusals against the wire, with the spawn, product-graph, Slisp and host regressions. |
-| `just sel4_entropy_check` | Entropy authority on `sel4-entropy`: seeded draws judged against the host HMAC-DRBG, hardware draws distinct and fail-closed without virtio-rng, budgets and request sizes refused; fails until the composition lands. |
+| `just sel4_entropy_check` | Entropy authority on `sel4-entropy`: seeded draws judged against the host HMAC-DRBG, hardware draws distinct and fail-closed without virtio-rng, budgets and request sizes refused. |
 | `just io_tcp_host_check` | Host tests of the production TCP engine against real host smoltcp peers. |
 | `just sel4_channel_check` | P5.3.1 gate: two components rendezvous over a generation-declared native seL4 Endpoint. |
 | `just sel4_crossing_check` | B22 gate: a graph outlives `MAX_CHANNELS` and still sends on every live one. |
@@ -301,15 +315,19 @@ For how the planes work and how to add one, read
 | `just duo_serial_monitor serial timeout` | Bring-up aid, not a gate: print whatever the Duo's UART0 emits and assert nothing. |
 | `just duo_slisp_check serial` | P3.F: build the target-qualified resident graph with Duo UART0 input, deploy its distinct product FIT, drive one bounded Slisp session, and cold-reset only through the gate-only terminator after every assertion has passed. |
 | `just rpi5_artifact_check` | RP1 exact-profile executable closure and deterministic artifact gate. |
+| `just rpi5_ros2_demo_v1_retired_check` | Retirement of the RPi5 ROS 2 demo format-1 contract: the artifact gate passes on format 2 alone, and the format-1 contract directory is gone. |
 | `just rpi5_boot_check serial` | Physical gate: require ordered boot evidence from the pinned build on UART10. |
 | `just rpi5_media_check` | Flatten via the media builder: objcopy drops the sectionless loader payload. |
-| `just rpi5_ros2_demo_contract_check` | RP0 target-qualified Raspberry Pi 5 ROS 2 demo contract gate. |
 | `just rpi5_ros2_demo_contract_v2_check` | RP0 format-2 Raspberry Pi 5 ROS 2 demo contract gate. |
 | `just zenoh_encoder_check` | Zenoh Profile 0 encoder reproduces every upstream-encoded batch in the decoder corpus byte for byte, after the host wire reference proves itself against the same corpus, and refuses seven named bad inputs; fails until the encoder lands. |
 | `just zenoh_session_check` | Zenoh Profile 0 session machine completes five named scenarios and refuses seven named inputs, as pure state transitions with injected time; fails until the session machine lands. |
 | `just zenoh_cdr_check` | Classic-CDR codec reproduces the demo fixture's four Counter samples, recomputed from their field values, and refuses seven malformed inputs; fails until the codec lands. |
 | `just zenoh_transport_check` | Zenoh transport runtime over a scripted byte link: six scenarios (split and coalesced batches, backpressure, peer close, restart) and seven refusals; fails until the runtime lands. |
+| `just zenoh_stock_check` | A stock eclipse-zenoh 1.0.0 peer's captured batches taken by the Profile 0 session on the plain demo topic, with the refusal corpus pinned by name and digest and the retained decoder, session, encoder and link tests required by name; explicit, in no aggregate, and fails until the session accepts a stock peer. |
+| `just zenoh_xcheck_check` | The codec and session against the real eclipse-zenoh 1.0.0 crates: the corpus as upstream's encoder produces it, a 6000-case sweep in both directions, one full session and the Zenoh ID edge cases. Needs the crates from a registry, so it is explicit and not in CI. |
+| `just zenoh_links_check` | A Zenoh Profile 0 link declared by a named configuration in a fixed mode or a heap mode, judged against the fragments a stock eclipse-zenoh 1.0.0 peer wrote (reproduced byte for byte by `scripts/lib/zenoh_fragment.py`), `contracts/zenoh-link-limits/v1`, the edge between a whole message and a fragmented one, and each refusal, with the stock-peer exam's retained tests required by name. Explicit; fails until the link takes fragments. |
 | `just zenoh_composition_check` | The derived `sel4-zenoh` composition grants the two nodes exactly the demo's authority, judged against 15 mutations of an honest composition; fails until the composition lands. |
+| `just zenoh_external_check` | The demo's guest connects out over a virtio NIC to a stock `eclipse-zenoh==1.0.0` listener on the host, built from a hash-pinned wheel: the listener's own record of the four samples, a packet capture holding exactly one TCP connection to `10.0.2.2:17447` and no DNS, UDP or ICMP, and the guest's report are judged against one another and the host wire reference; needs the wheel from a registry, so explicit and in no aggregate; fails until the `sel4-zenoh-external` composition lands. |
 | `just rpi5_ros2_zenoh_check` | R0's end-to-end claim: the composition and the four host recipes, then two node components exchange the declared topic over Zenoh Profile 0 under AArch64 QEMU, each reported batch judged byte for byte against the host wire reference; explicit, never part of `all`; fails until every slice lands. |
 | `just rpi5_serial_monitor serial timeout` | Bring-up aid only: monitor debug UART without qualifying the board. |
 | `just sel4_duo_image_check` | One seL4 build platform: the board or machine an image targets. |

@@ -1,0 +1,227 @@
+{
+  formatVersion = 1;
+  name = "sel4-entropy";
+  generation = 165;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [
+    "entropy-probe";
+    "entropy-service";
+    "init";
+    "virtio-rng-driver";
+  ];
+  placements = [
+    {
+      component = "init";
+      spawnBudget = 0;
+    };
+  ];
+  instances = [
+    {
+      name = "init";
+      executable = "init";
+    };
+    {
+      name = "virtio-rng-driver";
+      executable = "virtio-rng-driver";
+    };
+    {
+      name = "entropy-service";
+      executable = "entropy-service";
+    };
+    {
+      name = "entropy-hw-a";
+      executable = "entropy-probe";
+    };
+    {
+      name = "entropy-hw-b";
+      executable = "entropy-probe";
+    };
+    {
+      name = "entropy-seeded";
+      executable = "entropy-probe";
+    };
+    {
+      name = "entropy-intruder";
+      executable = "entropy-probe";
+    };
+  ];
+  grants = [
+    {
+      name = "entropy-source";
+      capabilityKind = "endpoint";
+      source = "entropy-service";
+      target = "virtio-rng-driver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "entropy-hw-a-entropy";
+      capabilityKind = "endpoint";
+      source = "entropy-hw-a";
+      target = "entropy-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "entropy-hw-b-entropy";
+      capabilityKind = "endpoint";
+      source = "entropy-hw-b";
+      target = "entropy-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "entropy-seeded-entropy";
+      capabilityKind = "endpoint";
+      source = "entropy-seeded";
+      target = "entropy-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-rng-device";
+      capabilityKind = "device";
+      source = "virtio-rng-driver";
+      target = "virtio-rng-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-rng-mmio";
+      capabilityKind = "mmioRegion";
+      source = "virtio-rng-driver";
+      target = "virtio-rng-driver";
+      rights = [
+        "mapMmio";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-rng-interrupt";
+      capabilityKind = "interruptSource";
+      source = "virtio-rng-driver";
+      target = "virtio-rng-driver";
+      rights = [
+        "irqAck";
+      ];
+      transferable = false;
+    };
+    {
+      name = "virtio-rng-dma";
+      capabilityKind = "dmaAccount";
+      source = "virtio-rng-driver";
+      target = "virtio-rng-driver";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      transferable = false;
+    };
+  ];
+  slotPins = [
+    {
+      holder = "virtio-rng-driver";
+      grant = "entropy-source";
+      slot = 0;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-rng-driver";
+      grant = "virtio-rng-device";
+      slot = 1;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-rng-driver";
+      grant = "virtio-rng-mmio";
+      slot = 2;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-rng-driver";
+      grant = "virtio-rng-interrupt";
+      slot = 3;
+      reason = "componentAbi";
+    };
+    {
+      holder = "virtio-rng-driver";
+      grant = "virtio-rng-dma";
+      slot = 4;
+      reason = "componentAbi";
+    };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [];
+  sharedBufferBudgetObject = false;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [];
+  notificationBindings = [];
+  bootProfiles = [];
+  clockAuthority = [];
+  clockAuthorityObject = false;
+  ioResourceBudget = [
+    {
+      holder = "virtio-rng-driver";
+      device = 0;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      irqSources = 1;
+      dmaPages = 4;
+      dmaMappings = 2;
+      bufferLoans = 0;
+      outstandingRequests = 1;
+    };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [];
+  networkDestinationsObject = false;
+  entropyAuthority = [
+    {
+      holder = "entropy-hw-a";
+      source = "hardware";
+      byteBudget = 96;
+    };
+    {
+      holder = "entropy-hw-b";
+      source = "hardware";
+      byteBudget = 96;
+    };
+    {
+      holder = "entropy-seeded";
+      source = "seeded";
+      byteBudget = 96;
+      seed = "5b8a23fc2c4497bf98a3ff5bf7011d126fc2926f3d7c88f823e5ce01a544b851";
+    };
+  ];
+  entropyAuthorityObject = true;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [];
+  waitSetObject = false;
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "Boots under aarch64-sel4-qemu-virt, with and without a QEMU virtio-rng device, and is exercised by its owning seL4 QEMU plane gate.";
+  acceptanceCriteria = "the sel4_entropy_check gate observes seeded draws equal to the host HMAC-DRBG, distinct hardware draws, refused budgets and sizes, and an ungranted holder with no binding.";
+}

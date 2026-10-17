@@ -1,8 +1,4 @@
 [group('hardware')]
-rpi5_ros2_demo_contract_check:
-    python3 scripts/check/check-rpi5-ros2-demo-contract.py
-
-[group('hardware')]
 rpi5_ros2_demo_contract_v2_check:
     python3 scripts/check/check-rpi5-ros2-demo-contract-v2.py
 
@@ -41,6 +37,33 @@ zenoh_transport_check:
 zenoh_composition_check:
     python3 scripts/check/check-zenoh-profile0.py --slice composition
 
+# The codec and session against the real eclipse-zenoh 1.0.0 crates: the corpus as
+# upstream's encoder produces it, a 6000-case sweep in both directions, one full
+# session and the Zenoh ID edge cases, each counted and judged here. Needs the
+# crates from a registry, so it is explicit and not in CI. Fails until the harness
+# lands.
+[group('hardware')]
+zenoh_xcheck_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice xcheck
+
+# The Profile 0 session against batches a stock eclipse-zenoh 1.0.0 peer put on a TCP
+# link, replayed from scripts/lib/zenoh_stock_peer.py: its connect, subscribe, publish,
+# keep-alive and close, and the things a bounded profile must still refuse. The live peer
+# is an explicit local experiment; nothing here needs a registry. Fails until the session
+# accepts a stock peer.
+[group('hardware')]
+zenoh_stock_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice stock
+
+# A Zenoh Profile 0 link declared by a named configuration, in a fixed mode with no heap or a
+# heap mode where the component supplies the storage a fragmented message is reassembled into.
+# Judged against the fragments a stock eclipse-zenoh 1.0.0 peer wrote, reproduced byte for byte by
+# scripts/lib/zenoh_fragment.py, and against contracts/zenoh-link-limits/v1. The live peer is an
+# explicit local experiment; nothing here needs a registry. Fails until the link takes fragments.
+[group('hardware')]
+zenoh_links_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice links
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.
@@ -48,9 +71,25 @@ zenoh_composition_check:
 rpi5_ros2_zenoh_check: sel4_pin_check zenoh_composition_check zenoh_encoder_check zenoh_session_check zenoh_cdr_check zenoh_transport_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm zenoh
 
+# The demo's guest connects out over a NIC to a stock eclipse-zenoh 1.0.0 listener on the
+# host, built from a hash-pinned wheel into build/zenoh-external. The listener's own record,
+# a packet capture holding exactly one TCP connection to 10.0.2.2:17447 and no DNS or UDP,
+# and the guest's report are judged against one another and the host wire reference.
+# Needs the wheel from a registry, so it is explicit and not in CI or any aggregate. Fails
+# until the sel4-zenoh-external composition (generation 169) lands.
 [group('hardware')]
-rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check rpi5_ros2_demo_contract_v2_check
+zenoh_external_check: sel4_pin_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm zenoh-external
+
+[group('hardware')]
+rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_v2_check
     python3 scripts/check/check-rpi5-artifacts.py
+
+# Retirement of the RPi5 ROS 2 demo format-1 contract: the artifact gate still
+# passes on format 2 alone, and the format-1 contract directory is gone.
+[group('hardware')]
+rpi5_ros2_demo_v1_retired_check: rpi5_artifact_check
+    @if test -e contracts/rpi5-ros2-demo/v1; then echo 'contracts/rpi5-ros2-demo/v1 still exists' >&2; exit 1; fi
 
 # Uses the board-specific bcm2712 prefix, target directory, generation, image,
 # and pinned hashes; it is not interchangeable with the qemu-arm-virt build.

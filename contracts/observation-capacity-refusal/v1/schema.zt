@@ -1,0 +1,59 @@
+-- Local replay record for a post-execution observation-capacity refusal.
+-- It is a gate refusal, never a recipe-failure observation or closure receipt.
+
+ExecutionIdentity :: type {
+  requirements : Text;
+  helper : Text;
+  code : Text;
+  policy : Text;
+  inputs : Text;
+  target : Text;
+  image : Text;
+  epoch : Text;
+};
+
+CapacityRefusal :: type {
+  formatVersion : Int;
+  kind : Text;
+  runKey : Text;
+  gate : Text;
+  justTarget : Text;
+  identity : ExecutionIdentity;
+  outcome : Text;
+  stderrLimitBytes : Int;
+  stderrObservedBytes : Int;
+  recipeExitCode : Int;
+  diagnosticReceiptPath : Text;
+  diagnosticReceiptSha256 : Text;
+  finishedAt : Int;
+  reuseUntil : Int;
+};
+
+FromData @ExecutionIdentity :: derive
+FromData @CapacityRefusal :: derive
+
+formatVersion :: Int = 1;
+kind :: Text = "slime-observation-capacity-refusal";
+outcome :: Text = "stderr-capacity";
+gate :: Text = "just-observations";
+stderrLimitBytes :: Int = 65536;
+maxReceiptBytes :: Int = 8192;
+maxPathBytes :: Int = 240;
+reuseSeconds :: Int = 3600;
+
+decodeRefusal :: Data -> Validation DecodeIssue CapacityRefusal
+  = data => decode data;
+
+{
+  ExecutionIdentity =;
+  CapacityRefusal =;
+  decodeRefusal =;
+  formatVersion =;
+  kind =;
+  outcome =;
+  gate =;
+  stderrLimitBytes =;
+  maxReceiptBytes =;
+  maxPathBytes =;
+  reuseSeconds =;
+}

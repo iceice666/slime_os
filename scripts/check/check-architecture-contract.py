@@ -421,7 +421,7 @@ def check_generated_bindings() -> None:
         "generated boot bindings are not in sync with their contracts",
     )
     require_command(
-        [_sys.executable, "scripts/generate/generate-component-bindings.py", "--check"],
+        [_sys.executable, "scripts/generate/generate-bindings.py", "--check", "component"],
         "generated component bindings are not in sync with their contract",
     )
 

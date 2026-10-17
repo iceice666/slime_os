@@ -283,6 +283,17 @@ NetworkInterfaceEntry :: type {
   mac : Text;
 };
 
+-- Entropy authority row: a holder that may draw from the declared entropy
+-- service, whether its stream is instantiated from the hardware source or from
+-- `seed` (64 lowercase hex digits, seeded rows only), and the total bytes it
+-- may draw. Encoded as `contracts/entropy-authority/v1`.
+EntropyAuthorityEntry :: type {
+  holder : Text;
+  source : Text;
+  byteBudget : Int;
+  seed? : Text;
+};
+
 -- Application bindings and exact local listener policy, distinct from remote destinations.
 NetworkApplicationEntry :: type {
   holder : Text;
@@ -665,6 +676,9 @@ GenerationManifest :: type {
   -- so a network service with a link and no row configures nothing.
   networkInterfaces? : List NetworkInterfaceEntry;
   networkApplications? : List NetworkApplicationEntry;
+  -- Optional entropy authority table. Absent and empty both grant no holder
+  -- any entropy; readable only by the instance named `entropy-service`.
+  entropyAuthority? : List EntropyAuthorityEntry;
   -- Optional B83 exact per-ring block authority table. Absent and empty both
   -- grant no ring any block right, so a userspace block driver refuses every
   -- submission rather than defaulting open. Readable only by the declared
@@ -728,6 +742,7 @@ FromData @PrivateMemoryBudgetEntry :: derive
 FromData @NetworkDestinationEntry :: derive
 FromData @NetworkInterfaceEntry :: derive
 FromData @NetworkApplicationEntry :: derive
+FromData @EntropyAuthorityEntry :: derive
 FromData @BlockRingAuthorityEntry :: derive
 FromData @FabricProfileInterposition :: derive
 FromData @FabricProfile :: derive
@@ -764,6 +779,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   NetworkDestinationEntry =;
   NetworkInterfaceEntry =;
   NetworkApplicationEntry =;
+  EntropyAuthorityEntry =;
   BlockRingAuthorityEntry =;
   ClockAuthorityEntry =;
   SchedulingClassBand =;

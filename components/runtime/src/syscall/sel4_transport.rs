@@ -249,7 +249,7 @@ fn receive_native(
         let (info, _) = if blocking {
             endpoint.with(&mut *ipc_buffer).recv(())
         } else {
-            endpoint.with(&mut *ipc_buffer).nb_recv(())
+            nb_recv(endpoint, &mut *ipc_buffer)
         };
         // An empty `nb_recv` is identified by carrying no words and no
         // capabilities. The label is *not* part of the test: seL4 leaves MR0
@@ -258,6 +258,9 @@ fn receive_native(
         // shape check below then rejects as a malformed 573-byte payload
         // instead of the "nothing there" it is. Every real message carries at
         // least one word or one capability, so this cannot swallow one.
+        //
+        // This holds only if `info` is defined when nothing was received; see
+        // `nb_recv`.
         if !blocking && info.length() == 0 && info.extra_caps() == 0 {
             RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
             return Ok(ERR_WOULDBLOCK);
@@ -296,6 +299,121 @@ fn receive_native(
         );
         Ok(length)
     })
+}
+
+/// `seL4_NBRecv` on `endpoint`, returning a `MessageInfo` that is all zero when
+/// no message was waiting.
+///
+/// On an empty `seL4_NBRecv` the kernel writes only the badge register, so the
+/// message-info register keeps whatever it held before the syscall. The
+/// `sel4` crate declares that register output-only, leaving it to compiler
+/// register allocation; the call below makes it an input fixed at zero. The
+/// badge cannot stand in for emptiness: the root mints peer endpoints with
+/// badge 0.
+///
+/// Message registers are copied to the IPC buffer only when a message arrived;
+/// on an empty receive they hold stale register contents, not message data.
+/// MCS kernels use the `sel4` crate's call unchanged.
+fn nb_recv(endpoint: cap::Endpoint, ipc_buffer: &mut sel4::IpcBuffer) -> (MessageInfo, Word) {
+    sel4::sel4_cfg_if! {
+        if #[sel4_cfg(KERNEL_MCS)] {
+            endpoint.with(ipc_buffer).nb_recv(())
+        } else {
+            let (info, badge, message) = nb_recv_registers(endpoint.bits() as Word);
+            let mut raw = sel4::sys::seL4_MessageInfo::new(0, 0, 0, 0);
+            raw.0.inner_mut()[0] = info;
+            let info = MessageInfo::from_inner(raw);
+            if info.length() != 0 || info.extra_caps() != 0 {
+                ipc_buffer.msg_regs_mut()[..message.len()].copy_from_slice(&message);
+            }
+            (info, badge)
+        }
+    }
+}
+
+/// Issues `seL4_NBRecv` without MCS on `endpoint` and returns the message-info
+/// register, the badge, and the four message registers, in that order. The
+/// message-info register is passed in as zero: each assignment below is the
+/// one `sel4-sys` uses for `sys_recv`, with that register changed from output
+/// to input and output.
+#[cfg(target_arch = "aarch64")]
+#[sel4::sel4_cfg(not(KERNEL_MCS))]
+fn nb_recv_registers(endpoint: Word) -> (Word, Word, [Word; 4]) {
+    let mut badge = endpoint;
+    let mut info: Word = 0;
+    let (mr0, mr1, mr2, mr3): (Word, Word, Word, Word);
+    // SAFETY: syscall number in x7, endpoint in x0, an unused reply argument in
+    // x6 and message info in x1. The kernel returns the badge in x0, the
+    // message info in x1 and the first four message registers in x2..x5.
+    unsafe {
+        core::arch::asm!(
+            "svc 0",
+            in("x7") sel4::sys::syscall_id::NBRecv as Word,
+            inout("x0") badge,
+            inout("x1") info,
+            out("x2") mr0,
+            out("x3") mr1,
+            out("x4") mr2,
+            out("x5") mr3,
+            in("x6") 0 as Word,
+        );
+    }
+    (info, badge, [mr0, mr1, mr2, mr3])
+}
+
+/// See the aarch64 definition.
+#[cfg(target_arch = "riscv64")]
+#[sel4::sel4_cfg(not(KERNEL_MCS))]
+fn nb_recv_registers(endpoint: Word) -> (Word, Word, [Word; 4]) {
+    let mut badge = endpoint;
+    let mut info: Word = 0;
+    let (mr0, mr1, mr2, mr3): (Word, Word, Word, Word);
+    // SAFETY: syscall number in a7, endpoint in a0, an unused reply argument in
+    // a6 and message info in a1. The kernel returns the badge in a0, the
+    // message info in a1 and the first four message registers in a2..a5.
+    unsafe {
+        core::arch::asm!(
+            "ecall",
+            in("a7") sel4::sys::syscall_id::NBRecv as Word,
+            inout("a0") badge,
+            inout("a1") info,
+            out("a2") mr0,
+            out("a3") mr1,
+            out("a4") mr2,
+            out("a5") mr3,
+            in("a6") 0 as Word,
+        );
+    }
+    (info, badge, [mr0, mr1, mr2, mr3])
+}
+
+// The x86-64 syscall needs fixed registers, which `asm!` can only name. The
+// architecture-neutral trees keep register names out of their Rust, so the call
+// lives in `runtime/asm/nb_recv_x86_64.S`, whose header gives the register
+// contract, and is reached through the C ABI.
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(include_str!("../../asm/nb_recv_x86_64.S"));
+
+#[cfg(target_arch = "x86_64")]
+unsafe extern "C" {
+    fn slime_nb_recv_x86_64(endpoint: Word, out: *mut Word, syscall_id: Word);
+}
+
+/// See the aarch64 definition.
+#[cfg(target_arch = "x86_64")]
+#[sel4::sel4_cfg(not(KERNEL_MCS))]
+fn nb_recv_registers(endpoint: Word) -> (Word, Word, [Word; 4]) {
+    let mut out = [0 as Word; 6];
+    // SAFETY: `out` has the six words the routine writes, and it preserves
+    // every register the C ABI requires of a callee.
+    unsafe {
+        slime_nb_recv_x86_64(
+            endpoint,
+            out.as_mut_ptr(),
+            sel4::sys::syscall_id::NBRecv as Word,
+        );
+    }
+    (out[0], out[1], [out[2], out[3], out[4], out[5]])
 }
 
 fn with_thread_buffer(f: impl FnOnce(&mut sel4::IpcBuffer) -> Result<i64, i64>) -> i64 {
@@ -1252,6 +1370,28 @@ pub fn network_interface_read(cursor: usize, out: &mut [u8]) -> i64 {
     }
 }
 
+/// Read authenticated entropy-authority rows into the transfer window.
+pub fn entropy_authority_read(cursor: usize, out: &mut [u8]) -> i64 {
+    let transfer = match reserve(out.len(), 0) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) = match outcome(&call(
+        capability_table_labels::ENTROPY_AUTHORITY_READ,
+        &[cursor as Word, 0, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, out, None) {
+        Ok(_) => result,
+        Err(error) => error,
+    }
+}
+
 /// Read authenticated application rows into the transfer window.
 pub fn network_application_read(cursor: usize, out: &mut [u8]) -> i64 {
     let transfer = match reserve(out.len(), 0) {
@@ -1539,23 +1679,18 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
     }
 }
 
-/// Write one diagnostic line through the root service.
+/// Write one diagnostic record through the console dispatcher.
 ///
-/// **Not `seL4_DebugPutChar`, even where the kernel offers it.** That was the
-/// implementation under `PRINTING`, and it emitted one syscall per byte — so
-/// the root's own `debug_println!`, or another component's line, could land
-/// mid-string and destroy a marker. A transcript would show ` QoS matched`
-/// where `[fabric] QoS matched` was written, and whichever gate required that
-/// marker failed on a boot that was otherwise correct (B18).
+/// Each call submits one bounded payload to the console dispatcher. Callers must
+/// assemble a complete record before submission; fragments are not joined. The
+/// root and console dispatcher share record serialization on the qualified
+/// single-core non-MCS path. An accepted record is therefore printed
+/// contiguously, and an invalid or oversized one is refused whole. Send
+/// completion does not acknowledge emission.
 ///
-/// The root's graph loop is single-threaded and answers one request at a time,
-/// so a line printed inside its `DebugWrite` arm cannot interleave with
-/// anything. That makes atomicity structural rather than a matter of timing.
-///
-/// The cost is that this now needs a bound transfer window, where the direct
-/// path needed nothing. Every launched component binds one before it runs, and
-/// a task that has not is not yet in a state where its output would be
-/// attributable.
+/// The payload travels through this thread's bound transfer window. Every
+/// launched component binds one before it runs, and a task that has not is not
+/// yet in a state where its output would be attributable.
 pub fn debug_write(bytes: &[u8]) -> i64 {
     let transfer = match stage(bytes, &[]) {
         Ok(transfer) => transfer,

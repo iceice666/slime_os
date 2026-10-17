@@ -65,11 +65,25 @@ OTHER = "other"
 CLASSES = (PRODUCT, GRADER, INTERFACE, DERIVED, OTHER)
 
 
-def code_paths(policy: Path = POLICY) -> tuple[str, ...]:
-    entries = json.loads(policy.read_text())["codePaths"]
-    if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
-        raise ValueError("codePaths must be a list of paths")
+def code_paths_data(text: str) -> tuple[str, ...]:
+    policy = json.loads(text)
+    if not isinstance(policy, dict) or "codePaths" not in policy:
+        raise ValueError("policy must contain codePaths")
+    entries = policy["codePaths"]
+    if not isinstance(entries, list) or not all(
+        isinstance(entry, str)
+        and bool(entry)
+        and not entry.startswith("/")
+        and all(part not in ("", ".", "..") for part in entry.rstrip("/").split("/"))
+        and "\x00" not in entry
+        for entry in entries
+    ):
+        raise ValueError("codePaths must be a list of nonempty relative paths")
     return tuple(entries)
+
+
+def code_paths(policy: Path = POLICY) -> tuple[str, ...]:
+    return code_paths_data(policy.read_text())
 
 
 def _under(path: str, entry: str) -> bool:
@@ -105,13 +119,13 @@ class Verdict:
 def judge(changes: list[tuple[str, str]], code: tuple[str, ...]) -> Verdict:
     """Apply the scope rules to `(status, path)` rows from `git diff --name-status`.
 
-    Rename rows carry the destination path; a rename out of the product tree
-    is still a product change, and a renamed or copied schema is not a new one.
+    The parser emits source rows as well as rename/copy destination rows.
+    Destinations introduce identities even when Git reports R or C rather than A.
     """
     verdict = Verdict()
     for status, path in changes:
         verdict.classes[classify(path, code, status)].append(path)
-        if status.startswith("A") and NEW_ITEM.search(path):
+        if status.startswith(("A", "R", "C")) and NEW_ITEM.search(path):
             verdict.added_items.append(path)
     if verdict.added_items and verdict.classes[PRODUCT]:
         verdict.findings.append(
@@ -124,13 +138,29 @@ def judge(changes: list[tuple[str, str]], code: tuple[str, ...]) -> Verdict:
 
 
 def parse_name_status(text: str) -> list[tuple[str, str]]:
-    """Rows of `git diff --name-status`; renames and copies yield their destination."""
+    """Decode `git diff --name-status -z` without quoting or line splitting.
+
+    Source rows never qualify for the new-schema or new-item exceptions.
+    Copies preserve source protection even though their source remains present.
+    """
+    if not text:
+        return []
+    if not text.endswith("\x00"):
+        raise ValueError("name-status stream must be NUL terminated")
+    fields = text[:-1].split("\x00")
     rows = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        status = parts[0]
-        path = parts[-1]
-        rows.append((status, path))
+    cursor = 0
+    while cursor < len(fields):
+        status = fields[cursor]
+        cursor += 1
+        if not re.fullmatch(r"(?:[ADMT]|M\d{1,3}|[RC]\d{1,3})", status):
+            raise ValueError(f"unsupported name-status code: {status!r}")
+        count = 2 if status.startswith(("R", "C")) else 1
+        paths = fields[cursor:cursor + count]
+        if len(paths) != count or any(not path for path in paths):
+            raise ValueError("incomplete name-status record")
+        cursor += count
+        if count == 2:
+            rows.append(("D" if status.startswith("R") else "M", paths[0]))
+        rows.append((status, paths[-1]))
     return rows

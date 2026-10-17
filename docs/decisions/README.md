@@ -31,6 +31,9 @@ readable and link to the decision that replaced them.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
+- [Negative controls for product judges](negative-controls-for-product-judges.md)
+  — accepted; a negative control is required for every assertion about Slime OS
+  itself, and not for assertions about verification or process tooling.
 - [Planning PRs may fix the Zutai schema a grader binds to](planning-pr-schema-contracts.md)
   — proposed; a new `contracts/<name>/v<N>/schema.zt` is an interface a
   planning pull request may land with its exam, while generators, bindings,
@@ -46,7 +49,7 @@ readable and link to the decision that replaced them.
   boot-store v1 is the only product BootState layout, and the userspace
   planes' LBA 1024/1025 object-store layout is test scaffolding until the
   manager stages into a boot store.
-- [Entropy authority](entropy-authority.md) — proposed; a userspace
+- [Entropy authority](entropy-authority.md) — accepted; a userspace
   entropy-service over a virtio-rng driver, with generation-declared holders,
   per-holder HMAC-DRBG output and reproducible seeded fixtures.
 - [AMD IOMMU ownership on x86-64](amd-iommu-ownership.md) — proposed; seL4
@@ -59,3 +62,15 @@ readable and link to the decision that replaced them.
   two-node exchange as six slices, each judged from evidence its implementation
   did not write: an independent wire reference proved against the upstream
   corpus, mutation-tested judges, and a QEMU arm in the network plane checker.
+- [Zenoh Profile 0 and a stock Zenoh peer](zenoh-stock-peer.md) — proposed;
+  what a captured eclipse-zenoh 1.0.0 peer sends that Profile 0 refuses (an optional
+  QoS extension, OAM and DeclareFinal, a key-expression alias, keep-alives), the four
+  bounded changes that would take it, and what the capture did not cover.
+- [Zenoh Profile 0 links declared by a named configuration](zenoh-link-limits.md) — proposed;
+  a link declared in a fixed mode with no heap or a heap mode where the component supplies the
+  storage a fragmented message is reassembled into, judged by a contract that sets no size of its
+  own, against the fragments a stock eclipse-zenoh 1.0.0 peer wrote.
+- [Zenoh Profile 0 guest connecting out to a stock listener](zenoh-external-listener.md) —
+  proposed; the guest opens one TCP connection over a NIC to a stock eclipse-zenoh 1.0.0
+  listener on the host, judged from the listener's own record, a packet capture and the host
+  wire reference, with the composition and guest left to the implementation.

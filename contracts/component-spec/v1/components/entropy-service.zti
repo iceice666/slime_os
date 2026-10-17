@@ -1,0 +1,63 @@
+{
+  formatVersion = 1;
+  name = "entropy-service";
+  componentType = "service";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Serves per-holder HMAC-DRBG streams under generation entropy-authority budgets, seeded from the virtio-rng driver or a declared seed.";
+  implementation = {
+    provider = "workspace";
+    binary = "entropy-service";
+    contentHash = "";
+  };
+  provides = [
+    "endpoint";
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [];
+  dependencies = [];
+  communication = {
+    semantic = "none";
+    qos = [];
+  };
+  configuration = [];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Ready";
+    "Running";
+    "Error";
+  ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the sel4_entropy_check gate boots the sel4-entropy composition twice with a QEMU virtio-rng device and once without";
+    expectedResult = "the service reads its authority table, reproduces seeded streams exactly, refuses draws at their declared bounds, and fails hardware draws closed without the device";
+    passFailCriteria = "[entropy-service] authority holders=3 hardware=2 seeded=1";
+    requiredTestEnvironment = "sel4_entropy_check";
+  };
+}

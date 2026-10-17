@@ -18,11 +18,14 @@ Current owners:
   `contracts/block-authority/v1/`, `boot-contracts/src/io_resource.rs`, and
   `slime-root/src/{device,io_resource}.rs`;
 - shared ring adapters: `components/lib/src/`;
-- virtio-blk and virtio-net drivers: `components/services/virtio-*-driver/`;
+- virtio-blk, virtio-net and virtio-rng drivers:
+  `components/services/virtio-*-driver/`;
 - exact network destinations: `contracts/network-destination/v1/`;
 - declared network interface/MAC/address: `contracts/network-interface/v1/`;
-- service protocols: `contracts/block/v2/`, `contracts/link-device/v1/`, and
-  `contracts/network-service/v1/`.
+- declared entropy holders: `contracts/entropy-authority/v1/`;
+- service protocols: `contracts/block/v2/`, `contracts/link-device/v1/`,
+  `contracts/network-service/v1/`, `contracts/entropy-source/v1/`, and
+  `contracts/entropy-service/v1/`.
 
 ## Queue, request, and lease semantics
 
@@ -111,6 +114,20 @@ the bounded HTTP/DNS client) has its own page:
 [network service](network-service.md). It shares this substrate's queue,
 epoch, lease, and reset semantics and adds nothing to the hardware authority
 model above.
+
+## Entropy boundary
+
+`virtio-rng-driver` holds io-resource authority for one virtio-rng transport
+and answers exactly one declared consumer, `entropy-service`, over
+`entropy-source/v1`. Without the device every fill is answered `unavailable`;
+the driver never substitutes bytes. `entropy-service` reads the generation's
+`entropy-authority/v1` rows through `CAPABILITY ENTROPY AUTHORITY READ`, which
+the root answers only for the instance named `entropy-service`, and serves each
+row's holder over its own non-transferable `<holder>-entropy` endpoint with
+`entropy-service/v1`. Every holder draws from its own HMAC-DRBG; raw device
+bytes never leave the service. The decision and its alternatives are in
+[entropy authority](../decisions/entropy-authority.md); `just sel4_entropy_check`
+is the owning gate.
 
 ## Verification
 

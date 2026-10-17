@@ -254,7 +254,7 @@ pub fn serve_directory_inspect<const TASKS: usize>(
         Ok(descriptor) => descriptor,
         Err(error) => return Response::error(error),
     };
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH directory inspected task={} slot={slot} namespace={namespace} scope={}",
         id.0,
         DisplayPath(path),
@@ -329,7 +329,7 @@ pub fn serve_directory_derive<const TASKS: usize>(
     if table.install(free, capability).is_err() {
         return Response::error(IpcError::DestinationSlotsExhausted);
     }
-    sel4::debug_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH directory derived task={} from={slot} to={free} namespace={} scope={} rights={rights:#x}",
         id.0,
         source.namespace,
@@ -386,7 +386,7 @@ pub fn serve_directory_commit<const TASKS: usize>(
     let namespace = capability.namespace;
     let scope = capability.scope;
     if !scopes.is_root(scope) {
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH directory commit refused task={} slot={slot} namespace={namespace} reason=scoped scope={}",
             id.0,
             DisplayPath(scopes.path(scope)),
@@ -395,7 +395,7 @@ pub fn serve_directory_commit<const TASKS: usize>(
     }
     match namespaces.commit(namespace, expected, new) {
         Some(true) => {
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH directory committed task={} namespace={namespace} root={:02x}{:02x}{:02x}{:02x}",
                 id.0,
                 new[0],
@@ -407,7 +407,7 @@ pub fn serve_directory_commit<const TASKS: usize>(
         }
         // The root moved under the caller. Not an error: re-read and retry.
         Some(false) => {
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH directory commit stale task={} namespace={namespace}",
                 id.0,
             );

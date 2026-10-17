@@ -60,6 +60,7 @@ pub mod clock;
 pub mod console;
 pub mod cspace;
 pub mod device;
+pub mod diagnostic;
 pub mod directory;
 pub mod event;
 pub mod fault;

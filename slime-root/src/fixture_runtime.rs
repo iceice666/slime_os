@@ -23,7 +23,9 @@ pub(super) fn serve(
         }
         let (info, badge) = endpoint.recv(());
         let Some((id, arrival)) = TaskId::from_badge(badge) else {
-            sel4::debug_println!("SLIME_ROOT unbadged arrival badge={badge:#x} rejected");
+            slime_root::diagnostic_println!(
+                "SLIME_ROOT unbadged arrival badge={badge:#x} rejected"
+            );
             ipc::reply(Response::error(IpcError::InvalidOperation));
             continue;
         };
@@ -31,7 +33,7 @@ pub(super) fn serve(
             .iter()
             .position(|fixture| fixture.is_some_and(|fixture| fixture.id == id))
         else {
-            sel4::debug_println!("SLIME_ROOT unknown task badge={badge:#x} rejected");
+            slime_root::diagnostic_println!("SLIME_ROOT unknown task badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
             continue;
         };
@@ -70,7 +72,7 @@ pub(super) fn serve(
             ),
         }
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_ROOT service budget exhausted iterations={MAX_SERVICE_ITERATIONS} task={}",
         fixtures[index].map_or(u32::MAX, |fixture| fixture.id.0)
     );
@@ -102,7 +104,7 @@ fn serve_request(
         // after the fixture has finished, in `report_buffer_phase`.
         fixture_labels::DIRECTIVE => {
             if info.length() < 2 || words[0] != REQUEST_TAG {
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_ROOT request malformed task={} len={} tag={:#x}",
                     id.0,
                     info.length(),
@@ -111,7 +113,7 @@ fn serve_request(
                 ipc::reply(Response::error(IpcError::InvalidLength));
                 return;
             }
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_ROOT request badge={:#x} task={} service_label={} directive={}",
                 id.service_badge(),
                 id.0,
@@ -120,7 +122,7 @@ fn serve_request(
             );
             match supervision.ipc_completed(id.0, fixture_labels::DIRECTIVE, 0) {
                 Ok(event) => report(&event.kind, id, position, fixtures),
-                Err(error) => sel4::debug_println!(
+                Err(error) => slime_root::diagnostic_println!(
                     "SLIME_ROOT ipc accounting rejected task={} error={error:?}",
                     id.0
                 ),
@@ -135,7 +137,7 @@ fn serve_request(
         // finished, in `report_buffer_phase` and `report_memory_phase`.
         shared_buffer_labels::MAP => {
             if info.length() < 3 || words[0] != REQUEST_TAG {
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_ROOT shared report malformed task={} len={} tag={:#x}",
                     id.0,
                     info.length(),
@@ -147,7 +149,7 @@ fn serve_request(
             if words[1] == MEM_REPORT_TAG {
                 memory_phase.flags |= words[2] & MEM_REPORT_ALL;
                 memory_phase.reported = true;
-                sel4::debug_println!(
+                slime_root::diagnostic_println!(
                     "SLIME_MEM child reported task={} flags={:#x}",
                     id.0,
                     words[2],
@@ -160,7 +162,7 @@ fn serve_request(
             // execute-never verdict is the root's and is preserved here.
             buffer_phase.flags |= words[2] & (REPORT_RW_READBACK_OK | REPORT_RO_WRITE_REFUSED);
             buffer_phase.reported = true;
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_BUF child reported task={} observed={:#x} flags={:#x}",
                 id.0,
                 buffer_phase.observed,
@@ -183,7 +185,7 @@ fn serve_request(
                         .get(id)
                         .map(|task| task.private_memory)
                         .unwrap_or(private_memory::Region::DENIED);
-                    sel4::debug_println!(
+                    slime_root::diagnostic_println!(
                         "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
                         id.0,
                         region.pages(),
@@ -197,7 +199,7 @@ fn serve_request(
                     Response::success(previous as i64, region.base() as sel4::Word)
                 }
                 Err(task::TaskError::PrivateMemory(error)) => {
-                    sel4::debug_println!(
+                    slime_root::diagnostic_println!(
                         "SLIME_MEM refused task={} delta={delta} cause={} detail={error:?}",
                         id.0,
                         private_memory_cause(&error),
@@ -205,7 +207,7 @@ fn serve_request(
                     Response::error(IpcError::TransferFailed)
                 }
                 Err(error) => {
-                    sel4::debug_println!(
+                    slime_root::diagnostic_println!(
                         "SLIME_MEM rejected task={} delta={delta} error={error:?}",
                         id.0
                     );
@@ -225,7 +227,7 @@ fn serve_request(
                         fixture.terminated = true;
                     }
                 }
-                Err(error) => sel4::debug_println!(
+                Err(error) => slime_root::diagnostic_println!(
                     "SLIME_ROOT exit supervision rejected task={} error={error:?}",
                     id.0
                 ),
@@ -234,7 +236,7 @@ fn serve_request(
         }
         label => {
             let response = Response::error(IpcError::UnsupportedOperation);
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_ROOT request unsupported task={} service_label={} result={}",
                 id.0,
                 label,
@@ -257,7 +259,10 @@ fn serve_fault(
     let record = match fault::decode_fault(info) {
         Ok(record) => record,
         Err(error) => {
-            sel4::debug_println!("SLIME_ROOT fault undecodable task={} error={error:?}", id.0);
+            slime_root::diagnostic_println!(
+                "SLIME_ROOT fault undecodable task={} error={error:?}",
+                id.0
+            );
             return;
         }
     };
@@ -281,7 +286,7 @@ fn serve_fault(
         if probe == Probe::Execute {
             buffer_phase.flags |= REPORT_EXECUTE_REFUSED;
         }
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_BUF probe refused task={} kind={} access={:?} address={:#x} instruction={:#x}",
             id.0,
             probe.name(),
@@ -310,7 +315,7 @@ fn serve_fault(
                 fixture.terminated = true;
             }
         }
-        Err(error) => sel4::debug_println!(
+        Err(error) => slime_root::diagnostic_println!(
             "SLIME_ROOT fault supervision rejected task={} error={error:?}",
             id.0
         ),
@@ -324,7 +329,7 @@ fn stop(tasks: &TaskTable<MAX_TASKS>, id: TaskId, after: &str) {
     if let Some(task) = tasks.get(id)
         && let Err(error) = task.suspend()
     {
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_ROOT suspend after {after} failed task={} error={error:?}",
             id.0
         );
@@ -344,22 +349,22 @@ fn report(
         LifecycleEventKind::IpcCompleted {
             service_label,
             result,
-        } => sel4::debug_println!(
+        } => slime_root::diagnostic_println!(
             "SLIME_ROOT child request served task={} role={role} service_label={service_label} result={result}",
             id.0,
         ),
-        LifecycleEventKind::Exited { status } => sel4::debug_println!(
+        LifecycleEventKind::Exited { status } => slime_root::diagnostic_println!(
             "SLIME_ROOT child exit observed task={} role={role} status={status}",
             id.0
         ),
-        LifecycleEventKind::Faulted(record) => sel4::debug_println!(
+        LifecycleEventKind::Faulted(record) => slime_root::diagnostic_println!(
             "SLIME_ROOT child fault observed task={} role={role} kind={:?} instruction={:?} address={:?}",
             id.0,
             record.kind,
             record.instruction,
             record.address,
         ),
-        other => sel4::debug_println!(
+        other => slime_root::diagnostic_println!(
             "SLIME_ROOT child event task={} role={role} kind={other:?}",
             id.0
         ),
@@ -598,7 +603,7 @@ pub(super) fn report_buffer_phase(
             SHARED_CHILD_REPLY
         )
     }
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_BUF readback vaddr={:#x} root_wrote={:#x} child_read={:#x} child_wrote={:#x} match=1",
         SHARED_RW_VADDR + SHARED_PATTERN_OFFSET,
         SHARED_RW_PATTERN,
@@ -631,7 +636,7 @@ pub(super) fn report_buffer_phase(
         )
     }
     #[cfg(not(target_arch = "x86_64"))]
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_BUF rights enforced ro_write=refused wx_execute=refused probes={} supervised=1",
         phase.probes,
     );
@@ -639,7 +644,7 @@ pub(super) fn report_buffer_phase(
     // refusal, and printing the other marker would make an unenforced mapping
     // read as an enforced one in a transcript.
     #[cfg(target_arch = "x86_64")]
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_BUF rights enforced ro_write=refused wx_execute=unenforced probes={} supervised=1",
         phase.probes,
     );
@@ -686,7 +691,7 @@ pub(super) fn report_memory_phase(phase: &MemoryPhase, tasks: &TaskTable<MAX_TAS
         )
     }
     #[cfg(not(slime_private_fail_second_allocation))]
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_MEM enforced quota={PRIVATE_QUOTA_PAGES} pages={} grants={} grown={} reclaimed={} flags={:#x}",
         table.total_pages(),
         table.grants(),
@@ -695,7 +700,7 @@ pub(super) fn report_memory_phase(phase: &MemoryPhase, tasks: &TaskTable<MAX_TAS
         phase.flags,
     );
     #[cfg(slime_private_fail_second_allocation)]
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_MEM enforced clean_quota={PRIVATE_QUOTA_PAGES} retry_quota={PRIVATE_RETRY_QUOTA_PAGES} pages={} grants={} grown={} reclaimed={} flags={:#x}",
         table.total_pages(),
         table.grants(),

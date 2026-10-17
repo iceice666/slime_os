@@ -1,42 +1,54 @@
 [group('generate')]
 io_queue_gen:
-    python3 scripts/generate/generate-io-queue-bindings.py
+    python3 scripts/generate/generate-bindings.py io-queue
 [group('generate')]
 link_device_gen:
-    python3 scripts/generate/generate-link-device-bindings.py
+    python3 scripts/generate/generate-bindings.py link-device
 
 [group('generate')]
 network_service_gen:
-    python3 scripts/generate/generate-network-service-bindings.py
+    python3 scripts/generate/generate-bindings.py network-service
+
+[group('generate')]
+zenoh_profile_gen:
+    python3 scripts/generate/generate-bindings.py zenoh-profile
+
+[group('generate')]
+zenoh_stock_gen:
+    python3 scripts/generate/generate-zenoh-stock-bindings.py
 
 
 [group('generate')]
 block_gen:
-    python3 scripts/generate/generate-block-bindings.py
+    python3 scripts/generate/generate-bindings.py block
 
 [group('generate')]
 component_gen:
-    python3 scripts/generate/generate-component-bindings.py
+    python3 scripts/generate/generate-bindings.py component
 
 [group('generate')]
 store_gen:
-    python3 scripts/generate/generate-store-bindings.py
+    python3 scripts/generate/generate-bindings.py store
 
 [group('generate')]
 spawn_gen:
-    python3 scripts/generate/generate-spawn-bindings.py
+    python3 scripts/generate/generate-bindings.py spawn
 
 [group('generate')]
 pwm_servo_gen:
-    python3 scripts/generate/generate-pwm-servo-bindings.py
+    python3 scripts/generate/generate-bindings.py pwm-servo
+
+[group('generate')]
+entropy_gen:
+    python3 scripts/generate/generate-bindings.py entropy
 
 [group('generate')]
 serial_device_gen:
-    python3 scripts/generate/generate-serial-device-bindings.py
+    python3 scripts/generate/generate-bindings.py serial-device
 
 [group('generate')]
 mavlink_heartbeat_gen:
-    python3 scripts/generate/generate-mavlink-heartbeat-bindings.py
+    python3 scripts/generate/generate-bindings.py mavlink-heartbeat
 
 [group('generate')]
 component_runtime_abi_gen:
@@ -48,7 +60,7 @@ syscall_abi_gen:
 
 [group('generate')]
 sample_descriptor_gen:
-    python3 scripts/generate/generate-sample-descriptor-bindings.py
+    python3 scripts/generate/generate-bindings.py sample-descriptor
 
 [group('generate')]
 interface_schema_gen:
@@ -56,50 +68,50 @@ interface_schema_gen:
 
 [group('generate')]
 capability_transfer_gen:
-    python3 scripts/generate/generate-capability-transfer-bindings.py
+    python3 scripts/generate/generate-bindings.py capability-transfer
 
 [group('generate')]
 fabric_stream_gen:
-    python3 scripts/generate/generate-fabric-stream-bindings.py
+    python3 scripts/generate/generate-bindings.py fabric-stream
 
 [group('generate')]
 fabric_ring_gen:
-    python3 scripts/generate/generate-fabric-ring-bindings.py
+    python3 scripts/generate/generate-bindings.py fabric-ring
 
 [group('generate')]
 fabric_trace_gen:
-    python3 scripts/generate/generate-fabric-trace-bindings.py
+    python3 scripts/generate/generate-bindings.py fabric-trace
 
 [group('generate')]
 fabric_visibility_gen:
-    python3 scripts/generate/generate-fabric-visibility-bindings.py
+    python3 scripts/generate/generate-bindings.py fabric-visibility
 
 [group('generate')]
 fabric_graph_gen: boot_gen
 
 [group('generate')]
 generation_management_gen:
-    python3 scripts/generate/generate-generation-management-bindings.py
+    python3 scripts/generate/generate-bindings.py generation-management
 
 [group('generate')]
 powerbox_gen:
-    python3 scripts/generate/generate-powerbox-bindings.py
+    python3 scripts/generate/generate-bindings.py powerbox
 
 [group('generate')]
 private_memory_probe_gen:
-    python3 scripts/generate/generate-private-memory-probe-bindings.py
+    python3 scripts/generate/generate-bindings.py private-memory-probe
 
 [group('generate')]
 component_sdk_release_gen:
-    python3 scripts/generate/generate-component-sdk-release-bindings.py
+    python3 scripts/generate/generate-bindings.py component-sdk-release
 
 
 [group('generate')]
 boot_media_gen:
-    python3 scripts/generate/generate-boot-media-bindings.py
+    python3 scripts/generate/generate-bindings.py boot-media
 [group('generate')]
 cpu_boot_observation_gen:
-    python3 scripts/generate/generate-cpu-boot-observation-bindings.py
+    python3 scripts/generate/generate-bindings.py cpu-boot-observation
 [group('generate')]
 boot_gen:
     python3 scripts/generate/generate-boot-bindings.py

@@ -1,0 +1,434 @@
+"""Host reference for Zenoh transport fragmentation, written independently of the Rust codec.
+
+A Put larger than a batch is sent as FRAGMENT batches. Each carries the reliable flag, a "more
+follows" flag on every fragment but the last, a sequence number, and a slice of the serialized
+network message. Only the first slice starts the message, so a receiver decodes nothing until the
+last fragment arrives and the slices are joined.
+
+    FRAGMENT   <hdr 0x26 | 0x40 if more><sn:leb128><slice>
+
+The bytes belong to eclipse-zenoh. The captures below were taken from a stock
+`eclipse-zenoh==1.0.0` peer through a logging TCP proxy, one run each, on one x86_64 Linux host
+(wheel sha256 `1763912951ecd2a3706f668faf0541245387096b37a4fefb73af7848dadd46ff`, peer mode,
+scouting and gossip off, `transport/link/tx/batch_size` set per run). The peer was given one Put of
+a payload of the stated size with the demo's 33-byte attachment; each capture is the sequence of
+FRAGMENT bodies it wrote, pinned by length, header and sha256. `reference_split` is the rule the
+captures obey, and `self_test` proves the rule reproduces every pinned body, so nothing here is
+derived from the Rust implementation.
+
+What this does not cover: a peer other than this one, a batch size other than 512 and 2048,
+unreliable fragments, extensions on a fragment, or fragments of anything but one Put with the
+33-byte attachment.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import struct
+from dataclasses import dataclass
+
+import zenoh_wire
+
+ID_FRAGMENT = 0x06
+FLAG_R = 0x20
+FLAG_M = 0x40
+FLAG_Z = 0x80
+GID = bytes(0xE0 + i for i in range(16))
+STREAM_LENGTH_BYTES = 2
+
+
+class FragmentError(ValueError):
+    """Input the reference refuses to encode or decode."""
+
+
+def read_leb32(data: bytes, at: int, bits: int = 32) -> tuple[int, int]:
+    """A canonical LEB128 that fits `bits` bits, read the way the Rust reader reads it.
+
+    At most `ceil(bits / 7)` bytes; a value above `bits` bits is an overflow; a multi-byte value
+    whose last byte is zero is not canonical. `zenoh_wire.read_leb128` accepts all three, so the
+    fragment reference does not use it for a sequence number, a scope or a length. A key-expression
+    scope is read with 16 bits, as the Rust decoder reads it (`LEB128_SHORT_BITS`)."""
+    value = 0
+    for count in range((bits + 6) // 7):
+        if at + count >= len(data):
+            raise FragmentError("truncated LEB128")
+        byte = data[at + count]
+        value |= (byte & 0x7F) << (7 * count)
+        if not byte & 0x80:
+            if value >> bits:
+                raise FragmentError(f"LEB128 over {bits} bits")
+            if count > 0 and byte & 0x7F == 0:
+                raise FragmentError("noncanonical LEB128")
+            return value, at + count + 1
+    raise FragmentError(f"LEB128 over {bits} bits")
+
+
+_PERIOD = bytes((i * 7 + 1) % 251 for i in range(251))
+
+
+def payload_slice(start: int, stop: int) -> bytes:
+    """Bytes `start` to `stop` of the payload pattern, without building the payload before them.
+
+    The pattern repeats every 251 bytes, so any slice is cut from a few repeats of one period."""
+    count = stop - start
+    if count <= 0:
+        return b""
+    offset = start % 251
+    return (_PERIOD * ((offset + count) // 251 + 1))[offset : offset + count]
+
+
+def payload_bytes(size: int) -> bytes:
+    """The payload the captures carried: a fixed pattern, so a reassembled message is checkable."""
+    return payload_slice(0, size)
+
+
+def attachment() -> bytes:
+    """The 33-byte attachment the captures carried: sequence 0, timestamp 1000, the demo GID."""
+    return struct.pack("<qq", 0, 1000) + bytes([16]) + GID
+
+
+def message(size: int, header: int = 0x1D, alias: int = 1) -> bytes:
+    """The serialized network message the captures split: a PUSH with a Put, the alias form.
+
+    Header 0x1d, scope 1 (the alias the stock peer declared), then the Put with the attachment
+    extension, its length, the attachment, the payload length and the payload."""
+    att = attachment()
+    return (
+        bytes([header])
+        + zenoh_wire.leb128(alias)
+        + bytes([zenoh_wire.ID_PUT | zenoh_wire.FLAG_Z, zenoh_wire.EXT_ATTACHMENT])
+        + zenoh_wire.leb128(len(att))
+        + att
+        + zenoh_wire.leb128(size)
+        + payload_bytes(size)
+    )
+
+
+def split_iter(msg, batch: int, first_sn: int):
+    """Yield the FRAGMENT bodies of `msg` for a link whose batch is `batch` bytes, one at a time.
+
+    A fragment body is at most `batch - 2` bytes, the stream length being the other two. Sequence
+    numbers are consecutive from `first_sn`. Every body but the last carries the "more" flag. `msg` is
+    anything that can be sliced and measured, so a message too large to copy is split in place."""
+    if batch <= STREAM_LENGTH_BYTES + 6:
+        raise FragmentError("a batch cannot hold a fragment header and a slice")
+    at, sn = 0, first_sn
+    while at < len(msg):
+        header_len = 1 + len(zenoh_wire.leb128(sn))
+        chunk = msg[at : at + (batch - STREAM_LENGTH_BYTES - header_len)]
+        at += len(chunk)
+        more = at < len(msg)
+        yield bytes([ID_FRAGMENT | FLAG_R | (FLAG_M if more else 0)]) + zenoh_wire.leb128(sn) + chunk
+        sn = (sn + 1) & 0xFFFFFFFF
+
+
+def reference_split(msg: bytes, batch: int, first_sn: int) -> list[bytes]:
+    """Split `msg` into FRAGMENT bodies for a link whose batch is `batch` bytes."""
+    return list(split_iter(msg, batch, first_sn))
+
+
+def reference_split_uneven(msg: bytes, batch: int, first_sn: int, lead: tuple[int, ...]) -> list[bytes]:
+    """Split like `reference_split`, but the leading fragments carry the given slice lengths.
+
+    A slice is at most the maximum, never more, so a sender may flush early: the lengths in `lead`
+    are the first fragments' slices and every later one is filled to the maximum."""
+    if batch <= STREAM_LENGTH_BYTES + 6:
+        raise FragmentError("a batch cannot hold a fragment header and a slice")
+    bodies: list[bytes] = []
+    at, sn = 0, first_sn
+    while at < len(msg):
+        header_len = 1 + len(zenoh_wire.leb128(sn))
+        limit = batch - STREAM_LENGTH_BYTES - header_len
+        take = lead[len(bodies)] if len(bodies) < len(lead) else limit
+        if not 1 <= take <= limit:
+            raise FragmentError("a slice is empty or longer than a fragment holds")
+        chunk = msg[at : at + take]
+        at += len(chunk)
+        more = at < len(msg)
+        bodies.append(bytes([ID_FRAGMENT | FLAG_R | (FLAG_M if more else 0)]) + zenoh_wire.leb128(sn) + chunk)
+        sn = (sn + 1) & 0xFFFFFFFF
+    return bodies
+
+
+@dataclass(frozen=True)
+class Fragment:
+    more: bool
+    sn: int
+    data: bytes
+
+
+def decode_fragment(body: bytes, batch: int | None = None) -> Fragment:
+    """Decode one FRAGMENT body; refuse anything that is not exactly the reliable form.
+
+    When the batch the link announced is given, a body longer than the batch less the two-byte
+    stream length is refused: the peer was told that size and must not send more."""
+    if not body:
+        raise FragmentError("empty fragment")
+    if batch is not None and len(body) > batch - STREAM_LENGTH_BYTES:
+        raise FragmentError("a fragment longer than the announced batch")
+    header = body[0]
+    if header & 0x1F != ID_FRAGMENT:
+        raise FragmentError("not a FRAGMENT")
+    if header & FLAG_R == 0:
+        raise FragmentError("an unreliable fragment")
+    if header & FLAG_Z:
+        raise FragmentError("a fragment with extensions")
+    sn, at = read_leb32(body, 1)
+    if at >= len(body):
+        raise FragmentError("a fragment with no data")
+    return Fragment(more=bool(header & FLAG_M), sn=sn, data=body[at:])
+
+
+def reassemble_iter(bodies, expected_sn: int | None = None, batch: int | None = None):
+    """Yield the data of a run of FRAGMENT bodies, refusing a run that is not a whole message.
+
+    The run must be consecutive sequence numbers, every fragment but the last marked "more", and
+    the last not. The sequence number wraps at 32 bits, as the transport's does. When the session's
+    next expected sequence number is given, the first fragment must carry exactly it: a run replayed
+    from an earlier point, or one that skips ahead, is refused, as a FRAME with the wrong sequence
+    number is. Fragments are taken one at a time, so a run too large to hold is checked in place; a
+    refusal is raised when the run is consumed."""
+    previous = None
+    for body in bodies:
+        part = decode_fragment(body, batch)
+        if previous is None:
+            if expected_sn is not None and part.sn != expected_sn & 0xFFFFFFFF:
+                raise FragmentError("the first fragment is not the session's next sequence number")
+        else:
+            if part.sn != (previous.sn + 1) & 0xFFFFFFFF:
+                raise FragmentError("fragment sequence numbers are not consecutive")
+            if not previous.more:
+                raise FragmentError("a fragment marked final is followed by another")
+        yield part.data
+        previous = part
+    if previous is None:
+        raise FragmentError("no fragments")
+    if previous.more:
+        raise FragmentError("the last fragment still says more follows")
+
+
+def reassemble(bodies: list[bytes], expected_sn: int | None = None, batch: int | None = None) -> bytes:
+    """Join a run of FRAGMENT bodies into the message, refusing a run that is not a whole message."""
+    return b"".join(reassemble_iter(bodies, expected_sn, batch))
+
+
+def next_sn(first_sn: int, count: int) -> int:
+    """The session's next expected sequence number after a run of `count` fragments: each fragment
+    uses one, and the number wraps at 32 bits."""
+    return (first_sn + count) & 0xFFFFFFFF
+
+
+PUSH_ALIAS = 0x1D
+
+
+def full_key_for_exam(size: int, key: str = "0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_a82fd5ffcb96d0a197a5ad3680d1c4e6ba43a962928ecd592fb565eb8129595b") -> bytes:
+    """A Put naming the demo key in full, with the 33-byte attachment and `size` payload bytes."""
+    return zenoh_wire.push_put(key, attachment(), payload_bytes(size), True)
+
+PUSH_FULL_KEY = zenoh_wire.ID_PUSH | zenoh_wire.FLAG_N | zenoh_wire.FLAG_M
+
+
+def key_expression(raw: bytes) -> str:
+    """The Rust decoder's `key_expression`, written again: valid UTF-8, no wildcard, no `?` or `#`, no
+    leading or trailing `/` and no `//`. A wildcard is its own class; the rest are invalid."""
+    try:
+        key = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise FragmentError("invalid-keyexpr: the key is not UTF-8") from error
+    if "*" in key or "$" in key:
+        raise FragmentError("wildcard-keyexpr: the key holds a wildcard")
+    if "?" in key or "#" in key or key.startswith("/") or key.endswith("/") or "//" in key:
+        raise FragmentError("invalid-keyexpr: the key is not a valid key expression")
+    return key
+
+
+def check_deadline(first_ms: int, last_ms: int, timeout_ms: int) -> None:
+    """A reassembly is measured from its first fragment. The last fragment may arrive exactly
+    `timeout_ms` after it and one millisecond later is refused: the rule the session's lease uses,
+    which expires only when the time is past the deadline."""
+    if last_ms < first_ms:
+        raise FragmentError("the last fragment arrived before the first")
+    if last_ms - first_ms > timeout_ms:
+        raise FragmentError("reassembly-timeout: the run outlived its declared timeout")
+
+
+def decode_message(
+    msg: bytes,
+    alias: int | None = None,
+    max_key: int | None = None,
+    max_payload: int | None = None,
+    subscribed: str | None = None,
+    alias_key: str | None = None,
+) -> dict:
+    """Decode the reassembled PUSH with a Put: the key, the attachment and the payload.
+
+    The key is either the alias a stock peer declared (header 0x1d, a nonzero 16-bit scope and no
+    key bytes) or the key in full (header 0x7d, scope 0, a 16-bit length and the bytes). Given the
+    session's declared alias (a peer-declared alias is sender-mapped), a scope that is another alias, or
+    the alias in the receiver mapping, is refused: it was never declared. Given the key that alias
+    stands for and the subscriber's key, a Put for an alias that stands for another key is refused. Given
+    the configuration's key and payload sizes, a longer key or payload is refused. A full key must be a
+    valid key expression, and given the key the session's subscriber declared, a Put for another key
+    is refused as the whole-frame session refuses it."""
+    # The header is the PUSH id with the named flag (0x20) and the sender-mapping flag (0x40); the
+    # extension flag (0x80) is not accepted. A stock publisher addressing a stock listener's alias
+    # uses the receiver mapping (0x1d), as the captures do; a peer that declared the alias to this
+    # side uses the sender mapping (0x5d), as the whole-frame stock push does.
+    if not msg:
+        raise FragmentError("malformed-message: an empty message")
+    if msg[0] & 0x1F != PUSH_ALIAS & 0x1F:
+        raise FragmentError("unsupported-message: not a PUSH")
+    if msg[0] & 0x80:
+        raise FragmentError("unsupported-extension: the PUSH carries extensions")
+    named = bool(msg[0] & 0x20)
+    sender = bool(msg[0] & 0x40)
+    scope, at = read_leb32(msg, 1, 16)
+    key = None
+    if named:
+        if scope != 0:
+            raise FragmentError("a full key in a nonzero scope")
+        length, at = read_leb32(msg, at, 16)
+        if length == 0:
+            raise FragmentError("an empty key")
+        if max_key is not None and length > max_key:
+            raise FragmentError("the key is longer than the configuration declares")
+        if at + length > len(msg):
+            raise FragmentError("truncated: the message ends inside the key")
+        key = msg[at : at + length]
+        at += length
+        text = key_expression(key)
+        if subscribed is not None and text != subscribed:
+            raise FragmentError("undeclared-key: the Put names a key the subscriber did not declare")
+    else:
+        if scope == 0:
+            raise FragmentError("alias scope 0 is the global scope and names no alias")
+        if alias is not None and not sender:
+            raise FragmentError("invalid-keyexpr: a receiver-mapped alias names one this side declared, and it declares none")
+        if alias is not None and scope != alias:
+            raise FragmentError("an alias the session never declared")
+        if alias_key is not None and subscribed is not None and alias_key != subscribed:
+            raise FragmentError("undeclared-key: the alias stands for a key the subscriber did not declare")
+    if at >= len(msg):
+        raise FragmentError("truncated: the message ends before the Put")
+    body = msg[at]
+    if body & 0x1F != zenoh_wire.ID_PUT or body & 0x60:
+        raise FragmentError("unsupported-message: not a Put, or a Put with a timestamp or an encoding")
+    if not body & zenoh_wire.FLAG_Z:
+        raise FragmentError("a Put without the attachment extension")
+    if at + 1 >= len(msg):
+        raise FragmentError("truncated: the message ends before the Put's extension")
+    if msg[at + 1] != zenoh_wire.EXT_ATTACHMENT:
+        raise FragmentError("unsupported-extension: the Put's extension is not the attachment, or is chained")
+    at += 2
+    att_len, at = read_leb32(msg, at)
+    if att_len != zenoh_wire.ATTACHMENT_BYTES:
+        raise FragmentError("the attachment is not 33 bytes")
+    if at + att_len > len(msg):
+        raise FragmentError("truncated: the message ends inside the attachment")
+    att = msg[at : at + att_len]
+    if att[16] != zenoh_wire.GID_BYTES:
+        raise FragmentError("the attachment's GID length byte is not 16")
+    at += att_len
+    size, at = read_leb32(msg, at)
+    if max_payload is not None and size > max_payload:
+        raise FragmentError("the payload is longer than the configuration declares")
+    if at + size > len(msg):
+        raise FragmentError("truncated: the payload is shorter than its length says")
+    if at + size < len(msg):
+        raise FragmentError("trailing-bytes: the message has data after its payload")
+    return {"scope": scope, "key": key, "attachment": att, "payload": memoryview(msg)[at:]}
+
+
+# Captured from the stock peer: (payload bytes, batch bytes, first sequence number, fragment
+# lengths, fragment headers, sha256 of each fragment body). A fragment's length is the batch less
+# the two-byte stream length, except the last.
+CAPTURES = (
+    (
+        5000,
+        2048,
+        250917212,
+        (2046, 2046, 963),
+        (0x66, 0x66, 0x26),
+        (
+            "3a204a426aa81bfd43d1993883cd26ad288bb10cd21f0e9e8da310a7aff8acb4",
+            "115c8ad2bfa2bb2ae78a932cc6d26b592f621e4256f980f7a38407a3cc556c79",
+            "77922590635a1ec6191f82ad1272fc0995585c5547fc0210b604c4a2f1fbc8fb",
+        ),
+    ),
+    (
+        2200,
+        2048,
+        228976026,
+        (2046, 204),
+        (0x66, 0x26),
+        (
+            "9bbc893d83b3354f2e3c89b09d307545e3f7f538f200f7bf763d0bafefde6384",
+            "2b7ea030692c9a4f13bb70adf972aab18669c10ad6959c07c190e4c979aac6bc",
+        ),
+    ),
+    (
+        5000,
+        512,
+        26343361,
+        (510, 510, 510, 510, 510, 510, 510, 510, 510, 500),
+        (0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x26),
+        (
+            "6a60b9186829556cfd5fc0fdfab10593142abeadd37a892e8212039d18925a41",
+            "5abc503a4bbaf5b3aa2cb5a4f3ec9e4ef65ea68f8c7c614d125e25e6fa2a965f",
+            "8326441f5a41c8ab8f300fe3364189a0fdebb25d0c8a825def86aaffbd0ed945",
+            "2abdfba4fe45211b4bdd614acb1c3aca21a85b9dee14621872f7b60755817331",
+            "aa020b56f6bf33e35844067d5bda2308b1cba283036315b7f47348edf1371c85",
+            "c0f5bd6b2aaa0cb06c55b686dce03334860afacaa3bfee0f14dd78c417d34ac5",
+            "04fcf50f3044e353d1d59849ebca133bb2faf854bdebdd88494cf4cecea000ec",
+            "297bf4144dd72a828dcdadce16e8f0908a1f8b3840144308b11383d85d80172c",
+            "3c6e6a38c4df129edf7b0ba9aeb2df0d9f25e9fedfdb812b629ea08909b93d83",
+            "25617eb4aa9e787983cdc17edc7fd357d6d3bd1db4bdd80649c67c8e72696ac9",
+        ),
+    ),
+)
+
+def fits_one_frame(msg: bytes, batch: int, frame_sn: int) -> bool:
+    """Whether a message travels whole: a FRAME is its header byte, its sequence number and the
+    message, and the batch holds `batch - 2` bytes behind the stream length."""
+    return 1 + len(zenoh_wire.leb128(frame_sn)) + len(msg) <= batch - STREAM_LENGTH_BYTES
+
+
+# Observed, not derived: at a 2048-byte batch a Put of 2001 payload bytes was delivered with no
+# FRAGMENT on the wire, and one of 2002 payload bytes became two fragments of 2046 and 6 bytes. The
+# message is 2041 and 2042 bytes, and with a FRAME's header byte and four-byte sequence number
+# (the sequence numbers in these runs were between 2**21 and 2**28) that is 2046 and 2047 against a
+# limit of 2046. The 2001-byte run's own frame was not recorded, so its sequence number is taken to
+# be in the same range as the others.
+BOUNDARY = (
+    (2001, 2048, 206290105, False, ()),
+    (2002, 2048, 206290106, True, (2046, 6)),
+)
+
+
+def self_test() -> int:
+    """Prove the reference reproduces every captured body and reassembles every capture.
+
+    Returns the number of fragment bodies checked."""
+    checked = 0
+    for size, batch, first_sn, lengths, headers, digests in CAPTURES:
+        msg = message(size)
+        bodies = reference_split(msg, batch, first_sn)
+        got = tuple((len(b), b[0], hashlib.sha256(b).hexdigest()) for b in bodies)
+        want = tuple(zip(lengths, headers, digests, strict=True))
+        if got != want:
+            raise FragmentError(f"the reference does not reproduce the {size}-byte, {batch}-byte capture")
+        if reassemble(bodies) != msg:
+            raise FragmentError(f"the {size}-byte capture does not reassemble to its message")
+        decoded = decode_message(reassemble(bodies))
+        if decoded["payload"] != payload_bytes(size) or decoded["attachment"] != attachment():
+            raise FragmentError(f"the {size}-byte capture does not decode to the sent payload")
+        checked += len(bodies)
+    for size, batch, first_sn, fragmented, lengths in BOUNDARY:
+        msg = message(size)
+        whole = fits_one_frame(msg, batch, first_sn)
+        if whole == fragmented:
+            raise FragmentError(f"the {size}-byte boundary case is on the wrong side of the rule")
+        if fragmented:
+            if tuple(len(b) for b in reference_split(msg, batch, first_sn)) != lengths:
+                raise FragmentError(f"the {size}-byte boundary case splits differently")
+    return checked

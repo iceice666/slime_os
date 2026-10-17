@@ -215,7 +215,7 @@ impl BuddyBacking {
             } else {
                 self.node(node.parent as usize).slot
             };
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_BACKING shared_node cap={} parent={} paddr={} bytes={} state={:?}",
                 node.slot,
                 parent,

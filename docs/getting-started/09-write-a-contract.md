@@ -28,7 +28,7 @@ Two families exist, distinguished by who consumes the bindings:
 | Family | Consumer | Generator | Output |
 | --- | --- | --- | --- |
 | **Boot and persistence** — generation, kernel image, target profile, BootState, release, budgets, authorities | `boot-contracts` (decoded by the root at admission) | one script for all of them: `scripts/generate/generate-boot-bindings.py` (`just boot_gen`), whose `GENERATORS` table lists each schema | `boot-contracts/src/generated/<name>.rs` and `scripts/lib/boot_contracts.py` |
-| **IPC and service protocols** — spawn, block, store, fs, io-queue, network, powerbox, generation-management… | `components/proto` (`slime-proto`), used by components on both sides | one script per protocol: `scripts/generate/generate-<name>-bindings.py` (`just <name>_gen`) | `components/proto/src/<name>.rs`, sometimes `components/runtime/include/slime/<name>.h` |
+| **IPC and service protocols** — spawn, block, store, fs, io-queue, network, powerbox, generation-management… | `components/proto` (`slime-proto`), used by components on both sides | one row per protocol in `scripts/lib/zutai_bindings.py`, rendered by `scripts/generate/generate-bindings.py <name>` (`just <name>_gen`) | `components/proto/src/<name>.rs`, sometimes `components/runtime/include/slime/<name>.h` |
 
 Pick the family by consumer. If the root decodes it while admitting a
 generation, it is boot family; if two components exchange it at runtime, it
@@ -120,15 +120,17 @@ Adding a protocol `widget` for two components:
 
 1. **Author** `contracts/widget/v1/schema.zt` and `gen_rust.zt`, copying the
    nearest existing pair. Choose the output path(s) in `main`.
-2. **Add the generator** `scripts/generate/generate-widget-bindings.py` by
-   copying `generate-spawn-bindings.py`: it stages the render into a temp
-   directory, compares with the committed output, and supports `--check`.
-   Add a recipe in `just/generate.just`:
+2. **Add the binding** as one row of `BINDINGS` in
+   `scripts/lib/zutai_bindings.py`, next to the nearest existing row (`spawn`
+   for Rust plus a C header, `fabric-call` for Rust alone). The shared
+   pipeline stages the render into a temp directory, refuses the schema's
+   `INVALID_*_SCHEMA` sentinel, formats Rust, and compares with the committed
+   output under `--check`. Add a recipe in `just/generate.just`:
 
    ```just
    [group('generate')]
    widget_gen:
-       python3 scripts/generate/generate-widget-bindings.py
+       python3 scripts/generate/generate-bindings.py widget
    ```
 3. **Generate and commit** both the schema and the output:
 

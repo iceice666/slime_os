@@ -694,7 +694,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
 
     #[cfg(slime_private_stress)]
     fn stress_census(allocator: &ObjectAllocator, attempt: usize, phase: &str) {
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM stress census attempt={attempt} phase={phase} slots={} descriptors={} extents={} objects={} bytes={} reusable_anchors={} reusable_bytes={} ordinary_bytes={} preserved_bytes={} preserved_anchors={} descriptor_capacity={} extent_capacity={} infrastructure_owned={}",
             allocator.free_slots(),
             allocator.allocation_descriptors_free(),
@@ -881,7 +881,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 let required = required_descriptors.unwrap_or(usize::MAX);
                 let reserved = allocator.reserve_stress_descriptors(required.saturating_sub(1));
                 let effective = allocator.allocation_descriptors_free();
-                sel4::debug_println!(
+                crate::diagnostic_println!(
                     "SLIME_MEM stress construction case=descriptors attempt=2 actual={actual} effective={effective} required={required} reserved={reserved}"
                 );
             }
@@ -965,7 +965,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     .cap();
                 #[cfg(slime_private_stress)]
                 if stress_attempt == 0 {
-                    sel4::debug_println!(
+                    crate::diagnostic_println!(
                         "SLIME_MEM stress construction case=construction attempt=0 actual=0 effective=0 required=0 reserved=0"
                     );
                     return Err(TaskError::ForcedConstructionFailure);

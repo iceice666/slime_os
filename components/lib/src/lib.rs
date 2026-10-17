@@ -3,6 +3,8 @@
 #[cfg(feature = "component-runtime")]
 pub mod block_io;
 #[cfg(feature = "component-runtime")]
+pub mod console_line;
+#[cfg(feature = "component-runtime")]
 pub mod fabric_boot;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_matrix;
@@ -12,6 +14,7 @@ pub mod fabric_self_view;
 pub mod fabric_visibility;
 #[cfg(feature = "component-runtime")]
 pub mod generation_composition;
+pub mod hmac_drbg;
 pub mod http;
 pub mod link_frames;
 #[cfg(feature = "component-runtime")]
@@ -22,9 +25,17 @@ pub mod private_memory_adaptive;
 pub mod private_memory_capacity;
 #[cfg(feature = "component-runtime")]
 pub mod private_memory_matrix;
+pub mod ros_cdr;
 pub mod servo_failsafe;
 #[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;
 pub mod tick_clock;
 pub mod uart16550;
 pub mod virtio_mmio;
+pub mod zenoh_link;
+#[cfg(test)]
+mod zenoh_links;
+pub mod zenoh_node;
+pub mod zenoh_profile0;
+#[cfg(test)]
+mod zenoh_stock;

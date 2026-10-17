@@ -182,7 +182,7 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         direction: DmaDirection,
     ) -> Result<(u64, u64), AdapterError> {
         let frames = self.loan_frames.ok_or(AdapterError::DmaFailed)?;
-        sel4::debug_println!(
+        slime_root::diagnostic_println!(
             "SLIME_IO payload dma pages={} frames={} writable={} direction={direction:?}",
             pages,
             frames.len(),
@@ -197,7 +197,7 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         for index in 0..frames.len() {
             let frame = frames.get(index).ok_or(AdapterError::DmaFailed)?;
             let paddr = self.allocator.physical_address_of(frame.0);
-            sel4::debug_println!(
+            slime_root::diagnostic_println!(
                 "SLIME_IO payload frame index={index} slot={} paddr={paddr:?}",
                 frame.0
             );
@@ -239,7 +239,7 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
             self.allocator
                 .allocate_contiguous_granules(pages)
                 .map_err(|error| {
-                    sel4::debug_println!(
+                    slime_root::diagnostic_println!(
                         "SLIME_IO queue contiguous allocation failed pages={pages} error={error:?}"
                     );
                     AdapterError::DmaFailed
@@ -257,7 +257,9 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
                     allocated += 1;
                 }
                 Err(error) => {
-                    sel4::debug_println!("SLIME_IO queue map failed index={index} error={error:?}");
+                    slime_root::diagnostic_println!(
+                        "SLIME_IO queue map failed index={index} error={error:?}"
+                    );
                     for rollback in 0..allocated {
                         if let Some(page) = self.dma_pages[first + rollback].take() {
                             let _ = page.release(self.allocator);
@@ -460,7 +462,7 @@ pub(super) fn reclaim_driver(
     let (actions, fresh) = service.table.reclaim_driver(&mut adapter, driver)?;
     service.next_epoch[instance] = fresh.0;
     let after = service.table.occupancy(driver);
-    sel4::debug_println!(
+    slime_root::diagnostic_println!(
         "SLIME_IO reclaim task={} pre_mmio_bytes={} pre_mmio_mappings={} pre_irq_sources={} pre_dma_pages={} pre_dma_mappings={} pre_requests={} reclaimed_mmio_bytes={} reclaimed_mmio_mappings={} reclaimed_irq_sources={} reclaimed_dma_pages={} reclaimed_dma_mappings={} settled_requests={} post_mmio_bytes={} post_mmio_mappings={} post_irq_sources={} post_dma_pages={} post_dma_mappings={} post_requests={} actions={} fresh_epoch={}",
         task.0,
         before.mmio_bytes,
@@ -712,7 +714,7 @@ pub(super) fn serve_io_resource(
                     Response::success(handle.id.0 as i64, handle.iova().value() as sel4::Word)
                 }
                 Err(error) => {
-                    sel4::debug_println!(
+                    slime_root::diagnostic_println!(
                         "SLIME_IO queue map refused task={} epoch={} base={:#x} pages={} error={error:?}",
                         task.0,
                         epoch.0,

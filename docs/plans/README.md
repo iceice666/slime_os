@@ -15,6 +15,11 @@ in `docs/decisions/`, with explicit status and revisit conditions. Keep
 exploratory possibilities that are not committed work in `docs/directions/`.
 Delivery chronology and historical verification results do not belong in a plan.
 
+## Qualification designs
+
+- [Console record qualification](console-record-qualification.md) — deterministic
+  root/console contention, whole producer operations, and retained local QEMU regressions.
+
 ## Extracted requirements
 
 - [Memory capacity](memory-capacity.md) — target-bound multi-holder capacity

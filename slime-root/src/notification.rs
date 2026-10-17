@@ -142,7 +142,7 @@ impl NotificationTable {
             });
             self.len += 1;
             report.created += 1;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH notification grant={} source_instance={} target_instance={}",
                 grant.name,
                 grant.source,
@@ -198,7 +198,7 @@ impl NotificationTable {
                 .copy(&root.absolute_cptr(minted), rights())
                 .map_err(NotificationError::Mint)?;
             installed += 1;
-            sel4::debug_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH notification binding task={} slot={} role={:?}",
                 task.0,
                 destination,

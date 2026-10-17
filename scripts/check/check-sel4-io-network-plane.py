@@ -47,6 +47,7 @@ from typing import NamedTuple, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
+from console_record_controls import validate_local  # noqa: E402
 from harness import sha256_file  # noqa: E402
 
 import link_peer  # noqa: E402
@@ -57,7 +58,9 @@ import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
 import devloop_observations  # noqa: E402
+import zenoh_capture  # noqa: E402
 import zenoh_exchange  # noqa: E402
+import zenoh_listener_peer  # noqa: E402
 from sel4_gate_markers import match_marker_contract  # noqa: E402
 from sel4_plane import run_plane  # noqa: E402
 
@@ -506,41 +509,56 @@ NET_COUNTS: tuple[tuple[str, str, int], ...] = (
 )
 
 
+# The two nodes run concurrently, so no chain orders one node's lines against the other's except
+# where a message crosses the session: the subscriber's declaration precedes the publisher's match,
+# its sent samples precede the subscriber's receipt, and the subscriber's close precedes the
+# publisher's. Everything else is a per-node chain, and a per-node chain is a causal story only.
 ZENOH_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("zenoh admission", (rf"SLIME_ROOT generation admitted number={zenoh_exchange.GENERATION} executables=\d+ instances=4 grants=\d+ ",)),
     ("zenoh service", (
         r"\[network-service\] loopback interface=127\.0\.0\.1 external_nic=none",
         r"\[network-service\] loopback frames=[1-9]\d* rejected=0 handles=0 external_frames=0 resets=0 syns=2 fins=2",
     )),
-    ("zenoh sessions", (
-        r"\[ros2-demo-subscriber\] session open role=listener initial_sn=0 lease_ms=2000",
-        r"\[ros2-demo-publisher\] session open role=connector initial_sn=0 lease_ms=2000",
-        r"\[ros2-demo-subscriber\] declared subscriber id=1 key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
-        r"\[ros2-demo-publisher\] declaration matched key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
-    )),
-    ("zenoh samples", (
-        r"\[ros2-demo-publisher\] wire sent sample=0 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=0 value=10",
-        r"\[ros2-demo-publisher\] wire sent sample=1 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=1 value=20",
-        r"\[ros2-demo-publisher\] wire sent sample=2 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=2 value=30",
-        r"\[ros2-demo-publisher\] wire sent sample=3 hex=[0-9a-f]+",
-        r"\[ros2-demo-subscriber\] sample validated sequence=3 value=40",
-        r"\[rpi5-ros2-demo\] received count=4 sequences=0,1,2,3 values=10,20,30,40",
-    )),
-    ("zenoh teardown", (
-        r"\[ros2-demo-subscriber\] undeclared subscriber id=1",
-        r"\[ros2-demo-subscriber\] session closing samples=4",
-        r"\[ros2-demo-publisher\] session closed samples=4",
-    )),
-    ("zenoh denials", (
+    ("zenoh publisher", (
         r"\[ros2-demo-publisher\] denial class=undeclared-endpoint refused=1",
         r"\[ros2-demo-publisher\] denial class=listen refused=1",
         r"\[ros2-demo-publisher\] denial class=scouting refused=1",
+        r"\[ros2-demo-publisher\] session open role=connector initial_sn=0 lease_ms=2000",
+        r"\[ros2-demo-publisher\] declaration matched key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-publisher\] wire sent sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] wire sent sample=1 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] wire sent sample=2 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] wire sent sample=3 hex=[0-9a-f]+",
+        r"\[ros2-demo-publisher\] session closed samples=4",
+    )),
+    ("zenoh subscriber", (
         r"\[ros2-demo-subscriber\] denial class=connect refused=1",
+        r"\[ros2-demo-subscriber\] session open role=listener initial_sn=0 lease_ms=2000",
+        r"\[ros2-demo-subscriber\] declared subscriber id=1 key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-subscriber\] wire received sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=0 value=10",
+        r"\[ros2-demo-subscriber\] wire received sample=1 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=1 value=20",
+        r"\[ros2-demo-subscriber\] wire received sample=2 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=2 value=30",
+        r"\[ros2-demo-subscriber\] wire received sample=3 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] sample validated sequence=3 value=40",
+        r"\[rpi5-ros2-demo\] received count=4 sequences=0,1,2,3 values=10,20,30,40",
+        r"\[ros2-demo-subscriber\] undeclared subscriber id=1",
+        r"\[ros2-demo-subscriber\] session closing samples=4",
+    )),
+    # The one cross-node chain: a declaration is matched before the publisher sends, a sample is sent
+    # before it is received, and the subscriber closes before the publisher sees the close.
+    ("zenoh crossing", (
+        r"\[ros2-demo-subscriber\] declared subscriber id=1 key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-publisher\] declaration matched key=0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_[0-9a-f]{64}",
+        r"\[ros2-demo-publisher\] wire sent sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] wire received sample=0 hex=[0-9a-f]+",
+        r"\[ros2-demo-subscriber\] session closing samples=4",
+        r"\[ros2-demo-publisher\] session closed samples=4",
     )),
     ("zenoh success", (
+        r"\[ros2-demo-publisher\] session closed samples=4",
         r"\[rpi5-ros2-demo\] success profile=rpi5-ros2-demo-v2 samples=4",
         rf"SLIME_GRAPH HEALTHY generation={zenoh_exchange.GENERATION} required=4 live=0 completed=4 failed=0",
     )),
@@ -1113,6 +1131,62 @@ def run_zenoh_arm(transcript_path: Path | None) -> None:
     devloop_observations.record(casesObserved=samples, bytesObserved=wire_bytes, negativeControlsRefused=controls)
 
 
+def run_zenoh_external_arm(transcript_path: Path | None) -> None:
+    """Boot the demo against a stock eclipse-zenoh 1.0.0 listener on the host, over a NIC.
+
+    The composition must exist and grant exactly one outbound connection before QEMU starts. The
+    publisher's report, the packet capture taken at the virtio-net device and the record the
+    stock listener wrote are then judged against one another and against the host wire reference.
+    The listener is built from a hash-pinned wheel, so this arm is explicit and needs a registry.
+    """
+    contract = zenoh_exchange.demo()
+    try:
+        zenoh_capture.check_pins(contract)
+    except zenoh_capture.CaptureError as error:
+        fail(str(error))
+    fixture = COMPOSITIONS / f"{zenoh_capture.CLOSURE}.zti"
+    if not fixture.is_file():
+        fail(f"{fixture.relative_to(ROOT)} does not exist; the {zenoh_capture.CLOSURE} composition has not landed")
+    try:
+        facts = zenoh_capture.check_external_rows(*zenoh_capture.external_from_text(fixture.read_text(encoding="utf-8")))
+        zenoh_exchange.reference_self_test(ROOT / "components" / "lib" / "src" / "zenoh_profile0" / "vectors.txt")
+    except (zenoh_capture.CaptureError, zenoh_exchange.ExchangeError, zenoh_exchange.zenoh_wire.WireError) as error:
+        fail(str(error))
+    image = build_image(zenoh_capture.CLOSURE)
+    netdev = f"user,id=slimenet,net=10.0.2.0/24,host={zenoh_capture.PEER},dhcpstart={zenoh_capture.GUEST},ipv6=off"
+    terminal = re.compile(r"\[ros2-demo-publisher\] session closed samples=4|" + "|".join(FAILURE_MARKERS))
+    try:
+        with tempfile.TemporaryDirectory(prefix="slime-zenoh-external-") as directory, \
+                zenoh_listener_peer.Listener(Path(directory) / "receipt.zti", zenoh_capture.PORT) as listener:
+            capture = Path(directory) / "network.pcap"
+            transcript = run_plane(
+                image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS,
+                additional_arguments=(
+                    "-netdev", netdev,
+                    "-device", f"virtio-net-device,netdev=slimenet,mac={zenoh_capture.INTERFACE['mac']}",
+                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",
+                ),
+            )
+            if not capture.is_file():
+                fail("QEMU did not produce the zenoh-external packet observation")
+            packets = capture.read_bytes()
+            listener_output = listener.finish(zenoh_listener_peer.DEADLINE_SECONDS)
+            if transcript_path is not None:
+                transcript_path.write_text(transcript + "\n" + listener_output, encoding="utf-8")
+                transcript_path.with_suffix(".pcap").write_bytes(packets)
+            lines = [line.strip() for line in transcript.splitlines() if line.strip().startswith("[ros2-demo-publisher] ")]
+            result = zenoh_capture.judge_run(packets, lines, Path(directory) / "receipt.zti", contract)
+    except (OSError, RuntimeError, ValueError) as error:
+        fail(f"zenoh-external evidence refused: {error}")
+    good, accepted, mutations = zenoh_capture.controls(contract)
+    composition_facts, composition_refused = zenoh_capture.external_controls()
+    _receipts_accepted, receipts_refused = zenoh_capture.receipt_controls(contract)
+    controls = mutations + composition_refused + receipts_refused
+    print(f"[zenoh-external-wire] guest-stream={result['guest_stream']} peer-stream={result['peer_stream']} frames={result['frames']} keep-alives={result['keep_alives']} arp={result['arp']} peer-batches={result['peer_batches']}")
+    print(f"[zenoh-external] samples-in-receipt={result['receipt']} wire-bytes={result['bytes']} authority-facts={facts} controls-refused={controls} honest-variants={accepted} composition-facts={composition_facts}")
+    devloop_observations.record(casesObserved=result["receipt"], bytesObserved=result["bytes"], negativeControlsRefused=controls)
+
+
 def http_launch_text(url: str) -> str:
     """Serialize only through the schema-generated launch binding."""
     encoded = url.encode("ascii")
@@ -1301,7 +1375,8 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "zenoh", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
+    parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their mutated evidence, without QEMU or a listener")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
     parser.add_argument(
@@ -1309,11 +1384,25 @@ def main() -> None:
         type=Path,
         help="write the tcp arm's serial transcript and peer summary to this file",
     )
+    parser.add_argument("--local-runs", type=int, help="local arm only: run the same image 1..20 times, stopping at the first failure")
+    parser.add_argument("--raw-directory", type=Path, help="local arm only: exclusively create a directory for original serial byte prefixes, including failed runs")
     arguments = parser.parse_args()
+    if arguments.arm != "local" and (arguments.local_runs is not None or arguments.raw_directory is not None):
+        fail("--local-runs and --raw-directory require --arm local")
+    if arguments.local_runs is None:
+        arguments.local_runs = 1
+    if not 1 <= arguments.local_runs <= 20:
+        fail("--local-runs must be an integer in 1..20")
+    if arguments.local_runs > 1 and arguments.raw_directory is None:
+        fail("repeated local runs require --raw-directory to retain every attempted run")
+    if arguments.local_runs > 1 and arguments.transcript is not None:
+        fail("--transcript supports only a single local run; use --raw-directory for repeats")
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     if arguments.arm == "http-public" and not arguments.allow_public:
         fail("public HTTP requires explicit --allow-public; unavailable public access is not a pass")
+    if arguments.controls_only and arguments.arm != "zenoh-external":
+        fail("--controls-only requires --arm zenoh-external")
     if arguments.http_case is not None and arguments.arm != "http":
         fail("--http-case requires --arm http")
     if arguments.arm == "http":
@@ -1392,20 +1481,56 @@ def main() -> None:
             raise
         print("seL4 I/O lifetime plane check: actual client fault, interrupted receive reset, buffer reclamation and fresh-incarnation traffic proved")
     if arguments.arm in ("local", "all"):
+        if arguments.raw_directory is not None:
+            try:
+                arguments.raw_directory.parent.mkdir(parents=True, exist_ok=True)
+                arguments.raw_directory.mkdir(mode=0o700)
+            except OSError as error:
+                fail(f"cannot exclusively create raw directory {arguments.raw_directory}: {error}")
         image = build_image("sel4-io-local")
+        image_digest = sha256_file(image, fail) if arguments.raw_directory is not None else None
+        if image_digest is not None:
+            print(f"[local-observation] target=aarch64-sel4-qemu-virt closure=sel4-io-local image-sha256={image_digest} runs={arguments.local_runs}", flush=True)
         terminal = re.compile(LOCAL_CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
-        transcript = run_plane(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS)
-        if arguments.transcript is not None:
-            arguments.transcript.write_text(transcript, encoding="utf-8")
-        try:
-            match_marker_contract(transcript, LOCAL_CHAINS, FAILURE_MARKERS, fail)
-        except SystemExit:
-            print(transcript)
-            raise
-        print("seL4 I/O local plane check: real TCP listen/connect/accept, independent bidirectional bytes, EOF and normal teardown without a NIC proved")
+        for ordinal in range(1, arguments.local_runs + 1):
+            raw_path = None
+            if arguments.raw_directory is not None:
+                if sha256_file(image, fail) != image_digest:
+                    fail("local image changed between runs; refusing to boot a different image")
+                raw_path = arguments.raw_directory / f"run-{ordinal:02d}.serial"
+                print(f"[local-observation] run={ordinal}/{arguments.local_runs} raw-transcript={raw_path}", flush=True)
+            transcript = run_plane(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS, raw_transcript=raw_path)
+            if arguments.transcript is not None:
+                arguments.transcript.write_text(transcript, encoding="utf-8")
+            try:
+                match_marker_contract(transcript, LOCAL_CHAINS, FAILURE_MARKERS, fail)
+                if arguments.local_runs > 1:
+                    try:
+                        validate_local(transcript, sys.modules[__name__])
+                    except ValueError as error:
+                        fail(f"local run {ordinal} console records refused: {error}")
+            except SystemExit:
+                print(transcript)
+                raise
+            print("seL4 I/O local plane check: real TCP listen/connect/accept, independent bidirectional bytes, EOF and normal teardown without a NIC proved")
     if arguments.arm == "zenoh":
         run_zenoh_arm(arguments.transcript)
         print("seL4 zenoh plane check: two nodes exchanged four samples over one Zenoh Profile 0 session, byte-exact against the host reference, with exactly the declared authority and every denial observed")
+    if arguments.arm == "zenoh-external" and arguments.controls_only:
+        contract = zenoh_exchange.demo()
+        try:
+            samples, accepted, mutations = zenoh_capture.controls(contract)
+            facts, composition = zenoh_capture.external_controls()
+            receipts_accepted, receipts_refused = zenoh_capture.receipt_controls(contract)
+            zenoh_capture.check_pins(contract)
+            zenoh_exchange.reference_self_test(ROOT / "components" / "lib" / "src" / "zenoh_profile0" / "vectors.txt")
+        except (zenoh_capture.CaptureError, zenoh_exchange.ExchangeError, zenoh_exchange.zenoh_wire.WireError) as error:
+            fail(str(error))
+        print(f"zenoh external judges: {samples} samples on an honest capture, {accepted} honest variants accepted, {mutations} mutated captures and in-memory receipts refused, {receipts_accepted} listener records accepted and {receipts_refused} refused by the contract's decoder, {facts} authority facts on an honest composition, {composition} mutations refused")
+        return
+    if arguments.arm == "zenoh-external":
+        run_zenoh_external_arm(arguments.transcript)
+        print("seL4 zenoh external check: the guest connected out over TCP to a stock eclipse-zenoh 1.0.0 listener, which delivered all four samples, and the capture holds exactly that one connection")
     if arguments.arm in ("tcp", "all"):
         mac = check_tcp_fixture()
         image = build_image(TCP_CLOSURE)

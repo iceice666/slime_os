@@ -123,19 +123,6 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 # Any implementation artifact appearing requires removing the exclusion first.
 # Rows are (canonical item UUID, checker filename, closure name, artifact paths).
 PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
-    "sel4-entropy": (
-        "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e",
-        "check-sel4-entropy-plane.py",
-        "sel4-entropy",
-        (
-            "contracts/system-spec/v1/systems/sel4-entropy.zti",
-            "contracts/generation-manifest/v1/compositions/sel4-entropy.zti",
-            "contracts/system-image-closure/v2/closures/sel4-entropy.zti",
-            "contracts/system-test-run/v1/runs/sel4-entropy.zti",
-            "components/services/virtio-rng-driver",
-            "components/services/entropy-service",
-        ),
-    ),
     "sel4-serial": (
         "01a10778-adf1-7d64-a4e8-851e425c03e9",
         "check-sel4-component-graph.py",

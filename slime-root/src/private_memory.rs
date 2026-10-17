@@ -535,7 +535,7 @@ impl NativePrivateMemoryKernel {
         } else {
             ("map", 512, 1024, 512)
         };
-        sel4::debug_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM stress growth case={case} previous={previous} delta={delta} backed={backed}"
         );
         self.failure = None;

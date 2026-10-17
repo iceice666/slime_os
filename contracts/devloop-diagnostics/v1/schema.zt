@@ -1,0 +1,54 @@
+-- Local gate diagnostic receipt. Raw output is opaque bytes, never evidence.
+-- A receipt describes one immutable capture, not a completion decision.
+-- outputPath names the first limitBytes of recipe stdout followed by stderr;
+-- recipeExitCode is the exit status of just, not an underlying child process.
+-- The operator-facing line is SLIME_DEVLOOP_DIAGNOSTIC receipt=<path> run=<key>.
+-- Receipt and output paths are repository-relative, immutable and non-symlink.
+
+ExecutionIdentity :: type {
+  requirements : Text;
+  helper : Text;
+  code : Text;
+  policy : Text;
+  inputs : Text;
+  target : Text;
+  image : Text;
+  epoch : Text;
+};
+
+DiagnosticReceipt :: type {
+  formatVersion : Int;
+  kind : Text;
+  runKey : Text;
+  identity : ExecutionIdentity;
+  justTarget : Text;
+  recipeExitCode : Int;
+  outputPath : Text;
+  sha256 : Text;
+  capturedBytes : Int;
+  limitBytes : Int;
+  truncated : Bool;
+};
+
+FromData @ExecutionIdentity :: derive
+FromData @DiagnosticReceipt :: derive
+
+formatVersion :: Int = 1;
+kind :: Text = "slime-devloop-diagnostics";
+maxReceiptBytes :: Int = 8192;
+maxOutputBytes :: Int = 65536;
+maxPathBytes :: Int = 240;
+
+decodeReceipt :: Data -> Validation DecodeIssue DiagnosticReceipt
+  = data => decode data;
+
+{
+  ExecutionIdentity =;
+  DiagnosticReceipt =;
+  decodeReceipt =;
+  formatVersion =;
+  kind =;
+  maxReceiptBytes =;
+  maxOutputBytes =;
+  maxPathBytes =;
+}

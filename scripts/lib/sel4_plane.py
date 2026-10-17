@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from re import Pattern
-from typing import NoReturn
+from typing import BinaryIO, NoReturn
 
 from harness import ROOT, load_qemu_profile, profile_integer, profile_text, sha256_file
 
@@ -75,6 +75,7 @@ def run_plane(
     input_text: str | None = None,
     input_character_delay: float = 0.001,
     input_steps: Sequence[tuple[Sequence[Pattern[str]], str]] = (),
+    raw_transcript: Path | None = None,
 ) -> str:
     """Run QEMU until terminal evidence, exit, or the bounded timeout.
 
@@ -83,7 +84,12 @@ def run_plane(
     has matched a line printed since the previous step's text was sent, so a
     step never races the guest output it depends on. The harness does not log
     input; callers supplying secrets must use a guest input path that does not
-    echo them to the serial output.
+    echo them to the serial output. Explicit `raw_transcript` capture exclusively
+    creates a file before launch and retains the original consumed stdout/stderr
+    bytes, including CRLF, through the terminal line (not a post-terminal drain).
+    Captured runs decode UTF-8 with replacement for matching; uncaptured runs
+    retain the existing text-mode behavior. Raw files also survive failed runs,
+    and may contain guest-echoed input, so callers must opt in deliberately.
     """
     if (input_trigger is None) != (input_text is None):
         fail("QEMU launch input requires both a readiness trigger and input text")
@@ -98,6 +104,12 @@ def run_plane(
         steps.append(((input_trigger,), input_text))
     command = qemu_base_command(image=image, fail=fail, pins_path=pins_path)
     command.extend(additional_arguments)
+    raw_output: BinaryIO | None = None
+    if raw_transcript is not None:
+        try:
+            raw_output = raw_transcript.open("xb")
+        except OSError as error:
+            fail(f"cannot exclusively create raw QEMU transcript {raw_transcript}: {error}")
     try:
         process = subprocess.Popen(
             command,
@@ -105,10 +117,12 @@ def run_plane(
             stdin=subprocess.PIPE if steps else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            text=raw_output is None,
+            bufsize=1 if raw_output is None else -1,
         )
     except OSError as error:
+        if raw_output is not None:
+            raw_output.close()
         fail(f"cannot run QEMU: {error}")
 
     timed_out = threading.Event()
@@ -132,7 +146,13 @@ def run_plane(
     matched: set[int] = set()
     try:
         assert process.stdout is not None
-        for line in process.stdout:
+        for output in process.stdout:
+            if raw_output is not None:
+                raw_output.write(output)
+                raw_output.flush()
+                line = output.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+            else:
+                line = output
             lines.append(line.rstrip("\r\n"))
             if sent_steps < len(steps):
                 patterns, text = steps[sent_steps]
@@ -141,7 +161,7 @@ def run_plane(
                     assert process.stdin is not None
                     try:
                         for character in text:
-                            process.stdin.write(character)
+                            process.stdin.write(character.encode("utf-8") if raw_output is not None else character)
                             process.stdin.flush()
                             if input_character_delay:
                                 time.sleep(input_character_delay)
@@ -152,16 +172,27 @@ def run_plane(
             if terminal_condition.search(line):
                 terminal_reached = True
                 break
+    except OSError as error:
+        if raw_output is None:
+            raise
+        fail(f"cannot collect QEMU serial output: {error}")
     finally:
         watchdog.cancel()
         watchdog.join()
         if process.poll() is None:
             process.terminate()
         try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        finally:
+            if raw_output is not None:
+                try:
+                    raw_output.close()
+                except OSError as error:
+                    fail(f"cannot close raw QEMU transcript {raw_transcript}: {error}")
 
     transcript = "\n".join(lines)
     diagnostic_tail = "\n".join(lines[-80:])

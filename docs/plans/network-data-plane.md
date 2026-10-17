@@ -178,7 +178,8 @@ double-quoted string literal that is valid only as a spawn argument.
 `http-get` holds exact numeric grants only: the controlled peer on
 `10.0.2.2:18080` and `1.1.1.1:80`. The composition declares no resolver and no
 launch seed, so a hostname URL fails closed without a DNS packet; hostname
-support waits for an entropy authority. The network service and the
+support waits for the network service to draw from the entropy authority
+([decision](../decisions/entropy-authority.md)). The network service and the
 virtio-net driver are declared `resident` (`contracts/instance-lifetime/v1`):
 the service reads its own lifetime and, when resident, keeps every control
 endpoint open after a session closes or aborts, so each new `http-get`

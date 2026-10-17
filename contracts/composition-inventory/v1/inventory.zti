@@ -73,6 +73,14 @@
       systemSpec = "contracts/system-spec/v1/systems/sel4-directory.zti";
     };
     {
+      baseline = "";
+      composition = "sel4-entropy";
+      deferralReason = "";
+      owningGate = "sel4_entropy_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-entropy.zti";
+    };
+    {
       baseline = "contracts/system-spec/v1/baselines/sel4-filesystem.zti";
       composition = "sel4-filesystem";
       deferralReason = "";
@@ -559,6 +567,14 @@
       owningGate = "wait_set_check";
       state = "derived";
       systemSpec = "contracts/system-spec/v1/systems/sel4-wait-set.zti";
+    };
+    {
+      baseline = "";
+      composition = "sel4-zenoh";
+      deferralReason = "";
+      owningGate = "rpi5_ros2_zenoh_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-zenoh.zti";
     };
   ];
   formatVersion = 1;
