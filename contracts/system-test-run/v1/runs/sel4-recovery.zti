@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-recovery";
-  imageClosureIdentity = "e000028a5c409aa9cb8027219034c12320ed0f6ddc8fd5c7a3d065a0263ef6d0";
+  imageClosureIdentity = "b130386170b5c34b0f85dedeee28255a36f321009511c2c36c9664341b1ba37d";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [

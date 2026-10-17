@@ -23,14 +23,17 @@ import importlib.util
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import NamedTuple, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from devloop_observations import record as record_observations  # noqa: E402
 from harness import (  # noqa: E402
     GENERATION_COMPOSITIONS,
     GENERATION_CONTRACT,
@@ -71,6 +74,9 @@ AUTOMATIC_BINDING_SLOTS = {
 }
 
 BOOT_TIMEOUT_SECONDS = 120
+# How long the second serial port's host end waits for QEMU to connect before
+# the burst, and for QEMU to close it after the boot.
+SERIAL_PEER_WAIT_SECONDS = 10
 INPUT_WAIT_MARKER = r"\[slisp\] resident input wait"
 
 # The product generation carries Slisp beside console and spawn-service.
@@ -445,6 +451,187 @@ TIMER_RATE = r"SLIME_TIMER acquired irq=\d+ freq_hz=(\d+)"
 BEAT_VALUES = r"\[mavlink-heartbeat\] send seq=(\d+) status=(\S+) deadline=(\d+) now=(\d+)"
 
 
+# The product graph plus `pl011-driver`, granted QEMU virt's second serial port
+# through the root's declared inventory, `uart16550-driver` bound to device
+# ordinal 1, which that inventory does not hold, and `serial-probe`, a testkit
+# client holding an endpoint to each. Init launches the three before Slisp
+# (slots 10, 11, 12). The gate is the host end of the second port: it reads
+# what the probe writes there and sends the burst the probe reads back.
+SERIAL_HOST_BYTES = b"SLIME SERIAL" + bytes((0xA5, 0x5A, 0x0F, 0xF0))
+SERIAL_GUEST_BYTES = bytes(range(1, 25))
+SERIAL_SEND_MARKER = r"\[serial-probe\] awaiting host bytes"
+SERIAL_TERMINAL_MARKER = TERMINAL_MARKER
+SERIAL_REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        "generation admitted",
+        r"SLIME_ROOT generation admitted number=169 executables=9 instances=9 grants=\d+ ",
+    ),
+    ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
+    (
+        "all catalogue payloads are native ELF images",
+        r"SLIME_ROOT graph admitted executables=9 instances=9 slimecm=0 elf=9 unrecognized=0",
+    ),
+    (
+        "the generation declares no private-memory budget",
+        r"SLIME_MEM budget holders=0 declared=0",
+    ),
+    (
+        "only root-owned init was staged",
+        r"SLIME_GRAPH staged task=0 instance=init executable=init grants=9 bindings=9 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+",
+    ),
+    (
+        "the executable catalogue remained available to spawn",
+        r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=9 slimecm=0 wrong_target=0 unrecognized=0",
+    ),
+    ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
+    ("init began the declared graph", r"\[init\] launching component graph"),
+    (
+        "init authorized console through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=0",
+    ),
+    (
+        "console received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=1 slot=33 side=both",
+    ),
+    (
+        "init spawned console as instance task 1",
+        r"SLIME_GRAPH spawned task=0 child=1 component=console grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized spawn-service through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=3",
+    ),
+    (
+        "spawn-service received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=2 slot=33 side=both",
+    ),
+    (
+        "init spawned spawn-service as instance task 2",
+        r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=3 endpoints=3 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=1",
+    ),
+    (
+        "init authorized the pl011 driver through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=10 component=pl011-driver grants=0",
+    ),
+    (
+        "the pl011 driver received the probe's declared endpoint",
+        r"SLIME_GRAPH native endpoint task=\d+ slot=33 side=both",
+    ),
+    # The value is the root's inventory length, not the holder's ordinal: the
+    # declared inventory holds one device, so both drivers' quotas print 1.
+    (
+        "the root installed the pl011 driver's declared device quota",
+        r"SLIME_IO quota task=\d+ instance=pl011-driver devices=1 shared_granule=0",
+    ),
+    (
+        "init spawned the pl011 driver",
+        r"SLIME_GRAPH spawned task=0 child=\d+ component=pl011-driver grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized the 16550 driver through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=11 component=uart16550-driver grants=0",
+    ),
+    (
+        "the 16550 driver received the probe's declared endpoint",
+        r"SLIME_GRAPH native endpoint task=\d+ slot=33 side=both",
+    ),
+    (
+        "the root installed the 16550 driver's declared device quota",
+        r"SLIME_IO quota task=\d+ instance=uart16550-driver devices=1 shared_granule=0",
+    ),
+    (
+        "init spawned the 16550 driver",
+        r"SLIME_GRAPH spawned task=0 child=\d+ component=uart16550-driver grants=0 endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized the serial probe through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=12 component=serial-probe grants=0",
+    ),
+    # Installed in grant-name order: `probe-noport-rpc` (slot 1) first.
+    (
+        "the serial probe received its endpoint to the 16550 driver",
+        r"SLIME_GRAPH native endpoint task=\d+ slot=34 side=both",
+    ),
+    (
+        "the serial probe received its endpoint to the pl011 driver",
+        r"SLIME_GRAPH native endpoint task=\d+ slot=33 side=both",
+    ),
+    (
+        "init spawned the serial probe",
+        r"SLIME_GRAPH spawned task=0 child=\d+ component=serial-probe grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "init authorized Slisp through its executable binding",
+        r"SLIME_GRAPH spawn authorized task=0 slot=9 component=slisp grants=0",
+    ),
+    (
+        "Slisp received its two declared service endpoints",
+        r"SLIME_GRAPH native endpoint task=\d+ slot=33 side=both",
+    ),
+    (
+        "Slisp received its second declared service endpoint",
+        r"SLIME_GRAPH native endpoint task=\d+ slot=35 side=both",
+    ),
+    (
+        "init spawned Slisp",
+        r"SLIME_GRAPH spawned task=0 child=\d+ component=slisp grants=0 endpoints=2 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
+    ),
+    (
+        "the supervisor certified the live graph",
+        r"SLIME_GRAPH healthy generation=169 instances=[0-9a-f]{16} required=7 live=7 idle=7 failed=0",
+    ),
+    ("init kept the product graph resident", r"\[init\] product services resident"),
+    ("the product identified the Slisp shell", r"Slisp"),
+    ("Slisp displayed its prompt", r"slisp> "),
+    ("Slisp entered resident input wait", INPUT_WAIT_MARKER),
+    ("Slisp received uninterrupted QEMU serial input", r"\(\+ 1 1\)\n=> 2"),
+    ("Slisp requested sysinfo through spawn-service", r"sysinfo\n\[spawn-service\] request"),
+    ("sysinfo completed through the generation profile", r"\[sysinfo\] spawned through profile"),
+    ("sysinfo exited cleanly", r"SLIME_GRAPH component exit task=\d+ status=0"),
+    ("Slisp reported the accepted spawn", SERIAL_TERMINAL_MARKER),
+)
+# The drivers report their binds on their own schedule, and the root its
+# inventory before any of them; the supervision record races Slisp's reply.
+SERIAL_EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"SLIME_ROOT io authority inventory devices=1 mode=declared",
+    r"\[pl011-driver\] port bound fifo=16",
+    r"\[uart16550-driver\] device absent, refusing requests",
+    SUPERVISION_COLLECTED,
+    SPAWN_SERVICE_READY,
+)
+# The probe's claims, one line each, in the order it makes them. The gate sends
+# the burst only once the awaiting line is seen, so the empty read precedes any
+# host byte; it types into Slisp only once the last line is seen, so the probe
+# is quiet while the shell's input is asserted uninterrupted.
+SERIAL_HOLD_MARKERS: tuple[str, ...] = (
+    r"\[serial-probe\] empty read status=ok bytes=0",
+    r"\[serial-probe\] write status=ok bytes=12",
+    SERIAL_SEND_MARKER,
+    r"\[serial-probe\] read bytes=24 reads=\d+ data=0102030405060708090a0b0c0d0e0f101112131415161718",
+    r"\[serial-probe\] bad-op refused status=bad-op",
+    r"\[serial-probe\] bad-length refused status=bad-length",
+    r"\[serial-probe\] malformed refused status=malformed",
+    r"\[serial-probe\] write after refusals status=ok bytes=4",
+    r"\[serial-probe\] no-port write status=no-device",
+    r"\[serial-probe\] no-port read status=no-device",
+    r"\[serial-probe\] serial probe complete cases=9 refused=5",
+)
+# Every hold line but the awaiting and terminal ones is one case the probe ran;
+# five of them are requests the drivers refused.
+SERIAL_CASES: tuple[str, ...] = tuple(
+    pattern
+    for pattern in SERIAL_HOLD_MARKERS
+    if pattern not in (SERIAL_SEND_MARKER, SERIAL_HOLD_MARKERS[-1])
+)
+SERIAL_REFUSALS: tuple[str, ...] = tuple(
+    pattern for pattern in SERIAL_CASES if "refused status=" in pattern or "no-port" in pattern
+)
+SERIAL_READ_VALUES = r"\[serial-probe\] read bytes=(\d+) reads=(\d+) data=([0-9a-f]*)"
+# The probe asks for at most one receive FIFO's depth per read, so a burst
+# longer than that is whole only if several reads were joined in order.
+SERIAL_READ_LIMIT = 16
+
+
 class Composition(NamedTuple):
     closure: str
     fixture: Path
@@ -454,7 +641,11 @@ class Composition(NamedTuple):
     terminal: str
     summary: str
     # A second ordered chain whose last marker must be seen before typing.
-    beats: tuple[str, ...] = ()
+    hold: tuple[str, ...] = ()
+    # The hold chain is the heartbeat producer's, judged on its own grid.
+    cadence: bool = False
+    # The arm attaches QEMU's second serial port and is its host end.
+    serial_peer: bool = False
 
 
 COMPOSITIONS: dict[str, Composition] = {
@@ -501,19 +692,45 @@ COMPOSITIONS: dict[str, Composition] = {
             "deadline grid, each refused no-device; sysinfo still launched and all "
             "six required resident instances remained live"
         ),
-        beats=MAVLINK_BEAT_MARKERS,
+        hold=MAVLINK_BEAT_MARKERS,
+        cadence=True,
+    ),
+    "sel4-serial": Composition(
+        closure="sel4-serial",
+        fixture=GENERATION_COMPOSITIONS / "sel4-serial.zti",
+        required=SERIAL_REQUIRED_MARKERS,
+        unordered=SERIAL_EXPECTED_UNORDERED,
+        commands=("(+ 1 1)\n", "sysinfo\n"),
+        terminal=SERIAL_TERMINAL_MARKER,
+        summary=(
+            "seL4 serial graph check: init launched the pl011 driver on QEMU virt's "
+            "second serial port, the 16550 driver on an ordinal the platform did not "
+            "inventory, and the serial probe before Slisp; the host end of the port "
+            "received the probe's 16 bytes and the probe read the host's 24-byte "
+            "burst whole; an empty read, three malformed requests and two no-port "
+            "requests were answered as the protocol names; the console still "
+            "evaluated input and launched sysinfo, and all seven required resident "
+            "instances remained live"
+        ),
+        hold=SERIAL_HOLD_MARKERS,
+        serial_peer=True,
     ),
 }
-# Both arms for the gate control, which mutates every marker of each.
+# Every arm for the gate control, which mutates every marker of each.
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("required marker sequence", tuple(pattern for _, pattern in REQUIRED_MARKERS)),
     ("pwm marker sequence", tuple(pattern for _, pattern in PWM_REQUIRED_MARKERS)),
     ("mavlink marker sequence", tuple(pattern for _, pattern in MAVLINK_REQUIRED_MARKERS)),
     ("mavlink heartbeat sequence", MAVLINK_BEAT_MARKERS),
+    ("serial marker sequence", tuple(pattern for _, pattern in SERIAL_REQUIRED_MARKERS)),
+    ("serial probe sequence", SERIAL_HOLD_MARKERS),
 ) + tuple(
     ("order-independent marker", (pattern,))
     for pattern in dict.fromkeys(
-        EXPECTED_UNORDERED + PWM_EXPECTED_UNORDERED + MAVLINK_EXPECTED_UNORDERED
+        EXPECTED_UNORDERED
+        + PWM_EXPECTED_UNORDERED
+        + MAVLINK_EXPECTED_UNORDERED
+        + SERIAL_EXPECTED_UNORDERED
     )
 )
 
@@ -579,6 +796,10 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # IO9: the producer's and the serial driver's fatal paths.
     r"\[mavlink-heartbeat\] FAIL ",
     r"\[uart16550-driver\] fail: ",
+    # The second serial port's driver and its probe, which reports a reply it
+    # did not expect here rather than stopping short of its chain.
+    r"\[pl011-driver\] fail: ",
+    r"\[serial-probe\] fail: ",
 )
 
 
@@ -673,6 +894,63 @@ def build_image(platform: str, image_path: Path, closure: str) -> None:
     IMAGE = built.image
 
 
+class SerialPeer:
+    """The host end of QEMU's second serial port for one boot.
+
+    It listens before QEMU starts, and QEMU connects to it as a client while
+    starting, before the guest runs, so no byte the guest writes precedes the
+    connection. A thread accepts it and buffers every byte the guest writes
+    until QEMU closes the port at the end of the boot.
+    """
+
+    def __init__(self) -> None:
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.listener.settimeout(BOOT_TIMEOUT_SECONDS)
+        self.connected = threading.Event()
+        self.connection: socket.socket | None = None
+        self.received = bytearray()
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def qemu_backend(self) -> str:
+        host, port = self.listener.getsockname()[:2]
+        return f"tcp:{host}:{port}"
+
+    def serve(self) -> None:
+        try:
+            connection, _ = self.listener.accept()
+        except OSError:
+            return
+        self.connection = connection
+        self.connected.set()
+        while True:
+            try:
+                chunk = connection.recv(4096)
+            except OSError:
+                return
+            if not chunk:
+                return
+            with self.lock:
+                self.received.extend(chunk)
+
+    def send(self, data: bytes) -> None:
+        """Hand `data` to QEMU in one write, so it arrives as one burst."""
+        if not self.connected.wait(SERIAL_PEER_WAIT_SECONDS):
+            fail("QEMU never connected its second serial port to the gate")
+        assert self.connection is not None
+        self.connection.sendall(data)
+
+    def close(self) -> bytes:
+        """Every byte the guest wrote, read until QEMU closed the port."""
+        self.thread.join(SERIAL_PEER_WAIT_SECONDS)
+        self.listener.close()
+        if self.connection is not None:
+            self.connection.close()
+        with self.lock:
+            return bytes(self.received)
+
+
 def check_manifest(image_path: Path, manifest_path: Path, platform: str) -> dict[str, object]:
     manifest = verify_identity(
         manifest_path,
@@ -694,16 +972,20 @@ def boot(
     platform: str,
     image_path: Path,
     composition: Composition,
+    peer: SerialPeer | None = None,
 ) -> str:
     """Boot the resident product graph and drive one bounded input session.
 
     Unlike the fixture planes, this graph never drains: init stays alive
     supervising its services. The gate therefore ends the boot on the terminal
     marker after feeding input, and the feed itself waits for the guest to
-    announce that it is waiting for input rather than sending on a timer.
+    announce that it is waiting for input rather than sending on a timer. With
+    a `peer`, the burst for the second serial port waits the same way, for the
+    probe to announce that it is reading.
     """
     input_wait = re.compile(INPUT_WAIT_MARKER)
-    hold = re.compile(composition.beats[-1]) if composition.beats else None
+    hold = re.compile(composition.hold[-1]) if composition.hold else None
+    send = re.compile(SERIAL_SEND_MARKER) if peer is not None else None
     terminal = re.compile(composition.terminal)
     collected = re.compile(SUPERVISION_COLLECTED)
     failures = re.compile("|".join(FAILURE_MARKERS))
@@ -712,6 +994,7 @@ def boot(
         assert process.stdin is not None
         assert process.stdout is not None
         sent_expression = False
+        sent_burst = False
         saw_input_wait = False
         saw_hold = hold is None
         saw_terminal = False
@@ -720,9 +1003,13 @@ def boot(
             lines.append(line.rstrip("\n"))
             if failures.search(line):
                 break
-            # Slisp's input wait and the last pinned beat come from different
-            # tasks in either order; typing waits for both, so every pinned
-            # beat is inside the run however fast the shell came up.
+            if send is not None and not sent_burst and send.search(line):
+                assert peer is not None
+                peer.send(SERIAL_GUEST_BYTES)
+                sent_burst = True
+            # Slisp's input wait and the last held marker come from different
+            # tasks in either order; typing waits for both, so every held
+            # marker is inside the run however fast the shell came up.
             if input_wait.search(line):
                 saw_input_wait = True
             if hold is not None and hold.search(line):
@@ -769,6 +1056,8 @@ def boot(
             "-nographic",
             "-serial",
             "mon:stdio",
+            # QEMU virt's second PL011, present only when a backend is given.
+            *(("-serial", peer.qemu_backend()) if peer is not None else ()),
             *qemu_kernel_arguments(qemu_binary, image_path, fail),
         ]
     return run_boot(
@@ -864,16 +1153,16 @@ def check_transcript(transcript: str, composition: Composition) -> None:
             report_transcript(transcript)
             fail(f"missing unordered marker: {pattern}")
     position = 0
-    for pattern in composition.beats:
+    for pattern in composition.hold:
         match = re.compile(pattern).search(transcript, position)
         if match is None:
             report_transcript(transcript)
             if re.search(pattern, transcript) is not None:
-                fail(f"beat out of order: {pattern}")
-            fail(f"missing beat: {pattern}")
+                fail(f"held marker out of order: {pattern}")
+            fail(f"missing held marker: {pattern}")
         position = match.end()
-    if composition.beats:
-        check_cadence(transcript, len(composition.beats))
+    if composition.cadence:
+        check_cadence(transcript, len(composition.hold))
     # Each task's window is its own region, which is the property the pinned
     # addresses used to carry before component code size made them brittle. Two
     # tasks bound at one base would mean one staging area serving both, and a
@@ -913,6 +1202,57 @@ def check_heartbeat_vectors() -> None:
             fail(f"the Python decoder did not return one verified heartbeat for seq={seq}")
     print(
         f"heartbeat vectors: {len(HEARTBEAT_VECTORS)} pinned frames encoded and decoded",
+        flush=True,
+    )
+
+
+def check_serial_peer_bytes(received: bytes) -> int:
+    """The host end of the second port saw the probe's two writes and no more."""
+    if received != SERIAL_HOST_BYTES:
+        fail(
+            "the host end of the second serial port received "
+            f"{received.hex() or 'nothing'}, expected {SERIAL_HOST_BYTES.hex()}"
+        )
+    print(f"serial peer: the host end received the probe's {len(received)} bytes", flush=True)
+    return len(received)
+
+
+def check_serial_read(transcript: str) -> int:
+    """The probe read the gate's burst whole and in order, over several reads."""
+    reports = re.findall(SERIAL_READ_VALUES, transcript)
+    if len(reports) != 1:
+        fail(f"expected one probe read report, saw {len(reports)}")
+    count, reads, data = reports[0]
+    read = bytes.fromhex(data) if len(data) % 2 == 0 else None
+    if read != SERIAL_GUEST_BYTES or int(count) != len(SERIAL_GUEST_BYTES):
+        fail(
+            f"the probe read bytes={count} data={data}, expected "
+            f"bytes={len(SERIAL_GUEST_BYTES)} data={SERIAL_GUEST_BYTES.hex()}"
+        )
+    least = -(-len(SERIAL_GUEST_BYTES) // SERIAL_READ_LIMIT)
+    if int(reads) < least:
+        fail(
+            f"the probe read {len(read)} bytes in {reads} reads; at {SERIAL_READ_LIMIT} "
+            f"bytes per read that takes at least {least}"
+        )
+    print(f"serial read: the probe joined the {len(read)}-byte burst from {reads} reads", flush=True)
+    return len(read)
+
+
+def check_serial_evidence(transcript: str, received: bytes) -> None:
+    """Judge both ends of the second port and report the counts observed."""
+    host = check_serial_peer_bytes(received)
+    guest = check_serial_read(transcript)
+    cases = sum(1 for pattern in SERIAL_CASES if re.search(pattern, transcript))
+    refused = sum(1 for pattern in SERIAL_REFUSALS if re.search(pattern, transcript))
+    record_observations(
+        casesObserved=cases,
+        negativeControlsRefused=refused,
+        bytesObserved=host + guest,
+    )
+    print(
+        f"serial evidence: {cases} probe cases, {refused} refused requests, "
+        f"{host + guest} bytes verified on both ends",
         flush=True,
     )
 
@@ -976,7 +1316,8 @@ def main() -> None:
         default="sel4",
         help=(
             "which product composition to boot: the product graph, or it plus the pwm "
-            "driver, or it plus the serial driver and heartbeat producer"
+            "driver, or it plus the serial driver and heartbeat producer, or it plus "
+            "a driver on QEMU's second serial port and the probe that exercises it"
         ),
     )
     parser.add_argument(
@@ -998,7 +1339,7 @@ def main() -> None:
         if arguments.platform != "qemu-arm-virt":
             fail(f"the {arguments.composition} composition is packaged by closure on qemu-arm-virt only")
     check_automatic_binding_slots(composition.fixture)
-    if composition.beats:
+    if composition.cadence:
         check_heartbeat_vectors()
     image_path, manifest_path = artifact_paths("slime-sel4-graph", arguments.platform)
     if arguments.no_build:
@@ -1014,11 +1355,17 @@ def main() -> None:
         image_path = IMAGE
         manifest = {}
     check_deleted_compatibility_surface()
-    transcript = boot(manifest, arguments.platform, image_path, composition)
+    peer = SerialPeer() if composition.serial_peer else None
+    try:
+        transcript = boot(manifest, arguments.platform, image_path, composition, peer)
+    finally:
+        received = peer.close() if peer is not None else b""
     if arguments.transcript is not None:
         arguments.transcript.parent.mkdir(parents=True, exist_ok=True)
         arguments.transcript.write_text(transcript + "\n", encoding="utf-8")
     check_transcript(transcript, composition)
+    if composition.serial_peer:
+        check_serial_evidence(transcript, received)
     print(f"{composition.summary} on {arguments.platform}")
 
 
