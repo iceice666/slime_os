@@ -31,6 +31,9 @@ readable and link to the decision that replaced them.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
+- [Negative controls for product judges](negative-controls-for-product-judges.md)
+  — accepted; a negative control is required for every assertion about Slime OS
+  itself, and not for assertions about verification or process tooling.
 - [Planning PRs may fix the Zutai schema a grader binds to](planning-pr-schema-contracts.md)
   — proposed; a new `contracts/<name>/v<N>/schema.zt` is an interface a
   planning pull request may land with its exam, while generators, bindings,
