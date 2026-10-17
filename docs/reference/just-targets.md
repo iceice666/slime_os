@@ -126,11 +126,13 @@ For how the planes work and how to add one, read
 | `just capability_rights_model_check` | Model-check the capability-rights model. |
 | `just component_spec_check` | Aggregate: `contracts_check`, `component_spec_validation_check`. |
 | `just component_spec_validation_check` | CP0 component-specification model gate. |
-| `just contracts_check` | Aggregate: `contracts_source_check`, `generation_v5_check`. |
+| `just contracts_check` | Aggregate: `contracts_source_check`, `generation_corpus_check`. |
 | `just contracts_source_check` | Type-check every contract schema and renderer and refuse stale generated bindings (`check-contracts.py`). |
 | `just data_fabric_profile_check` | C8.9 typed full-profile and resource-bound closure gate. |
 | `just data_fabric_trace_check` | Refuse stale fabric-trace bindings. |
 | `just fabric_manifest_check` | C8.2 fabric-graph generation admission gate. |
+| `just generation_corpus_check shard_index shard_count` | Every seL4 manifest the generation builder declares still builds, optionally one round-robin shard of the corpus. |
+| `just generation_v5_retired_check` | Retirement of the generation v5 guard: the corpus still builds, and the guard's checker, recipe, codePaths entry, reference row and CI steps are gone. |
 | `just generation_v5_check shard_index shard_count` | Every generation this repository builds is v5, and nothing still writes v4. |
 | `just interface_schema_check` | Validate `contracts/interface-schema/v1` and its normalized outputs. |
 | `just io_model_check` | Aggregate: `io_queue_model_check`, `io_resource_model_check`. |
@@ -155,38 +157,38 @@ For how the planes work and how to add one, read
 
 | Recipe | Does |
 | --- | --- |
-| `just block_gen` | `python3 scripts/generate/generate-block-bindings.py` |
+| `just block_gen` | `python3 scripts/generate/generate-bindings.py block` |
 | `just boot_gen` | Regenerate `boot-contracts/src/generated/` and `scripts/lib/boot_contracts.py` from every boot-family schema. |
 | `just boot_media_gen` | Render `contracts/boot-media/v1`'s host constants. |
 | `just bootstate_gen` | Aggregate: `boot_gen`. |
-| `just capability_transfer_gen` | `python3 scripts/generate/generate-capability-transfer-bindings.py` |
-| `just component_gen` | `python3 scripts/generate/generate-component-bindings.py` |
+| `just capability_transfer_gen` | `python3 scripts/generate/generate-bindings.py capability-transfer` |
+| `just component_gen` | `python3 scripts/generate/generate-bindings.py component` |
 | `just component_runtime_abi_gen` | The `label -> operation` pairs the contract declared, from its own output. |
 | `just component_sdk_release_gen` | Render `contracts/component-sdk-release/v1`'s host constants. |
 | `just cpu_boot_observation_gen` | Render `contracts/cpu-boot-observation/v1`'s host constants. |
 | `just fabric_graph_gen` | Aggregate: `boot_gen`. |
-| `just entropy_gen` | `python3 scripts/generate/generate-entropy-bindings.py` |
-| `just fabric_ring_gen` | `python3 scripts/generate/generate-fabric-ring-bindings.py` |
-| `just fabric_stream_gen` | `python3 scripts/generate/generate-fabric-stream-bindings.py` |
-| `just fabric_trace_gen` | `python3 scripts/generate/generate-fabric-trace-bindings.py` |
-| `just fabric_visibility_gen` | `python3 scripts/generate/generate-fabric-visibility-bindings.py` |
+| `just entropy_gen` | `python3 scripts/generate/generate-bindings.py entropy` |
+| `just fabric_ring_gen` | `python3 scripts/generate/generate-bindings.py fabric-ring` |
+| `just fabric_stream_gen` | `python3 scripts/generate/generate-bindings.py fabric-stream` |
+| `just fabric_trace_gen` | `python3 scripts/generate/generate-bindings.py fabric-trace` |
+| `just fabric_visibility_gen` | `python3 scripts/generate/generate-bindings.py fabric-visibility` |
 | `just generation_gen` | Aggregate: `boot_gen`. |
-| `just generation_management_gen` | `python3 scripts/generate/generate-generation-management-bindings.py` |
+| `just generation_management_gen` | `python3 scripts/generate/generate-bindings.py generation-management` |
 | `just interface_schema_gen` | `python3 scripts/generate/generate-interface-schema-bindings.py` |
-| `just io_queue_gen` | `python3 scripts/generate/generate-io-queue-bindings.py` |
+| `just io_queue_gen` | `python3 scripts/generate/generate-bindings.py io-queue` |
 | `just kernel_image_gen` | Aggregate: `boot_gen`. |
-| `just link_device_gen` | `python3 scripts/generate/generate-link-device-bindings.py` |
-| `just mavlink_heartbeat_gen` | `python3 scripts/generate/generate-mavlink-heartbeat-bindings.py` |
-| `just network_service_gen` | `python3 scripts/generate/generate-network-service-bindings.py` |
-| `just powerbox_gen` | `python3 scripts/generate/generate-powerbox-bindings.py` |
-| `just private_memory_probe_gen` | `python3 scripts/generate/generate-private-memory-probe-bindings.py` |
-| `just pwm_servo_gen` | `python3 scripts/generate/generate-pwm-servo-bindings.py` |
-| `just sample_descriptor_gen` | `python3 scripts/generate/generate-sample-descriptor-bindings.py` |
-| `just serial_device_gen` | `python3 scripts/generate/generate-serial-device-bindings.py` |
-| `just spawn_gen` | `python3 scripts/generate/generate-spawn-bindings.py` |
-| `just store_gen` | `python3 scripts/generate/generate-store-bindings.py` |
+| `just link_device_gen` | `python3 scripts/generate/generate-bindings.py link-device` |
+| `just mavlink_heartbeat_gen` | `python3 scripts/generate/generate-bindings.py mavlink-heartbeat` |
+| `just network_service_gen` | `python3 scripts/generate/generate-bindings.py network-service` |
+| `just powerbox_gen` | `python3 scripts/generate/generate-bindings.py powerbox` |
+| `just private_memory_probe_gen` | `python3 scripts/generate/generate-bindings.py private-memory-probe` |
+| `just pwm_servo_gen` | `python3 scripts/generate/generate-bindings.py pwm-servo` |
+| `just sample_descriptor_gen` | `python3 scripts/generate/generate-bindings.py sample-descriptor` |
+| `just serial_device_gen` | `python3 scripts/generate/generate-bindings.py serial-device` |
+| `just spawn_gen` | `python3 scripts/generate/generate-bindings.py spawn` |
+| `just store_gen` | `python3 scripts/generate/generate-bindings.py store` |
 | `just syscall_abi_gen` | The `label -> operation` pairs the contract declared, from its own table. |
-| `just zenoh_profile_gen` | `python3 scripts/generate/generate-zenoh-profile-bindings.py` |
+| `just zenoh_profile_gen` | `python3 scripts/generate/generate-bindings.py zenoh-profile` |
 | `just zenoh_stock_gen` | Render the captured stock-peer batches as the Rust constants `zenoh_stock::` reads, from `contracts/zenoh-stock-fixtures/v1`. |
 
 ## planes / mechanism
@@ -312,9 +314,9 @@ For how the planes work and how to add one, read
 | `just duo_serial_monitor serial timeout` | Bring-up aid, not a gate: print whatever the Duo's UART0 emits and assert nothing. |
 | `just duo_slisp_check serial` | P3.F: build the target-qualified resident graph with Duo UART0 input, deploy its distinct product FIT, drive one bounded Slisp session, and cold-reset only through the gate-only terminator after every assertion has passed. |
 | `just rpi5_artifact_check` | RP1 exact-profile executable closure and deterministic artifact gate. |
+| `just rpi5_ros2_demo_v1_retired_check` | Retirement of the RPi5 ROS 2 demo format-1 contract: the artifact gate passes on format 2 alone, and the format-1 contract directory is gone. |
 | `just rpi5_boot_check serial` | Physical gate: require ordered boot evidence from the pinned build on UART10. |
 | `just rpi5_media_check` | Flatten via the media builder: objcopy drops the sectionless loader payload. |
-| `just rpi5_ros2_demo_contract_check` | RP0 target-qualified Raspberry Pi 5 ROS 2 demo contract gate. |
 | `just rpi5_ros2_demo_contract_v2_check` | RP0 format-2 Raspberry Pi 5 ROS 2 demo contract gate. |
 | `just zenoh_encoder_check` | Zenoh Profile 0 encoder reproduces every upstream-encoded batch in the decoder corpus byte for byte, after the host wire reference proves itself against the same corpus, and refuses seven named bad inputs; fails until the encoder lands. |
 | `just zenoh_session_check` | Zenoh Profile 0 session machine completes five named scenarios and refuses seven named inputs, as pure state transitions with injected time; fails until the session machine lands. |

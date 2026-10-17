@@ -4,7 +4,7 @@
 RPi5 ROS 2 demo's static bounded peer link: the admitted message identifiers,
 the numeric bounds a decoder enforces before it allocates, the two admitted
 extensions, and the closed vocabulary of reasons a decoder refuses input.
-Generate the Rust constants with `python3 scripts/generate/generate-zenoh-profile-bindings.py`
+Generate the Rust constants with `python3 scripts/generate/generate-bindings.py zenoh-profile`
 (`just zenoh_profile_gen`); the output is `components/proto/src/zenoh_profile.rs`.
 
 ## What this contract does not define

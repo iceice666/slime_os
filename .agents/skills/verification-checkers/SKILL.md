@@ -57,10 +57,17 @@ judges on every boundary it claims:
 - A counted observation is counted from transcript or output evidence, not
   assigned from a literal or a configuration value the fixture already
   knows.
-- Every positive assertion has a negative control that makes it fail: a
-  missing marker, a reordered chain, an explicit failure marker, a wrong
-  count, absent bytes, a wrong holder. An assertion with no control is
-  unproven.
+- Every positive assertion a product judge makes has a negative control
+  that makes it fail: a missing marker, a reordered chain, an explicit
+  failure marker, a wrong count, absent bytes, a wrong holder. An assertion
+  with no control is unproven. A product judge asserts something about
+  Slime OS behavior or a format, wire, or boundary it owns or reads; the
+  gate-control suite that supplies the plane gates' controls counts as one.
+  An assertion about verification or process tooling itself (devloop and
+  MyQue adapters, work-item closeout, retirement, and publication automation,
+  CI selection, any test of a checker) needs no control. Adding one is a new
+  exam and a human decision; see
+  `docs/decisions/negative-controls-for-product-judges.md`.
 - A gate that runs a subset of an exam (a `--slice`, an `--arm`) still runs
   the pinned corpus judge and the controls that protect what the subset
   relies on; an implementation must not be able to alter a pinned refusal
