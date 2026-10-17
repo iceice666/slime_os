@@ -7,11 +7,11 @@
 //! refused here with the matching class. Nothing allocates.
 
 use super::{
-    ATTACHMENT_GID_LEN_AT, EXT_ATTACHMENT, EXT_WIRE_EXPR, FLAG_BIT5, FLAG_BIT6, FLAG_Z, GID_BYTES,
-    ID_CLOSE, ID_D_SUBSCRIBER, ID_DECLARE, ID_FRAME, ID_INIT, ID_KEEP_ALIVE, ID_OPEN, ID_PUSH,
-    ID_PUT, MAX_ATTACHMENT_BYTES, MAX_BATCH_BYTES, MAX_COOKIE_BYTES, MAX_KEY_BYTES,
-    MAX_PAYLOAD_BYTES, Mapping, Refusal, STREAM_LENGTH_BYTES, U_SUBSCRIBER_HEADER,
-    WIRE_EXPR_FLAG_NAMED, WIRE_EXPR_FLAG_SENDER, key_expression,
+    ATTACHMENT_GID_LEN_AT, Bounds, EXT_ATTACHMENT, EXT_WIRE_EXPR, FLAG_BIT5, FLAG_BIT6, FLAG_Z,
+    GID_BYTES, ID_CLOSE, ID_D_SUBSCRIBER, ID_DECLARE, ID_FRAME, ID_INIT, ID_KEEP_ALIVE, ID_OPEN,
+    ID_PUSH, ID_PUT, MAX_ATTACHMENT_BYTES, MAX_BATCH_BYTES, MAX_COOKIE_BYTES, Mapping, Refusal,
+    STREAM_LENGTH_BYTES, U_SUBSCRIBER_HEADER, WIRE_EXPR_FLAG_NAMED, WIRE_EXPR_FLAG_SENDER,
+    key_expression,
 };
 use slime_proto::zenoh_profile as p;
 
@@ -65,11 +65,16 @@ pub enum EncodeError {
 struct Writer<'a> {
     out: &'a mut [u8],
     len: usize,
+    cap: usize,
 }
 
 impl<'a> Writer<'a> {
     fn new(out: &'a mut [u8]) -> Self {
-        Self { out, len: 0 }
+        Self::with_cap(out, MAX_BATCH_BYTES)
+    }
+
+    fn with_cap(out: &'a mut [u8], cap: usize) -> Self {
+        Self { out, len: 0, cap }
     }
 
     fn put(&mut self, bytes: &[u8]) -> Result<(), EncodeError> {
@@ -77,7 +82,7 @@ impl<'a> Writer<'a> {
             .len
             .checked_add(bytes.len())
             .ok_or(EncodeError::BatchTooLarge)?;
-        if end > MAX_BATCH_BYTES {
+        if end > self.cap {
             return Err(EncodeError::BatchTooLarge);
         }
         let slot = self
@@ -139,8 +144,8 @@ fn check_cookie(cookie: &[u8]) -> Result<(), EncodeError> {
 }
 
 /// The decoder's key-expression rule, applied to the bytes that would be sent.
-fn check_key(key: &str) -> Result<&[u8], EncodeError> {
-    if key.len() > MAX_KEY_BYTES {
+fn check_key(key: &str, max: usize) -> Result<&[u8], EncodeError> {
+    if key.len() > max {
         return Err(EncodeError::KeyTooLong);
     }
     if key.is_empty() {
@@ -300,8 +305,9 @@ fn declare_subscriber(
     id: u32,
     mapping: Mapping,
     key: &str,
+    bounds: Bounds,
 ) -> Result<(), EncodeError> {
-    let key = check_key(key)?;
+    let key = check_key(key, bounds.key)?;
     let mut header = ID_D_SUBSCRIBER | FLAG_BIT5;
     if mapping == Mapping::Sender {
         header |= FLAG_BIT6;
@@ -318,8 +324,9 @@ fn undeclare_subscriber(
     id: u32,
     mapping: Mapping,
     key: &str,
+    bounds: Bounds,
 ) -> Result<(), EncodeError> {
-    let key = check_key(key)?;
+    let key = check_key(key, bounds.key)?;
     let mut flags = WIRE_EXPR_FLAG_NAMED;
     if mapping == Mapping::Sender {
         flags |= WIRE_EXPR_FLAG_SENDER;
@@ -339,23 +346,37 @@ fn undeclare_subscriber(
     writer.put(key)
 }
 
-fn push_put(
-    writer: &mut Writer<'_>,
-    mapping: Mapping,
+/// Refuses a Put the decoder would refuse: a key that is not a valid key expression within the bounds,
+/// an attachment that is not the 33-byte form, or a payload over the bound.
+pub fn validate_put(
     key: &str,
     attachment: &[u8],
-    payload: &[u8],
+    payload_len: usize,
+    bounds: &Bounds,
 ) -> Result<(), EncodeError> {
-    let key = check_key(key)?;
+    check_key(key, bounds.key)?;
     if attachment.len() != MAX_ATTACHMENT_BYTES {
         return Err(EncodeError::AttachmentLength);
     }
     if attachment.get(ATTACHMENT_GID_LEN_AT) != Some(&GID_LEN_BYTE) {
         return Err(EncodeError::AttachmentGid);
     }
-    if payload.len() > MAX_PAYLOAD_BYTES {
+    if payload_len > bounds.payload {
         return Err(EncodeError::PayloadTooLong);
     }
+    Ok(())
+}
+
+fn push_put(
+    writer: &mut Writer<'_>,
+    mapping: Mapping,
+    key: &str,
+    attachment: &[u8],
+    payload: &[u8],
+    bounds: Bounds,
+) -> Result<(), EncodeError> {
+    validate_put(key, attachment, payload.len(), &bounds)?;
+    let key = check_key(key, bounds.key)?;
     let mut header = ID_PUSH | FLAG_BIT5;
     if mapping == Mapping::Sender {
         header |= FLAG_BIT6;
@@ -374,17 +395,24 @@ fn push_put(
 pub struct FrameEncoder<'a> {
     writer: Writer<'a>,
     messages: usize,
+    bounds: Bounds,
 }
 
 impl<'a> FrameEncoder<'a> {
     /// Starts a reliable FRAME with sequence number `sn` in `out`.
     pub fn new(out: &'a mut [u8], sn: u32) -> Result<Self, EncodeError> {
-        let mut writer = Writer::new(out);
+        Self::with_bounds(out, sn, Bounds::DEMO)
+    }
+
+    /// Starts a reliable FRAME that may be as large as `bounds` says.
+    pub fn with_bounds(out: &'a mut [u8], sn: u32, bounds: Bounds) -> Result<Self, EncodeError> {
+        let mut writer = Writer::with_cap(out, bounds.batch);
         writer.byte(ID_FRAME | FLAG_BIT5)?;
         writer.leb(sn)?;
         Ok(Self {
             writer,
             messages: 0,
+            bounds,
         })
     }
 
@@ -411,7 +439,8 @@ impl<'a> FrameEncoder<'a> {
         mapping: Mapping,
         key: &str,
     ) -> Result<(), EncodeError> {
-        self.message(|writer| declare_subscriber(writer, id, mapping, key))
+        let bounds = self.bounds;
+        self.message(|writer| declare_subscriber(writer, id, mapping, key, bounds))
     }
 
     pub fn undeclare_subscriber(
@@ -420,7 +449,8 @@ impl<'a> FrameEncoder<'a> {
         mapping: Mapping,
         key: &str,
     ) -> Result<(), EncodeError> {
-        self.message(|writer| undeclare_subscriber(writer, id, mapping, key))
+        let bounds = self.bounds;
+        self.message(|writer| undeclare_subscriber(writer, id, mapping, key, bounds))
     }
 
     /// A PUSH carrying a Put with the 33-byte attachment and a payload of at
@@ -432,7 +462,8 @@ impl<'a> FrameEncoder<'a> {
         attachment: &[u8],
         payload: &[u8],
     ) -> Result<(), EncodeError> {
-        self.message(|writer| push_put(writer, mapping, key, attachment, payload))
+        let bounds = self.bounds;
+        self.message(|writer| push_put(writer, mapping, key, attachment, payload, bounds))
     }
 
     /// The batch length, once at least one network message is in the frame.
@@ -446,7 +477,15 @@ impl<'a> FrameEncoder<'a> {
 
 /// The 2-byte little-endian stream length prefix for a batch of `batch_len`.
 pub fn stream_prefix(batch_len: usize) -> Result<[u8; STREAM_LENGTH_BYTES], EncodeError> {
-    if batch_len == 0 || batch_len > MAX_BATCH_BYTES {
+    stream_prefix_max(batch_len, MAX_BATCH_BYTES)
+}
+
+/// The stream length of a batch body of `batch_len` bytes, none longer than `max`.
+pub fn stream_prefix_max(
+    batch_len: usize,
+    max: usize,
+) -> Result<[u8; STREAM_LENGTH_BYTES], EncodeError> {
+    if batch_len == 0 || batch_len > max {
         return Err(EncodeError::StreamLength);
     }
     let length = u16::try_from(batch_len).map_err(|_| EncodeError::StreamLength)?;
@@ -455,7 +494,12 @@ pub fn stream_prefix(batch_len: usize) -> Result<[u8; STREAM_LENGTH_BYTES], Enco
 
 /// Copies `batch` behind its stream length prefix and returns the bytes written.
 pub fn stream_batch(out: &mut [u8], batch: &[u8]) -> Result<usize, EncodeError> {
-    let prefix = stream_prefix(batch.len())?;
+    stream_batch_max(out, batch, MAX_BATCH_BYTES)
+}
+
+/// Copies `batch`, no longer than `max`, behind its stream length prefix.
+pub fn stream_batch_max(out: &mut [u8], batch: &[u8], max: usize) -> Result<usize, EncodeError> {
+    let prefix = stream_prefix_max(batch.len(), max)?;
     let total = STREAM_LENGTH_BYTES + batch.len();
     let (head, body) = out
         .get_mut(..total)

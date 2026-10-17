@@ -79,6 +79,9 @@ fn class_of(error: SessionError) -> &'static str {
         SessionError::Closed => "closed",
         SessionError::InvalidConfig => "invalid-config",
         SessionError::Encode(_) => "encode",
+        SessionError::Fragment(error) => error.class(),
+        SessionError::OutOfMemory => "out-of-memory",
+        SessionError::NeedsFragments => "needs-fragments",
     }
 }
 
@@ -125,6 +128,9 @@ fn owned(events: &crate::zenoh_profile0::session::Events<'_>) -> Vec<Ev> {
             },
             Event::SubscriberUndeclared { id } => Ev::Undeclared(id),
             Event::Closed { reason } => Ev::Closed(reason),
+            Event::SampleStored { .. } => {
+                unreachable!("a session that cannot fragment stores no sample")
+            }
         })
         .collect()
 }

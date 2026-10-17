@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::zenoh_profile0::encode::{self, FrameEncoder, stream_batch};
-use crate::zenoh_profile0::{Mapping, Message, Network, StreamFramer};
+use crate::zenoh_profile0::{Mapping, Message, Network, StreamFramer, decode_batch};
 use std::vec::Vec;
 
 const KEY: &str = "0/slime_demo/counter/slime_demo_msgs::msg::dds_::Counter_/RIHS01_a82fd5ffcb96d0a197a5ad3680d1c4e6ba43a962928ecd592fb565eb8129595b";
@@ -90,6 +90,9 @@ fn owned(outcome: &Outcome<'_>, out: &[u8]) -> (Vec<u8>, Vec<Ev>) {
             },
             Event::SubscriberUndeclared { id } => Ev::Undeclared(id),
             Event::Closed { reason } => Ev::Closed(reason),
+            Event::SampleStored { .. } => {
+                unreachable!("a session that cannot fragment stores no sample")
+            }
         })
         .collect();
     (outcome.batch(out).to_vec(), events)

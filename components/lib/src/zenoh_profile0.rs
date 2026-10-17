@@ -20,7 +20,11 @@
 mod tests;
 
 pub mod encode;
+pub mod fragment;
+pub mod limits;
+pub mod reassembly;
 pub mod session;
+pub mod tables;
 
 use slime_proto::zenoh_profile as p;
 
@@ -66,6 +70,29 @@ pub use p::{
     GID_BYTES, MAX_ATTACHMENT_BYTES, MAX_BATCH_BYTES, MAX_COOKIE_BYTES, MAX_KEY_BYTES,
     MAX_PAYLOAD_BYTES, STREAM_LENGTH_BYTES,
 };
+
+/// How large a batch, a key and a payload a link will read or write. The first release's are the
+/// constants of `slime_proto::zenoh_profile`; a configured link states its own. A FRAGMENT is not a
+/// batch this decoder reads: a heap session recognises it by header first, and a fixed one refuses it
+/// here as unsupported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounds {
+    /// The longest batch body, the stream length not included.
+    pub batch: usize,
+    /// The longest key, in encoded bytes.
+    pub key: usize,
+    /// The largest payload of one Put.
+    pub payload: usize,
+}
+
+impl Bounds {
+    /// The first release's bounds: a 512-byte batch, a 129-byte key, a 12-byte payload.
+    pub const DEMO: Self = Self {
+        batch: MAX_BATCH_BYTES,
+        key: MAX_KEY_BYTES,
+        payload: MAX_PAYLOAD_BYTES,
+    };
+}
 
 /// Why the decoder refuses input. The vocabulary is `refusalClasses` in the
 /// contract; each variant's [`code`](Refusal::code) is that class's code.
@@ -187,12 +214,14 @@ pub enum Network<'a> {
 pub struct Frame<'a> {
     pub sn: u32,
     body: &'a [u8],
+    bounds: Bounds,
 }
 
 impl<'a> Frame<'a> {
     pub fn messages(&self) -> Networks<'a> {
         Networks {
             reader: Reader::new(self.body),
+            bounds: self.bounds,
         }
     }
 }
@@ -200,6 +229,7 @@ impl<'a> Frame<'a> {
 /// Iterator over a validated frame's network messages.
 pub struct Networks<'a> {
     reader: Reader<'a>,
+    bounds: Bounds,
 }
 
 impl<'a> Iterator for Networks<'a> {
@@ -211,7 +241,7 @@ impl<'a> Iterator for Networks<'a> {
         }
         // `decode_batch` validated every message, so an error here is unreachable;
         // ending the iteration is the safe answer if it ever were not.
-        match parse_network(&mut self.reader) {
+        match parse_network(&mut self.reader, &self.bounds) {
             Ok(message) => Some(message),
             Err(_) => {
                 self.reader.at = self.reader.data.len();
@@ -493,7 +523,11 @@ enum KeyRef<'a> {
 /// full. A nonzero scope with no suffix is an alias reference. A suffix after a nonzero scope would
 /// extend the declared key, and the alias resolves to that key and no other, so it is refused; the
 /// suffix is judged first, so a wildcard or an oversized key keeps its own class.
-fn key_reference<'a>(reader: &mut Reader<'a>, named: bool) -> Result<KeyRef<'a>, Refusal> {
+fn key_reference<'a>(
+    reader: &mut Reader<'a>,
+    named: bool,
+    bounds: &Bounds,
+) -> Result<KeyRef<'a>, Refusal> {
     let scope = reader.leb(p::LEB128_SHORT_BITS)?;
     if !named {
         return if scope == 0 {
@@ -503,7 +537,7 @@ fn key_reference<'a>(reader: &mut Reader<'a>, named: bool) -> Result<KeyRef<'a>,
         };
     }
     let length = reader.leb(p::LEB128_SHORT_BITS)? as usize;
-    if length > MAX_KEY_BYTES {
+    if length > bounds.key {
         return Err(Refusal::OverBound);
     }
     if length == 0 {
@@ -516,7 +550,11 @@ fn key_reference<'a>(reader: &mut Reader<'a>, named: bool) -> Result<KeyRef<'a>,
     Ok(KeyRef::Full(key))
 }
 
-fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> {
+fn declare<'a>(
+    reader: &mut Reader<'a>,
+    header: u8,
+    bounds: &Bounds,
+) -> Result<Network<'a>, Refusal> {
     // The interest flag carries an interest id before the declaration. Every declaration with it
     // was refused as an unsupported message; the one a stock peer ends its declarations with, a
     // DeclareFinal, is now accepted and ignored, and anything else with the flag stays that way.
@@ -550,7 +588,7 @@ fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refus
             if id == 0 {
                 return Err(Refusal::InvalidKeyexpr);
             }
-            match key_reference(reader, true)? {
+            match key_reference(reader, true, bounds)? {
                 KeyRef::Full(key) => Ok(Network::DeclareKeyExpr { id, key }),
                 KeyRef::Alias(_) => Err(Refusal::InvalidKeyexpr),
             }
@@ -561,7 +599,7 @@ fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refus
             }
             let id = reader.leb(p::LEB128_MAX_BITS)?;
             let mapping = Mapping::from_flag(sub & FLAG_BIT6 != 0);
-            match key_reference(reader, sub & FLAG_BIT5 != 0)? {
+            match key_reference(reader, sub & FLAG_BIT5 != 0, bounds)? {
                 KeyRef::Full(key) => Ok(Network::DeclareSubscriber { id, mapping, key }),
                 KeyRef::Alias(alias) => Ok(Network::DeclareSubscriberAlias { id, mapping, alias }),
             }
@@ -579,7 +617,7 @@ fn declare<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refus
                 return Err(Refusal::UnsupportedExtension);
             }
             let length = reader.leb(p::LEB128_MAX_BITS)? as usize;
-            if length > WIRE_EXPR_HEADER_BYTES + MAX_KEY_BYTES {
+            if length > WIRE_EXPR_HEADER_BYTES + bounds.key {
                 return Err(Refusal::OverBound);
             }
             let mut inner = Reader::new(reader.take(length)?);
@@ -639,9 +677,9 @@ fn oam<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> 
     Ok(Network::Oam)
 }
 
-fn push<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal> {
+fn push<'a>(reader: &mut Reader<'a>, header: u8, bounds: &Bounds) -> Result<Network<'a>, Refusal> {
     no_extension(header)?;
-    let key = key_reference(reader, header & FLAG_BIT5 != 0)?;
+    let key = key_reference(reader, header & FLAG_BIT5 != 0, bounds)?;
     let body = reader.u8()?;
     if body & ID_MASK != ID_PUT || body & (FLAG_BIT5 | FLAG_BIT6) != 0 {
         return Err(Refusal::UnsupportedMessage);
@@ -670,7 +708,7 @@ fn push<'a>(reader: &mut Reader<'a>, header: u8) -> Result<Network<'a>, Refusal>
         gid: &raw[ATTACHMENT_GID_LEN_AT + 1..],
     };
     let size = reader.leb(p::LEB128_MAX_BITS)? as usize;
-    if size > MAX_PAYLOAD_BYTES {
+    if size > bounds.payload {
         return Err(Refusal::OverBound);
     }
     let mapping = Mapping::from_flag(header & FLAG_BIT6 != 0);
@@ -697,17 +735,17 @@ fn word(bytes: &[u8], at: usize) -> [u8; 8] {
     out
 }
 
-fn parse_network<'a>(reader: &mut Reader<'a>) -> Result<Network<'a>, Refusal> {
+fn parse_network<'a>(reader: &mut Reader<'a>, bounds: &Bounds) -> Result<Network<'a>, Refusal> {
     let header = reader.u8()?;
     match header & ID_MASK {
-        ID_DECLARE => declare(reader, header),
-        ID_PUSH => push(reader, header),
+        ID_DECLARE => declare(reader, header, bounds),
+        ID_PUSH => push(reader, header, bounds),
         ID_OAM => oam(reader, header),
         _ => Err(Refusal::UnsupportedMessage),
     }
 }
 
-fn frame<'a>(mut reader: Reader<'a>, header: u8) -> Result<Message<'a>, Refusal> {
+fn frame<'a>(mut reader: Reader<'a>, header: u8, bounds: &Bounds) -> Result<Message<'a>, Refusal> {
     if header & FLAG_BIT5 == 0 {
         return Err(Refusal::UnsupportedMessage);
     }
@@ -722,20 +760,26 @@ fn frame<'a>(mut reader: Reader<'a>, header: u8) -> Result<Message<'a>, Refusal>
     let body = Reader::new(&reader.data[reader.at..]);
     let mut check = body;
     while check.left() != 0 {
-        parse_network(&mut check)?;
+        parse_network(&mut check, bounds)?;
     }
     Ok(Message::Frame(Frame {
         sn,
         body: body.data,
+        bounds: *bounds,
     }))
 }
 
-/// Decodes one batch body, the bytes after a stream length prefix.
+/// Decodes one batch body, the bytes after a stream length prefix, under the first release's bounds.
 pub fn decode_batch(batch: &[u8]) -> Result<Message<'_>, Refusal> {
+    decode_batch_with(batch, &Bounds::DEMO)
+}
+
+/// Decodes one batch body under `bounds`.
+pub fn decode_batch_with<'a>(batch: &'a [u8], bounds: &Bounds) -> Result<Message<'a>, Refusal> {
     if batch.is_empty() {
         return Err(Refusal::EmptyBatch);
     }
-    if batch.len() > MAX_BATCH_BYTES {
+    if batch.len() > bounds.batch {
         return Err(Refusal::LengthExceedsBatch);
     }
     let mut reader = Reader::new(batch);
@@ -745,7 +789,7 @@ pub fn decode_batch(batch: &[u8]) -> Result<Message<'_>, Refusal> {
         ID_OPEN => open(reader, header),
         ID_CLOSE => close(reader, header),
         ID_KEEP_ALIVE => keep_alive(reader, header),
-        ID_FRAME => frame(reader, header),
+        ID_FRAME => frame(reader, header, bounds),
         _ => Err(Refusal::UnsupportedMessage),
     }
 }
@@ -756,21 +800,24 @@ pub fn decode_batch(batch: &[u8]) -> Result<Message<'_>, Refusal> {
 /// caller loops: push, drain every complete batch, push the remainder. A prefix
 /// is judged as soon as both its bytes have arrived, wherever the chunk
 /// boundaries fall.
-pub struct StreamFramer {
-    buffer: [u8; STREAM_LENGTH_BYTES + MAX_BATCH_BYTES],
+pub struct StreamFramerOf<const N: usize> {
+    buffer: [u8; N],
     len: usize,
 }
 
-impl Default for StreamFramer {
+/// The first release's framer: a 512-byte batch and its two-byte length.
+pub type StreamFramer = StreamFramerOf<{ STREAM_LENGTH_BYTES + MAX_BATCH_BYTES }>;
+
+impl<const N: usize> Default for StreamFramerOf<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StreamFramer {
+impl<const N: usize> StreamFramerOf<N> {
     pub const fn new() -> Self {
         Self {
-            buffer: [0; STREAM_LENGTH_BYTES + MAX_BATCH_BYTES],
+            buffer: [0; N],
             len: 0,
         }
     }
@@ -798,7 +845,7 @@ impl StreamFramer {
         if length == 0 {
             return Err(Refusal::EmptyBatch);
         }
-        if length > MAX_BATCH_BYTES {
+        if length > N.saturating_sub(STREAM_LENGTH_BYTES) {
             return Err(Refusal::LengthExceedsBatch);
         }
         let end = STREAM_LENGTH_BYTES + length;

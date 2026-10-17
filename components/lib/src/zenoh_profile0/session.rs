@@ -14,9 +14,16 @@
 //! the peer declared, which a Put this side sends must match.
 
 use super::encode::{self, EncodeError, FrameEncoder};
+use super::fragment::{
+    FragmentError, PutMessage, PutRules, Source, Splitter, decode_fragment, decode_put,
+    fits_one_frame, is_fragment,
+};
+use super::limits::{Limits, Mode};
+use super::reassembly::{Progress, Reassembly};
+use super::tables::{InsertError, Keys, SlotTable};
 use super::{
-    Frame, MAX_BATCH_BYTES, MAX_COOKIE_BYTES, MAX_KEY_BYTES, Mapping, Message, Network, Refusal,
-    decode_batch,
+    Bounds, Frame, MAX_BATCH_BYTES, MAX_COOKIE_BYTES, MAX_KEY_BYTES, Mapping, Message, Network,
+    Refusal, STREAM_LENGTH_BYTES, decode_batch_with,
 };
 use slime_proto::zenoh_profile as p;
 
@@ -26,8 +33,67 @@ mod tests;
 
 /// Events one received batch can yield; this is the contract's outstanding-sample bound.
 pub const MAX_EVENTS: usize = 4;
-/// The batch size this side advertises in INIT.
+/// The batch size the first release advertises in INIT.
 const OUR_BATCH_SIZE: u16 = MAX_BATCH_BYTES as u16;
+/// Table changes one FRAME may make before it is refused, so a frame that fails midway can be undone.
+const JOURNAL: usize = 16;
+
+/// What a session is declared with beyond its identity: the sizes it reads and writes, the batch it
+/// announces, and whether it reassembles fragments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Params {
+    pub bounds: Bounds,
+    /// The batch announced in INIT, the stream length included.
+    pub announced: u16,
+    pub fragments: bool,
+    pub timeout_ms: u64,
+    /// The largest message one reassembly may join.
+    pub message_limit: usize,
+    /// Subscribers the peer may declare. The session also holds one of its own, so its subscriber
+    /// table has one more slot than this.
+    pub per_side: usize,
+    /// The most events one received batch can yield; the session's event storage must hold them.
+    pub events: usize,
+    /// The key aliases the peer may declare.
+    pub aliases: usize,
+    /// The samples the owner may hold unread; the link queues two notices for each.
+    pub samples: usize,
+}
+
+impl Params {
+    /// The first release's: a fixed 512-byte batch.
+    pub const DEMO: Self = Self {
+        bounds: Bounds::DEMO,
+        announced: OUR_BATCH_SIZE,
+        fragments: false,
+        timeout_ms: 0,
+        message_limit: 0,
+        per_side: 1,
+        events: MAX_EVENTS,
+        aliases: 1,
+        samples: MAX_EVENTS,
+    };
+
+    /// The parameters a limits declaration describes.
+    pub fn from_limits(limits: &Limits) -> Self {
+        let body = limits.batch_bytes.saturating_sub(STREAM_LENGTH_BYTES);
+        Self {
+            bounds: Bounds {
+                batch: body,
+                key: limits.key_bytes,
+                payload: usize::try_from(limits.payload_bytes).unwrap_or(usize::MAX),
+            },
+            announced: u16::try_from(limits.batch_bytes).unwrap_or(u16::MAX),
+            fragments: limits.mode == Mode::Heap,
+            timeout_ms: limits.reassembly_timeout_ms,
+            message_limit: usize::try_from(limits.message_bytes()).unwrap_or(usize::MAX),
+            per_side: limits.max_subscribers,
+            events: limits.events_per_batch(),
+            aliases: limits.max_keys,
+            samples: limits.outstanding_samples,
+        }
+    }
+}
 const CLOSE_EXPIRED: u8 = p::CLOSE_EXPIRED as u8;
 const ZID_BYTES: usize = p::MAX_ZID_BYTES;
 
@@ -76,13 +142,31 @@ pub enum SessionError {
     UnknownSubscriber,
     /// A PUSH whose key is not the declared subscriber's key.
     UndeclaredKey,
-    /// A FRAME yielding more than [`MAX_EVENTS`] events.
+    /// A FRAME yielding more than [`MAX_EVENTS`] events, or changing more than the journal holds.
     TooManyMessages,
+    /// A fragmented Put or a reassembly the fragment codec or the storage refused.
+    Fragment(FragmentError),
+    /// The storage lent for a reassembly cannot hold the message.
+    OutOfMemory,
+    /// A Put too large for one frame, which a session that fragments sends as fragments.
+    NeedsFragments,
 }
 
 impl From<Refusal> for SessionError {
     fn from(refusal: Refusal) -> Self {
         Self::Decode(refusal)
+    }
+}
+
+impl From<FragmentError> for SessionError {
+    fn from(error: FragmentError) -> Self {
+        match error {
+            FragmentError::Refused(refusal) => Self::Decode(refusal),
+            FragmentError::SequenceMismatch => Self::SequenceMismatch,
+            FragmentError::UndeclaredKey => Self::UndeclaredKey,
+            FragmentError::OutOfMemory => Self::OutOfMemory,
+            other => Self::Fragment(other),
+        }
     }
 }
 
@@ -108,22 +192,30 @@ pub enum Event<'a> {
     SubscriberUndeclared {
         id: u32,
     },
+    /// A fragmented Put joined into the lent storage: its payload is `len` bytes at the end of the
+    /// `offset + len` bytes the storage holds.
+    SampleStored {
+        sequence: i64,
+        timestamp: i64,
+        offset: usize,
+        len: usize,
+    },
     Closed {
         reason: u8,
     },
 }
 
-/// Up to [`MAX_EVENTS`] events, in the order they happened.
+/// Up to `E` events, in the order they happened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Events<'a> {
-    items: [Option<Event<'a>>; MAX_EVENTS],
+pub struct Events<'a, const E: usize = MAX_EVENTS> {
+    items: [Option<Event<'a>>; E],
     len: usize,
 }
 
-impl<'a> Events<'a> {
+impl<'a, const E: usize> Events<'a, E> {
     const fn empty() -> Self {
         Self {
-            items: [None; MAX_EVENTS],
+            items: [None; E],
             len: 0,
         }
     }
@@ -157,13 +249,13 @@ impl<'a> Events<'a> {
 
 /// The result of one accepted call: the batch body written, if any, and events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Outcome<'a> {
+pub struct Outcome<'a, const E: usize = MAX_EVENTS> {
     /// Length of the batch body written at the start of the lent storage; 0 means nothing to send.
     pub sent: usize,
-    pub events: Events<'a>,
+    pub events: Events<'a, E>,
 }
 
-impl<'a> Outcome<'a> {
+impl<'a, const E: usize> Outcome<'a, E> {
     const fn nothing() -> Self {
         Self {
             sent: 0,
@@ -203,68 +295,85 @@ pub struct Config<'a> {
     pub cookie: &'a [u8],
 }
 
+/// A table change a FRAME made, so a frame that fails midway can be undone.
 #[derive(Clone, Copy, Debug)]
-struct Subscriber {
-    id: u32,
-    key: [u8; MAX_KEY_BYTES],
-    len: usize,
+enum Change {
+    Alias(usize),
+    Subscribed(usize),
+    Unsubscribed(usize),
 }
 
-impl Subscriber {
-    fn new(id: u32, key: &str) -> Result<Self, SessionError> {
-        Self::from_bytes(id, key.as_bytes())
-    }
-
-    fn from_bytes(id: u32, bytes: &[u8]) -> Result<Self, SessionError> {
-        let mut buffer = [0u8; MAX_KEY_BYTES];
-        buffer
-            .get_mut(..bytes.len())
-            .ok_or(SessionError::Decode(Refusal::OverBound))?
-            .copy_from_slice(bytes);
-        Ok(Self {
-            id,
-            key: buffer,
-            len: bytes.len(),
-        })
-    }
-
-    fn key(&self) -> &[u8] {
-        self.key.get(..self.len).unwrap_or(&[])
+/// The alias a reference names, or the refusal a reference to an alias nobody declared draws. The alias
+/// resolves to the declared key and no other. The peer declared it, so it lives in the sender's mapping;
+/// a reference in the receiver's mapping names an alias this side declared, and this side declares none.
+fn resolve<const K: usize, const B: usize>(
+    aliases: &SlotTable<K, B>,
+    named: u32,
+    mapping: Mapping,
+) -> Result<&[u8], SessionError> {
+    match aliases.key_of(u64::from(named)) {
+        Some(key) if mapping == Mapping::Sender => Ok(key),
+        _ => Err(SessionError::Decode(Refusal::InvalidKeyexpr)),
     }
 }
 
-/// The key-expression alias a stock peer declares: its numeric id and the key it stands for.
-#[derive(Clone, Copy, Debug)]
-struct Alias {
-    id: u32,
-    key: [u8; MAX_KEY_BYTES],
-    len: usize,
+fn same(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
 }
 
-impl Alias {
-    fn new(id: u32, key: &str) -> Result<Self, SessionError> {
-        let bytes = key.as_bytes();
-        let mut buffer = [0u8; MAX_KEY_BYTES];
-        buffer
-            .get_mut(..bytes.len())
-            .ok_or(SessionError::Decode(Refusal::OverBound))?
-            .copy_from_slice(bytes);
-        Ok(Self {
-            id,
-            key: buffer,
-            len: bytes.len(),
-        })
-    }
-
-    fn key(&self) -> &[u8] {
-        self.key.get(..self.len).unwrap_or(&[])
+/// What a table that would not take a slot means: `full` for a table with no room.
+fn table_error(error: InsertError, full: SessionError) -> SessionError {
+    match error {
+        InsertError::Full => full,
+        InsertError::Duplicate => SessionError::Decode(Refusal::InvalidKeyexpr),
+        InsertError::KeyTooLong => SessionError::Decode(Refusal::OverBound),
     }
 }
 
+/// Delivers a Put to this side's subscriber when it names a key one of them declared.
+fn deliver<'a, const S: usize, const B: usize, const E: usize>(
+    subs: &SlotTable<S, B>,
+    key: &[u8],
+    attachment: crate::zenoh_profile0::Attachment<'a>,
+    payload: &'a [u8],
+    events: &mut Events<'a, E>,
+) -> Result<(), SessionError> {
+    if !subscribed_to(subs, key) {
+        return Err(SessionError::UndeclaredKey);
+    }
+    events.push(Event::SampleDelivered {
+        sequence: attachment.sequence,
+        timestamp: attachment.timestamp,
+        payload,
+    })
+}
+
+/// The tag on the id of a subscription this side declared; the peer's carry none.
+const LOCAL: u64 = 1 << 32;
+
+/// Whether this side subscribed to `key`.
+fn subscribed_to<const S: usize, const B: usize>(subs: &SlotTable<S, B>, key: &[u8]) -> bool {
+    subs.find_by(|id, held| id & LOCAL != 0 && held == key)
+        .is_some()
+}
+
+/// A session over `K` key aliases and `S` subscribers of each side, keys of up to `B` bytes. The
+/// defaults are the first release's.
 #[derive(Clone, Debug)]
-pub struct Session {
+pub struct SessionOf<
+    const K: usize = 1,
+    const S: usize = 2,
+    const B: usize = MAX_KEY_BYTES,
+    const E: usize = MAX_EVENTS,
+> {
     role: Role,
     state: State,
+    params: Params,
     zid: [u8; ZID_BYTES],
     zid_len: usize,
     lease_ms: u64,
@@ -280,58 +389,48 @@ pub struct Session {
     /// The latest time an accepted call gave the session. A send that has no clock of its own is
     /// stamped with it, and the link ticks the session on every pump.
     now_ms: u64,
-    /// The one alias a stock peer declared with DeclareKeyExpr, and the key it stands for.
-    alias: Option<Alias>,
-    /// The subscription this side declared; received PUSH messages are delivered only to its key.
-    local: Option<Subscriber>,
-    /// The subscription the peer declared; a Put this side sends must name its key.
-    remote: Option<Subscriber>,
+    /// The batch the peer announced in its INIT; what this side sends is bounded by it.
+    peer_batch: usize,
+    reassembly: Reassembly,
+    /// The key aliases a stock peer declared with DeclareKeyExpr, and the keys they stand for.
+    aliases: SlotTable<K, B>,
+    /// Every subscription, this side's and the peer's, in the `S` slots the configuration declares. A
+    /// received PUSH is delivered only to the keys of this side's, and a Put this side sends must name
+    /// one of the peer's.
+    subs: SlotTable<S, B>,
+    /// How many of `subs` each side holds, so a side's limit is checked without a scan.
+    local_n: usize,
+    remote_n: usize,
 }
 
-/// The alias a reference names, or the refusal a reference to an alias nobody declared draws. The
-/// alias resolves to the declared key and no other. The peer declared it, so it lives in the
-/// sender's mapping; a reference in the receiver's mapping names an alias this side declared, and
-/// this side declares none.
-fn resolve(alias: Option<Alias>, named: u32, mapping: Mapping) -> Result<Alias, SessionError> {
-    match alias {
-        Some(held) if held.id == named && mapping == Mapping::Sender => Ok(held),
-        _ => Err(SessionError::Decode(Refusal::InvalidKeyexpr)),
-    }
-}
+/// The first release's session.
+pub type Session = SessionOf<1, 2, MAX_KEY_BYTES, MAX_EVENTS>;
 
-/// Delivers a Put to this side's subscriber when it names the subscriber's key.
-fn deliver<'a>(
-    local: Option<Subscriber>,
-    key: &[u8],
-    attachment: crate::zenoh_profile0::Attachment<'a>,
-    payload: &'a [u8],
-    events: &mut Events<'a>,
-) -> Result<(), SessionError> {
-    match local {
-        Some(held) if held.key() == key => events.push(Event::SampleDelivered {
-            sequence: attachment.sequence,
-            timestamp: attachment.timestamp,
-            payload,
-        }),
-        _ => Err(SessionError::UndeclaredKey),
-    }
-}
-
-fn same(left: &[u8], right: &[u8]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-            == 0
-}
-
-impl Session {
-    /// A session in [`State::Idle`], or [`SessionError::InvalidConfig`] when
-    /// the encoder could not announce `config`.
+impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K, S, B, E> {
+    /// A session with the first release's parameters, in [`State::Idle`], or
+    /// [`SessionError::InvalidConfig`] when the encoder could not announce `config`.
     pub fn new(role: Role, config: &Config<'_>) -> Result<Self, SessionError> {
+        Self::with_params(role, config, Params::DEMO)
+    }
+
+    /// A session declared by `params`.
+    pub fn with_params(
+        role: Role,
+        config: &Config<'_>,
+        params: Params,
+    ) -> Result<Self, SessionError> {
+        // The storage is exactly what the configuration declares: the peer's aliases, our own subscriber
+        // and the peer's, the key length and the events a batch yields. Smaller refuses what the limits
+        // promise and larger leaves a bound that only the array enforces.
+        if params.bounds.key != B
+            || params.events != E
+            || params.aliases != K
+            || params.per_side + 1 != S
+        {
+            return Err(SessionError::InvalidConfig);
+        }
         let mut scratch = [0u8; 2 * MAX_BATCH_BYTES];
-        encode::init_syn(&mut scratch, config.zid, OUR_BATCH_SIZE)
+        encode::init_syn(&mut scratch, config.zid, params.announced)
             .map_err(|_| SessionError::InvalidConfig)?;
         encode::open_ack(&mut scratch, config.lease_ms, config.initial_sn)
             .map_err(|_| SessionError::InvalidConfig)?;
@@ -342,7 +441,7 @@ impl Session {
             .ok_or(SessionError::InvalidConfig)?
             .copy_from_slice(config.zid);
         if role == Role::Listener {
-            encode::init_ack(&mut scratch, config.zid, OUR_BATCH_SIZE, config.cookie)
+            encode::init_ack(&mut scratch, config.zid, params.announced, config.cookie)
                 .map_err(|_| SessionError::InvalidConfig)?;
             cookie
                 .get_mut(..config.cookie.len())
@@ -353,6 +452,7 @@ impl Session {
         Ok(Self {
             role,
             state: State::Idle,
+            params,
             zid,
             zid_len: config.zid.len(),
             lease_ms: config.lease_ms,
@@ -364,9 +464,12 @@ impl Session {
             last_rx_ms: 0,
             last_tx_ms: 0,
             now_ms: 0,
-            alias: None,
-            local: None,
-            remote: None,
+            peer_batch: usize::from(u16::MAX),
+            reassembly: Reassembly::new(params.timeout_ms, params.message_limit),
+            aliases: SlotTable::new(),
+            subs: SlotTable::new(),
+            local_n: 0,
+            remote_n: 0,
         })
     }
 
@@ -380,6 +483,10 @@ impl Session {
 
     pub const fn is_open(&self) -> bool {
         matches!(self.state, State::Open)
+    }
+
+    pub const fn params(&self) -> &Params {
+        &self.params
     }
 
     /// The sequence number the next reliable FRAME this side sends carries.
@@ -397,26 +504,59 @@ impl Session {
         self.peer_lease_ms
     }
 
+    /// The batch the peer announced, 65535 until its INIT arrives or when it omitted the size.
+    pub const fn peer_batch(&self) -> usize {
+        self.peer_batch
+    }
+
+    /// The longest batch body this side sends: the smaller of its own batch and the peer's, less the
+    /// stream length. The peer accepts no more, and this side's send storage holds no more.
+    pub fn send_body_max(&self) -> usize {
+        self.params
+            .bounds
+            .batch
+            .min(self.peer_batch.saturating_sub(STREAM_LENGTH_BYTES))
+    }
+
+    /// Whether a reassembly is in progress.
+    pub const fn reassembling(&self) -> bool {
+        self.reassembly.is_open()
+    }
+
+    /// The key aliases the peer declared.
+    pub const fn aliases(&self) -> usize {
+        self.aliases.len()
+    }
+
+    /// The subscribers held, of both sides.
+    pub const fn subscribers(&self) -> usize {
+        self.local_n + self.remote_n
+    }
+
+    fn first_of(&self, side: u64) -> Option<(u32, &[u8])> {
+        let at = self.subs.find_by(|id, _| id & LOCAL == side)?;
+        let (id, key) = self.subs.get(at)?;
+        Some((id as u32, key))
+    }
+
     /// The id of the subscriber this side declared, if any.
     pub fn subscriber_id(&self) -> Option<u32> {
-        self.local.as_ref().map(|slot| slot.id)
+        self.first_of(LOCAL).map(|(id, _)| id)
     }
 
     /// The key of the subscriber this side declared, if any.
     pub fn subscriber_key(&self) -> Option<&str> {
-        let slot = self.local.as_ref()?;
-        core::str::from_utf8(slot.key()).ok()
+        core::str::from_utf8(self.first_of(LOCAL)?.1).ok()
     }
 
     /// The id of the subscriber the peer declared, if any.
     pub fn peer_subscriber_id(&self) -> Option<u32> {
-        self.remote.as_ref().map(|slot| slot.id)
+        self.first_of(0).map(|(id, _)| id)
     }
 
     /// The key of the subscriber the peer declared, if any.
     pub fn peer_subscriber_key(&self) -> Option<&str> {
-        let slot = self.remote.as_ref()?;
-        core::str::from_utf8(slot.key()).ok()
+        core::str::from_utf8(self.first_of(0)?.1).ok()
     }
 
     /// The time after which [`tick`](Self::tick) closes the session; `None`
@@ -452,9 +592,11 @@ impl Session {
 
     fn shut(&mut self) {
         self.state = State::Closed;
-        self.local = None;
-        self.remote = None;
-        self.alias = None;
+        self.subs.clear();
+        self.local_n = 0;
+        self.remote_n = 0;
+        self.aliases.clear();
+        self.reassembly.release();
     }
 
     /// Stamps a batch this side sent, which restarts the keep-alive cadence.
@@ -476,11 +618,11 @@ impl Session {
         &mut self,
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Connector || self.state != State::Idle {
             return Err(SessionError::UnexpectedMessage);
         }
-        let sent = encode::init_syn(out, self.own_zid()?, OUR_BATCH_SIZE)?;
+        let sent = encode::init_syn(out, self.own_zid()?, self.params.announced)?;
         self.state = State::AwaitInitAck;
         self.last_rx_ms = now_ms;
         self.last_tx_ms = now_ms;
@@ -488,15 +630,71 @@ impl Session {
         Ok(Outcome::sending(sent))
     }
 
-    /// Decodes `batch` (a body without its stream prefix) and applies it.
+    /// Decodes `batch` (a body without its stream prefix) and applies it. A session that reassembles
+    /// has no storage here, so a fragment is refused as out of memory; see
+    /// [`on_batch_with`](Self::on_batch_with).
     pub fn on_batch<'a>(
         &mut self,
         batch: &'a [u8],
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
-        let message = decode_batch(batch)?;
+    ) -> Result<Outcome<'a, E>, SessionError> {
+        self.on_batch_with(batch, now_ms, out, &mut [])
+    }
+
+    /// Decodes `batch` and applies it. `cell` is the storage a fragmented message is joined into; the
+    /// caller keeps lending the same cell until a message completes, and the sample it yields is the
+    /// `SampleStored` range of it.
+    pub fn on_batch_with<'a>(
+        &mut self,
+        batch: &'a [u8],
+        now_ms: u64,
+        out: &mut [u8],
+        cell: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
+        if self.state == State::Closed {
+            return Err(SessionError::Closed);
+        }
+        if self.params.fragments && batch.first().copied().is_some_and(is_fragment) {
+            let outcome = self.on_fragment(batch, now_ms, cell)?;
+            self.last_rx_ms = now_ms;
+            self.now_ms = now_ms;
+            return Ok(outcome);
+        }
+        let message = decode_batch_with(batch, &self.params.bounds)?;
         self.on_message(message, now_ms, out)
+    }
+
+    /// What a received batch can raise, judged without applying it so a link can wait until its queue
+    /// and heap have room: the most notices, and how many of them are samples. A batch the decoder
+    /// refuses raises none, and one that raises more than the session's events can hold is reported at
+    /// the cap, so the session, not the link, refuses it and names the cause.
+    pub fn events_needed(&self, batch: &[u8]) -> (usize, usize) {
+        if self.params.fragments && batch.first().copied().is_some_and(is_fragment) {
+            let last = batch.first().is_some_and(|header| header & 0x40 == 0);
+            return (usize::from(last), usize::from(last));
+        }
+        match decode_batch_with(batch, &self.params.bounds) {
+            Ok(Message::Frame(frame)) => {
+                let mut events = 0;
+                let mut samples = 0;
+                for network in frame.messages() {
+                    match network {
+                        Network::PushPut { .. } | Network::PushPutAlias { .. } => {
+                            events += 1;
+                            samples += 1;
+                        }
+                        Network::DeclareSubscriber { .. }
+                        | Network::DeclareSubscriberAlias { .. }
+                        | Network::UndeclareSubscriber { .. } => events += 1,
+                        _ => {}
+                    }
+                }
+                (events.min(E), samples.min(E))
+            }
+            Ok(Message::OpenSyn { .. } | Message::OpenAck { .. } | Message::Close { .. }) => (1, 0),
+            _ => (0, 0),
+        }
     }
 
     /// Applies one decoded message. An accepted message refreshes the lease.
@@ -505,13 +703,15 @@ impl Session {
         message: Message<'a>,
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Closed {
             return Err(SessionError::Closed);
         }
         let outcome = match message {
-            Message::InitSyn { .. } => self.on_init_syn(out)?,
-            Message::InitAck { cookie, .. } => self.on_init_ack(cookie, out)?,
+            Message::InitSyn { batch_size, .. } => self.on_init_syn(batch_size, out)?,
+            Message::InitAck {
+                cookie, batch_size, ..
+            } => self.on_init_ack(cookie, batch_size, out)?,
             Message::OpenSyn {
                 lease_ms,
                 initial_sn,
@@ -533,11 +733,26 @@ impl Session {
         Ok(outcome)
     }
 
-    fn on_init_syn<'a>(&mut self, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    fn on_init_syn<'a>(
+        &mut self,
+        batch_size: u16,
+        out: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Listener || self.state != State::Idle {
             return Err(SessionError::UnexpectedMessage);
         }
-        let sent = encode::init_ack(out, self.own_zid()?, OUR_BATCH_SIZE, self.own_cookie()?)?;
+        let sent = encode::init_ack(
+            out,
+            self.own_zid()?,
+            self.params.announced,
+            self.own_cookie()?,
+        )?;
+        // The reply is a batch and cannot be fragmented: the peer must have said it accepts it, stream
+        // length included.
+        if sent + STREAM_LENGTH_BYTES > usize::from(batch_size) {
+            return Err(SessionError::Decode(Refusal::LengthExceedsBatch));
+        }
+        self.peer_batch = usize::from(batch_size);
         self.state = State::AwaitOpenSyn;
         Ok(Outcome::sending(sent))
     }
@@ -545,8 +760,9 @@ impl Session {
     fn on_init_ack<'a>(
         &mut self,
         cookie: &[u8],
+        batch_size: u16,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Connector || self.state != State::AwaitInitAck {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -555,8 +771,12 @@ impl Session {
             .get_mut(..cookie.len())
             .ok_or(SessionError::Decode(Refusal::OverBound))?;
         let sent = encode::open_syn(out, self.lease_ms, self.tx_sn, cookie)?;
+        if sent + STREAM_LENGTH_BYTES > usize::from(batch_size) {
+            return Err(SessionError::Decode(Refusal::LengthExceedsBatch));
+        }
         slot.copy_from_slice(cookie);
         self.cookie_len = cookie.len();
+        self.peer_batch = usize::from(batch_size);
         self.state = State::AwaitOpenAck;
         Ok(Outcome::sending(sent))
     }
@@ -567,7 +787,7 @@ impl Session {
         initial_sn: u32,
         cookie: &[u8],
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Listener || self.state != State::AwaitOpenSyn {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -575,6 +795,10 @@ impl Session {
             return Err(SessionError::CookieMismatch);
         }
         let sent = encode::open_ack(out, self.lease_ms, self.tx_sn)?;
+        // The reply cannot be fragmented either: it must fit the batch the peer announced in its INIT.
+        if sent + STREAM_LENGTH_BYTES > self.peer_batch {
+            return Err(SessionError::Decode(Refusal::LengthExceedsBatch));
+        }
         self.peer_lease_ms = lease_ms;
         self.rx_sn = initial_sn;
         self.state = State::Open;
@@ -585,7 +809,7 @@ impl Session {
         &mut self,
         lease_ms: u64,
         initial_sn: u32,
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.role != Role::Connector || self.state != State::AwaitOpenAck {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -597,14 +821,14 @@ impl Session {
 
     /// Traffic that renews the lease, and nothing else. Before OPEN it would refresh a handshake
     /// that has not finished, so it is refused there and the session is left as it was.
-    fn on_keep_alive<'a>(&mut self) -> Result<Outcome<'a>, SessionError> {
+    fn on_keep_alive<'a>(&mut self) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
             return Err(SessionError::UnexpectedMessage);
         }
         Ok(Outcome::nothing())
     }
 
-    fn on_close<'a>(&mut self, reason: u8) -> Result<Outcome<'a>, SessionError> {
+    fn on_close<'a>(&mut self, reason: u8) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Idle {
             return Err(SessionError::UnexpectedMessage);
         }
@@ -612,23 +836,93 @@ impl Session {
         Ok(Outcome::nothing().with(Event::Closed { reason }))
     }
 
-    /// A frame is applied whole or not at all: the slot and the sequence number
-    /// commit only after every network message was accepted.
-    fn on_frame<'a>(&mut self, frame: Frame<'a>) -> Result<Outcome<'a>, SessionError> {
+    /// Takes a slot for a subscriber the peer declared. A peer that holds as many as the configuration
+    /// declares, or declares an id it already holds, is at the limit.
+    fn take_remote(&mut self, id: u64, key: &[u8]) -> Result<usize, SessionError> {
+        if self.remote_n >= self.params.per_side || self.subs.find(id).is_some() {
+            return Err(SessionError::SubscriberLimit);
+        }
+        let at = self
+            .subs
+            .insert(id, key)
+            .map_err(|error| table_error(error, SessionError::SubscriberLimit))?;
+        self.remote_n += 1;
+        Ok(at)
+    }
+
+    /// A frame is applied whole or not at all: every table change it makes is journaled and undone if a
+    /// later message in it is refused, and the sequence number commits only after all were accepted.
+    fn on_frame<'a>(&mut self, frame: Frame<'a>) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
+            return Err(SessionError::UnexpectedMessage);
+        }
+        if self.reassembly.is_open() {
+            self.reassembly.release();
             return Err(SessionError::UnexpectedMessage);
         }
         if frame.sn != self.rx_sn {
             return Err(SessionError::SequenceMismatch);
         }
-        let mut remote = self.remote;
-        let mut alias = self.alias;
-        let local = self.local;
+        let mut journal = [None; JOURNAL];
+        let mut used = 0;
         let mut events = Events::empty();
+        match self.apply_frame(&frame, &mut journal, &mut used, &mut events) {
+            Ok(()) => {
+                for change in journal.iter().take(used).flatten() {
+                    if let Change::Unsubscribed(at) = *change {
+                        self.subs.settle(at);
+                    }
+                }
+                self.rx_sn = self.rx_sn.wrapping_add(1);
+                Ok(Outcome { sent: 0, events })
+            }
+            Err(error) => {
+                for change in journal.iter().take(used).rev().flatten() {
+                    match *change {
+                        Change::Alias(at) => self.aliases.remove(at),
+                        Change::Subscribed(at) => {
+                            self.subs.remove(at);
+                            self.remote_n -= 1;
+                        }
+                        Change::Unsubscribed(at) => {
+                            self.subs.restore(at);
+                            self.remote_n += 1;
+                        }
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn apply_frame<'a>(
+        &mut self,
+        frame: &Frame<'a>,
+        journal: &mut [Option<Change>; JOURNAL],
+        used: &mut usize,
+        events: &mut Events<'a, E>,
+    ) -> Result<(), SessionError> {
+        // Room in the journal is claimed before a table is changed, so a frame that could not be undone
+        // is refused before it does anything.
+        fn room(used: &usize) -> Result<(), SessionError> {
+            if *used < JOURNAL {
+                Ok(())
+            } else {
+                Err(SessionError::TooManyMessages)
+            }
+        }
+        fn note(journal: &mut [Option<Change>; JOURNAL], used: &mut usize, change: Change) {
+            if let Some(slot) = journal.get_mut(*used) {
+                *slot = Some(change);
+                *used += 1;
+            }
+        }
         for network in frame.messages() {
             match network {
                 Network::DeclareSubscriber { id, key, .. } => {
-                    remote = Some(self.declared_remotely(remote, id, key)?);
+                    room(used)?;
+                    let at = self.take_remote(u64::from(id), key.as_bytes())?;
+                    note(journal, used, Change::Subscribed(at));
                     events.push(Event::SubscriberDeclared { id })?;
                 }
                 Network::DeclareSubscriberAlias {
@@ -636,71 +930,123 @@ impl Session {
                     mapping,
                     alias: named,
                 } => {
-                    let held = resolve(alias, named, mapping)?;
-                    if remote.is_some() {
-                        return Err(SessionError::SubscriberLimit);
-                    }
-                    remote = Some(Subscriber::from_bytes(id, held.key())?);
+                    room(used)?;
+                    let held = resolve(&self.aliases, named, mapping)?;
+                    let mut copy = [0u8; B];
+                    let key = copy
+                        .get_mut(..held.len())
+                        .ok_or(SessionError::Decode(Refusal::OverBound))?;
+                    key.copy_from_slice(held);
+                    let at = self.take_remote(u64::from(id), key)?;
+                    note(journal, used, Change::Subscribed(at));
                     events.push(Event::SubscriberDeclared { id })?;
                 }
-                Network::UndeclareSubscriber { id, key, .. } => match remote {
-                    Some(held) if held.id == id && held.key() == key.as_bytes() => {
-                        remote = None;
-                        events.push(Event::SubscriberUndeclared { id })?;
-                    }
-                    _ => return Err(SessionError::UnknownSubscriber),
-                },
+                Network::UndeclareSubscriber { id, key, .. } => {
+                    room(used)?;
+                    let at = self
+                        .subs
+                        .find(u64::from(id))
+                        .filter(|&at| {
+                            self.subs
+                                .get(at)
+                                .is_some_and(|(_, held)| held == key.as_bytes())
+                        })
+                        .ok_or(SessionError::UnknownSubscriber)?;
+                    self.subs.defer_remove(at);
+                    self.remote_n -= 1;
+                    note(journal, used, Change::Unsubscribed(at));
+                    events.push(Event::SubscriberUndeclared { id })?;
+                }
                 Network::PushPut {
                     key,
                     attachment,
                     payload,
                     ..
-                } => deliver(local, key.as_bytes(), attachment, payload, &mut events)?,
+                } => deliver(&self.subs, key.as_bytes(), attachment, payload, events)?,
                 Network::PushPutAlias {
                     mapping,
                     alias: named,
                     attachment,
                     payload,
                 } => {
-                    let held = resolve(alias, named, mapping)?;
-                    deliver(local, held.key(), attachment, payload, &mut events)?;
+                    let held = resolve(&self.aliases, named, mapping)?;
+                    deliver(&self.subs, held, attachment, payload, events)?;
                 }
                 Network::DeclareKeyExpr { id, key } => {
-                    // One alias, declared once: a second id is over the bound, and the same id
-                    // again is a redeclaration whether or not it names the same key.
-                    match alias {
-                        Some(held) if held.id == id => {
-                            return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
-                        }
-                        Some(_) => return Err(SessionError::Decode(Refusal::OverBound)),
-                        None => alias = Some(Alias::new(id, key)?),
+                    // The same id again is a redeclaration whether or not it names the same key; a
+                    // new id with every slot taken is over the bound.
+                    if self.aliases.find(u64::from(id)).is_some() {
+                        return Err(SessionError::Decode(Refusal::InvalidKeyexpr));
                     }
+                    room(used)?;
+                    let at =
+                        self.aliases
+                            .insert(u64::from(id), key.as_bytes())
+                            .map_err(|error| {
+                                table_error(error, SessionError::Decode(Refusal::OverBound))
+                            })?;
+                    note(journal, used, Change::Alias(at));
                 }
                 Network::Oam | Network::DeclareFinal => {}
             }
         }
-        self.remote = remote;
-        self.alias = alias;
-        self.rx_sn = self.rx_sn.wrapping_add(1);
-        Ok(Outcome { sent: 0, events })
+        Ok(())
     }
 
-    fn declared_remotely(
-        &self,
-        remote: Option<Subscriber>,
-        id: u32,
-        key: &str,
-    ) -> Result<Subscriber, SessionError> {
-        if remote.is_some() {
-            return Err(SessionError::SubscriberLimit);
+    /// One FRAGMENT of a message: joined into `cell`, and when the last arrives the message is read as
+    /// a Put and held to what a whole-frame Put is held to. A refusal at any point frees the cell and
+    /// leaves the session's sequence number where it was.
+    fn on_fragment<'a>(
+        &mut self,
+        batch: &[u8],
+        now_ms: u64,
+        cell: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
+        if self.state != State::Open {
+            return Err(SessionError::UnexpectedMessage);
         }
-        Subscriber::new(id, key)
+        let fragment = match decode_fragment(batch, Some(usize::from(self.params.announced))) {
+            Ok(fragment) => fragment,
+            Err(error) => {
+                self.reassembly.release();
+                return Err(error.into());
+            }
+        };
+        let progress = self
+            .reassembly
+            .accept(&fragment, cell, self.rx_sn, now_ms)?;
+        if progress == Progress::Open {
+            return Ok(Outcome::nothing());
+        }
+        let (message, next) = self.reassembly.finish(cell)?;
+        let subs = &self.subs;
+        let subscribed = |key: &[u8]| subscribed_to(subs, key);
+        let rules = PutRules {
+            max_key: self.params.bounds.key,
+            max_payload: self.params.bounds.payload as u64,
+            aliases: Some(&self.aliases),
+            subscribed: &subscribed,
+        };
+        let view = decode_put(message, &rules)?;
+        let offset = (view.payload.as_ptr() as usize).saturating_sub(message.as_ptr() as usize);
+        let event = Event::SampleStored {
+            sequence: view.attachment.sequence,
+            timestamp: view.attachment.timestamp,
+            offset,
+            len: view.payload.len(),
+        };
+        self.rx_sn = next;
+        Ok(Outcome::nothing().with(event))
     }
 
     /// Closes the session with a CLOSE batch once `now_ms` is past the lease deadline. An open
     /// session that has sent nothing for a quarter of its own announced lease writes a KEEP_ALIVE; before
     /// OPEN, or while the lent storage cannot take one, it only accepts and does nothing.
-    pub fn tick<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    pub fn tick<'a>(
+        &mut self,
+        now_ms: u64,
+        out: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
         let expired = self.expire(now_ms, out)?;
         if expired.sent != 0 {
             self.now_ms = self.now_ms.max(now_ms);
@@ -723,7 +1069,7 @@ impl Session {
         &mut self,
         now_ms: u64,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         let outcome = self.expire(now_ms, out)?;
         self.now_ms = self.now_ms.max(now_ms);
         Ok(outcome)
@@ -731,7 +1077,13 @@ impl Session {
 
     /// The expiry check without the clock: a refused call must leave the session as it was, so
     /// the callers advance `now_ms` only after the whole operation has succeeded.
-    fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    fn expire<'a>(&mut self, now_ms: u64, out: &mut [u8]) -> Result<Outcome<'a, E>, SessionError> {
+        // A run whose last fragment never came is refused once its deadline has passed and its storage is
+        // released; the session itself stays open.
+        if self.reassembly.expired(now_ms) {
+            self.reassembly.release();
+            return Err(FragmentError::ReassemblyTimeout.into());
+        }
         match self.lease_deadline() {
             Some(deadline) if now_ms > deadline => {
                 let sent = encode::close(out, CLOSE_EXPIRED, true)?;
@@ -754,7 +1106,11 @@ impl Session {
     }
 
     /// Closes the session locally with a CLOSE batch carrying `reason`.
-    pub fn close<'a>(&mut self, reason: u8, out: &mut [u8]) -> Result<Outcome<'a>, SessionError> {
+    pub fn close<'a>(
+        &mut self,
+        reason: u8,
+        out: &mut [u8],
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state == State::Closed {
             return Err(SessionError::Closed);
         }
@@ -763,17 +1119,26 @@ impl Session {
         Ok(Outcome::sending(sent).with(Event::Closed { reason }))
     }
 
+    /// The bounds this side writes under: its own, with the batch the smaller of its own and the peer's.
+    fn send_bounds(&self) -> Bounds {
+        Bounds {
+            batch: self.send_body_max(),
+            ..self.params.bounds
+        }
+    }
+
     /// Builds one reliable FRAME with the next sequence number; the number is
     /// spent only when the frame was built.
     fn send_frame<'a>(
         &mut self,
         out: &mut [u8],
         build: impl FnOnce(&mut FrameEncoder<'_>) -> Result<(), EncodeError>,
-    ) -> Result<Outcome<'a>, SessionError> {
+    ) -> Result<Outcome<'a, E>, SessionError> {
         if self.state != State::Open {
             return Err(SessionError::NotOpen);
         }
-        let mut frame = FrameEncoder::new(out, self.tx_sn)?;
+        let bounds = self.send_bounds();
+        let mut frame = FrameEncoder::with_bounds(out, self.tx_sn, bounds)?;
         build(&mut frame)?;
         let sent = frame.finish()?;
         self.tx_sn = self.tx_sn.wrapping_add(1);
@@ -788,15 +1153,17 @@ impl Session {
         id: u32,
         key: &str,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
-        if self.local.is_some() {
+    ) -> Result<Outcome<'a, E>, SessionError> {
+        if self.local_n >= 1 || self.subs.find(LOCAL | u64::from(id)).is_some() {
             return Err(SessionError::SubscriberLimit);
         }
-        let held = Subscriber::new(id, key)?;
         let outcome = self.send_frame(out, |frame| {
             frame.declare_subscriber(id, Mapping::Sender, key)
         })?;
-        self.local = Some(held);
+        self.subs
+            .insert(LOCAL | u64::from(id), key.as_bytes())
+            .map_err(|error| table_error(error, SessionError::SubscriberLimit))?;
+        self.local_n += 1;
         Ok(outcome)
     }
 
@@ -806,32 +1173,106 @@ impl Session {
         id: u32,
         key: &str,
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
-        match self.local {
-            Some(held) if held.id == id && held.key() == key.as_bytes() => {}
-            _ => return Err(SessionError::UnknownSubscriber),
-        }
+    ) -> Result<Outcome<'a, E>, SessionError> {
+        let at = self
+            .subs
+            .find(LOCAL | u64::from(id))
+            .filter(|&at| {
+                self.subs
+                    .get(at)
+                    .is_some_and(|(_, held)| held == key.as_bytes())
+            })
+            .ok_or(SessionError::UnknownSubscriber)?;
         let outcome = self.send_frame(out, |frame| {
             frame.undeclare_subscriber(id, Mapping::Sender, key)
         })?;
-        self.local = None;
+        self.subs.remove(at);
+        self.local_n -= 1;
         Ok(outcome)
     }
 
-    /// Writes a FRAME carrying a Put to the key the peer declared; `attachment` is from [`encode::attachment`].
+    /// Whether the peer declared a subscriber on `key`, which a Put must name.
+    fn check_put(
+        &self,
+        key: &str,
+        attachment: &[u8],
+        payload_len: usize,
+    ) -> Result<(), SessionError> {
+        if self
+            .subs
+            .find_by(|id, held| id & LOCAL == 0 && held == key.as_bytes())
+            .is_none()
+        {
+            return Err(SessionError::UndeclaredKey);
+        }
+        encode::validate_put(key, attachment, payload_len, &self.params.bounds)?;
+        Ok(())
+    }
+
+    /// Whether a Put of `payload_len` bytes under `key` travels in one FRAME at the next sequence number.
+    pub fn put_fits_one_frame(&self, key: &str, attachment: &[u8], payload_len: usize) -> bool {
+        let message = PutMessage::new(key.as_bytes(), attachment, &[]);
+        let size =
+            Source::len(&message) - 1 + super::limits::leb_bytes(payload_len as u64) + payload_len;
+        fits_one_frame(size, self.send_body_max() + STREAM_LENGTH_BYTES, self.tx_sn)
+    }
+
+    /// Writes a FRAME carrying a Put to a key the peer declared; `attachment` is from [`encode::attachment`].
+    /// A Put that does not fit one frame is refused as over the bound in a session that cannot
+    /// fragment, and as [`SessionError::NeedsFragments`] in one that can.
     pub fn send_put<'a>(
         &mut self,
         key: &str,
         attachment: &[u8],
         payload: &[u8],
         out: &mut [u8],
-    ) -> Result<Outcome<'a>, SessionError> {
-        match self.remote {
-            Some(held) if held.key() == key.as_bytes() => {}
-            _ => return Err(SessionError::UndeclaredKey),
+    ) -> Result<Outcome<'a, E>, SessionError> {
+        self.check_put(key, attachment, payload.len())?;
+        if self.state == State::Open && !self.put_fits_one_frame(key, attachment, payload.len()) {
+            return Err(if self.params.fragments {
+                SessionError::NeedsFragments
+            } else {
+                SessionError::Decode(Refusal::OverBound)
+            });
         }
         self.send_frame(out, |frame| {
             frame.push_put(Mapping::Sender, key, attachment, payload)
         })
+    }
+
+    /// Writes the next FRAGMENT of a Put that does not fit one frame, starting at byte `at` of the
+    /// message (0 for the first) and returning the position to resume from, or `None` once the whole
+    /// message has been written. The caller passes the same key, attachment and payload throughout.
+    pub fn send_put_fragment<'a>(
+        &mut self,
+        key: &str,
+        attachment: &[u8],
+        payload: &[u8],
+        at: usize,
+        out: &mut [u8],
+    ) -> Result<(Outcome<'a, E>, Option<usize>), SessionError> {
+        if self.state != State::Open {
+            return Err(SessionError::NotOpen);
+        }
+        if !self.params.fragments {
+            return Err(SessionError::Decode(Refusal::OverBound));
+        }
+        if at == 0 {
+            self.check_put(key, attachment, payload.len())?;
+        }
+        let message = PutMessage::new(key.as_bytes(), attachment, payload);
+        let mut splitter = Splitter::resume(
+            message,
+            self.send_body_max() + STREAM_LENGTH_BYTES,
+            at,
+            self.tx_sn,
+        )?;
+        let Some(sent) = splitter.next_body(out)? else {
+            return Ok((Outcome::nothing(), None));
+        };
+        self.tx_sn = splitter.next_sn();
+        self.sent_now(self.now_ms);
+        let next = (!splitter.done()).then(|| splitter.position());
+        Ok((Outcome::sending(sent), next))
     }
 }

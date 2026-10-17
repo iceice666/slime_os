@@ -5,7 +5,7 @@
 //! lines are what `scripts/check/check-zenoh-profile0.py --slice encoder` reads.
 
 use super::*;
-use crate::zenoh_profile0::{Message, Network, decode_batch};
+use crate::zenoh_profile0::{MAX_KEY_BYTES, MAX_PAYLOAD_BYTES, Message, Network, decode_batch};
 use std::fmt::Write as _;
 use std::string::String;
 use std::vec::Vec;

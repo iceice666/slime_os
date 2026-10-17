@@ -488,6 +488,8 @@ impl Subscriber {
                     };
                 }
                 Notice::SubscriberDeclared { .. } => {}
+                // The demo link never reassembles, so it joins nothing into a heap.
+                Notice::SampleStored(_) => {}
             }
         }
         if link.is_open() && !self.declared && !link.send_pending() {
