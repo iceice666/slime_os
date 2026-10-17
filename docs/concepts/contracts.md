@@ -30,7 +30,7 @@ is a small, readable example.
 
 ```
 contracts/<name>/vN/schema.zt        ← edit here
-        │  scripts/generate/generate-<name>-bindings.py   (just <name>_gen)
+        │  scripts/generate/generate-bindings.py <name>   (just <name>_gen)
         ▼
 generated Rust                        ← never edit here
   components/proto/src/<name>.rs

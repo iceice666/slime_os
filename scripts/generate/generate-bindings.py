@@ -5,6 +5,8 @@
     generate-bindings.py NAME...          write each binding's outputs
     generate-bindings.py --check NAME...  fail if any committed output is stale
     generate-bindings.py --check --all    every binding in the table
+
+`--check` first runs the pipeline's negative controls (`zutai_bindings.check_controls`).
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("name one or more bindings, or pass --all")
     names = sorted(zutai_bindings.BINDINGS) if arguments.all else arguments.names
     if arguments.check:
+        refused = zutai_bindings.check_controls()
+        print(f"{refused} binding controls refused")
         stale = [path for name in names for path in zutai_bindings.stale(name)]
         if stale:
             raise SystemExit(

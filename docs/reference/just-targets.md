@@ -132,6 +132,7 @@ For how the planes work and how to add one, read
 | `just data_fabric_trace_check` | Refuse stale fabric-trace bindings. |
 | `just fabric_manifest_check` | C8.2 fabric-graph generation admission gate. |
 | `just generation_corpus_check shard_index shard_count` | Every seL4 manifest the generation builder declares still builds, optionally one round-robin shard of the corpus. |
+| `just generation_v5_retired_check` | Retirement of the generation v5 guard: the corpus still builds, and the guard's checker, recipe, codePaths entry, reference row and CI steps are gone. |
 | `just generation_v5_check shard_index shard_count` | Every generation this repository builds is v5, and nothing still writes v4. |
 | `just interface_schema_check` | Validate `contracts/interface-schema/v1` and its normalized outputs. |
 | `just io_model_check` | Aggregate: `io_queue_model_check`, `io_resource_model_check`. |
@@ -313,6 +314,7 @@ For how the planes work and how to add one, read
 | `just duo_serial_monitor serial timeout` | Bring-up aid, not a gate: print whatever the Duo's UART0 emits and assert nothing. |
 | `just duo_slisp_check serial` | P3.F: build the target-qualified resident graph with Duo UART0 input, deploy its distinct product FIT, drive one bounded Slisp session, and cold-reset only through the gate-only terminator after every assertion has passed. |
 | `just rpi5_artifact_check` | RP1 exact-profile executable closure and deterministic artifact gate. |
+| `just rpi5_ros2_demo_v1_retired_check` | Retirement of the RPi5 ROS 2 demo format-1 contract: the artifact gate passes on format 2 alone, and the format-1 contract directory is gone. |
 | `just rpi5_boot_check serial` | Physical gate: require ordered boot evidence from the pinned build on UART10. |
 | `just rpi5_media_check` | Flatten via the media builder: objcopy drops the sectionless loader payload. |
 | `just rpi5_ros2_demo_contract_v2_check` | RP0 format-2 Raspberry Pi 5 ROS 2 demo contract gate. |

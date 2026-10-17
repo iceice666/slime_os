@@ -50,6 +50,14 @@ generation_corpus_check shard_index="0" shard_count="1":
 [group('contracts')]
 contracts_check: contracts_source_check generation_corpus_check
 
+# Retirement of the generation v5 guard: the corpus still builds, and its
+# checker, recipe, codePaths entry, reference row and CI steps are gone. The
+# bracketed patterns keep this recipe from matching itself.
+[group('contracts')]
+generation_v5_retired_check: generation_corpus_check
+    @if test -e scripts/check/check-generation-v[5].py; then echo 'the v5 guard checker still exists' >&2; exit 1; fi
+    @if grep -rnE 'generation_v5[_]check|check-generation-v5[.]py' just Justfile .devloop/policy.json .github docs/reference/just-targets.md; then echo 'the v5 guard is still referenced above' >&2; exit 1; fi
+
 [group('contracts')]
 architecture_contract_check: contracts_check
     python3 scripts/check/check-architecture-contract.py

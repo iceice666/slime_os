@@ -31,4 +31,4 @@ RP0 fixes the demo contract; it does not claim that the kernel, DDS runtime, AAr
 
 ## Retired
 
-Format 1 is retired: no component, system spec, or composition emits or reads it, its checker and recipe are removed, and this directory is deleted by the retirement work item `01a14829-ac45-7929-8647-b82f2d7c6999`. [Format 2](../v2/README.md) is the Raspberry Pi 5 ROS 2 demo contract.
+Format 1 is retired: no component, system spec, or composition emits or reads it, its checker and recipe are removed, and this directory is deleted by the retirement work item `01a148f2-d144-7395-b9e0-862a6e66ab33`. [Format 2](../v2/README.md) is the Raspberry Pi 5 ROS 2 demo contract.

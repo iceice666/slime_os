@@ -28,7 +28,7 @@ Two families exist, distinguished by who consumes the bindings:
 | Family | Consumer | Generator | Output |
 | --- | --- | --- | --- |
 | **Boot and persistence** — generation, kernel image, target profile, BootState, release, budgets, authorities | `boot-contracts` (decoded by the root at admission) | one script for all of them: `scripts/generate/generate-boot-bindings.py` (`just boot_gen`), whose `GENERATORS` table lists each schema | `boot-contracts/src/generated/<name>.rs` and `scripts/lib/boot_contracts.py` |
-| **IPC and service protocols** — spawn, block, store, fs, io-queue, network, powerbox, generation-management… | `components/proto` (`slime-proto`), used by components on both sides | one script per protocol: `scripts/generate/generate-<name>-bindings.py` (`just <name>_gen`) | `components/proto/src/<name>.rs`, sometimes `components/runtime/include/slime/<name>.h` |
+| **IPC and service protocols** — spawn, block, store, fs, io-queue, network, powerbox, generation-management… | `components/proto` (`slime-proto`), used by components on both sides | one row per protocol in `scripts/lib/zutai_bindings.py`, rendered by `scripts/generate/generate-bindings.py <name>` (`just <name>_gen`) | `components/proto/src/<name>.rs`, sometimes `components/runtime/include/slime/<name>.h` |
 
 Pick the family by consumer. If the root decodes it while admitting a
 generation, it is boot family; if two components exchange it at runtime, it

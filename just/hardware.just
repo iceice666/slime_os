@@ -85,6 +85,12 @@ zenoh_external_check: sel4_pin_check
 rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_v2_check
     python3 scripts/check/check-rpi5-artifacts.py
 
+# Retirement of the RPi5 ROS 2 demo format-1 contract: the artifact gate still
+# passes on format 2 alone, and the format-1 contract directory is gone.
+[group('hardware')]
+rpi5_ros2_demo_v1_retired_check: rpi5_artifact_check
+    @if test -e contracts/rpi5-ros2-demo/v1; then echo 'contracts/rpi5-ros2-demo/v1 still exists' >&2; exit 1; fi
+
 # Uses the board-specific bcm2712 prefix, target directory, generation, image,
 # and pinned hashes; it is not interchangeable with the qemu-arm-virt build.
 [group('hardware')]

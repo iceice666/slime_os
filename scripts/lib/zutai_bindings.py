@@ -18,6 +18,7 @@ from __future__ import annotations
 import fcntl
 import os
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -189,7 +190,7 @@ class BindingError(SystemExit):
     pass
 
 
-def _render_run(name: str, spec: Run) -> dict[str, str]:
+def _render_run(name: str, spec: Run, renderer: list[str] | None = None) -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix=f"slime-{name}-bindings-") as temporary:
         staging = Path(temporary)
         for output in spec.outputs:
@@ -197,7 +198,7 @@ def _render_run(name: str, spec: Run) -> dict[str, str]:
         environment = os.environ | {"ZUTAI_STDLIB_ROOT": str(STDLIB)}
         environment |= {variable: str(staging) for variable in spec.roots}
         process = subprocess.run(
-            [str(binary()), "run", str(ROOT / spec.schema)],
+            renderer or [str(binary()), "run", str(ROOT / spec.schema)],
             cwd=ROOT,
             env=environment,
             check=False,
@@ -265,15 +266,75 @@ def _write_atomic(path: Path, contents: str) -> None:
         raise
 
 
+def _differing(rendered: dict[str, str], root: Path) -> list[str]:
+    return [
+        path
+        for path, text in rendered.items()
+        if not (root / path).is_file() or (root / path).read_text(encoding="utf-8") != text
+    ]
+
+
 def stale(name: str) -> list[str]:
     """Repository paths whose committed bytes differ from what `name` renders."""
     rendered = render(name)
     with _output_lock(name):
-        return [
-            path
-            for path, text in rendered.items()
-            if not (ROOT / path).is_file() or (ROOT / path).read_text(encoding="utf-8") != text
-        ]
+        return _differing(rendered, ROOT)
+
+
+# Negative controls. A stand-in renderer (a Python one-liner given the staging
+# root in CONTROL_ROOT) drives the same `_render_run` and `_differing` paths the
+# real bindings use; each refusal case must be refused and the clean case must
+# render and compare equal, so a pass of `--check` is evidence of refusal rather
+# than of renderers that happen to succeed today.
+CONTROL_ROOT = "SLIME_CONTROL_BINDINGS_ROOT"
+CONTROL_SENTINEL = "INVALID_CONTROL_SCHEMA"
+CONTROL_RUN = Run("control.zt", (CONTROL_ROOT,), (same("out/control.rs"), flat("lib/control.py")), CONTROL_SENTINEL)
+_WRITE = (
+    "import os, pathlib; root = pathlib.Path(os.environ['{root}']); "
+    "(root / 'out/control.rs').write_text({rust!r}); (root / 'control.py').write_text({python!r})"
+)
+CLEAN_RUST = "pub const CONTROL: u8 = 1;\n"
+CLEAN_PYTHON = "CONTROL = 1\n"
+RENDER_REFUSALS = {
+    "renderer exits non-zero": "raise SystemExit(3)",
+    "declared output not written": "pass",
+    "sentinel in the Rust output": _WRITE.format(
+        root=CONTROL_ROOT, rust=f"// {CONTROL_SENTINEL}\n" + CLEAN_RUST, python=CLEAN_PYTHON
+    ),
+    "sentinel in the Python output": _WRITE.format(
+        root=CONTROL_ROOT, rust=CLEAN_RUST, python=f"# {CONTROL_SENTINEL}\n" + CLEAN_PYTHON
+    ),
+    "Rust rustfmt refuses": _WRITE.format(root=CONTROL_ROOT, rust="pub const CONTROL: u8 = ;\n", python=CLEAN_PYTHON),
+}
+CLEAN = _WRITE.format(root=CONTROL_ROOT, rust=CLEAN_RUST, python=CLEAN_PYTHON)
+
+
+def check_controls() -> int:
+    """Run every control; raise BindingError if one is not refused. Returns the count refused."""
+    refused = 0
+    for label, body in RENDER_REFUSALS.items():
+        try:
+            _render_run("control", CONTROL_RUN, [sys.executable, "-c", body])
+        except SystemExit:
+            refused += 1
+            continue
+        raise BindingError(f"binding control accepted: {label}")
+    rendered = _render_run("control", CONTROL_RUN, [sys.executable, "-c", CLEAN])
+    with tempfile.TemporaryDirectory(prefix="slime-control-bindings-committed-") as temporary:
+        committed = Path(temporary)
+        if sorted(_differing(rendered, committed)) != sorted(rendered):
+            raise BindingError("binding control accepted: committed outputs missing")
+        refused += 1
+        for path, text in rendered.items():
+            (committed / path).parent.mkdir(parents=True, exist_ok=True)
+            (committed / path).write_text(text, encoding="utf-8")
+        if _differing(rendered, committed):
+            raise BindingError("binding control refused identical committed outputs")
+        (committed / "out/control.rs").write_text(CLEAN_RUST + "// drift\n", encoding="utf-8")
+        if _differing(rendered, committed) != ["out/control.rs"]:
+            raise BindingError("binding control accepted: a drifted committed output")
+        refused += 1
+    return refused
 
 
 def write(name: str) -> list[str]:
