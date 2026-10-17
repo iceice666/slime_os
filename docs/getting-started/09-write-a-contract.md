@@ -120,15 +120,17 @@ Adding a protocol `widget` for two components:
 
 1. **Author** `contracts/widget/v1/schema.zt` and `gen_rust.zt`, copying the
    nearest existing pair. Choose the output path(s) in `main`.
-2. **Add the generator** `scripts/generate/generate-widget-bindings.py` by
-   copying `generate-spawn-bindings.py`: it stages the render into a temp
-   directory, compares with the committed output, and supports `--check`.
-   Add a recipe in `just/generate.just`:
+2. **Add the binding** as one row of `BINDINGS` in
+   `scripts/lib/zutai_bindings.py`, next to the nearest existing row (`spawn`
+   for Rust plus a C header, `fabric-call` for Rust alone). The shared
+   pipeline stages the render into a temp directory, refuses the schema's
+   `INVALID_*_SCHEMA` sentinel, formats Rust, and compares with the committed
+   output under `--check`. Add a recipe in `just/generate.just`:
 
    ```just
    [group('generate')]
    widget_gen:
-       python3 scripts/generate/generate-widget-bindings.py
+       python3 scripts/generate/generate-bindings.py widget
    ```
 3. **Generate and commit** both the schema and the output:
 

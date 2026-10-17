@@ -3,7 +3,7 @@
 `v2/schema.zt` defines the spawn-service request, reply and argument frame.
 Generate the Rust (`components/proto/src/spawn.rs`) and C
 (`components/runtime/include/slime/spawn.h`) bindings with
-`python3 scripts/generate/generate-spawn-bindings.py`. `v1/` remains as the
+`python3 scripts/generate/generate-bindings.py spawn`. `v1/` remains as the
 retained source of format version 1; spawn-service serves only version 2 and
 refuses version 1.
 

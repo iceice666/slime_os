@@ -32,19 +32,10 @@ release_trust_check: contracts_check release_trust_runtime_check
 [group('contracts')]
 contracts_source_check: bootstate_model_check capability_rights_model_check io_queue_model_check io_resource_model_check
     python3 scripts/check/check-contracts.py
-    python3 scripts/generate/generate-spawn-bindings.py --check
-    python3 scripts/generate/generate-pwm-servo-bindings.py --check
-    python3 scripts/generate/generate-entropy-bindings.py --check
-    python3 scripts/generate/generate-serial-device-bindings.py --check
-    python3 scripts/generate/generate-mavlink-heartbeat-bindings.py --check
-    python3 scripts/generate/generate-link-device-bindings.py --check
-    python3 scripts/generate/generate-network-service-bindings.py --check
-    python3 scripts/generate/generate-zenoh-profile-bindings.py --check
     python3 scripts/generate/generate-zenoh-stock-bindings.py --check
     python3 scripts/generate/generate-zenoh-stock-bindings.py --controls
     python3 scripts/check/check-boot-layout-resource.py
     python3 scripts/check/check-lifecycle-identity.py
-    python3 scripts/generate/generate-fabric-ring-bindings.py --check
     python3 scripts/generate/generate-syscall-abi-bindings.py --check
     python3 scripts/generate/generate-component-runtime-abi-bindings.py --check
 
@@ -86,7 +77,7 @@ system_spec_check: component_spec_validation_check
 
 [group('contracts')]
 system_composition_closure_check: system_spec_check
-    python3 scripts/generate/generate-composition-inventory-bindings.py --check
+    python3 scripts/generate/generate-bindings.py --check composition-inventory
     python3 scripts/check/check-composition-inventory.py
 
 # Resolution checks each closure's committed prefix against `sel4/pins.toml`;
@@ -135,8 +126,8 @@ system_image_scenario_check: system_image_builder_check
 
 [group('contracts')]
 system_image_closure_check: system_spec_check
-    python3 scripts/generate/generate-system-image-closure-bindings.py --check
-    python3 scripts/generate/generate-system-test-run-bindings.py --check
+    python3 scripts/generate/generate-bindings.py --check system-image-closure
+    python3 scripts/generate/generate-bindings.py --check system-test-run
     python3 scripts/check/check-system-image-closure.py
 
 # Every gate that consumes the committed closure corpus, on one tree: freshness,
@@ -158,7 +149,7 @@ data_fabric_profile_check: contracts_check
 
 [group('contracts')]
 data_fabric_trace_check: contracts_check sel4_trace_check
-    python3 scripts/generate/generate-fabric-trace-bindings.py --check
+    python3 scripts/generate/generate-bindings.py --check fabric-trace
 
 [group('contracts')]
 sample_descriptor_check: contracts_check sel4_sample_check

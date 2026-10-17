@@ -2,7 +2,7 @@
 
 `v1/schema.zt` owns the application request, completion, and provisioning bytes.
 Regenerate the Rust bindings with
-`python3 scripts/generate/generate-network-service-bindings.py`.
+`python3 scripts/generate/generate-bindings.py network-service`.
 The existing request and completion layouts remain 56 and 24 bytes respectively.
 The retained endpoint-only authority fixture exercises policy and capability
 bookkeeping without a transport. Only the provisioned IO0 path described below
