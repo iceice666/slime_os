@@ -148,6 +148,9 @@ PLANES: tuple[tuple[str, str], ...] = (
     # root-autostart and every grant is between them, so the block states that init's own table is
     # empty rather than listing authority the nodes hold.
     ("sel4-zenoh", "slime-sel4-zenoh.elf"),
+    # The same demo with its publisher dialling a stock peer through a virtio NIC. Init holds nothing
+    # here either: the nodes, the network service and the driver are all root-autostart.
+    ("sel4-zenoh-external", "slime-sel4-zenoh-external.elf"),
 )
 
 # The subset P6.4 replays on x86-64: the resident product graph plus the two
