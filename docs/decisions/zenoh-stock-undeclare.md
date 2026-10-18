@@ -1,11 +1,13 @@
 # Zenoh Profile 0 taking a stock peer's undeclaration
 
 **Status:** Proposed
-**Related work items:** `01a14f09-f9a8-7f9d-9c92-543d54a7712e` (this decision's exam and
-implementation); `01a14f0b-2bbc-7d80-9ecd-e6bac02970e5` (the external-listener exam, which
+**Related work items:** `01a1514d-8af5-7fa1-a4c2-70be8785fb2e` (this decision's exam and
+implementation); `01a1514d-caa7-74ff-8fca-c4fcda87aba1` (the external-listener exam, which
 admits the form in its capture judge and replaces `01a13948-fc94-7359-ae7d-31c029147cf7`); the
 stock-peer session work `01a12f13-a343-7924-af20-18148fc1b0d9`; Zenoh Profile 0 epic
-`01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
+`01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`. Both items were admitted twice in review: the first pair
+(`01a14f09-f9a8-7f9d-9c92-543d54a7712e`, `01a14f0b-2bbc-7d80-9ecd-e6bac02970e5`) pinned 62 controls
+and is cancelled and superseded, as the QEMU gate item was in #268; neither was started.
 
 ## Context
 
@@ -107,7 +109,8 @@ Profile 0 takes one more shape from a stock peer, and nothing wider.
 
 - `just zenoh_undeclare_check` fails until the decoder and session take the form, and names the
   Rust test that did not pass.
-- The exam pins 20 cases and 62 corrupted records (44 transcripts and 18 hand-off records),
+- The exam pins 20 cases and 68 corrupted records (44 transcripts, 18 hand-off records and 6
+  corrupted inputs to the check that the host reference reproduces the capture),
   exactly, and compares them with the admitted item while it is active.
 - The external-listener exam pins 4 cases and 291 corrupted records (246 + 15 + 30), where it
   pinned 279 (234 + 15 + 30), and 46 honest captures where it pinned 45. The 12 added mutations

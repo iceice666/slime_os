@@ -1,7 +1,7 @@
 # Zenoh Profile 0 guest connecting out to a stock listener
 
 **Status:** Proposed
-**Related work items:** `01a14f0b-2bbc-7d80-9ecd-e6bac02970e5` (this decision's exam and
+**Related work items:** `01a1514d-caa7-74ff-8fca-c4fcda87aba1` (this decision's exam and
 implementation, which replaces `01a13948-fc94-7359-ae7d-31c029147cf7` once the stock peer's
 undeclaration is taken: see [Zenoh Profile 0 taking a stock peer's
 undeclaration](zenoh-stock-undeclare.md)); Zenoh Profile 0 epic `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`; the stock-peer

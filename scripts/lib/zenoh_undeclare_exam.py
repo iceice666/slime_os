@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import zenoh_exchange
@@ -49,6 +50,7 @@ PEER = (
     ("undeclares-08-close", "0300"),
 )
 UNDECLARE = "undeclares-07-undeclare-subscriber"
+DECLARE_SUBSCRIBER = "undeclares-05-declare-subscriber-declare-final"
 SUBSCRIBER_ID = 1
 
 OK_SCENARIOS = (
@@ -66,12 +68,15 @@ def _need(condition: bool, message: str) -> None:
         raise UndeclareError(message)
 
 
-def _frame_sn() -> int:
-    """The sequence number of the captured undeclaration's FRAME."""
-    batch = bytes.fromhex(dict(PEER)[UNDECLARE])
+def _sn_of(batch: bytes) -> int:
     _need(batch[0] == zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R, "the captured undeclaration is not a reliable FRAME")
     sn, _at = zenoh_wire.read_leb128(batch, 1)
     return sn
+
+
+def _frame_sn() -> int:
+    """The sequence number of the captured undeclaration's FRAME."""
+    return _sn_of(bytes.fromhex(dict(PEER)[UNDECLARE]))
 
 
 def _qos_declare(*inner: bytes) -> bytes:
@@ -115,18 +120,52 @@ def refuse() -> tuple[tuple[str, str], ...]:
     return tuple((name, batch) for name, batch, _cls in _refusals())
 
 
-def reference_agrees() -> None:
-    """The host reference reproduces the captured undeclaration, and it undeclares the id the peer declared."""
-    captured = bytes.fromhex(dict(PEER)[UNDECLARE])
-    built = zenoh_wire.frame(_frame_sn(), zenoh_wire.undeclare_subscriber_by_id(SUBSCRIBER_ID))
+def reference_agrees(
+    peer: tuple[tuple[str, str], ...] = PEER,
+    refused: tuple[tuple[str, str], ...] | None = None,
+    build: Callable[[int], bytes] = zenoh_wire.undeclare_subscriber_by_id,
+) -> None:
+    """The host reference reproduces the captured undeclaration, and it undeclares the id the peer declared.
+
+    The inputs are parameters so that `reference_controls` can corrupt each one in turn.
+    """
+    refused = refuse() if refused is None else refused
+    captured = bytes.fromhex(dict(peer)[UNDECLARE])
+    built = zenoh_wire.frame(_sn_of(captured), build(SUBSCRIBER_ID))
     _need(built == captured, f"the host reference builds {built.hex()}, the peer sent {captured.hex()}")
-    declared = bytes.fromhex(dict(PEER)["undeclares-05-declare-subscriber-declare-final"])
+    declared = bytes.fromhex(dict(peer)[DECLARE_SUBSCRIBER])
     _need(declared.endswith(bytes.fromhex("4201013e001a")), "the captured subscriber declaration is not id 1 through alias 1")
-    _need(len({name for name, _ in PEER}) == len(PEER), "a captured batch name is used twice")
-    _need(len({name for name, _ in refuse()}) == len(refuse()), "a refused variant name is used twice")
-    captured_set = {hexed for _name, hexed in PEER}
-    for name, batch in refuse():
+    _need(len({name for name, _ in peer}) == len(peer), "a captured batch name is used twice")
+    _need(len({name for name, _ in refused}) == len(refused), "a refused variant name is used twice")
+    captured_set = {hexed for _name, hexed in peer}
+    for name, batch in refused:
         _need(batch not in captured_set, f"{name} is a batch the peer sent")
+
+
+def reference_controls() -> int:
+    """Each input `reference_agrees` guards is corrupted in turn, and must be refused for its own reason."""
+    reference_agrees()
+
+    def declaring(old: str, new: str) -> tuple[tuple[str, str], ...]:
+        return tuple((name, hexed.replace(old, new) if name == DECLARE_SUBSCRIBER else hexed) for name, hexed in PEER)
+
+    honest = refuse()
+    cases: list[tuple[str, dict, str]] = [
+        ("a host reference that undeclares another subscriber id", {"build": lambda sub_id: zenoh_wire.undeclare_subscriber_by_id(sub_id + 1)}, "the host reference builds"),
+        ("a captured subscriber that is id 2", {"peer": declaring("4201013e001a", "4202013e001a")}, "is not id 1 through alias 1"),
+        ("a captured subscriber through alias 2", {"peer": declaring("4201013e001a", "4201023e001a")}, "is not id 1 through alias 1"),
+        ("a captured batch name used twice", {"peer": (*PEER[:-1], (PEER[0][0], PEER[-1][1]))}, "a captured batch name is used twice"),
+        ("a refused variant name used twice", {"refused": (honest[0], honest[0], *honest[2:])}, "a refused variant name is used twice"),
+        ("a refused variant that is a batch the peer sent", {"refused": ((honest[0][0], PEER[-1][1]), *honest[1:])}, "is a batch the peer sent"),
+    ]
+    for label, changes, reason in cases:
+        try:
+            reference_agrees(**changes)
+        except UndeclareError as error:
+            _need(reason in str(error), f"control: {label} was refused for another reason: {error}")
+            continue
+        raise UndeclareError(f"control: the reference check accepted {label}")
+    return len(cases)
 
 
 def good_lines() -> list[str]:
@@ -345,14 +384,14 @@ def handoff_controls() -> int:
 
 
 def all_controls() -> int:
-    return transcript_controls() + handoff_controls()
+    return transcript_controls() + handoff_controls() + reference_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these; once
 # it is gone these still bind. Both counts are exact.
 PINNED_CASES = 20
-PINNED_CONTROLS = 62
+PINNED_CONTROLS = 68
 ADMISSION = "slime-zenoh-profile0-stock-undeclare-"
 
 
@@ -360,7 +399,7 @@ def item_pins() -> tuple[int, int]:
     """The case count and the control count the admitted item fixes, read from its stored body, or (0, 0)."""
     for path in sorted((ROOT / ".tasks" / "items").glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        if "zenoh_undeclare_check" not in text or ADMISSION not in text:
+        if "zenoh_undeclare_check" not in text or ADMISSION not in text or re.search(r"^state: cancelled$", text, re.M):
             continue
         cases = re.search(r'id = "all-cases-observed";.*?intValue = (\d+);', text, re.S)
         controls = re.search(r'id = "exactly-\d+-controls";.*?observation = "negativeControlsRefused";.*?intValue = (\d+);', text, re.S)
