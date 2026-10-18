@@ -64,6 +64,15 @@ zenoh_stock_check:
 zenoh_links_check:
     python3 scripts/check/check-zenoh-profile0.py --slice links
 
+# A stock Zenoh peer ending its subscription: an UndeclareSubscriber that names the subscriber by id
+# alone, inside a DECLARE carrying the network QoS extension. The eight batches the peer sent are
+# replayed into a connector session and the host reference reproduces the undeclaration byte for
+# byte (scripts/lib/zenoh_undeclare_exam.py, contracts/zenoh-stock-undeclare/v1). Nothing here needs
+# a registry. Fails until the session takes the bare undeclaration.
+[group('hardware')]
+zenoh_undeclare_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice undeclare
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.

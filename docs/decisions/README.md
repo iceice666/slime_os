@@ -74,3 +74,7 @@ readable and link to the decision that replaced them.
   proposed; the guest opens one TCP connection over a NIC to a stock eclipse-zenoh 1.0.0
   listener on the host, judged from the listener's own record, a packet capture and the host
   wire reference, with the composition and guest left to the implementation.
+- [Zenoh Profile 0 taking a stock peer's undeclaration](zenoh-stock-undeclare.md) — proposed;
+  the one batch the stock-peer exam did not capture, an `UndeclareSubscriber` that names the
+  subscriber by id alone behind the network QoS extension, taken by the session by id and
+  nothing wider, with ten variants it keeps refusing by name and class.

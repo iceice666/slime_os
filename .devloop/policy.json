@@ -219,6 +219,7 @@
     "scripts/lib/zenoh_links_exam.py",
     "scripts/lib/zenoh_listener_peer.py",
     "scripts/lib/zenoh_stock_peer.py",
+    "scripts/lib/zenoh_undeclare_exam.py",
     "scripts/lib/zenoh_wire.py",
     "scripts/lib/zutai_bindings.py",
     "scripts/lib/zutai_cli.py",

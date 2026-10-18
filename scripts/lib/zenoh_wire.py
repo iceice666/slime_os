@@ -17,6 +17,7 @@ Layouts, from the 1.0.0 codec as the corpus records them:
   DECLARE    <hdr 0x1e><declaration>
   D_SUBSCR   <hdr><id:leb128><scope:leb128><keylen:leb128><key>
   U_SUBSCR   <hdr|Z><id:leb128><ext 0x5f><len:leb128><flags><scope:leb128><raw suffix>
+  U_SUBSCR   (by id) DECLARE<hdr|Z><ext 0x21><qos:leb128> then <hdr 0x03><id:leb128>, no extension
   PUSH       <hdr><scope:leb128><keylen:leb128><key><PUT>
   PUT        <hdr|Z><ext 0x43><len:leb128><attachment><payload len:leb128><payload>
 """
@@ -41,6 +42,8 @@ FLAG_S = FLAG_T = FLAG_M = 0x40
 FLAG_Z = 0x80
 EXT_WIRE_EXPR = 0x5F
 EXT_ATTACHMENT = 0x43
+EXT_QOS_NETWORK = 0x21
+QOS_NETWORK_DEFAULT = 8
 
 ATTACHMENT_BYTES = 33
 GID_BYTES = 16
@@ -122,6 +125,12 @@ def declare_subscriber(sub_id: int, key: str, sender: bool) -> bytes:
 def undeclare_subscriber(sub_id: int, key: str, sender: bool) -> bytes:
     body = bytes([0x01 | (0x02 if sender else 0)]) + leb128(0) + key.encode()
     return bytes([ID_DECLARE, ID_U_SUBSCRIBER | FLAG_Z]) + leb128(sub_id) + bytes([EXT_WIRE_EXPR]) + prefixed(body)
+
+
+def undeclare_subscriber_by_id(sub_id: int) -> bytes:
+    """What a stock peer sends: the DECLARE carries the network QoS extension and the undeclaration
+    names the subscriber by id alone, because the codec leaves out the wire expression when it is null."""
+    return bytes([ID_DECLARE | FLAG_Z, EXT_QOS_NETWORK, QOS_NETWORK_DEFAULT, ID_U_SUBSCRIBER]) + leb128(sub_id)
 
 
 def attachment(sequence: int, timestamp: int, gid: bytes) -> bytes:
