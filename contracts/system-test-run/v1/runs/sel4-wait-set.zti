@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-wait-set";
-  imageClosureIdentity = "b6ae65077c4c1b57372e89dbca54605ad2d99f6ca33938351d94a31337f857b4";
+  imageClosureIdentity = "6643a9ccab7c23f0af49f94037d7da5f9c82f598285e57ffcd696a6c32c72364";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
