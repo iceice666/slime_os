@@ -33,22 +33,32 @@ fn system_census_counts_rounded_static_and_mapping_until_returned() {
         let mut allocator = fixture();
         assert_eq!(allocator.system_backing_bytes(), 0);
         assert_eq!(allocator.elastic_inventory().bytes, 0);
-        allocator.extents[0] = Some(extent(0, 16, ExtentKind::Static));
+        allocator
+            .extents
+            .set(0, Some(extent(0, 16, ExtentKind::Static)));
         assert_eq!(allocator.system_backing_bytes(), 1 << 16);
-        allocator.extents[1] = Some(extent(1, 13, ExtentKind::MappingTables));
+        allocator
+            .extents
+            .set(1, Some(extent(1, 13, ExtentKind::MappingTables)));
         assert_eq!(allocator.system_backing_bytes(), (1 << 16) + (1 << 13));
 
         // Rounded ownership is independent of object occupancy and revoke progress.
-        allocator.extents[0].as_mut().unwrap().bytes = 4096;
-        allocator.extents[0].as_mut().unwrap().watermark = 4096;
-        allocator.extents[0].as_mut().unwrap().objects = 1;
-        allocator.extents[0].as_mut().unwrap().revoked = true;
-        allocator.extents[1].as_mut().unwrap().revoked = true;
+        allocator.extents.update(0, |extent| extent.bytes = 4096);
+        allocator
+            .extents
+            .update(0, |extent| extent.watermark = 4096);
+        allocator.extents.update(0, |extent| extent.objects = 1);
+        allocator.extents.update(0, |extent| extent.revoked = true);
+        allocator.extents.update(1, |extent| extent.revoked = true);
         assert_eq!(allocator.system_backing_bytes(), (1 << 16) + (1 << 13));
         assert_eq!(allocator.elastic_inventory().bytes, 0);
 
-        allocator.extents[2] = Some(extent(2, 18, ExtentKind::PrivateData));
-        allocator.extents[3] = Some(extent(3, 12, ExtentKind::PrivateTables));
+        allocator
+            .extents
+            .set(2, Some(extent(2, 18, ExtentKind::PrivateData)));
+        allocator
+            .extents
+            .set(3, Some(extent(3, 12, ExtentKind::PrivateTables)));
         assert_eq!(allocator.system_backing_bytes(), (1 << 16) + (1 << 13));
         assert_eq!(allocator.elastic_inventory().bytes, 0);
     });
@@ -65,24 +75,28 @@ fn returned_static_transfers_system_ownership_to_common_inventory_exactly_once()
             watermark: 4096,
         });
         allocator.untyped_len = 1;
-        allocator.extents[0] = Some(extent(0, 16, ExtentKind::Static));
+        allocator
+            .extents
+            .set(0, Some(extent(0, 16, ExtentKind::Static)));
         let common_before = allocator.elastic_inventory().bytes;
         let baseline = common_before + allocator.system_backing_bytes();
         assert_eq!(common_before, 3 * 4096);
         assert_eq!(baseline, 3 * 4096 + (1 << 16));
 
-        let retained = allocator.extents[0].as_mut().unwrap();
-        retained.revoked = true;
+        allocator
+            .extents
+            .update(0, |retained| retained.revoked = true);
         assert_eq!(allocator.elastic_inventory().bytes, common_before);
         assert_eq!(allocator.system_backing_bytes(), 1 << 16);
 
         // Model publication after complete cleanup, not a host kernel revoke.
-        let returned = allocator.extents[0].as_mut().unwrap();
-        returned.active = false;
-        returned.owner = u16::MAX;
-        returned.watermark = 0;
-        returned.objects = 0;
-        returned.bytes = 0;
+        allocator.extents.update(0, |returned| {
+            returned.active = false;
+            returned.owner = u16::MAX;
+            returned.watermark = 0;
+            returned.objects = 0;
+            returned.bytes = 0;
+        });
         for _ in 0..2 {
             assert_eq!(allocator.system_backing_bytes(), 0);
             assert_eq!(allocator.elastic_inventory().bytes, baseline);
@@ -98,8 +112,12 @@ fn system_census_keeps_global_root_guarantee_and_split_owners_disjoint() {
         // Seed an independently observable counter value; this does not test
         // publication by allocate(), contiguous allocation, or the high probe.
         allocator.global_object_backing_bytes = 2096;
-        allocator.extents[0] = Some(extent(0, 16, ExtentKind::Static));
-        allocator.extents[1] = Some(extent(1, 13, ExtentKind::MappingTables));
+        allocator
+            .extents
+            .set(0, Some(extent(0, 16, ExtentKind::Static)));
+        allocator
+            .extents
+            .set(1, Some(extent(1, 13, ExtentKind::MappingTables)));
         let system = 2096 + (1 << 16) + (1 << 13);
         assert_eq!(allocator.system_backing_bytes(), system);
 
@@ -110,19 +128,18 @@ fn system_census_keeps_global_root_guarantee_and_split_owners_disjoint() {
             size_bits: root.size_bits,
             watermark: 4096,
         });
-        allocator.extents[2] = Some(root);
+        allocator.extents.set(2, Some(root));
         assert_eq!(allocator.infrastructure_owned_bytes(), 1 << 17);
         assert_eq!(allocator.system_backing_bytes(), system);
 
         let mut guaranteed = extent(3, 15, ExtentKind::Static);
         guaranteed.reserve(0, ExtentKind::Static);
-        allocator.extents[3] = Some(guaranteed);
+        allocator.extents.set(3, Some(guaranteed));
         assert_eq!(allocator.reserved_extent_bytes(), 1 << 15);
         assert_eq!(allocator.system_backing_bytes(), system);
-        allocator.extents[3]
-            .as_mut()
-            .unwrap()
-            .assign(3, 2, ExtentKind::MappingTables);
+        allocator
+            .extents
+            .update(3, |extent| extent.assign(3, 2, ExtentKind::MappingTables));
         assert_eq!(allocator.reserved_extent_bytes(), 0);
         assert_eq!(allocator.borrowed_extent_bytes(), 1 << 15);
         assert_eq!(allocator.system_backing_bytes(), system);
@@ -135,9 +152,9 @@ fn system_census_keeps_global_root_guarantee_and_split_owners_disjoint() {
         left.paddr = parent.paddr;
         let mut right = extent(6, 14, ExtentKind::MappingTables);
         right.paddr = parent.paddr + (1 << 14);
-        allocator.extents[4] = Some(parent);
-        allocator.extents[5] = Some(left);
-        allocator.extents[6] = Some(right);
+        allocator.extents.set(4, Some(parent));
+        allocator.extents.set(5, Some(left));
+        allocator.extents.set(6, Some(right));
         assert_eq!(allocator.system_backing_bytes(), system + (1 << 15));
         assert_eq!(allocator.elastic_inventory().bytes, 0);
         let baseline = allocator.system_backing_bytes()

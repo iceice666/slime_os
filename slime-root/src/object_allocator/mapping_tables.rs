@@ -154,14 +154,17 @@ mod tests {
                 extent.assign(arena.index(), arena.serial, ExtentKind::MappingTables);
                 extent.objects = 1;
                 extent.bytes = 4096;
-                allocator.extents[0] = Some(extent);
-                allocator.allocations[0] = super::super::AllocationRecord {
-                    owner: arena.index() as u16,
-                    extent: 0,
-                    serial: arena.serial,
-                    allocation: super::super::ArenaAllocation::new(20, 12, false, false),
-                    next_state: super::super::PRIVATE_STATE_NONE,
-                };
+                allocator.extents.set(0, Some(extent));
+                allocator.allocations.set(
+                    0,
+                    super::super::AllocationRecord {
+                        owner: arena.index() as u16,
+                        extent: 0,
+                        serial: arena.serial,
+                        allocation: super::super::ArenaAllocation::new(20, 12, false, false),
+                        next_state: super::super::PRIVATE_STATE_NONE,
+                    },
+                );
                 allocator.mapping_tables.records[0] = Some(MappingTable {
                     arena,
                     vspace: 30,
@@ -335,7 +338,7 @@ impl ObjectAllocator {
                 // cannot revoke any sibling mapping or loader-owned table.
                 let extent = self.extents[table.extent].ok_or(AllocError::NoKernelUntyped)?;
                 revoke(extent.parent.bits() as usize)?;
-                self.live_objects -= extent.objects;
+                self.live_objects -= extent.objects as usize;
                 self.live_bytes -= extent.bytes;
                 let position = self
                     .allocations
@@ -344,18 +347,12 @@ impl ObjectAllocator {
                         record.belongs_to(arena) && record.allocation.slot() == table.slot
                     })
                     .ok_or(AllocError::NoKernelUntyped)?;
-                self.allocations[position] = super::AllocationRecord::EMPTY;
+                self.allocations
+                    .set(position, super::AllocationRecord::EMPTY);
                 self.allocation_search_start = self.allocation_search_start.min(position);
                 self.arena_mut(arena)?.slot_len -= 1;
                 self.slots.release(table.slot);
-                let extent = self.extents[table.extent].as_mut().unwrap();
-                extent.active = false;
-                extent.revoked = false;
-                extent.owner = u16::MAX;
-                extent.serial = 0;
-                extent.watermark = 0;
-                extent.objects = 0;
-                extent.bytes = 0;
+                self.settle_returned_extent(table.extent);
                 self.mapping_tables.records[index] = None;
             }
         }

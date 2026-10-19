@@ -432,7 +432,8 @@ impl ObjectAllocator {
     /// aligned 2 MiB extent a large frame in the same transaction was planned
     /// to occupy. Fixed arenas keep their original selection unchanged.
     pub fn mark_arena_elastic(&mut self, id: TaskArenaId) -> Result<(), AllocError> {
-        self.arena_mut(id)?.elastic = true;
+        self.arena(id)?;
+        self.extents.set_elastic(id.index(), true);
         Ok(())
     }
 
@@ -615,7 +616,7 @@ impl ObjectAllocator {
                 });
                 continue;
             }
-            self.live_objects = self.live_objects.saturating_sub(extent.objects);
+            self.live_objects = self.live_objects.saturating_sub(extent.objects as usize);
             self.live_bytes = self.live_bytes.saturating_sub(extent.bytes);
             self.release_extent_allocations(id, index);
             // Backing borrowed from a reservation returns to that reservation
@@ -752,7 +753,7 @@ impl ObjectAllocator {
             }
             self.slots.release(record.allocation.slot());
             self.physical.remove(record.allocation.slot());
-            self.allocations[index] = super::AllocationRecord::EMPTY;
+            self.allocations.set(index, super::AllocationRecord::EMPTY);
             self.allocation_search_start = self.allocation_search_start.min(index);
             if let Ok(arena) = self.arena_mut(id) {
                 arena.slot_len = arena.slot_len.saturating_sub(1);
@@ -773,7 +774,8 @@ impl ObjectAllocator {
             };
             let slot = self.allocations[position].allocation.slot();
             self.slots.release(slot);
-            self.allocations[position] = super::AllocationRecord::EMPTY;
+            self.allocations
+                .set(position, super::AllocationRecord::EMPTY);
             self.allocation_search_start = self.allocation_search_start.min(position);
             let arena = self.arena_mut(id)?;
             arena.slot_len = arena.slot_len.saturating_sub(1);
@@ -798,7 +800,8 @@ impl ObjectAllocator {
             }
             let kind = record.allocation.private_kind() as usize;
             let head = self.arenas[id.index()].reusable_heads[kind];
-            self.allocations[index].next_state = head;
+            self.allocations
+                .update(index, |record| record.next_state = head);
             self.arenas[id.index()].reusable_heads[kind] = index as u32;
         }
     }
@@ -920,9 +923,9 @@ mod tests {
                     extent.assign(owner.index(), owner.serial, ExtentKind::PrivateData);
                     Some(extent)
                 };
-                allocator.extents[0] = owned(a);
-                allocator.extents[1] = owned(a);
-                allocator.extents[2] = owned(b);
+                allocator.extents.set(0, owned(a));
+                allocator.extents.set(1, owned(a));
+                allocator.extents.set(2, owned(b));
                 allocator.quarantine_extents(a, &[0]);
                 allocator.quarantine_extents(a, &[1, 0]);
                 allocator.quarantine_extents(b, &[2]);
@@ -940,7 +943,7 @@ mod tests {
                         ..ledger::Resources::ZERO
                     }
                 );
-                allocator.extents[1] = None;
+                allocator.extents.set(1, None);
                 assert_eq!(
                     allocator.elastic_quarantine_resources(a).bytes,
                     GRANULE_BYTES as u64

@@ -23,6 +23,7 @@ mod extent_buddy;
 mod mapping_tables;
 mod preserved;
 mod qualification;
+mod record_tables;
 mod segmented;
 mod shared_backing;
 mod slots;
@@ -1148,7 +1149,10 @@ struct ExtentRecord {
     active: bool,
     revoked: bool,
     watermark: usize,
-    objects: usize,
+    /// Live objects retyped from this extent. 32 bits leave room for `link`
+    /// without growing the record, which would change how many records a
+    /// metadata page holds.
+    objects: u32,
     bytes: usize,
     /// Reservation that owns this record across borrows, or
     /// [`guarantee_vault::RESERVATION_NONE`].
@@ -1165,6 +1169,9 @@ struct ExtentRecord {
     split: bool,
     /// The two children of a split record, or [`extent_buddy::NO_EXTENT`].
     children: [u32; 2],
+    /// The next extent on its arena's room chain, or
+    /// [`record_tables::NO_LINK`]. Written only by the extent table.
+    link: u32,
 }
 
 impl ExtentRecord {
@@ -1184,6 +1191,7 @@ impl ExtentRecord {
             origin: guarantee_vault::RESERVATION_NONE,
             split: false,
             children: [extent_buddy::NO_EXTENT; 2],
+            link: record_tables::NO_LINK,
         }
     }
 
@@ -1312,8 +1320,6 @@ struct ArenaRecord {
     in_flight_head: u32,
     in_flight_granules: usize,
     releasing: bool,
-    /// Backing arrives on demand and in mixed sizes for this arena.
-    elastic: bool,
 }
 
 impl ArenaRecord {
@@ -1326,7 +1332,6 @@ impl ArenaRecord {
             in_flight_head: PRIVATE_STATE_NONE,
             in_flight_granules: 0,
             releasing: false,
-            elastic: false,
         }
     }
 
@@ -1342,6 +1347,12 @@ const _: () = assert!(
     WIDE_TABLE_CNODE_SLOTS.is_power_of_two()
         && MAX_TASK_ALLOCATIONS < u32::MAX as usize
         && MAX_TASK_EXTENTS < u16::MAX as usize
+);
+// Records per metadata page are reported in the census lines the private-memory
+// gates read, so a record that grew would move those figures.
+const _: () = assert!(
+    core::mem::size_of::<Option<ExtentRecord>>() == 72
+        && core::mem::size_of::<AllocationRecord>() == 32
 );
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1379,8 +1390,8 @@ pub struct ObjectAllocator {
     devices: [Option<DeviceRegion>; MAX_DEVICE_UNTYPEDS],
     device_len: usize,
     arenas: [ArenaRecord; MAX_TASK_ARENAS],
-    extents: segmented::Segmented<Option<ExtentRecord>>,
-    allocations: segmented::Segmented<AllocationRecord>,
+    extents: record_tables::ExtentTable,
+    allocations: record_tables::AllocationTable,
     allocation_search_start: usize,
     next_arena_serial: u32,
     slots_allocated: usize,
@@ -1432,8 +1443,8 @@ impl ObjectAllocator {
             devices: [None; MAX_DEVICE_UNTYPEDS],
             device_len: 0,
             arenas: [ArenaRecord::empty(); MAX_TASK_ARENAS],
-            extents: segmented::Segmented::new(),
-            allocations: segmented::Segmented::new(),
+            extents: record_tables::ExtentTable::new(),
+            allocations: record_tables::AllocationTable::new(),
             allocation_search_start: 0,
             next_arena_serial: 1,
             slots_allocated: 0,
@@ -1926,12 +1937,14 @@ impl ObjectAllocator {
     }
 
     pub fn reusable_extent_bytes(&self) -> usize {
-        self.extents
-            .iter()
-            .flatten()
-            .filter(|extent| extent.is_common_free())
-            .map(|extent| 1usize << extent.size_bits)
-            .sum()
+        let bytes = self.extents.free_bytes();
+        #[cfg(test)]
+        assert_eq!(
+            bytes,
+            self.extents.recount_free_bytes(),
+            "recount: reusable extent bytes"
+        );
+        bytes
     }
 
     /// [`Self::reusable_extent_bytes`], restricted to private-backing extents.
@@ -2553,6 +2566,7 @@ impl ObjectAllocator {
         )?;
         let serial = self.next_arena_serial;
         self.next_arena_serial = self.next_arena_serial.wrapping_add(1).max(1);
+        self.extents.reset_arena(index);
         self.arenas[index] = ArenaRecord {
             serial,
             active: true,
@@ -2561,6 +2575,7 @@ impl ObjectAllocator {
         let id = self.arenas[index].id(index);
         if let Err(error) = self.provision_extent(id, size_bits, ExtentKind::Static) {
             self.arenas[index] = ArenaRecord::empty();
+            self.extents.reset_arena(index);
             return Err(error);
         }
         Ok(id)
@@ -2610,6 +2625,30 @@ impl ObjectAllocator {
         self.private_visits
     }
 
+    /// Present extent records and owned allocation records read since the
+    /// last reset, however they were reached.
+    #[cfg(test)]
+    pub(crate) fn record_reads(&self) -> usize {
+        self.extents.reads() + self.allocations.reads()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_record_reads(&self) {
+        self.extents.set_reads(0);
+        self.allocations.set_reads(0);
+    }
+
+    /// Run `check` without counting what it reads: the recounts a test build
+    /// compares maintained figures with are not part of serving a request.
+    #[cfg(test)]
+    fn uncounted<R>(&self, check: impl FnOnce(&Self) -> R) -> R {
+        let (extents, allocations) = (self.extents.reads(), self.allocations.reads());
+        let result = check(self);
+        self.extents.set_reads(extents);
+        self.allocations.set_reads(allocations);
+        result
+    }
+
     fn push_reusable(&mut self, id: TaskArenaId, position: usize) -> Result<(), AllocError> {
         let kind = self
             .allocations
@@ -2625,7 +2664,8 @@ impl ObjectAllocator {
             .allocation
             .private_kind();
         let head = self.private_arena(id)?.reusable_heads[kind as usize];
-        self.allocations[position].next_state = head;
+        self.allocations
+            .update(position, |record| record.next_state = head);
         self.arena_mut(id)?.reusable_heads[kind as usize] = position as u32;
         Ok(())
     }
@@ -2681,9 +2721,11 @@ impl ObjectAllocator {
                 if previous == PRIVATE_STATE_NONE {
                     self.arena_mut(id)?.reusable_heads[kind as usize] = next;
                 } else {
-                    self.allocations[previous as usize].next_state = next;
+                    self.allocations
+                        .update(previous as usize, |record| record.next_state = next);
                 }
-                self.allocations[position].next_state = PRIVATE_STATE_NONE;
+                self.allocations
+                    .update(position, |record| record.next_state = PRIVATE_STATE_NONE);
                 return Ok(Some(position));
             }
             previous = current;
@@ -2692,17 +2734,19 @@ impl ObjectAllocator {
         Err(Self::private_record_error())
     }
 
-    fn private_record_mut(
-        &mut self,
+    /// Where one committed private record of this arena lives.
+    fn private_record_position(
+        &self,
         id: TaskArenaId,
         allocation: &PrivateAllocation,
-    ) -> Result<&mut AllocationRecord, AllocError> {
+    ) -> Result<usize, AllocError> {
         self.private_arena(id)?;
         if allocation.arena != id {
             return Err(Self::private_record_error());
         }
+        let position = allocation.position as usize;
         self.allocations
-            .get_mut(allocation.position as usize)
+            .get(position)
             .filter(|record| {
                 record.belongs_to(id)
                     && record.allocation.is_private()
@@ -2712,6 +2756,7 @@ impl ObjectAllocator {
                     && record.allocation.slot() == allocation.cap.bits() as usize
                     && record.next_state == PRIVATE_STATE_NONE
             })
+            .map(|_| position)
             .ok_or_else(Self::private_record_error)
     }
 
@@ -2728,13 +2773,16 @@ impl ObjectAllocator {
             return Ok(index);
         }
         self.ensure_extent_descriptors(1)?;
-        let index =
-            self.extents
-                .iter()
-                .position(Option::is_none)
-                .ok_or(AllocError::ArenaTableFull {
-                    limit: MAX_TASK_EXTENTS,
-                })?;
+        let vacancy = self.extents.first_vacancy();
+        #[cfg(test)]
+        assert_eq!(
+            vacancy,
+            self.extents.walk_vacancy(),
+            "recount: lowest vacant extent slot"
+        );
+        let index = vacancy.ok_or(AllocError::ArenaTableFull {
+            limit: MAX_TASK_EXTENTS,
+        })?;
         let parent_slot = self.take_slot()?;
         let blueprint = sel4::ObjectBlueprint::Untyped { size_bits };
         if let Err(error) = self.allocate_from_global(blueprint, parent_slot) {
@@ -2763,8 +2811,9 @@ impl ObjectAllocator {
         let parent =
             crate::root_cspace::RootSlot::<sel4::cap_type::Untyped>::from_address(parent_slot)
                 .cap();
-        self.extents[index] = Some(ExtentRecord::new(parent, size_bits));
-        self.extents[index].as_mut().expect("new extent").paddr = self.last_paddr;
+        let mut record = ExtentRecord::new(parent, size_bits);
+        record.paddr = self.last_paddr;
+        self.extents.set(index, Some(record));
         Ok(index)
     }
 
@@ -2776,10 +2825,8 @@ impl ObjectAllocator {
     ) -> Result<usize, AllocError> {
         self.arena(id)?;
         let index = self.acquire_extent_record(size_bits)?;
-        self.extents[index]
-            .as_mut()
-            .expect("extent position is provisioned")
-            .assign(id.index(), id.serial, kind);
+        self.extents
+            .update(index, |extent| extent.assign(id.index(), id.serial, kind));
         Ok(index)
     }
 
@@ -2792,16 +2839,15 @@ impl ObjectAllocator {
     /// record active and owned, which is what keeps a quarantine unavailable
     /// rather than advertised as free.
     fn settle_returned_extent(&mut self, index: usize) {
-        let Some(record) = self.extents.get_mut(index).and_then(Option::as_mut) else {
-            return;
-        };
-        record.active = false;
-        record.revoked = false;
-        record.owner = u16::MAX;
-        record.serial = 0;
-        record.watermark = 0;
-        record.objects = 0;
-        record.bytes = 0;
+        self.extents.update_present(index, |record| {
+            record.active = false;
+            record.revoked = false;
+            record.owner = u16::MAX;
+            record.serial = 0;
+            record.watermark = 0;
+            record.objects = 0;
+            record.bytes = 0;
+        });
     }
 
     fn allocation_position(&self) -> Result<usize, AllocError> {
@@ -2820,13 +2866,16 @@ impl ObjectAllocator {
         allocation: ArenaAllocation,
     ) -> Result<usize, AllocError> {
         let position = self.allocation_position()?;
-        self.allocations[position] = AllocationRecord {
-            owner: id.index() as u16,
-            extent: extent.map_or(PRIVATE_EXTENT_NONE, |index| index as u32),
-            serial: id.serial,
-            allocation,
-            next_state: PRIVATE_STATE_NONE,
-        };
+        self.allocations.set(
+            position,
+            AllocationRecord {
+                owner: id.index() as u16,
+                extent: extent.map_or(PRIVATE_EXTENT_NONE, |index| index as u32),
+                serial: id.serial,
+                allocation,
+                next_state: PRIVATE_STATE_NONE,
+            },
+        );
         self.arena_mut(id)?.slot_len += 1;
         self.allocation_search_start = (position + 1) % self.allocations.len();
         Ok(position)
@@ -2860,7 +2909,45 @@ impl ObjectAllocator {
         size_bits: usize,
         source: ExtentSource,
     ) -> Result<(usize, usize), AllocError> {
-        let elastic = self.arena(id).is_ok_and(|arena| arena.elastic);
+        // Static and mapping-table extents are chosen while a task is built
+        // or admitted, not per page, and keep the walk below.
+        if record_tables::room_rank(kind).is_none()
+            || size_bits < GRANULE_BYTES.trailing_zeros() as usize
+            || self.arena(id).is_err()
+        {
+            return self.walk_extent_for_allocation(id, kind, size_bits, source);
+        }
+        let selected = self.extents.room_select(id, kind, size_bits, source);
+        #[cfg(test)]
+        {
+            if matches!(selected, Err(AllocError::ArenaTableFull { .. })) {
+                assert!(
+                    !self.extents.room_chain_sound(id.index()),
+                    "recount: a sound room chain refused a request"
+                );
+            } else {
+                let walked = self.uncounted(|allocator| {
+                    allocator.walk_extent_for_allocation(id, kind, size_bits, source)
+                });
+                assert_eq!(
+                    selected, walked,
+                    "recount: the room chain disagrees with the walk"
+                );
+            }
+        }
+        selected
+    }
+
+    /// Every record of the table, in index order: the selection the room
+    /// chain reproduces, and the one kinds without a chain still make.
+    fn walk_extent_for_allocation(
+        &self,
+        id: TaskArenaId,
+        kind: ExtentKind,
+        size_bits: usize,
+        source: ExtentSource,
+    ) -> Result<(usize, usize), AllocError> {
+        let elastic = self.arena(id).is_ok() && self.extents.is_elastic(id.index());
         let candidates = self
             .extents
             .iter()
@@ -2949,12 +3036,11 @@ impl ObjectAllocator {
             return Err(error);
         }
         let bytes = 1usize << size_bits;
-        let extent = self.extents[extent_index]
-            .as_mut()
-            .expect("selected extent exists");
-        extent.watermark = watermark;
-        extent.objects += 1;
-        extent.bytes += bytes;
+        self.extents.update(extent_index, |extent| {
+            extent.watermark = watermark;
+            extent.objects += 1;
+            extent.bytes += bytes;
+        });
         self.objects_allocated += 1;
         self.live_objects += 1;
         self.bytes_allocated += bytes;
@@ -3008,36 +3094,11 @@ impl ObjectAllocator {
             .saturating_sub(self.operational_floor(self.operational_resources.slots))
     }
 
+    /// Whether `free` descriptors are available to an ordinary consumer, with
+    /// reservation-held and floor records withheld exactly as
+    /// [`Self::allocation_descriptors_free`] withholds them.
     fn has_allocation_descriptors(&self, free: usize) -> bool {
-        if free == 0 {
-            return true;
-        }
-        let Some(required) = free
-            .checked_add(self.reserved_descriptors())
-            .and_then(|count| {
-                count.checked_add(self.operational_floor(self.operational_resources.descriptors))
-            })
-        else {
-            return false;
-        };
-        if required == 0 {
-            return true;
-        }
-        if required > self.allocations.len() {
-            return false;
-        }
-        let mut available = 0;
-        for index in (self.allocation_search_start..self.allocations.len())
-            .chain(0..self.allocation_search_start)
-        {
-            if self.allocations[index].owner == u16::MAX {
-                available += 1;
-                if available == required {
-                    return true;
-                }
-            }
-        }
-        false
+        free == 0 || self.allocation_descriptors_free() >= free
     }
 
     pub fn ensure_allocation_descriptors(&mut self, free: usize) -> Result<(), AllocError> {
@@ -3063,8 +3124,7 @@ impl ObjectAllocator {
             let page = self.map_metadata_page()?;
             // SAFETY: page ownership is retained by the metadata ledger and no
             // other record table references this freshly mapped page.
-            unsafe { self.allocations.append(page, AllocationRecord::EMPTY) }
-                .map_err(|()| Self::private_record_error())?;
+            unsafe { self.allocations.append(page) }.map_err(|()| Self::private_record_error())?;
         }
         Ok(())
     }
@@ -3124,14 +3184,16 @@ impl ObjectAllocator {
     /// reservation-held record withheld for the reason [`Self::free_slots`]
     /// withholds slots.
     pub fn allocation_descriptors_free(&self) -> usize {
-        (self.allocations.len()
-            - self
-                .allocations
-                .iter()
-                .filter(|entry| entry.owner != u16::MAX)
-                .count())
-        .saturating_sub(self.reserved_descriptors())
-        .saturating_sub(self.operational_floor(self.operational_resources.descriptors))
+        let owned = self.allocations.owned();
+        #[cfg(test)]
+        assert_eq!(
+            owned,
+            self.allocations.recount_owned(),
+            "recount: owned allocation records"
+        );
+        (self.allocations.len() - owned)
+            .saturating_sub(self.reserved_descriptors())
+            .saturating_sub(self.operational_floor(self.operational_resources.descriptors))
     }
 
     #[cfg(any(slime_private_stress, slime_private_rollback, test))]
@@ -3140,13 +3202,14 @@ impl ObjectAllocator {
             .allocation_descriptors_free()
             .saturating_sub(leave_free);
         let mut remaining = count;
-        for record in self.allocations.iter_mut() {
+        for index in 0..self.allocations.len() {
             if remaining == 0 {
                 break;
             }
-            if record.owner == u16::MAX {
+            if self.allocations[index].owner == u16::MAX {
                 // Reserved metadata has no capability and belongs to no task arena.
-                record.owner = u16::MAX - 1;
+                self.allocations
+                    .update(index, |record| record.owner = u16::MAX - 1);
                 remaining -= 1;
             }
         }
@@ -3155,9 +3218,9 @@ impl ObjectAllocator {
 
     #[cfg(any(slime_private_stress, slime_private_rollback, test))]
     pub(crate) fn release_stress_descriptors(&mut self) {
-        for record in self.allocations.iter_mut() {
-            if record.owner == u16::MAX - 1 {
-                *record = AllocationRecord::EMPTY;
+        for index in 0..self.allocations.len() {
+            if self.allocations[index].owner == u16::MAX - 1 {
+                self.allocations.set(index, AllocationRecord::EMPTY);
             }
         }
     }
@@ -3212,7 +3275,7 @@ impl ObjectAllocator {
             let page = self.map_metadata_page()?;
             // SAFETY: the metadata ledger retains this fresh page exclusively
             // for this table until the root stops.
-            unsafe { self.extents.append(page, None) }.map_err(|()| AllocError::NoKernelUntyped)?;
+            unsafe { self.extents.append(page) }.map_err(|()| AllocError::NoKernelUntyped)?;
         }
         Ok(())
     }
@@ -3222,10 +3285,14 @@ impl ObjectAllocator {
     }
 
     pub fn extent_descriptors_free(&self) -> usize {
-        self.extents
-            .iter()
-            .filter(|entry| entry.is_none())
-            .count()
+        let present = self.extents.present();
+        #[cfg(test)]
+        assert_eq!(
+            present,
+            self.extents.recount_present(),
+            "recount: present extent records"
+        );
+        (self.extents.len() - present)
             .saturating_sub(self.operational_floor(self.operational_resources.extents))
     }
 
@@ -3249,7 +3316,7 @@ impl ObjectAllocator {
             .flatten()
             .filter(|extent| extent.belongs_to(id))
         {
-            objects += extent.objects;
+            objects += extent.objects as usize;
             bytes += extent.bytes;
         }
         Ok((slots, objects, bytes))
@@ -3274,6 +3341,7 @@ impl ObjectAllocator {
             .expect("test arena table has room");
         let serial = self.next_arena_serial;
         self.next_arena_serial = self.next_arena_serial.wrapping_add(1).max(1);
+        self.extents.reset_arena(index);
         self.arenas[index] = ArenaRecord {
             serial,
             active: true,
@@ -3405,12 +3473,13 @@ impl ObjectAllocator {
         // may only be reused for the same source; otherwise a guaranteed page
         // could be served by a record backed from the common pool.
         if let Some(position) = self.pop_reusable_from(id, kind, Some(size_bits), source)? {
-            let record = &mut self.allocations[position];
-            let mapped = record.allocation.is_mapped();
-            let extent = record.extent as usize;
-            record
-                .allocation
-                .set_private_state(kind, size_bits, false, mapped);
+            let (mapped, extent) = self.allocations.update(position, |record| {
+                let mapped = record.allocation.is_mapped();
+                record
+                    .allocation
+                    .set_private_state(kind, size_bits, false, mapped);
+                (mapped, record.extent as usize)
+            });
             return Ok((position, extent, 0, true, mapped));
         }
         let extent_kind = if kind == PrivateObjectKind::LeafTable {
@@ -3422,11 +3491,12 @@ impl ObjectAllocator {
         let position = self
             .pop_reusable(id, PrivateObjectKind::Empty, None)?
             .ok_or_else(Self::private_record_error)?;
-        let record = &mut self.allocations[position];
-        record.extent = extent as u32;
-        record
-            .allocation
-            .set_private_state(kind, size_bits, false, false);
+        self.allocations.update(position, |record| {
+            record.extent = extent as u32;
+            record
+                .allocation
+                .set_private_state(kind, size_bits, false, false);
+        });
         Ok((position, extent, watermark, false, false))
     }
 
@@ -3468,19 +3538,21 @@ impl ObjectAllocator {
             self.push_reusable(id, position)?;
             return Err(error);
         }
-        let extent = self.extents[extent_index]
-            .as_mut()
-            .expect("validated private extent");
-        self.live_objects -= extent.objects;
-        self.live_bytes -= extent.bytes;
-        extent.watermark = 0;
-        extent.objects = 0;
-        extent.bytes = 0;
-        let record = &mut self.allocations[position];
-        record.extent = PRIVATE_EXTENT_NONE;
-        record
-            .allocation
-            .set_private_state(PrivateObjectKind::Empty, 0, true, false);
+        let (objects, bytes) = self.extents.update(extent_index, |extent| {
+            let held = (extent.objects, extent.bytes);
+            extent.watermark = 0;
+            extent.objects = 0;
+            extent.bytes = 0;
+            held
+        });
+        self.live_objects -= objects as usize;
+        self.live_bytes -= bytes;
+        self.allocations.update(position, |record| {
+            record.extent = PRIVATE_EXTENT_NONE;
+            record
+                .allocation
+                .set_private_state(PrivateObjectKind::Empty, 0, true, false);
+        });
         self.push_reusable(id, position)
     }
 
@@ -3513,23 +3585,21 @@ impl ObjectAllocator {
                 .expect("private extent exists")
                 .parent;
             if let Err(error) = kernel.retype(parent, &blueprint, slot) {
-                self.allocations[position].extent = PRIVATE_EXTENT_NONE;
-                self.allocations[position].allocation.set_private_state(
-                    PrivateObjectKind::Empty,
-                    0,
-                    true,
-                    false,
-                );
+                self.allocations.update(position, |record| {
+                    record.extent = PRIVATE_EXTENT_NONE;
+                    record
+                        .allocation
+                        .set_private_state(PrivateObjectKind::Empty, 0, true, false);
+                });
                 self.push_reusable(id, position)?;
                 return Err(AllocError::Retype { size_bits, error });
             }
             let bytes = 1usize << size_bits;
-            let extent = self.extents[extent_index]
-                .as_mut()
-                .expect("private extent exists");
-            extent.watermark = watermark;
-            extent.objects += 1;
-            extent.bytes += bytes;
+            self.extents.update(extent_index, |extent| {
+                extent.watermark = watermark;
+                extent.objects += 1;
+                extent.bytes += bytes;
+            });
             self.objects_allocated += 1;
             self.live_objects += 1;
             self.bytes_allocated += bytes;
@@ -3553,19 +3623,17 @@ impl ObjectAllocator {
         {
             self.private_visits.mark += 1;
         }
-        let position = allocation.position as usize;
-        let kind = self
-            .private_record_mut(id, &allocation)?
-            .allocation
-            .private_kind();
+        let position = self.private_record_position(id, &allocation)?;
+        let kind = self.allocations[position].allocation.private_kind();
         let size_bits = self.allocations[position].allocation.size_bits();
         let head = self.private_arena(id)?.in_flight_head;
-        let record = &mut self.allocations[position];
-        record
-            .allocation
-            .set_private_state(kind, size_bits, false, mapped);
-        record.allocation.set_in_flight(true);
-        record.next_state = head;
+        self.allocations.update(position, |record| {
+            record
+                .allocation
+                .set_private_state(kind, size_bits, false, mapped);
+            record.allocation.set_in_flight(true);
+            record.next_state = head;
+        });
         let arena = self.arena_mut(id)?;
         arena.in_flight_head = position as u32;
         if kind == PrivateObjectKind::Granule {
@@ -3599,8 +3667,10 @@ impl ObjectAllocator {
             let next = record.next_state;
             let kind = record.allocation.private_kind();
             self.arenas[id.index()].in_flight_head = next;
-            self.allocations[position].next_state = PRIVATE_STATE_NONE;
-            self.allocations[position].allocation.set_in_flight(false);
+            self.allocations.update(position, |record| {
+                record.next_state = PRIVATE_STATE_NONE;
+                record.allocation.set_in_flight(false);
+            });
             if kind == PrivateObjectKind::Granule {
                 self.arenas[id.index()].in_flight_granules -= 1;
             }
@@ -3646,19 +3716,20 @@ impl ObjectAllocator {
             if kind == PrivateObjectKind::Granule {
                 self.arenas[id.index()].in_flight_granules -= 1;
             }
-            let record = &mut self.allocations[position];
-            record.next_state = PRIVATE_STATE_NONE;
             // A mapped leaf names one fixed VSpace span. Retain it as committed
             // ownership for that span rather than publishing it to the
             // kind-wide reusable pool, where another span could acquire the
             // same still-mapped capability and incorrectly skip `map_leaf`.
             let reusable = kind != PrivateObjectKind::LeafTable;
-            record.allocation.set_private_state(
-                kind,
-                size_bits,
-                reusable,
-                kind == PrivateObjectKind::LeafTable,
-            );
+            self.allocations.update(position, |record| {
+                record.next_state = PRIVATE_STATE_NONE;
+                record.allocation.set_private_state(
+                    kind,
+                    size_bits,
+                    reusable,
+                    kind == PrivateObjectKind::LeafTable,
+                );
+            });
             if reusable {
                 self.push_reusable(id, position)?;
             }
@@ -3674,13 +3745,14 @@ impl ObjectAllocator {
         {
             self.private_visits.reset += 1;
         }
-        let position = allocation.position as usize;
-        let record = self.private_record_mut(id, &allocation)?;
-        let kind = record.allocation.private_kind();
-        let size_bits = record.allocation.size_bits();
-        record
-            .allocation
-            .set_private_state(kind, size_bits, true, false);
+        let position = self.private_record_position(id, &allocation)?;
+        self.allocations.update(position, |record| {
+            let kind = record.allocation.private_kind();
+            let size_bits = record.allocation.size_bits();
+            record
+                .allocation
+                .set_private_state(kind, size_bits, true, false);
+        });
         self.push_reusable(id, position)
     }
 
@@ -3715,12 +3787,13 @@ impl ObjectAllocator {
                     slot: parent_slot,
                     error,
                 })?;
-            self.live_objects = self.live_objects.saturating_sub(extent.objects);
+            self.live_objects = self.live_objects.saturating_sub(extent.objects as usize);
             self.live_bytes = self.live_bytes.saturating_sub(extent.bytes);
-            let record = self.extents[index].as_mut().expect("extent exists");
-            record.revoked = true;
-            record.objects = 0;
-            record.bytes = 0;
+            self.extents.update(index, |record| {
+                record.revoked = true;
+                record.objects = 0;
+                record.bytes = 0;
+            });
         }
         self.arenas[id.index()].reusable_heads = [PRIVATE_STATE_NONE; 4];
         self.arenas[id.index()].in_flight_head = PRIVATE_STATE_NONE;
@@ -3736,7 +3809,7 @@ impl ObjectAllocator {
                 .map_err(|error| AllocError::ArenaCleanup { slot, error })?;
             self.slots.release(slot);
             self.physical.remove(slot);
-            self.allocations[index] = AllocationRecord::EMPTY;
+            self.allocations.set(index, AllocationRecord::EMPTY);
             self.allocation_search_start = self.allocation_search_start.min(index);
         }
         for index in 0..self.extents.len() {
@@ -3747,6 +3820,7 @@ impl ObjectAllocator {
         self.mapping_tables.forget(id);
         self.elastic_quarantine[id.index()] = elastic::Quarantine::EMPTY;
         self.arenas[id.index()] = ArenaRecord::empty();
+        self.extents.reset_arena(id.index());
         Ok(released)
     }
 
@@ -4036,7 +4110,7 @@ mod tests {
                 let mut extent =
                     ExtentRecord::new(sel4::cap::Untyped::from_bits(slot as _), size_bits);
                 extent.assign(id.index(), id.serial, kind);
-                allocator.extents[extent_position] = Some(extent);
+                allocator.extents.set(extent_position, Some(extent));
                 extent_position += 1;
                 Ok(())
             }
@@ -4378,7 +4452,7 @@ mod tests {
                                 size_bits,
                             );
                             extent.assign(id.index(), id.serial, kind);
-                            allocator.extents[extent_position] = Some(extent);
+                            allocator.extents.set(extent_position, Some(extent));
                             extent_position += 1;
                             Ok(())
                         }
@@ -4698,6 +4772,7 @@ mod tests {
             origin: super::guarantee_vault::RESERVATION_NONE,
             split: false,
             children: [super::extent_buddy::NO_EXTENT; 2],
+            link: super::record_tables::NO_LINK,
         };
         assert_eq!(
             task_static_backing_from_records(
@@ -4941,7 +5016,9 @@ mod tests {
                 let valid = allocator.arenas[arena.index()].reusable_heads
                     [PrivateObjectKind::Empty as usize];
                 let snapshot = allocator.allocations[valid as usize];
-                allocator.allocations[valid as usize].owner = 1;
+                allocator
+                    .allocations
+                    .update(valid as usize, |record| record.owner = 1);
                 let mut kernel = RecordingPrivateKernel::default();
                 assert!(matches!(
                     allocator.acquire_private_in(
@@ -4955,7 +5032,7 @@ mod tests {
                         limit: MAX_TASK_ALLOCATIONS,
                     })
                 ));
-                allocator.allocations[valid as usize] = snapshot;
+                allocator.allocations.set(valid as usize, snapshot);
                 assert_eq!(
                     allocator.arenas[arena.index()].reusable_heads
                         [PrivateObjectKind::Empty as usize],
@@ -5813,7 +5890,7 @@ mod tests {
             // extents sharing one address would let overlapping placements
             // certify.
             extent.paddr = (index + 1) * MAX_PRIVATE_EXTENT_BYTES;
-            allocator.extents[index] = Some(extent);
+            allocator.extents.set(index, Some(extent));
         }
     }
 
@@ -6593,8 +6670,8 @@ mod tests {
                 check(&allocator);
                 for remaining in [0, 1, 7, 31] {
                     allocator.reserve_stress_descriptors(remaining);
-                    // Begin inside the occupied prefix so finding the empty
-                    // suffix and wrapping the cursor both exercise the predicate.
+                    // Wherever the next record search begins, inside the
+                    // occupied prefix or past it, the answer is the same.
                     for cursor in [
                         0,
                         allocator.allocations.len() / 2,
@@ -7344,5 +7421,648 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// Serving one growth request reads the same records however much the
+    /// holder already has.
+    ///
+    /// Each request's returned extents are seeded just before it, as the
+    /// matrix's small schedule finds them after its bulk schedule, so both
+    /// tables gain present records between the compared requests: a walk of
+    /// the extent table would read at least the 10 extent records gained, and
+    /// a walk of the allocation table at least the 512 allocation records.
+    #[test]
+    fn a_growth_request_reads_no_more_records_when_the_holder_holds_twice_the_pages() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                // Records a request may read beyond the one before it for
+                // steps that do not depend on what the holder holds. Smaller
+                // than either table's growth between the compared requests,
+                // so no walk of either table fits inside it.
+                const ALLOWANCE: usize = 8;
+                const REQUEST: usize = 511;
+                let mut allocator = reservation_fixture();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let policy = guaranteed_policy(0);
+                let (mut ledger, token) = guaranteed_ledger(&policy, 0);
+                let mut region = Region::reserve(
+                    &mut allocator,
+                    0x1000_0000,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    crate::private_memory::MAX_REGION_PAGES,
+                    true,
+                )
+                .expect("host test window");
+                assert!(region.reservation() >= 4 * REQUEST);
+                let mut table = Table::new();
+                let mut kernel = RecordingPrivateKernel::default();
+                let mut reads = [0; 4];
+                let mut held = [(0, 0); 4];
+                for (request, read) in reads.iter_mut().enumerate() {
+                    let (shape, _) =
+                        region.shape_split(REQUEST, crate::private_memory::Lane::BasePage, 0);
+                    assert_eq!((shape.large_frames, shape.base_pages), (0, REQUEST));
+                    for bits in (GRANULE_EXTENT_BITS..LARGE_EXTENT_BITS).rev() {
+                        if shape.base_pages & (1 << (bits - GRANULE_EXTENT_BITS)) != 0 {
+                            seed_reusable_extents(&mut allocator, ExtentKind::PrivateData, bits, 1);
+                        }
+                    }
+                    seed_reusable_extents(
+                        &mut allocator,
+                        ExtentKind::PrivateTables,
+                        GRANULE_EXTENT_BITS,
+                        shape.tables,
+                    );
+                    held[request] = (
+                        allocator.extents.iter().flatten().count(),
+                        allocator
+                            .allocations
+                            .iter()
+                            .filter(|record| record.owner != u16::MAX)
+                            .count(),
+                    );
+                    allocator.reset_record_reads();
+                    let previous = crate::private_memory::elastic::grow(
+                        &mut table,
+                        &mut allocator,
+                        &mut ledger,
+                        token,
+                        arena,
+                        sel4::cap::VSpace::from_bits(7),
+                        &mut region,
+                        REQUEST,
+                        crate::private_memory::GrowthPlan {
+                            lane: crate::private_memory::Lane::BasePage,
+                            guaranteed_pages: 0,
+                            reservation: None,
+                        },
+                        &mut kernel,
+                    )
+                    .expect("every extent the request needs was returned before it");
+                    *read = allocator.record_reads();
+                    assert_eq!(previous, request * REQUEST);
+                }
+                assert!(
+                    held[2].0 > held[1].0 && held[2].1 > held[1].1,
+                    "both tables gained records between the compared requests: {held:?}"
+                );
+                assert!(
+                    reads[2] <= reads[1] + ALLOWANCE,
+                    "records read per request at 0, 511, 1022 and 1533 pages held: {reads:?}"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Best fit by extent size on an elastic arena and first fit by index on a
+    /// fixed one, pinned before the selection structure changes. Best fit is
+    /// what keeps a base page off the aligned extent a large frame in the same
+    /// transaction was planned to occupy.
+    #[test]
+    fn an_elastic_arena_takes_the_smallest_extent_with_room_and_a_fixed_arena_the_first() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(&mut allocator, ExtentKind::PrivateData, 13, 2);
+                let arena = allocator.arena_owning_slots_for_test(0);
+                let large = allocator
+                    .provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData)
+                    .unwrap();
+                let small = allocator
+                    .provision_extent(arena, 13, ExtentKind::PrivateData)
+                    .unwrap();
+                let other = allocator
+                    .provision_extent(arena, 13, ExtentKind::PrivateData)
+                    .unwrap();
+                assert!(large < small && small < other);
+                let select = |allocator: &ObjectAllocator, size_bits| {
+                    allocator
+                        .extent_for_allocation(
+                            arena,
+                            ExtentKind::PrivateData,
+                            size_bits,
+                            ExtentSource::Common,
+                        )
+                        .map(|(index, _)| index)
+                };
+                let too_small = |size_bits: usize| AllocError::ArenaTooSmall {
+                    size_bits,
+                    required: 1 << size_bits,
+                };
+
+                // Fixed: the lowest index with room, whatever its size.
+                assert_eq!(select(&allocator, GRANULE_EXTENT_BITS), Ok(large));
+                assert_eq!(select(&allocator, LARGE_EXTENT_BITS), Ok(large));
+
+                // Elastic: the smallest extent with room, the lower index
+                // first among equals; a 2 MiB frame still takes the 2 MiB one.
+                allocator.mark_arena_elastic(arena).unwrap();
+                assert_eq!(select(&allocator, GRANULE_EXTENT_BITS), Ok(small));
+                assert_eq!(select(&allocator, LARGE_EXTENT_BITS), Ok(large));
+
+                // One granule in the 2 MiB extent leaves it no room for a
+                // frame, and a granule still goes to the smallest extent.
+                allocator
+                    .extents
+                    .update(large, |extent| extent.watermark = GRANULE_BYTES);
+                assert_eq!(
+                    select(&allocator, LARGE_EXTENT_BITS),
+                    Err(too_small(LARGE_EXTENT_BITS))
+                );
+                assert_eq!(select(&allocator, GRANULE_EXTENT_BITS), Ok(small));
+
+                // A second, untouched 2 MiB extent takes the frame.
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                let second = allocator
+                    .provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData)
+                    .unwrap();
+                assert_eq!(select(&allocator, LARGE_EXTENT_BITS), Ok(second));
+                assert_eq!(select(&allocator, GRANULE_EXTENT_BITS), Ok(small));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// The selection rule follows the arena's mode at the moment of each
+    /// selection: a page taken first fit is followed, once the arena is
+    /// marked elastic, by one taken best fit.
+    #[test]
+    fn marking_an_arena_elastic_switches_its_next_selection_to_best_fit() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    LARGE_EXTENT_BITS,
+                    1,
+                );
+                seed_reusable_extents(&mut allocator, ExtentKind::PrivateData, 13, 1);
+                let arena = allocator.arena_owning_slots_for_test(0);
+                let large = allocator
+                    .provision_extent(arena, LARGE_EXTENT_BITS, ExtentKind::PrivateData)
+                    .unwrap();
+                let small = allocator
+                    .provision_extent(arena, 13, ExtentKind::PrivateData)
+                    .unwrap();
+                allocator.provision_private_slots(arena, 2).unwrap();
+                let mut kernel = RecordingPrivateKernel::default();
+                let mut granule = |allocator: &mut ObjectAllocator| {
+                    let allocation = allocator
+                        .acquire_private_in(
+                            arena,
+                            PrivateObjectKind::Granule,
+                            sel4::cap_type::Granule::object_blueprint(),
+                            ExtentSource::Common,
+                            &mut kernel,
+                        )
+                        .unwrap();
+                    allocator.allocations[allocation.position as usize].extent as usize
+                };
+                assert_eq!(granule(&mut allocator), large);
+                allocator.mark_arena_elastic(arena).unwrap();
+                assert_eq!(granule(&mut allocator), small);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A request no extent of the arena has room for is refused by name, and
+    /// before any record is taken or the kernel is asked.
+    #[test]
+    fn a_request_no_extent_has_room_for_is_refused_as_arena_too_small() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                let arena = allocator.arena_owning_slots_for_test(0);
+                allocator.mark_arena_elastic(arena).unwrap();
+                let data = allocator
+                    .provision_extent(arena, GRANULE_EXTENT_BITS, ExtentKind::PrivateData)
+                    .unwrap();
+                let reservation = allocator.open_reservation().unwrap();
+                let too_small = |size_bits: usize| {
+                    Err(AllocError::ArenaTooSmall {
+                        size_bits,
+                        required: 1 << size_bits,
+                    })
+                };
+                let select = |allocator: &ObjectAllocator, kind, size_bits, source| {
+                    allocator.extent_for_allocation(arena, kind, size_bits, source)
+                };
+                let common = ExtentSource::Common;
+
+                // Too large for the only extent, of a kind it is not, and
+                // from a source it is not.
+                assert_eq!(
+                    select(
+                        &allocator,
+                        ExtentKind::PrivateData,
+                        LARGE_EXTENT_BITS,
+                        common
+                    ),
+                    too_small(LARGE_EXTENT_BITS)
+                );
+                assert_eq!(
+                    select(
+                        &allocator,
+                        ExtentKind::PrivateTables,
+                        GRANULE_EXTENT_BITS,
+                        common
+                    ),
+                    too_small(GRANULE_EXTENT_BITS)
+                );
+                assert_eq!(
+                    select(
+                        &allocator,
+                        ExtentKind::PrivateData,
+                        GRANULE_EXTENT_BITS,
+                        ExtentSource::Guaranteed(reservation)
+                    ),
+                    too_small(GRANULE_EXTENT_BITS)
+                );
+                assert_eq!(
+                    select(
+                        &allocator,
+                        ExtentKind::PrivateData,
+                        GRANULE_EXTENT_BITS,
+                        common
+                    )
+                    .map(|(index, _)| index),
+                    Ok(data)
+                );
+
+                // Full: nothing has room, through selection and acquisition.
+                allocator
+                    .extents
+                    .update(data, |extent| extent.watermark = GRANULE_BYTES);
+                assert_eq!(
+                    select(
+                        &allocator,
+                        ExtentKind::PrivateData,
+                        GRANULE_EXTENT_BITS,
+                        common
+                    ),
+                    too_small(GRANULE_EXTENT_BITS)
+                );
+                allocator.provision_private_slots(arena, 1).unwrap();
+                let free = allocator.allocation_descriptors_free();
+                let mut kernel = RecordingPrivateKernel::default();
+                let refused = allocator
+                    .acquire_private_in(
+                        arena,
+                        PrivateObjectKind::Granule,
+                        sel4::cap_type::Granule::object_blueprint(),
+                        common,
+                        &mut kernel,
+                    )
+                    .map(|_| ());
+                assert_eq!(
+                    refused,
+                    too_small(GRANULE_EXTENT_BITS).map(|_: (usize, usize)| ())
+                );
+                assert!(kernel.requests.is_empty());
+                assert_eq!(allocator.allocation_descriptors_free(), free);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A page the arena has no spare record for is refused by name after its
+    /// extent was chosen and before anything is retyped or mapped: the extent
+    /// keeps its room and the descriptor pool its records.
+    #[test]
+    fn a_page_with_no_spare_record_is_refused_before_it_is_retyped_or_mapped() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                seed_reusable_extents(
+                    &mut allocator,
+                    ExtentKind::PrivateData,
+                    GRANULE_EXTENT_BITS,
+                    1,
+                );
+                // One CSlot owned, so the arena's chains are walked, and no
+                // record on any of them.
+                let arena = allocator.arena_owning_slots_for_test(1);
+                let data = allocator
+                    .provision_extent(arena, GRANULE_EXTENT_BITS, ExtentKind::PrivateData)
+                    .unwrap();
+                let free = allocator.allocation_descriptors_free();
+                let mut kernel = RecordingPrivateKernel::default();
+                let refused = allocator
+                    .acquire_private_in(
+                        arena,
+                        PrivateObjectKind::Granule,
+                        sel4::cap_type::Granule::object_blueprint(),
+                        ExtentSource::Common,
+                        &mut kernel,
+                    )
+                    .map(|_| ());
+                assert_eq!(
+                    refused,
+                    Err(AllocError::ArenaSlotTableFull {
+                        limit: MAX_TASK_ALLOCATIONS,
+                    })
+                );
+                assert!(kernel.requests.is_empty());
+                assert_eq!(allocator.extents[data].unwrap().watermark, 0);
+                assert_eq!(allocator.allocation_descriptors_free(), free);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// A growth whose descriptor page the metadata window cannot fund is
+    /// refused while it provisions descriptors, which precedes every mapping,
+    /// and takes no CSlot or record. On the host the window is closed by
+    /// construction; the refusal carries the name it has today.
+    #[test]
+    fn a_growth_whose_descriptor_page_cannot_be_funded_is_refused_before_any_page_is_mapped() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut allocator = reservation_fixture();
+                let arena = allocator.arena_owning_slots_for_test(0);
+                assert!(allocator.reserve_stress_descriptors(0) > 0);
+                assert_eq!(allocator.allocation_descriptors_free(), 0);
+                let slots = allocator.free_slots();
+                assert_eq!(
+                    allocator.provision_private_slots(arena, 1),
+                    Err(AllocError::NoKernelUntyped)
+                );
+                assert_eq!(allocator.free_slots(), slots);
+                assert_eq!(allocator.arena_slot_count(arena), Ok(0));
+                assert_eq!(allocator.allocation_descriptors_free(), 0);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// An elastic arena holding one 4 KiB data extent with room, a 4 KiB
+    /// table extent and one spare record, for the recount and chain tests.
+    fn room_chain_fixture() -> (ObjectAllocator, TaskArenaId, usize, usize) {
+        let mut allocator = reservation_fixture();
+        seed_reusable_extents(
+            &mut allocator,
+            ExtentKind::PrivateData,
+            GRANULE_EXTENT_BITS,
+            1,
+        );
+        seed_reusable_extents(
+            &mut allocator,
+            ExtentKind::PrivateTables,
+            GRANULE_EXTENT_BITS,
+            1,
+        );
+        let arena = allocator.arena_owning_slots_for_test(0);
+        allocator.mark_arena_elastic(arena).unwrap();
+        let data = allocator
+            .provision_extent(arena, GRANULE_EXTENT_BITS, ExtentKind::PrivateData)
+            .unwrap();
+        let tables = allocator
+            .provision_extent(arena, GRANULE_EXTENT_BITS, ExtentKind::PrivateTables)
+            .unwrap();
+        allocator.provision_private_slots(arena, 1).unwrap();
+        (allocator, arena, data, tables)
+    }
+
+    /// The panic message of one fixture's thread, or `None` when it ran clean.
+    fn room_chain_panic(
+        case: impl FnOnce(&mut ObjectAllocator, TaskArenaId, usize, usize) + Send + 'static,
+    ) -> Option<std::string::String> {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let (mut allocator, arena, data, tables) = room_chain_fixture();
+                case(&mut allocator, arena, data, tables);
+            })
+            .unwrap()
+            .join()
+            .err()
+            .map(|payload| {
+                payload
+                    .downcast_ref::<std::string::String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|text| (*text).into()))
+                    .unwrap_or_default()
+            })
+    }
+
+    /// Every figure the allocator maintains instead of counting is compared
+    /// with a full recount wherever a host test reads it, so no test needs to
+    /// know which figure it exercises: one made to disagree with its records
+    /// fails at its next read, and the same read of an undisturbed figure
+    /// passes.
+    #[test]
+    fn a_maintained_count_that_drifts_from_its_recount_fails_the_next_read() {
+        use super::record_tables::ExtentDrift;
+        type Drift = fn(&mut ObjectAllocator, TaskArenaId);
+        type Read = fn(&mut ObjectAllocator, TaskArenaId);
+        let cases: [(&str, Drift, Read); 5] = [
+            (
+                "owned allocation records",
+                |allocator, _| allocator.allocations.drift_for_test(),
+                |allocator, _| {
+                    allocator.allocation_descriptors_free();
+                },
+            ),
+            (
+                "present extent records",
+                |allocator, _| allocator.extents.drift_for_test(ExtentDrift::Present),
+                |allocator, _| {
+                    allocator.extent_descriptors_free();
+                },
+            ),
+            (
+                "reusable extent bytes",
+                |allocator, _| allocator.extents.drift_for_test(ExtentDrift::FreeBytes),
+                |allocator, _| {
+                    allocator.reusable_extent_bytes();
+                },
+            ),
+            (
+                "returned extents of one size",
+                |allocator, _| {
+                    allocator
+                        .extents
+                        .drift_for_test(ExtentDrift::Reuse { size_bits: 13 })
+                },
+                |allocator, _| {
+                    allocator.reusable_extent(13);
+                },
+            ),
+            (
+                "the room chain",
+                |allocator, arena| {
+                    allocator.extents.drift_for_test(ExtentDrift::RoomChain {
+                        arena: arena.index(),
+                    })
+                },
+                |allocator, arena| {
+                    let _ = allocator.extent_for_allocation(
+                        arena,
+                        ExtentKind::PrivateData,
+                        GRANULE_EXTENT_BITS,
+                        ExtentSource::Common,
+                    );
+                },
+            ),
+        ];
+        for (figure, drift, read) in cases {
+            let drifted = room_chain_panic(move |allocator, arena, _, _| {
+                drift(allocator, arena);
+                read(allocator, arena);
+            });
+            assert!(
+                drifted
+                    .as_deref()
+                    .is_some_and(|message| message.contains("recount")),
+                "{figure}: a drifted figure must fail its next read, got {drifted:?}"
+            );
+            let clean = room_chain_panic(move |allocator, arena, _, _| read(allocator, arena));
+            assert_eq!(
+                clean, None,
+                "{figure}: an undisturbed figure must pass its read"
+            );
+        }
+    }
+
+    /// A room chain that names anything but the arena's extents with room, in
+    /// order, refuses the request by name: nothing is taken from what the bad
+    /// link names, nothing reaches the kernel, and the walk ends.
+    #[test]
+    fn a_room_chain_link_that_names_no_extent_with_room_is_refused_by_name() {
+        type Corrupt = fn(&mut ObjectAllocator, TaskArenaId, usize, usize);
+        let broken = Err(AllocError::ArenaTableFull {
+            limit: MAX_TASK_EXTENTS,
+        });
+        let cases: [(&str, PrivateObjectKind, Corrupt); 5] = [
+            (
+                "a vacant slot",
+                PrivateObjectKind::Granule,
+                |allocator, arena, _, _| {
+                    let vacant = allocator.extents.iter().position(Option::is_none).unwrap();
+                    allocator
+                        .extents
+                        .set_room_head_for_test(arena.index(), vacant as u32);
+                },
+            ),
+            (
+                "a full extent",
+                PrivateObjectKind::Granule,
+                |allocator, arena, _, _| {
+                    seed_reusable_extents(
+                        allocator,
+                        ExtentKind::PrivateData,
+                        GRANULE_EXTENT_BITS,
+                        1,
+                    );
+                    let full = allocator
+                        .provision_extent(arena, GRANULE_EXTENT_BITS, ExtentKind::PrivateData)
+                        .unwrap();
+                    allocator
+                        .extents
+                        .update(full, |extent| extent.watermark = GRANULE_BYTES);
+                    allocator
+                        .extents
+                        .set_room_head_for_test(arena.index(), full as u32);
+                },
+            ),
+            (
+                "another arena's extent",
+                PrivateObjectKind::Granule,
+                |allocator, arena, _, _| {
+                    seed_reusable_extents(
+                        allocator,
+                        ExtentKind::PrivateData,
+                        GRANULE_EXTENT_BITS,
+                        1,
+                    );
+                    let other = allocator.arena_owning_slots_for_test(0);
+                    let foreign = allocator
+                        .provision_extent(other, GRANULE_EXTENT_BITS, ExtentKind::PrivateData)
+                        .unwrap();
+                    allocator
+                        .extents
+                        .set_room_head_for_test(arena.index(), foreign as u32);
+                },
+            ),
+            (
+                "an extent out of order",
+                PrivateObjectKind::LeafTable,
+                |allocator, arena, data, _| {
+                    // A larger data extent linked ahead of a smaller one:
+                    // a table request passes both, so the order is checked
+                    // before anything fits.
+                    seed_reusable_extents(allocator, ExtentKind::PrivateData, 13, 1);
+                    let larger = allocator
+                        .provision_extent(arena, 13, ExtentKind::PrivateData)
+                        .unwrap();
+                    allocator
+                        .extents
+                        .set_room_head_for_test(arena.index(), larger as u32);
+                    allocator
+                        .extents
+                        .set_room_link_for_test(larger, data as u32);
+                },
+            ),
+            (
+                "an extent linked to itself",
+                PrivateObjectKind::LeafTable,
+                |allocator, _, data, _| {
+                    allocator.extents.set_room_link_for_test(data, data as u32);
+                },
+            ),
+        ];
+        for (link, kind, corrupt) in cases {
+            let failed = room_chain_panic(move |allocator, arena, data, tables| {
+                corrupt(allocator, arena, data, tables);
+                let blueprint = match kind {
+                    PrivateObjectKind::LeafTable => {
+                        crate::child_vspace::private_leaf_table_type().blueprint()
+                    }
+                    _ => sel4::cap_type::Granule::object_blueprint(),
+                };
+                let free = allocator.allocation_descriptors_free();
+                let mut kernel = RecordingPrivateKernel::default();
+                let refused = allocator
+                    .acquire_private_in(arena, kind, blueprint, ExtentSource::Common, &mut kernel)
+                    .map(|_| ());
+                assert_eq!(refused, broken, "a chain head or link naming {link}");
+                assert!(kernel.requests.is_empty(), "{link}: the kernel was asked");
+                assert_eq!(allocator.allocation_descriptors_free(), free);
+            });
+            assert_eq!(failed, None, "{link}");
+        }
     }
 }
