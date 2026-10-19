@@ -189,6 +189,7 @@ For how the planes work and how to add one, read
 | `just store_gen` | `python3 scripts/generate/generate-bindings.py store` |
 | `just syscall_abi_gen` | The `label -> operation` pairs the contract declared, from its own table. |
 | `just zenoh_profile_gen` | `python3 scripts/generate/generate-bindings.py zenoh-profile` |
+| `just zenoh_undeclare_gen` | Render the stock peer's undeclaration session as the Rust constants `zenoh_undeclare::` reads, from `contracts/zenoh-stock-undeclare/v1`. |
 | `just zenoh_stock_gen` | Render the captured stock-peer batches as the Rust constants `zenoh_stock::` reads, from `contracts/zenoh-stock-fixtures/v1`. |
 
 ## planes / mechanism
