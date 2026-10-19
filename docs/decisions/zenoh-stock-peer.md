@@ -164,6 +164,11 @@ Everything else the profile refuses stays refused with its class.
   when answering a QoS-bearing `INIT_SYN` was not tested.
 - One peer, one wheel, one machine, one run each. The batch bytes replay
   deterministically; the peer's behaviour was not measured beyond what is stated here.
+- The peer never undeclared its subscriber in these runs, so the undeclaration refusals above are
+  built from the accepted corpus row and not from a capture. The external-listener exam later
+  captured the peer's own: a bare `03 <id>` behind the network QoS extension, which is not any
+  of the six batches built here. It is taken, and its variants refused, by
+  [Zenoh Profile 0 taking a stock peer's undeclaration](zenoh-stock-undeclare.md).
 - Python binding only. It wraps the Rust implementation, but `rmw_zenoh` and its
   liveliness tokens were not run.
 - The exchange never leaves the machine: no QEMU, no NIC, no external listener. Reaching

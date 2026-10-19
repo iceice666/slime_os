@@ -574,8 +574,17 @@ def _declare(reader: _Reader, header: int, seen: "_Seen | None" = None) -> str:
                 seen.subscriber = seen.alias[1]
             seen.subscriber_id, seen.active = subscriber_id, True
         return "subscriber"
+    if kind == ID_U_SUBSCRIBER and qos:
+        # What a stock peer sends: the QoS is the DECLARE's, and the undeclaration names the subscriber
+        # by id alone, with no extension and so no key. The session removes the subscriber it holds
+        # under that id; an id it does not hold is refused.
+        _need(sub == ID_U_SUBSCRIBER, "UndeclareSubscriber by id with another header")
+        undeclared_id = reader.leb(LEB_LONG, "subscriber id")
+        if seen is not None:
+            _need(seen.active and seen.subscriber_id == undeclared_id, "an UndeclareSubscriber that does not name the subscriber the peer holds")
+            seen.active, seen.undeclared = False, True
+        return "undeclare"
     if kind == ID_U_SUBSCRIBER:
-        _need(not qos, "UndeclareSubscriber with a QoS extension")
         _need(sub == FLAG_Z | ID_U_SUBSCRIBER, "UndeclareSubscriber with another header")
         undeclared_id = reader.leb(LEB_LONG, "subscriber id")
         _need(reader.u8("UndeclareSubscriber") == EXT_WIRE_EXPR, "UndeclareSubscriber without its wire expression")
@@ -1100,10 +1109,10 @@ def controls_refused(contract: dict) -> int:
 # completed and retired to .tasks/terminal. While the item is active its stored body is compared
 # with these; once it is gone these still bind. The count is exact, not a floor.
 PINNED_CASES = 4
-PINNED_CONTROLS = 279
+PINNED_CONTROLS = 291
 # The positive controls, pinned as the negative ones are: a judge that quietly loses an honest case
 # keeps refusing everything it refused, so only a count of what it accepts shows the loss.
-PINNED_HONEST_CAPTURES = 45
+PINNED_HONEST_CAPTURES = 46
 PINNED_ACCEPTED_RECEIPTS = 10
 ADMISSION = "slime-zenoh-profile0-external-listener-"
 
@@ -1112,7 +1121,7 @@ def item_pins() -> tuple[int, int]:
     """The case count and control count the admitted item fixes, read from its stored body, or (0, 0)."""
     for path in sorted((ROOT / ".tasks" / "items").glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        if "zenoh_external_check" not in text or ADMISSION not in text:
+        if "zenoh_external_check" not in text or ADMISSION not in text or re.search(r"^state: cancelled$", text, re.M):
             continue
         cases = re.search(r'id = "all-cases-observed";.*?intValue = (\d+);', text, re.S)
         controls_ = re.search(r'id = "exactly-\d+-controls";.*?observation = "negativeControlsRefused";.*?intValue = (\d+);', text, re.S)
@@ -1473,6 +1482,12 @@ def _undeclare_frame(scenario: dict, subscriber_id: int, key: str, skip: int = 0
     return bytes([zenoh_wire.ID_FRAME | zenoh_wire.FLAG_R]) + zenoh_wire.leb128(last + 1 + skip) + zenoh_wire.undeclare_subscriber(subscriber_id, key, True)
 
 
+def _undeclare_by_id_frame(scenario: dict, subscriber_id: int, skip: int = 0) -> bytes:
+    """A peer FRAME carrying the stock peer's undeclaration, which names the subscriber by id alone."""
+    last = max(_sn(b) for b in scenario["peer"][2:5])
+    return zenoh_wire.frame(last + 1 + skip, zenoh_wire.undeclare_subscriber_by_id(subscriber_id))
+
+
 def _replace_sent(index: int, change: Callable[[bytes], bytes], both: bool) -> Callable[[dict], dict]:
     def run(s: dict) -> dict:
         at = 2 + index
@@ -1729,6 +1744,18 @@ def mutations() -> list[tuple[str, Callable[[dict], dict]]]:
         ("a peer that undeclares a subscriber it does not hold, id 2", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 2, K())]))),
         ("a peer that undeclares its subscriber on another key", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, "0/other/key")]))),
         ("a peer that undeclares a subscriber twice", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_frame(s, 1, K()), _undeclare_frame(s, 1, K(), 1)]))),
+        ("a peer that undeclares its subscriber by id before the first sample", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_by_id_frame(s, 1)], peer_first=6))),
+        ("a peer that undeclares by id a subscriber it does not hold, id 2", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_by_id_frame(s, 2)]))),
+        ("a peer that undeclares by id twice", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_by_id_frame(s, 1), _undeclare_by_id_frame(s, 1, 1)]))),
+        ("a peer that undeclares by id and then in full", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_by_id_frame(s, 1), _undeclare_frame(s, 1, K(), 1)]))),
+        ("a peer subscriber declared and undeclared by id in one frame", edit(lambda s: s["peer"].__setitem__(4, s["peer"][4] + zenoh_wire.undeclare_subscriber_by_id(1)))),
+        ("a peer undeclaration by id without the QoS extension", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.frame(max(_sn(b) for b in s["peer"][2:5]) + 1, bytes([zenoh_wire.ID_DECLARE, zenoh_wire.ID_U_SUBSCRIBER, 1]))]))),
+        ("a peer undeclaration by id with the extension flag and no extension", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.frame(max(_sn(b) for b in s["peer"][2:5]) + 1, bytes([zenoh_wire.ID_DECLARE | zenoh_wire.FLAG_Z, zenoh_wire.EXT_QOS_NETWORK, zenoh_wire.QOS_NETWORK_DEFAULT, zenoh_wire.ID_U_SUBSCRIBER | zenoh_wire.FLAG_Z, 1]))]))),
+        ("a peer undeclaration by id with a reserved header bit", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.frame(max(_sn(b) for b in s["peer"][2:5]) + 1, bytes([zenoh_wire.ID_DECLARE | zenoh_wire.FLAG_Z, zenoh_wire.EXT_QOS_NETWORK, zenoh_wire.QOS_NETWORK_DEFAULT, zenoh_wire.ID_U_SUBSCRIBER | 0x20, 1]))]))),
+        ("a peer undeclaration by id with no id", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.frame(max(_sn(b) for b in s["peer"][2:5]) + 1, bytes([zenoh_wire.ID_DECLARE | zenoh_wire.FLAG_Z, zenoh_wire.EXT_QOS_NETWORK, zenoh_wire.QOS_NETWORK_DEFAULT, zenoh_wire.ID_U_SUBSCRIBER]))]))),
+        ("a peer undeclaration by id with a trailing byte", edit(lambda s: s.update(peer=[*s["peer"][:5], _undeclare_by_id_frame(s, 1) + b"\x00"]))),
+        ("a peer undeclaration by id with a QoS value over the bound", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.frame(max(_sn(b) for b in s["peer"][2:5]) + 1, bytes([zenoh_wire.ID_DECLARE | zenoh_wire.FLAG_Z, zenoh_wire.EXT_QOS_NETWORK, QOS_NETWORK_MAX + 1, zenoh_wire.ID_U_SUBSCRIBER, 1]))]))),
+        ("a peer undeclaration with the full form after the QoS extension", edit(lambda s: s.update(peer=[*s["peer"][:5], zenoh_wire.frame(max(_sn(b) for b in s["peer"][2:5]) + 1, bytes([zenoh_wire.ID_DECLARE | zenoh_wire.FLAG_Z, zenoh_wire.EXT_QOS_NETWORK, zenoh_wire.QOS_NETWORK_DEFAULT]) + zenoh_wire.undeclare_subscriber(1, K(), True)[1:])]))),
         ("an OPEN_SYN echoing another cookie", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, b"another-cookie-99"))),
         ("an OPEN_SYN echoing the cookie one byte short", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie()[:-1]))),
         ("an OPEN_SYN echoing the cookie with a byte added", guest_at(1, lambda b: zenoh_wire.open_(LEASE_MS, 0, _peer_cookie() + b"\x00"))),
@@ -1916,6 +1943,7 @@ def honest_variants(contract: dict) -> list[tuple[str, Callable[[dict], dict]]]:
         ("a handshake that negotiates only a segment size", update(guest_options=_option(MSS, (1460).to_bytes(2, "big")), peer_options=_option(MSS, (1460).to_bytes(2, "big")))),
         ("a peer CLOSE right after the fourth sample, before the guest's own CLOSE", lambda s: {**s, "peer": [*s["peer"][:5], zenoh_wire.close(0, True)], "layout": "close_after_four_samples"}),
         ("the peer undeclares its subscriber after the last sample, then closes", lambda s: {**s, "peer": [*s["peer"][:5], _undeclare_frame(s, 1, K()), zenoh_wire.close(0, True)]}),
+        ("the peer undeclares its subscriber by id after the last sample, then closes, as a stock peer does", lambda s: {**s, "peer": [*s["peer"][:5], _undeclare_by_id_frame(s, 1), zenoh_wire.close(0, True)]}),
         ("peer FRAME sequence numbers that wrap through 2**32", lambda s: {**s, "peer": [*s["peer"][:1], zenoh_wire.open_(10000, 0xFFFFFFFE, ack=True), *[_with_sn(b, 0xFFFFFFFE + i) for i, b in enumerate(s["peer"][2:5])], *s["peer"][5:]]}),
         ("a guest SYN retransmitted identically", update(syn_again=0)),
         ("a guest CLOSE with the last reason the profile names, 7", lambda s: {**s, "guest": [*s["guest"][:-1], zenoh_wire.close(7, True)]}),

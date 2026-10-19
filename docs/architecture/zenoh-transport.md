@@ -195,6 +195,10 @@ concurrently and a line built from several writes can be interleaved.
   peer's fragments reproduced byte for byte, payloads up to 256 MiB reassembled, the
   tables and notice queue filled to their limits at 9, 256, 65535 and 65536, and 94
   refusals by name and class, each judged on a link and on its session;
+- `just zenoh_undeclare_check` — the whole session a stock eclipse-zenoh 1.0.0 peer sent,
+  including its `UndeclareSubscriber` that names the subscriber by id alone behind the
+  network QoS extension, which the host reference reproduces byte for byte, and ten
+  variants of it refused by name and class;
 - `just zenoh_xcheck_check` — the codec and session against the real eclipse-zenoh 1.0.0
   crates: the 17 corpus batches as upstream's encoder produces them, a 6000-case sweep
   (5993 compared, 7 refused as a non-canonical Zenoh ID, none differing), our decoder
