@@ -41,7 +41,12 @@ eclipse-zenoh 1.0.0 peer on the plain demo topic is also taken
 `INIT_SYN` and, only where it was observed, on `OAM` and on the outer `DECLARE`; an
 `OAM` and a `DeclareFinal` after `OPEN`; and one numeric key-expression alias for the
 demo key, in the declaring peer's mapping only (a reference in the receiver's mapping
-names an alias this side declared, and it declares none, so it is `invalid-keyexpr`). Everything else is refused with a class from the closed vocabulary in
+names an alias this side declared, and it declares none, so it is `invalid-keyexpr`); and its
+`UndeclareSubscriber`, which names the subscriber by id alone behind the network QoS extension
+(`9e 21 08 03 <id>`, [decision](../decisions/zenoh-stock-undeclare.md)). The session removes the
+remote subscriber it holds under that id, and an id it does not hold is `unknown-subscriber`; the
+full form still matches on id and key, and the bare form without the QoS extension stays
+`malformed-message`. Everything else is refused with a class from the closed vocabulary in
 `contracts/zenoh-profile/v1`, never tolerated: routers and clients, wildcard key
 expressions, other resolutions, unknown extensions and messages. A second alias is
 refused as over-bound and an undeclared one as `invalid-keyexpr`.

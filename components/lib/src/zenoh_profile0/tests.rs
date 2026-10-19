@@ -84,6 +84,7 @@ fn network_summary(message: &Network<'_>) -> String {
             hex(attachment.raw),
             hex(payload)
         ),
+        Network::UndeclareSubscriberById { id } => format!("UNDECLARE_SUBSCRIBER_BY_ID:id={id}"),
         Network::Oam => "OAM".into(),
         Network::DeclareFinal => "DECLARE_FINAL".into(),
     }
@@ -381,6 +382,7 @@ fn byte_flips_never_panic_and_stay_bounded() {
                                 assert!(payload.len() <= MAX_PAYLOAD_BYTES);
                             }
                             Network::DeclareSubscriberAlias { .. }
+                            | Network::UndeclareSubscriberById { .. }
                             | Network::Oam
                             | Network::DeclareFinal => {}
                             Network::PushPut {

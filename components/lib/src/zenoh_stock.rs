@@ -923,7 +923,10 @@ fn bounded(frame: &crate::zenoh_profile0::Frame<'_>) {
                 assert_eq!(attachment.gid.len(), GID_BYTES);
                 assert!(payload.len() <= MAX_PAYLOAD_BYTES);
             }
-            Network::DeclareSubscriberAlias { .. } | Network::Oam | Network::DeclareFinal => {}
+            Network::DeclareSubscriberAlias { .. }
+            | Network::UndeclareSubscriberById { .. }
+            | Network::Oam
+            | Network::DeclareFinal => {}
         }
     }
 }
