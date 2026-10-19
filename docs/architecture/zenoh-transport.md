@@ -185,8 +185,9 @@ network authority and its executable exits at once.
 
 The instance names stay `ros2-demo-publisher` and `ros2-demo-subscriber`, which the exam
 pins; only their `executable` differs (`ros2-demo-publisher-external`,
-`ros2-demo-subscriber-external`). Both reuse `zenoh_node` and `zenoh_link` unchanged. The
-publisher's endpoint is a compile-time constant; the network service enforces the real
+`ros2-demo-subscriber-external`). The publisher reuses `zenoh_node` and `zenoh_link`
+unchanged; the subscriber links only `slime-rt` and exits at once, so no Zenoh code runs
+on its side. The publisher's endpoint is a compile-time constant; the network service enforces the real
 destination row, so a wrong constant is refused there and grants nothing. The publisher
 still sends its four refused requests. The scouting probe, a UDP connect, is refused by
 the external backend as `unsupported` and not `denied`, because its TCP-only engine
