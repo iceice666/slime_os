@@ -166,14 +166,15 @@ Pick the form by the shape of the information.
 
 1. `Why` or `Claim` is at most three sentences and states what becomes true.
    / `Why` 或 `Claim` 最多三句，說明什麼變成真。
-2. `What changed` lists files or areas, not a narrative.
-   / `What changed` 列檔案或區域，不是敘事。
+2. `What changed` or `Change` lists files or areas, not a narrative.
+   / `What changed` 或 `Change` 列檔案或區域，不是敘事。
 3. `Verification` names the exact command, the observed result, and the
    evidence class. Nothing that was not run appears as passed.
    / `Verification` 寫確切指令、觀察結果、證據類別。沒跑的不寫成通過。
 4. Known limits are stated in one list, not scattered.
    / 已知限制集中在一個清單。
 5. No sentence over 25 words (S1); no evaluative adjective (W8).
+   / 沒有超過 25 字的句子（S1）；沒有評價工作的形容詞（W8）。
 
 ### Conversation reply / 對話回覆
 
@@ -187,18 +188,29 @@ Pick the form by the shape of the information.
 
 ### `docs/` page
 
-1. The first paragraph says what the page owns and links the owning code or
-   contract. / 第一段說這頁擁有什麼，並連結擁有它的程式或契約。
+1. The first paragraph says what the page owns. An architecture, concept, or
+   reference page links the owning code or contract; a `docs/plans/` page
+   links the work item or decision that holds the design and says it is
+   unimplemented.
+   / 第一段說這頁擁有什麼。architecture、concept、reference 頁連結擁有它的
+   程式或契約；`docs/plans/` 頁連結持有設計的 work item 或 decision，並說明
+   尚未實作。
 2. Every glossary term is used as the glossary defines it (W1, W3).
+   / 每個術語表的詞都依術語表的定義使用（W1、W3）。
 3. Analogies only where section 5 allows.
+   / 類比只出現在第 5 節允許的地方。
 4. A diagram, if any, follows section 6.
+   / 如果有圖，遵守第 6 節。
 
 ### Work item / 工作項
 
-1. Scope is a list of what is in and what is out.
-   / 範圍是「包含」與「不包含」的清單。
-2. Each acceptance is one observable sentence (S2, S10).
-   / 每個驗收條件是一句可觀察的陳述。
+1. `scope` lists what is in; `nonGoals` lists what is out. Do not repeat one
+   in the other. / `scope` 列包含的事，`nonGoals` 列不包含的事，兩者不重複。
+2. Each `requirements[].statement` is one observable sentence (S2, S10). An
+   acceptance binds a gate and a predicate to that statement; it carries no
+   prose of its own.
+   / 每個 `requirements[].statement` 是一句可觀察的陳述（S2、S10）。
+   acceptance 只把 gate 和 predicate 綁到該陳述上，本身不帶敘述。
 
 ## Examples / 範例
 
