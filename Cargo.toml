@@ -608,6 +608,16 @@ opt-level = "s"
 codegen-units = 1
 debug = false
 
+[profile.release.package.slime-component-ros2-demo-publisher-external]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-component-ros2-demo-subscriber-external]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
 [profile.release.package.slime-component-io-local-network-probe]
 opt-level = "s"
 codegen-units = 1

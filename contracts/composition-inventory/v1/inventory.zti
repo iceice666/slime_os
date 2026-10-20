@@ -576,6 +576,14 @@
       state = "specNative";
       systemSpec = "contracts/system-spec/v1/systems/sel4-zenoh.zti";
     };
+    {
+      baseline = "";
+      composition = "sel4-zenoh-external";
+      deferralReason = "";
+      owningGate = "zenoh_external_check";
+      state = "specNative";
+      systemSpec = "contracts/system-spec/v1/systems/sel4-zenoh-external.zti";
+    };
   ];
   formatVersion = 1;
 }
