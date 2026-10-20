@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-pwm";
-  imageClosureIdentity = "c50f6d4e2b173ef5c04e725fd207779b738a9f85e912a82d00529f11558db767";
+  imageClosureIdentity = "58b23416a78038dcc7ed0a30333230c4e8f408eab7d1bb5b0d88839bacbe4882";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
