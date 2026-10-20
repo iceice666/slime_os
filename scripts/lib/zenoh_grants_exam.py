@@ -44,7 +44,7 @@ ROWS = (
 LIMITS = (3, 4, 12, 129, 3)
 
 # The arithmetic of the contract, written again here from its comments so a change to either shows.
-SLOT_OVERHEAD, ROW_OVERHEAD, HOLDER_OVERHEAD, SERVICE_FIXED = 32, 24, 64, 1024
+SLOT_OVERHEAD, ROW_OVERHEAD, HOLDER_OVERHEAD, SERVICE_FIXED = 32, 48, 64, 1024
 
 
 class GrantsError(Exception):
@@ -172,6 +172,13 @@ def cases() -> list[tuple[str, str, bool]]:
         ("a limits record with no holders", record(drop_limit="holders"), False),
         ("a right written as text", record(rows=[row("a", KEYS[0], "yes", False)]), False),
     ]
+    # Each upper bound is also held from the accepting side: the record at the bound is taken.
+    out += [
+        ("65535 ring slots with the stack they need", record(slots=65535), True),
+        ("a sample of exactly 1048576 bytes", record(sample=1048576), True),
+        ("a key bound of exactly 65535", record(key_bytes=65535), True),
+        ("65535 local subscriptions", record(local=65535), True),
+    ]
     # Four subscribe keys fit once the session can hold four of its own, so the bound is held both ways.
     out.append(("four subscribe keys with four local subscriptions", record(local=4, rows=[row("a", KEYS[0], False, True), row("a", KEYS[1], False, True), row("b", KEYS[2], False, True), row("c", KEYS[3], False, True)]), True))
     return out
@@ -192,6 +199,34 @@ SCHEMA_MUTATIONS = (
     ("a contract that allows any holder name", "t.length (withoutChars nameChars name) == 0", "true", "a holder name in capitals"),
     ("a contract that ignores the format version", "rec.formatVersion == formatVersion", "true", "format version 2"),
 )
+
+
+# A contract with an upper bound made exclusive. The bound is written at two places in the schema, so the
+# text must appear that many times. The weakened contract must then refuse the record at the bound, which
+# the real one takes: (label, text removed, text put in its place, times it appears, the case that flips).
+BOUND_MUTATIONS = (
+    ("a contract whose ring slots bound is exclusive", "ringSlots <= maxCount", "ringSlots < maxCount", 2, "65535 ring slots with the stack they need"),
+    ("a contract whose sample bytes bound is exclusive", "sampleBytes <= maxSampleBytes", "sampleBytes < maxSampleBytes", 2, "a sample of exactly 1048576 bytes"),
+    ("a contract whose key bytes bound is exclusive", "keyBytes <= maxKeyBytes", "keyBytes < maxKeyBytes", 2, "a key bound of exactly 65535"),
+    ("a contract whose local subscriptions bound is exclusive", "localSubscriptions <= maxCount", "localSubscriptions < maxCount", 1, "65535 local subscriptions"),
+)
+
+
+def bound_controls() -> int:
+    """Each upper bound is held from the accepting side: made exclusive, the contract refuses the record at it."""
+    text = SCHEMA.read_text(encoding="utf-8")
+    by_label = {label: (record_text, wanted) for label, record_text, wanted in cases()}
+    caught = 0
+    for label, old, new, times, case in BOUND_MUTATIONS:
+        if text.count(old) != times:
+            raise GrantsError(f"control: {label}: the text it changes appears {text.count(old)} times in the schema, not {times}")
+        record_text, wanted = by_label[case]
+        if not wanted:
+            raise GrantsError(f"control: {label}: the case {case!r} is one the contract refuses")
+        if contract_accepts(record_text, text.replace(old, new)) == wanted:
+            raise GrantsError(f"control: {label} was not seen: the weakened contract still took {case!r}")
+        caught += 1
+    return caught
 
 
 def mutation_controls() -> int:
@@ -283,13 +318,13 @@ def judge_cases() -> int:
 def all_controls() -> int:
     """Every refused record, every weakened contract and every drifted constant: the corruptions refused."""
     _accepted, refused = control_counts()
-    return refused + mutation_controls() + arithmetic_controls()
+    return refused + mutation_controls() + bound_controls() + arithmetic_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these.
-PINNED_CASES = 64
-PINNED_CONTROLS = 54
+PINNED_CASES = 68
+PINNED_CONTROLS = 58
 ADMISSION = "slime-zenoh-service-grants-"
 
 

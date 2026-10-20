@@ -12,8 +12,8 @@ Each remaining bound has a source.
 - A key uses ASCII letters, digits and the characters `/ _ - : . ~`. It has no empty segment. The contract refuses a wildcard, a query mark, a fragment mark and a non-ASCII character. The demo's key and an `rmw_zenoh` key (`<domain>/<topic>/<type>/<hash>`) are inside that set.
 - The rows may not name more holders than the record declares.
 - The service declares one subscription to its peer for each distinct subscribe key. Those keys may not exceed the local subscriptions that the record declares.
-- The stack must cover the service's fixed storage, a header per holder, every holder's ring, and a header and key per row. The schema states each overhead as a constant.
+- The stack must cover the service's fixed storage, a header per holder, every holder's ring, and a header and key per row. The schema states each overhead as a constant. Each constant is an upper bound on a `size_of`. The service core exam prints those sizes and refuses one above its constant.
 
 The record is closed. The derived `decode` ignores an unknown field. The contract therefore refuses one at the top level, in the limits and in every row.
 
-The decision is [`docs/decisions/zenoh-service.md`](../../docs/decisions/zenoh-service.md). The scope is `01a15900-bf5c-7f8c-9a3b-2bbc115ebbb9`. The checker is `scripts/check/check-zenoh-profile0.py --slice grants`. The implementation owns the Rust bindings and the path of a record from the system spec to the service.
+The decision is [`docs/decisions/zenoh-service.md`](../../docs/decisions/zenoh-service.md). The scope is `01a159c2-026a-7358-b6de-102b2d8e0d44`. The checker is `scripts/check/check-zenoh-profile0.py --slice grants`. The implementation owns the Rust bindings and the path of a record from the system spec to the service.

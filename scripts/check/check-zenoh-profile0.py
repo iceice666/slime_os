@@ -1643,6 +1643,19 @@ def undeclare_main(controls_only: bool) -> int:
     return 0
 
 
+def neighbour_controls(*, subscribers: bool) -> None:
+    # A slice that runs a neighbour's tests and judges their transcript relies on that judge's
+    # negative controls. They run here as a precondition and their refusals are not counted: they
+    # belong to the neighbour's own gate.
+    stock_controls()
+    try:
+        zenoh_links_exam.all_controls()
+        if subscribers:
+            zenoh_subscribers_exam.all_controls()
+    except (zenoh_links_exam.LinksError, zenoh_exchange.ExchangeError, zenoh_subscribers_exam.SubscribersError) as error:
+        fail(str(error))
+
+
 SUBSCRIBERS_FILTER = "zenoh_subscribers::"
 # The exam's own Rust test, by name: a filter that matches nothing passes silently.
 SUBSCRIBERS_TESTS = ("zenoh_subscribers::the_subscribers_exam",)
@@ -1669,9 +1682,7 @@ def run_subscribers() -> list[str]:
 
 
 def subscribers_main(controls_only: bool) -> int:
-    # The stock corpus judge and its mutations run here as a precondition, as they do for `--slice links`
-    # and `--slice undeclare`: their refusals belong to the stock gate's count, not to this one's.
-    stock_controls()
+    neighbour_controls(subscribers=False)
     if all(name in tests_passed("") for name in SUBSCRIBERS_TESTS):
         fail("control: a run with the subscribers exam test missing was read as complete")
     try:
@@ -1755,6 +1766,7 @@ def run_service() -> list[str]:
 
 
 def service_main(controls_only: bool) -> int:
+    neighbour_controls(subscribers=True)
     if all(name in tests_passed("") for name in SERVICE_TESTS):
         fail("control: a run with the service exam test missing was read as complete")
     try:

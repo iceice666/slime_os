@@ -29,6 +29,12 @@ GID = bytes([0xE0] * 16)
 # The service is the listener the exam opens, so its first FRAME carries its initial sequence number.
 SERVICE_SN = 7000
 LIMITS_LINE = "service limits 3 4 12 3"
+# What the core stores beyond its payload bytes, in bytes: a delivery slot, a grant row with its key
+# references, a holder's ring cursors and loss count, and the core's own counters. The core prints these
+# from `size_of`. Each is at most the matching overhead in the grants contract, which is what the declared
+# stack is computed from.
+SIZE_NAMES = ("slot", "row", "holder", "fixed")
+SIZES = {"slot": 28, "row": 48, "holder": 24, "fixed": 8}
 
 
 def _payload(sequence: int) -> bytes:
@@ -69,6 +75,7 @@ def good_lines() -> list[str]:
     out = [LIMITS_LINE]
     for holder, key, publish, subscribe in grants.ROWS:
         out.append(f"service grant {grants.HOLDERS[holder]} {K[key]} {'p' if publish else '-'}{'s' if subscribe else '-'}")
+    out += [f"service size {name} {SIZES[name]}" for name in SIZE_NAMES]
     # Two distinct subscribe keys of the three the rows name are declared by the peer's counterpart; the
     # service declares one subscription for each distinct key a holder subscribes to: k1 and k2.
     out += [
@@ -109,7 +116,33 @@ def _need(condition: bool, message: str) -> None:
         raise ServiceError(message)
 
 
-SHAPES = {"limits": 6, "grant": 5, "frame": 4, "ok": 3, "published": 6, "delivered": 6, "refused": 4, "held": 5, "lost": 5}
+SHAPES = {"limits": 6, "grant": 5, "size": 4, "frame": 4, "ok": 3, "published": 6, "delivered": 6, "refused": 4, "held": 5, "lost": 5}
+
+
+def size_bounds() -> dict[str, int]:
+    """The overheads the grants contract states, which the sizes the core prints may not exceed."""
+    constants = grants.schema_constants()
+    return {
+        "slot": constants["SLOT_OVERHEAD_BYTES"],
+        "row": constants["ROW_OVERHEAD_BYTES"],
+        "holder": constants["HOLDER_OVERHEAD_BYTES"],
+        "fixed": constants["SERVICE_FIXED_BYTES"],
+    }
+
+
+def _check_sizes(lines: list[str]) -> None:
+    """The four size lines follow the grant lines, name the four stored parts in order, and each value is
+    a whole number of bytes no larger than the grants contract's overhead for that part."""
+    first = 1 + len(grants.ROWS)
+    at = [index for index, line in enumerate(lines) if line.split()[1] == "size"]
+    _need(at == list(range(first, first + len(SIZE_NAMES))), f"service: the {len(SIZE_NAMES)} size lines must follow the grant lines, found them at {at}")
+    bounds = size_bounds()
+    for name, line in zip(SIZE_NAMES, lines[first : first + len(SIZE_NAMES)], strict=True):
+        fields = line.split()
+        _need(fields[2] == name, f"service: size line for {fields[2]!r} where {name!r} is required: {line}")
+        _need(fields[3].isdecimal(), f"service: the {name} size is not a whole number of bytes: {line}")
+        value = int(fields[3])
+        _need(1 <= value <= bounds[name], f"service: a {name} of {value} bytes exceeds the {bounds[name]} the grants contract allows")
 
 
 def judge(lines: list[str]) -> tuple[int, int]:
@@ -120,7 +153,10 @@ def judge(lines: list[str]) -> tuple[int, int]:
         _need(fields[:1] == ["service"], f"service: a record that is not a service exam line: {line!r}")
         _need(len(fields) > 1 and fields[1] in SHAPES, f"service: unrecognised line: {line}")
         _need(len(fields) == SHAPES[fields[1]], f"service: a {fields[1]} line has {len(fields)} fields, expected {SHAPES[fields[1]]}: {line}")
+    _check_sizes(lines)
     wanted = good_lines()
+    # A size is judged against a bound and not pinned: a core with a smaller layout is still honest.
+    lines = [wanted[index] if line.split()[1] == "size" else line for index, line in enumerate(lines)]
     for index, (seen, want) in enumerate(zip(lines, wanted, strict=False)):
         _need(seen == want, f"service line {index + 1} is {seen!r}, the exam requires {want!r}")
     if len(lines) < len(wanted):
@@ -200,15 +236,43 @@ def declaration_controls() -> int:
     return refused
 
 
+def size_controls() -> int:
+    """A size above the contract's overhead is refused for that reason, for each of the four parts, and so
+    are the size lines out of order. The honest sizes are within the bounds."""
+    good = good_lines()
+    bounds = size_bounds()
+    for name in SIZE_NAMES:
+        _need(SIZES[name] <= bounds[name], f"control: the exam's honest {name} size {SIZES[name]} exceeds the contract's {bounds[name]}")
+    refused = 0
+    first = 1 + len(grants.ROWS)
+    for offset, name in enumerate(SIZE_NAMES):
+        lines = list(good)
+        lines[first + offset] = f"service size {name} {bounds[name] + 1}"
+        try:
+            judge(lines)
+        except ServiceError as error:
+            _need("exceeds" in str(error), f"control: a {name} one byte over its bound was refused for another reason: {error}")
+            refused += 1
+            continue
+        raise ServiceError(f"control: the service judge accepted a {name} size one byte over the contract's {bounds[name]}")
+    swapped = list(good)
+    swapped[first], swapped[first + 1] = swapped[first + 1], swapped[first]
+    try:
+        judge(swapped)
+    except ServiceError:
+        return refused + 1
+    raise ServiceError("control: the service judge accepted the slot and row size lines swapped")
+
+
 def all_controls() -> int:
-    return transcript_controls() + declaration_controls()
+    return transcript_controls() + declaration_controls() + size_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these; once
 # it is gone these still bind. Both counts are exact.
-PINNED_CASES = 46
-PINNED_CONTROLS = 113
+PINNED_CASES = 50
+PINNED_CONTROLS = 126
 ADMISSION = "slime-zenoh-service-core-"
 
 

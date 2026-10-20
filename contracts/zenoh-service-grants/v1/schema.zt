@@ -52,11 +52,12 @@ maxSampleBytes :: Int = 1048576;
 maxHolderNameBytes :: Int = 32;
 
 -- What the service's arrays cost beyond their payload: a delivery slot holds a subscription id, a
--- sequence, a timestamp and a length; a row holds a holder index and two rights; a holder holds its
--- ring's cursors and its loss count; the core holds its tables' headers. Each is an upper bound on
--- the implementation's `size_of`, which its host tests hold these to.
+-- sequence, a timestamp and a length; a row holds a holder index, two rights and a reference to its
+-- key, and the core keeps a second reference to each distinct key; a holder holds its ring's cursors
+-- and its loss count; the core holds its tables' headers. Each is an upper bound on the
+-- implementation's `size_of`. The service core exam prints those sizes and refuses one above its bound.
 slotOverheadBytes :: Int = 32;
-rowOverheadBytes :: Int = 24;
+rowOverheadBytes :: Int = 48;
 holderOverheadBytes :: Int = 64;
 serviceFixedBytes :: Int = 1024;
 
