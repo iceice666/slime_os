@@ -74,6 +74,9 @@ readable and link to the decision that replaced them.
   proposed; the guest opens one TCP connection over a NIC to a stock eclipse-zenoh 1.0.0
   listener on the host, judged from the listener's own record, a packet capture and the host
   wire reference, with the composition and guest left to the implementation.
+- [A shared Zenoh service component](zenoh-service.md) — proposed; one component owns the Zenoh
+  link and session and serves local holders through per-holder key grants. It does not depend on
+  the fabric. The session's limit of one subscription of its own is the first obstacle.
 - [Zenoh Profile 0 taking a stock peer's undeclaration](zenoh-stock-undeclare.md) — proposed;
   the one batch the stock-peer exam did not capture, an `UndeclareSubscriber` that names the
   subscriber by id alone behind the network QoS extension, taken by the session by id and

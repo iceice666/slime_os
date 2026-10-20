@@ -81,6 +81,14 @@ requires the ten variants of it the profile keeps refusing, by name and class. T
 judge, the retained suites and the stock-peer exam are run beside it, so accepting the bare form
 cannot move a pinned refusal or a stock case.
 
+`--slice subscribers` judges a session that holds several subscriptions of its own. The session held
+exactly one, whatever the link was declared with; it now holds as many as its parameters say. The exam
+declares three, delivers to each key, undeclares one and keeps the others, reuses the freed slot,
+delivers once for two subscriptions on one key, and releases all on close. It refuses a fourth, a
+repeated id, an undeclaration of an id or key not held, a Put to a key not declared, a peer past its
+own limit and three configurations whose slots do not add up; and the demo's parameters still hold
+one. The links exam and the stock-peer exam run beside it, since both pin the subscriber limit.
+
 `--slice composition` judges the derived `sel4-zenoh` composition against the
 demo contract's authority and refuses 15 mutations of an honest one. It is the
 static half of the QEMU arm; the boot is `check-sel4-io-network-plane.py --arm zenoh`.
@@ -106,7 +114,10 @@ from typing import NoReturn
 import devloop_observations
 import zenoh_exchange
 import zenoh_links_exam
+import zenoh_grants_exam
+import zenoh_service_exam
 import zenoh_stock_peer
+import zenoh_subscribers_exam
 import zenoh_undeclare_exam
 import zenoh_wire
 import zutai_cli
@@ -1632,6 +1643,147 @@ def undeclare_main(controls_only: bool) -> int:
     return 0
 
 
+SUBSCRIBERS_FILTER = "zenoh_subscribers::"
+# The exam's own Rust test, by name: a filter that matches nothing passes silently.
+SUBSCRIBERS_TESTS = ("zenoh_subscribers::the_subscribers_exam",)
+assert len(SUBSCRIBERS_TESTS) == 1
+
+
+def run_subscribers() -> list[str]:
+    # The session's subscriber limit is what the links exam and the stock-peer exam pin at one, four, nine
+    # and 256, so both run and are judged here: lifting the own-side limit may not move any of them.
+    # `run_links` judges the pinned corpus and the stock-peer exam itself and returns the links lines.
+    stock_fixtures()
+    STOCK_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    STOCK_FIXTURES.write_text(zenoh_stock_peer.fixture_zti())
+    try:
+        zenoh_links_exam.judge(run_links())
+    except zenoh_links_exam.LinksError as error:
+        fail(str(error))
+    stdout, output = cargo_tests((SUBSCRIBERS_FILTER,), {**_os.environ})
+    passed = tests_passed(output)
+    missing = [name for name in SUBSCRIBERS_TESTS if name not in passed]
+    if missing:
+        fail(f"subscribers: the exam's tests did not run and pass ({len(missing)} of {len(SUBSCRIBERS_TESTS)}): {', '.join(missing[:4])}")
+    return exam_lines(stdout)
+
+
+def subscribers_main(controls_only: bool) -> int:
+    # The stock corpus judge and its mutations run here as a precondition, as they do for `--slice links`
+    # and `--slice undeclare`: their refusals belong to the stock gate's count, not to this one's.
+    stock_controls()
+    if all(name in tests_passed("") for name in SUBSCRIBERS_TESTS):
+        fail("control: a run with the subscribers exam test missing was read as complete")
+    try:
+        refused_controls = zenoh_subscribers_exam.all_controls()
+        item_cases, item_controls = zenoh_subscribers_exam.item_pins()
+        positive, refusals = zenoh_subscribers_exam.judge(zenoh_subscribers_exam.good_lines())
+    except zenoh_subscribers_exam.SubscribersError as error:
+        fail(str(error))
+    if positive + refusals != zenoh_subscribers_exam.PINNED_CASES:
+        fail(f"subscribers: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_subscribers_exam.PINNED_CASES}")
+    if refused_controls != zenoh_subscribers_exam.PINNED_CONTROLS:
+        fail(f"subscribers: {refused_controls} controls, the checker pins {zenoh_subscribers_exam.PINNED_CONTROLS}")
+    # While the item is an active work item, its stored body must say the same. A retired item has no
+    # body here, so this comparison is skipped and the pins above are the whole guard.
+    if item_cases and item_cases != zenoh_subscribers_exam.PINNED_CASES:
+        fail(f"subscribers: the admitted item fixes {item_cases} cases, the checker pins {zenoh_subscribers_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_subscribers_exam.PINNED_CONTROLS:
+        fail(f"subscribers: the admitted item requires {item_controls} controls, the checker pins {zenoh_subscribers_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 subscribers judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        cases, refusals = zenoh_subscribers_exam.judge(run_subscribers())
+    except zenoh_subscribers_exam.SubscribersError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=subscribers cases={cases} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=cases + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 subscribers check: a session holds as many subscriptions of its own as it is declared with and refuses one more")
+    return 0
+
+
+def grants_main(controls_only: bool) -> int:
+    try:
+        refused_controls = zenoh_grants_exam.all_controls()
+        item_cases, item_controls = zenoh_grants_exam.item_pins()
+        cases = zenoh_grants_exam.judge_cases()
+    except zenoh_grants_exam.GrantsError as error:
+        fail(str(error))
+    if cases != zenoh_grants_exam.PINNED_CASES:
+        fail(f"grants: the exam judges {cases} cases, the checker pins {zenoh_grants_exam.PINNED_CASES}")
+    if refused_controls != zenoh_grants_exam.PINNED_CONTROLS:
+        fail(f"grants: {refused_controls} controls, the checker pins {zenoh_grants_exam.PINNED_CONTROLS}")
+    # While the item is an active work item, its stored body must say the same. A retired item has no
+    # body here, so this comparison is skipped and the pins above are the whole guard.
+    if item_cases and item_cases != zenoh_grants_exam.PINNED_CASES:
+        fail(f"grants: the admitted item fixes {item_cases} cases, the checker pins {zenoh_grants_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_grants_exam.PINNED_CONTROLS:
+        fail(f"grants: the admitted item requires {item_controls} controls, the checker pins {zenoh_grants_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 grants judge: refused {refused_controls} corrupted records")
+        return 0
+    # The generated constants are the implementation's, so the recipe fails until they land.
+    try:
+        zenoh_grants_exam.check_generated()
+    except zenoh_grants_exam.GrantsError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=grants cases={cases} controls={refused_controls}")
+    devloop_observations.record(casesObserved=cases, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 grants check: the contract accepts the declarations it must, refuses the ones it must, and its constants are the generated ones")
+    return 0
+
+
+SERVICE_FILTER = "zenoh_service::"
+SERVICE_TESTS = ("zenoh_service::the_service_exam",)
+
+
+def run_service() -> list[str]:
+    # The service core stands on the session's subscriptions and on the subscription id an event carries, so
+    # the session exam, the links exam and, through it, the stock corpus and the stock-peer exam all run and
+    # are judged here: a change to the session that the core needs may not move any of them.
+    try:
+        zenoh_subscribers_exam.judge(run_subscribers())
+    except zenoh_subscribers_exam.SubscribersError as error:
+        fail(str(error))
+    stdout, output = cargo_tests((SERVICE_FILTER,), {**_os.environ})
+    passed = tests_passed(output)
+    missing = [name for name in SERVICE_TESTS if name not in passed]
+    if missing:
+        fail(f"service: the exam's tests did not run and pass ({len(missing)} of {len(SERVICE_TESTS)}): {', '.join(missing[:4])}")
+    return exam_lines(stdout)
+
+
+def service_main(controls_only: bool) -> int:
+    if all(name in tests_passed("") for name in SERVICE_TESTS):
+        fail("control: a run with the service exam test missing was read as complete")
+    try:
+        refused_controls = zenoh_service_exam.all_controls()
+        item_cases, item_controls = zenoh_service_exam.item_pins()
+        positive, refusals = zenoh_service_exam.judge(zenoh_service_exam.good_lines())
+    except (zenoh_service_exam.ServiceError, zenoh_grants_exam.GrantsError) as error:
+        fail(str(error))
+    if positive + refusals != zenoh_service_exam.PINNED_CASES:
+        fail(f"service: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_service_exam.PINNED_CASES}")
+    if refused_controls != zenoh_service_exam.PINNED_CONTROLS:
+        fail(f"service: {refused_controls} controls, the checker pins {zenoh_service_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_service_exam.PINNED_CASES:
+        fail(f"service: the admitted item fixes {item_cases} cases, the checker pins {zenoh_service_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_service_exam.PINNED_CONTROLS:
+        fail(f"service: the admitted item requires {item_controls} controls, the checker pins {zenoh_service_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 service judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        positive, refusals = zenoh_service_exam.judge(run_service())
+    except zenoh_service_exam.ServiceError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=service cases={positive} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=positive + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 service check: the core serves each holder what its grants allow, tells a slow one what it lost, and refuses what it cannot serve")
+    return 0
+
+
 def composition_main(controls_only: bool) -> int:
     contract = zenoh_exchange.demo()
     try:
@@ -1655,7 +1807,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "service"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -1668,6 +1820,12 @@ def main() -> int:
         return links_main(arguments.controls_only)
     if arguments.slice == "undeclare":
         return undeclare_main(arguments.controls_only)
+    if arguments.slice == "subscribers":
+        return subscribers_main(arguments.controls_only)
+    if arguments.slice == "grants":
+        return grants_main(arguments.controls_only)
+    if arguments.slice == "service":
+        return service_main(arguments.controls_only)
     refused_controls = controls(arguments.slice)
     if arguments.controls_only:
         print(f"zenoh profile 0 {arguments.slice} judge: refused {refused_controls} corrupted transcripts")
