@@ -1,6 +1,15 @@
 ---
 name: writing-style
-description: Rules for any prose an agent writes in Slime OS — PR bodies first, then conversation replies, then `docs/`, then work-item text. Combines ISO 24495-1 (reader-first structure), ASD-STE100 (countable sentence and word rules, with `docs/glossary.md` as the controlled vocabulary), a bounded form of ELI5 (analogies only as entry points), and Mayer's multimedia principles (when a table or diagram helps and when it adds load). Use before writing or reviewing a PR description, a reply to a human, a page under `docs/`, a work-item body, or a code comment longer than one line. Bilingual: every rule is stated in English and in Traditional Chinese.
+description: >-
+  Rules for any prose an agent writes in Slime OS — PR bodies first, then
+  conversation replies, then `docs/`, then work-item text. Combines ISO
+  24495-1 (reader-first structure), ASD-STE100 (countable sentence and word
+  rules, with `docs/glossary.md` as the controlled vocabulary), a bounded form
+  of ELI5 (analogies only as entry points), and Mayer's multimedia principles
+  (when a table or diagram helps and when it adds load). Use before writing or
+  reviewing a PR description, a reply to a human, a page under `docs/`, a
+  work-item body, or a code comment longer than one line. Bilingual — every
+  rule is stated in English and in Traditional Chinese.
 ---
 
 # Writing style / 寫作規範
@@ -168,9 +177,11 @@ Pick the form by the shape of the information.
    / `Why` 或 `Claim` 最多三句，說明什麼變成真。
 2. `What changed` or `Change` lists files or areas, not a narrative.
    / `What changed` 或 `Change` 列檔案或區域，不是敘事。
-3. `Verification` names the exact command, the observed result, and the
-   evidence class. Nothing that was not run appears as passed.
-   / `Verification` 寫確切指令、觀察結果、證據類別。沒跑的不寫成通過。
+3. `Verification` names the exact command or scenario, the observed result,
+   and the evidence class. Nothing that was not run or observed appears as
+   passed.
+   / `Verification` 寫確切指令或場景、觀察結果、證據類別。沒跑、沒觀察到的
+   不寫成通過。
 4. Known limits are stated in one list, not scattered.
    / 已知限制集中在一個清單。
 5. No sentence over 25 words (S1); no evaluative adjective (W8).
@@ -206,11 +217,12 @@ Pick the form by the shape of the information.
 
 1. `scope` lists what is in; `nonGoals` lists what is out. Do not repeat one
    in the other. / `scope` 列包含的事，`nonGoals` 列不包含的事，兩者不重複。
-2. Each `requirements[].statement` is one observable sentence (S2, S10). An
-   acceptance binds a gate and a predicate to that statement; it carries no
-   prose of its own.
+2. Each `requirements[].statement` is one observable sentence (S2, S10).
+   Each `acceptance[].rationale` says why its gate and predicate prove that
+   statement, in at most three sentences.
    / 每個 `requirements[].statement` 是一句可觀察的陳述（S2、S10）。
-   acceptance 只把 gate 和 predicate 綁到該陳述上，本身不帶敘述。
+   每個 `acceptance[].rationale` 說明它的 gate 和 predicate 為何能證明該陳述，
+   最多三句。
 
 ## Examples / 範例
 

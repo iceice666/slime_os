@@ -97,7 +97,14 @@ A comment should state what must remain true, not argue that the author was righ
 
 ## Writing style
 
-Every PR body, reply to a human, `docs/` page, work-item body, and multi-line comment follows [`.agents/skills/writing-style/SKILL.md`](.agents/skills/writing-style/SKILL.md): read it before writing any of these. The short form: conclusion first; one statement per sentence, at most 25 words; active voice with a named actor; one glossary term per concept, no synonym rotation, no evaluative adjectives about the work; analogies only in `docs/concepts/`, `docs/getting-started/`, and replies, never in a PR body; a table or Mermaid block when the information has that shape, no raw HTML diagrams in the repository. Repository text is English; a reply uses the human's language with identifiers and glossary terms untranslated.
+Every PR body, reply to a human, `docs/` page, work-item body, and multi-line comment follows [`.agents/skills/writing-style/SKILL.md`](.agents/skills/writing-style/SKILL.md). Read it before writing any of these. The short form:
+
+- Conclusion first.
+- One statement per sentence, at most 25 words. Active voice with a named actor.
+- One glossary term per concept. No synonym rotation. No evaluative adjectives about the work.
+- Analogies only in `docs/concepts/`, `docs/getting-started/`, and replies. Never in a PR body.
+- A table or Mermaid block when the information has that shape. No raw HTML diagrams in the repository.
+- Repository text is English. A reply uses the human's language, with identifiers and glossary terms untranslated.
 
 ## Development rules
 
