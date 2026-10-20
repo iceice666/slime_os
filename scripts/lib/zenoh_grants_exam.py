@@ -201,8 +201,8 @@ SCHEMA_MUTATIONS = (
 )
 
 
-# A contract with an upper bound made exclusive. The bound is written at two places in the schema, so the
-# text must appear that many times. The weakened contract must then refuse the record at the bound, which
+# A contract with an upper bound made exclusive. The text must appear in the schema as many times as the
+# row says, so a bound that moves or is written again is noticed. The weakened contract must then refuse the record at the bound, which
 # the real one takes: (label, text removed, text put in its place, times it appears, the case that flips).
 BOUND_MUTATIONS = (
     ("a contract whose ring slots bound is exclusive", "ringSlots <= maxCount", "ringSlots < maxCount", 2, "65535 ring slots with the stack they need"),
