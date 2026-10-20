@@ -281,17 +281,106 @@ def schema_constants() -> dict[str, int]:
     return found
 
 
+def live_rust(text: str) -> str:
+    """`text` with Rust comments and string literals blanked, so a declaration is matched only where it is live.
+
+    Line comments, block comments (which nest in Rust) and double-quoted strings with backslash escapes are
+    blanked, and newlines are kept. A character literal holding a double quote is skipped whole. Raw strings
+    are not handled, because the generated constants file has none.
+    """
+    out: list[str] = []
+    i, depth, n = 0, 0, len(text)
+    while i < n:
+        two = text[i : i + 2]
+        if depth:
+            if two == "/*":
+                depth += 1
+                i += 2
+            elif two == "*/":
+                depth -= 1
+                i += 2
+            else:
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+        elif two == "/*":
+            depth = 1
+            i += 2
+        elif two == "//":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif text[i] == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            out.append(" ")
+        elif text[i : i + 3] == "'\"'":
+            out.append("   ")
+            i += 3
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def generated_values(text: str) -> dict[str, list[int]]:
+    """Every live `pub const NAME: <integer type> = <number>;` line of the generated file, by name."""
+    live = live_rust(text)
+    found: dict[str, list[int]] = {rust: [] for rust in CONSTANTS}
+    for rust in CONSTANTS:
+        for match in re.finditer(rf"^[ \t]*pub const {rust}: [a-z0-9]+ = (\d+);[ \t]*$", live, re.M):
+            found[rust].append(int(match.group(1)))
+    return found
+
+
+def check_generated_text(text: str, name: str) -> int:
+    """Each constant is declared once, live, and equals the schema's."""
+    wanted = schema_constants()
+    found = generated_values(text)
+    for rust, value in wanted.items():
+        seen = found[rust]
+        if len(seen) != 1:
+            raise GrantsError(f"{name} declares {rust} {len(seen)} times as a live constant, the exam requires once")
+        if seen[0] != value:
+            raise GrantsError(f"{name} has {rust} = {seen[0]}, the schema states {value}")
+    return len(wanted)
+
+
 def check_generated() -> int:
     """The Rust constants the implementation generates equal the schema's, or the implementation has not landed."""
     if not GENERATED.is_file():
         raise GrantsError(f"{GENERATED.relative_to(ROOT)} does not exist; the grants bindings have not landed")
-    text = GENERATED.read_text(encoding="utf-8")
-    wanted = schema_constants()
-    for rust, value in wanted.items():
-        match = re.search(rf"pub const {rust}: [a-z0-9]+ = (\d+);", text)
-        if match is None or int(match.group(1)) != value:
-            raise GrantsError(f"{GENERATED.relative_to(ROOT)} has {rust} = {match.group(1) if match else 'nothing'}, the schema states {value}")
-    return len(wanted)
+    return check_generated_text(GENERATED.read_text(encoding="utf-8"), str(GENERATED.relative_to(ROOT)))
+
+
+def generated_file(*, comment: str = "", extra: str = "") -> str:
+    """An honest generated file: every constant declared once. `comment` prefixes each line, `extra` follows."""
+    lines = [f"{comment}pub const {rust}: u32 = {value};" for rust, value in schema_constants().items()]
+    return "\n".join(lines) + "\n" + extra
+
+
+def generated_controls() -> int:
+    """The honest file is taken, and a file that does not declare every constant once, live, is refused."""
+    if check_generated_text(generated_file(), "the honest file") != len(CONSTANTS):
+        raise GrantsError("control: the honest generated file was not taken")
+    honest = generated_file()
+    first = next(iter(CONSTANTS))
+    value = schema_constants()[first]
+    bad = (
+        ("every constant in a line comment", generated_file(comment="// ")),
+        ("every constant in a block comment", "/*\n" + honest + "*/\n"),
+        ("every constant in a nested block comment", "/* outer /* inner */\n" + honest + "*/\n"),
+        ("every constant inside a string", 'const S: &str = "' + honest.replace("\n", " ") + '";\n'),
+        ("a constant declared twice with the schema's value", honest + f"pub const {first}: u32 = {value};\n"),
+        ("a constant declared twice with another value", honest + f"pub const {first}: u32 = {value + 1};\n"),
+    )
+    for label, text in bad:
+        try:
+            check_generated_text(text, label)
+        except GrantsError:
+            continue
+        raise GrantsError(f"control: the generated-file check took {label}")
+    return len(bad)
 
 
 def arithmetic_controls() -> int:
@@ -318,13 +407,13 @@ def judge_cases() -> int:
 def all_controls() -> int:
     """Every refused record, every weakened contract and every drifted constant: the corruptions refused."""
     _accepted, refused = control_counts()
-    return refused + mutation_controls() + bound_controls() + arithmetic_controls()
+    return refused + mutation_controls() + bound_controls() + arithmetic_controls() + generated_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these.
 PINNED_CASES = 68
-PINNED_CONTROLS = 58
+PINNED_CONTROLS = 64
 ADMISSION = "slime-zenoh-service-grants-"
 
 

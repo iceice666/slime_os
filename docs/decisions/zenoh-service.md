@@ -1,7 +1,7 @@
 # A shared Zenoh service component
 
 **Status:** Proposed
-**Related work items:** `01a15900-b7a5-715e-9706-110fde699faf` (a session that holds several subscriptions of its own), `01a15b9a-21c1-749d-b945-c8ab0fe5f90d` (the grants contract) and `01a15b9a-2924-7131-a81b-74e6f385a3d6` (the service core, which depends on both). Zenoh Profile 0 epic: `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
+**Related work items:** `01a15900-b7a5-715e-9706-110fde699faf` (a session that holds several subscriptions of its own), `01a15baf-0a01-792c-8cb0-e50e5632813a` (the grants contract) and `01a15baf-144e-7636-94d2-4fd05f19c21a` (the service core, which depends on both). Zenoh Profile 0 epic: `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
 
 ## Context
 
@@ -47,8 +47,8 @@ A host state machine over a session and a scripted peer judges the service core,
 The planning PR that adds this record also adds items 1 to 3. Each item has an exam. A throwaway implementation produced the counts, and a revert removed it afterwards.
 
 1. **A session that holds several subscriptions of its own** (`01a15900-b7a5-715e-9706-110fde699faf`). `Params` gains `local`, and the table holds `per_side + local` slots. `Params::DEMO` and `Params::from_limits` keep `local` at 1. No link built from `zenoh-link-limits/v1` and no landed exam changes. The slice `--slice subscribers` pins 28 cases and 90 controls. It runs the links exam and the stock-peer exam beside it. A link configuration that declares more than one subscription needs a new version of the link-limits contract and re-admits the links item. This item does not do that.
-2. **The grants contract** (`01a15b9a-21c1-749d-b945-c8ab0fe5f90d`). `contracts/zenoh-service-grants/v1`, judged through its own decoder. The slice `--slice grants` pins 68 cases and 58 controls. Ten of the controls are weakened contracts that must each take the record that the removed check refuses. Four more make an upper bound exclusive, and the weakened contract must then refuse the record at that bound. The binding generator and the generated Rust constants belong to the implementation.
-3. **The service core** (`01a15b9a-2924-7131-a81b-74e6f385a3d6`). It follows items 1 and 2. The slice `--slice service` pins 50 cases and 126 controls. The item adds the matching subscription's id to `SampleDelivered`. The Rust test also prints the `size_of` of a slot, a row, a holder and the core. The judge refuses a size above the matching overhead constant in the grants contract, so the declared stack covers what the core stores.
+2. **The grants contract** (`01a15baf-0a01-792c-8cb0-e50e5632813a`). `contracts/zenoh-service-grants/v1`, judged through its own decoder. The slice `--slice grants` pins 68 cases and 64 controls. Ten of the controls are weakened contracts that must each take the record that the removed check refuses. Four more make an upper bound exclusive, and the weakened contract must then refuse the record at that bound. Six more are generated files that do not declare every constant once as live code. The binding generator and the generated Rust constants belong to the implementation.
+3. **The service core** (`01a15baf-144e-7636-94d2-4fd05f19c21a`). It follows items 1 and 2. The slice `--slice service` pins 50 cases and 126 controls. The item adds the matching subscription's id to `SampleDelivered`. The Rust test also prints the `size_of` of a slot, a row, a holder and the core. The judge refuses a size above the matching overhead constant in the grants contract, so the declared stack covers what the core stores.
 4. **The component, the client interface and a booted composition.** This item covers the service and its control and provisioning endpoints. It covers the ring and data loans and the typed adapter. It covers the path of the grants from the system spec to the service. It also covers a composition with two clients under QEMU. It is not planned, because it cannot be graded until item 3 lands.
 
 ## Out of scope
