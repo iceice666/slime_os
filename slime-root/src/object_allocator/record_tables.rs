@@ -189,6 +189,8 @@ pub(super) enum ExtentDrift {
     Present,
     FreeBytes,
     Reuse { size_bits: usize },
+    ReuseCursor { size_bits: usize },
+    Vacancy,
     RoomChain { arena: usize },
 }
 
@@ -690,6 +692,14 @@ impl ExtentTable {
             ExtentDrift::Reuse { size_bits } => {
                 let size = reuse_size(size_bits).expect("reuse size");
                 self.free_count[size] += 1;
+            }
+            ExtentDrift::ReuseCursor { size_bits } => {
+                let size = reuse_size(size_bits).expect("reuse size");
+                self.reuse_from[size] = self.records.len();
+            }
+            ExtentDrift::Vacancy => {
+                let lowest = self.walk_vacancy().expect("a vacant slot");
+                self.vacant_from = lowest + 1;
             }
             ExtentDrift::RoomChain { arena } => {
                 let head = self.room_head[arena];

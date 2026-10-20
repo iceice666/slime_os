@@ -7748,6 +7748,7 @@ mod tests {
                 );
                 assert!(kernel.requests.is_empty());
                 assert_eq!(allocator.allocation_descriptors_free(), free);
+                assert_eq!(allocator.extents[data].unwrap().watermark, GRANULE_BYTES);
             })
             .unwrap()
             .join()
@@ -7888,7 +7889,7 @@ mod tests {
         use super::record_tables::ExtentDrift;
         type Drift = fn(&mut ObjectAllocator, TaskArenaId);
         type Read = fn(&mut ObjectAllocator, TaskArenaId);
-        let cases: [(&str, Drift, Read); 5] = [
+        let cases: [(&str, Drift, Read); 7] = [
             (
                 "owned allocation records",
                 |allocator, _| allocator.allocations.drift_for_test(),
@@ -7919,6 +7920,27 @@ mod tests {
                 },
                 |allocator, _| {
                     allocator.reusable_extent(13);
+                },
+            ),
+            (
+                "the cursor to the lowest returned extent of one size",
+                |allocator, _| {
+                    seed_reusable_extents(allocator, ExtentKind::PrivateData, 13, 1);
+                    allocator
+                        .extents
+                        .drift_for_test(ExtentDrift::ReuseCursor { size_bits: 13 })
+                },
+                |allocator, _| {
+                    allocator.reusable_extent(13);
+                },
+            ),
+            (
+                "the cursor to the lowest vacant extent slot",
+                |allocator, _| allocator.extents.drift_for_test(ExtentDrift::Vacancy),
+                |allocator, _| {
+                    // No returned extent of this size, so a fresh record is
+                    // placed; the host has no untyped to retype it from.
+                    let _ = allocator.acquire_extent_record(14);
                 },
             ),
             (
