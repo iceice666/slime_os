@@ -114,6 +114,49 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
             "qemu-arm-virt",
         ),
     ),
+    # The network checker boots one image per arm. Its default arm is `sel4-io-network`, and the other
+    # thirteen are named here, each by the closure it builds.
+    "sel4-io-network": tuple(
+        (name, name, "qemu-arm-virt")
+        for name in (
+            "sel4-io-tcp",
+            "sel4-io-tcp-impairment",
+            "sel4-io-tcp-listener",
+            "sel4-io-tcp-options",
+            "sel4-io-driver-reset-in-flight",
+            "sel4-io-service-fault-in-flight",
+            "sel4-io-lifetime",
+            "sel4-io-local",
+            "sel4-net",
+            "sel4-zenoh",
+            "sel4-zenoh-external",
+            "sel4-http",
+            "sel4-http-public",
+        )
+    ),
+}
+
+# A checker that boots several images attaches QEMU devices in the functions that boot each one, and its arms
+# share the checker's timeout and failure markers. For such a checker, drives, devices and faults are read
+# from the functions an arm runs, found by following calls between the checker's own functions. An arm whose
+# code sits inline in `main()` has no entry function, and `main()` must then pass no QEMU arguments at all.
+ARM_ENTRY_FUNCTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-network": ("run_authority_arm",),
+        "sel4-io-tcp": ("run_tcp_arm",),
+        "sel4-io-tcp-impairment": ("run_impairment_arm",),
+        "sel4-io-tcp-listener": ("run_listener_arm",),
+        "sel4-io-tcp-options": ("run_options_arm",),
+        "sel4-io-driver-reset-in-flight": ("run_tcp_arm",),
+        "sel4-io-service-fault-in-flight": (),
+        "sel4-io-lifetime": (),
+        "sel4-io-local": (),
+        "sel4-net": ("run_net_arm",),
+        "sel4-zenoh": ("run_zenoh_arm",),
+        "sel4-zenoh-external": ("run_zenoh_external_arm",),
+        "sel4-http": ("run_http_arm",),
+        "sel4-http-public": ("run_http_public_arm",),
+    },
 }
 
 # A planning exclusion belongs to one invocation, never to its whole checker.
@@ -305,6 +348,43 @@ def closure_identity_for(name: str) -> str:
     return compile_closure(candidate).identity.hex()
 
 
+QEMU_ARGUMENT = re.compile(r'"-device"|"-drive"|"-netdev"|additional_arguments')
+
+
+def arm_source(path: _Path, run: str, text: str) -> str:
+    """The source an arm's drives, devices and faults are read from.
+
+    A checker with no entry table is read whole. For a checker with one, the source is the functions the arm
+    runs and the checker's own functions they call. An arm declared with no entry function must find no QEMU
+    argument anywhere in `main()`, so a device added to an inline arm cannot go unrecorded.
+    """
+    arms = ARM_ENTRY_FUNCTIONS.get(path.name)
+    if arms is None:
+        return text
+    if run not in arms:
+        fail(f"{path.name}: {run} has no entry in ARM_ENTRY_FUNCTIONS")
+    functions = {node.name: node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef)}
+    missing = [name for name in arms[run] if name not in functions]
+    if missing:
+        fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
+    if not arms[run]:
+        main = functions.get("main")
+        if main is None or QEMU_ARGUMENT.search(ast.get_source_segment(text, main) or ""):
+            fail(f"{path.name}: {run} is declared to attach nothing, but main() passes QEMU arguments or is absent")
+        return ""
+    seen: set[str] = set()
+    pending = list(arms[run])
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for node in ast.walk(functions[name]):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in functions:
+                pending.append(node.func.id)
+    return "\n".join(ast.get_source_segment(text, functions[name]) or "" for name in sorted(seen))
+
+
 def extract(path: _Path, run: str | None = None) -> dict:
     """Read one invocation's execution-only inputs from its checker constants."""
     run = run_name(path) if run is None else run
@@ -372,11 +452,12 @@ def extract(path: _Path, run: str | None = None) -> dict:
     # rather than parsing QEMU argv keeps this honest about what the checker
     # actually attaches; a checker that attaches two disks in two code paths
     # declares two.
-    drive_sites = len(re.findall(r'"-drive"', text))
+    scoped = arm_source(path, run, text)
+    drive_sites = len(re.findall(r'"-drive"', scoped))
 
     devices = sorted(
-        set(re.findall(r'"(virtio-[a-z]+-device)[^"]*"', text))
-        | set(re.findall(r'"(usb-kbd)"', text))
+        set(re.findall(r'"(virtio-[a-z]+-device)[^"]*"', scoped))
+        | set(re.findall(r'"(usb-kbd)"', scoped))
     )
 
     # A forbidden outcome is written either as a bare literal or as a regex with
@@ -406,7 +487,7 @@ def extract(path: _Path, run: str | None = None) -> dict:
         # being attached.
         ("device", r"device[_ -]fault|DEVICE_FAULT|fault[_ -]inject"),
     ):
-        if re.search(pattern, text):
+        if re.search(pattern, scoped):
             faults.append(kind)
 
     return {

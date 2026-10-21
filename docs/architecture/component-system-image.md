@@ -149,6 +149,15 @@ markers. Changing one arm must not silently alter the other's frozen declaration
 isolation before running the complete declaration gate. These are host checks,
 not evidence that a planned image has booted.
 
+The network checker boots 14 closures, and each has a record. Its arms share one
+timeout and one set of failure markers, but they attach different devices. Nine
+attach a virtio NIC and five attach nothing. `ARM_ENTRY_FUNCTIONS` in the generator
+names the functions that boot each arm. `extract` reads drives, devices and faults
+from those functions and the checker functions they call. Three arms run inline in
+`main()`. Each is declared to attach nothing, and the generator refuses it if
+`main()` passes a QEMU argument. The inventory controls compare the closures the
+checker builds with the runs it declares.
+
 After an intended image-closure change, update only its test-run references with
 `python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.
 This checks the entire batch before writing and refuses any execution-field

@@ -684,13 +684,156 @@ def check_inventory_controls() -> int:
     return refused
 
 
+# The network checker boots one image per arm. These arms attach a virtio NIC and the rest attach nothing:
+# the authority arm finds no backend by design, the three in-guest arms use no NIC, and the zenoh arm's two
+# nodes exchange samples inside the guest.
+NETWORK_CHECKER = "check-sel4-io-network-plane.py"
+NIC_ARMS = frozenset({
+    "sel4-io-tcp", "sel4-io-tcp-impairment", "sel4-io-tcp-listener", "sel4-io-tcp-options",
+    "sel4-io-driver-reset-in-flight", "sel4-net", "sel4-zenoh-external", "sel4-http", "sel4-http-public",
+})
+NO_NIC_ARMS = frozenset({
+    "sel4-io-network", "sel4-io-service-fault-in-flight", "sel4-io-lifetime", "sel4-io-local", "sel4-zenoh",
+})
+
+
+def built_closures(checker: _Path) -> set[str]:
+    """Every closure a checker passes to `build_image`, with module constants and `module.CLOSURE` resolved."""
+    import ast
+
+    tree = ast.parse(checker.read_text(encoding="utf-8"))
+    imports = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+
+    def library_closure(module: str) -> str:
+        found = re.search(r'^CLOSURE = "([a-z0-9-]+)"', (ROOT / "scripts/lib" / f"{module}.py").read_text(encoding="utf-8"), re.M)
+        if found is None:
+            fail(f"{module}.py declares no CLOSURE constant")
+        return found.group(1)
+
+    def resolve(node) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in constants:
+            return constants[node.id]
+        if isinstance(node, ast.Attribute) and node.attr == "CLOSURE" and isinstance(node.value, ast.Name):
+            return library_closure(node.value.id)
+        fail(f"{checker.name}: cannot resolve the closure named by {ast.dump(node)[:80]}")
+
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            value = node.value
+            if (isinstance(value, ast.Constant) and isinstance(value.value, str)) or (
+                isinstance(value, ast.Attribute) and value.attr == "CLOSURE" and isinstance(value.value, ast.Name)
+                and value.value.id in imports
+            ):
+                constants[node.targets[0].id] = resolve(value)
+    built = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "build_image" and node.args:
+            built.add(resolve(node.args[0]))
+    return built
+
+
+def check_arm_controls() -> int:
+    """The network checker's arms are each recorded, each with only the devices that arm attaches."""
+    import tempfile
+    from unittest.mock import patch
+
+    generator = GENERATOR_MODULE
+    checker = generator.CHECK_ROOT / NETWORK_CHECKER
+    refused = 0
+
+    def refuse(label, operation) -> None:
+        nonlocal refused
+        try:
+            operation()
+        except SystemExit as error:
+            if not str(error).startswith(("system test run generation:", "system test run check:")):
+                fail(f"arm control {label}: wrong refusal: {error}")
+            refused += 1
+        else:
+            fail(f"arm control accepted {label}")
+
+    variants = {name: closure for name, closure, _profile, _image in generator.run_variants(checker)}
+    if set(variants) != NIC_ARMS | NO_NIC_ARMS:
+        fail(f"arm control: the checker declares {sorted(set(variants) ^ (NIC_ARMS | NO_NIC_ARMS))} beyond or short of the expected arms")
+    if set(variants.values()) != built_closures(checker):
+        fail(
+            "arm control: the closures the network checker builds differ from the runs it declares: "
+            f"{sorted(set(variants.values()) ^ built_closures(checker))}"
+        )
+    for name in sorted(variants):
+        facts = generator.extract(checker, name)
+        expected = ["virtio-net-device"] if name in NIC_ARMS else []
+        if facts["devices"] != expected or facts["drives"] != 0 or facts["faults"] or facts["timeoutSeconds"] != 240:
+            fail(f"arm control: {name} extracts {facts}, expected devices {expected}, no drives, no faults and 240 s")
+    for name in NIC_ARMS | NO_NIC_ARMS:
+        if not (RUN_ROOT / f"{name}.zti").is_file():
+            fail(f"arm control: {name} has no run record")
+
+    source = checker.read_text(encoding="utf-8")
+
+    def mutated(old: str, new: str) -> str:
+        if source.count(old) != 1:
+            fail(f"arm control: the text it mutates appears {source.count(old)} times in the checker, not once")
+        return source.replace(old, new)
+
+    nic = '"-device", "virtio-net-device,netdev=probe",'
+    mutations = (
+        ("a NIC added to the authority arm",
+         mutated("        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS",
+                 f"        pins_path=PINS,\n        additional_arguments=({nic}),\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS"),
+         "sel4-io-network", True),
+        ("the NIC removed from the net arm",
+         mutated('"-device", f"virtio-net-device,netdev=slimenet,mac={mac}",\n                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps',
+                 '"-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps'),
+         "sel4-net", False),
+    )
+    with tempfile.TemporaryDirectory(prefix="slime-arm-controls-") as directory:
+        copy = _Path(directory) / NETWORK_CHECKER
+        for label, text, arm, gained in mutations:
+            copy.write_text(text, encoding="utf-8")
+            changed = generator.extract(copy, arm)["devices"]
+            if changed != (["virtio-net-device"] if gained else []):
+                fail(f"arm control: {label} did not change {arm}'s devices to {gained}")
+            refused += 1
+            for other in sorted(variants):
+                if other != arm and generator.extract(copy, other) != generator.extract(checker, other):
+                    fail(f"arm control: {label} changed {other}'s facts")
+            refused += 1
+        # An arm that runs inline in main() must attach nothing, so a device added there is refused.
+        copy.write_text(mutated('    if arguments.arm in ("lifetime", "all"):\n',
+                                '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),
+                        encoding="utf-8")
+        for inline in ("sel4-io-lifetime", "sel4-io-local", "sel4-io-service-fault-in-flight"):
+            refuse(f"a device passed in main() for {inline}", lambda inline=inline: generator.extract(copy, inline))
+        copy.write_text(source, encoding="utf-8")
+        entries = generator.ARM_ENTRY_FUNCTIONS[NETWORK_CHECKER]
+        for label, replacement in (
+            ("an arm with no entry", {key: value for key, value in entries.items() if key != "sel4-http"}),
+            ("an entry function the checker lacks", {**entries, "sel4-http": ("run_nothing_arm",)}),
+        ):
+            with patch.dict(generator.ARM_ENTRY_FUNCTIONS, {NETWORK_CHECKER: replacement}):
+                refuse(label, lambda: generator.extract(copy, "sel4-http"))
+        # A run record for a declared arm cannot go missing.
+        runs = _Path(directory) / "runs"
+        runs.mkdir()
+        for record in RUN_ROOT.glob("*.zti"):
+            (runs / record.name).write_bytes(record.read_bytes())
+        (runs / "sel4-http.zti").unlink()
+        with patch.dict(globals(), {"RUN_ROOT": runs}):
+            refuse("a declared arm with no run record", check_records_and_planes_correspond)
+    return refused
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory-controls", action="store_true",
                         help="exercise run inventory and arm isolation without a product boot")
     arguments = parser.parse_args()
     if arguments.inventory_controls:
-        controls = check_inventory_controls()
+        controls = check_inventory_controls() + check_arm_controls()
         print(f"system test run inventory controls: {controls} negative cases refused")
         return
     vocabulary = contract_vocabulary()
