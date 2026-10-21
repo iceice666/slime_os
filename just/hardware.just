@@ -86,8 +86,9 @@ zenoh_subscribers_check:
 # contracts/zenoh-service-grants/v1 takes the declarations it must take and refuses the ones it must
 # refuse. Each limit is held on both sides of its bound. Each check is removed in turn, and the
 # weakened contract must then take the record that the check refuses. The expectation is
-# scripts/lib/zenoh_grants_exam.py. Nothing here needs a registry. The recipe fails until the
-# generated constants land.
+# scripts/lib/zenoh_grants_exam.py. The exam renders the schema's constants as Rust and requires
+# components/proto/src/zenoh_service_grants.rs to equal that text. Nothing here needs a registry.
+# The recipe fails until that file lands.
 [group('hardware')]
 zenoh_grants_check:
     python3 scripts/check/check-zenoh-profile0.py --slice grants
