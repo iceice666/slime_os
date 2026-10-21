@@ -76,6 +76,9 @@ def good_lines() -> list[str]:
     for holder, key, publish, subscribe in grants.ROWS:
         out.append(f"service grant {grants.HOLDERS[holder]} {K[key]} {'p' if publish else '-'}{'s' if subscribe else '-'}")
     out += [f"service size {name} {SIZES[name]}" for name in SIZE_NAMES]
+    # The Rust test reads these from `slime_proto::zenoh_service_grants`, the file the grants exam holds to
+    # the generator's output. A crate that does not declare that module does not compile the test.
+    out += [f"service constant {name} {value}" for name, value in grants.schema_constants().items()]
     # Two distinct subscribe keys of the three the rows name are declared by the peer's counterpart; the
     # service declares one subscription for each distinct key a holder subscribes to: k1 and k2.
     out += [
@@ -116,7 +119,7 @@ def _need(condition: bool, message: str) -> None:
         raise ServiceError(message)
 
 
-SHAPES = {"limits": 6, "grant": 5, "size": 4, "frame": 4, "ok": 3, "published": 6, "delivered": 6, "refused": 4, "held": 5, "lost": 5}
+SHAPES = {"limits": 6, "grant": 5, "size": 4, "constant": 4, "frame": 4, "ok": 3, "published": 6, "delivered": 6, "refused": 4, "held": 5, "lost": 5}
 
 
 def size_bounds() -> dict[str, int]:
@@ -260,8 +263,36 @@ def size_controls() -> int:
     try:
         judge(swapped)
     except ServiceError:
-        return refused + 1
-    raise ServiceError("control: the service judge accepted the slot and row size lines swapped")
+        refused += 1
+    else:
+        raise ServiceError("control: the service judge accepted the slot and row size lines swapped")
+    return refused + constant_controls(good)
+
+
+def constant_controls(good: list[str]) -> int:
+    """The nine constants the Rust test reads from the generated module must each equal the schema's, and the
+    test must print all nine. A test that cannot read the module does not compile and prints none."""
+    at = [index for index, line in enumerate(good) if line.startswith("service constant ")]
+    _need(len(at) == len(grants.CONSTANTS), f"control: the honest transcript has {len(at)} constant lines, not {len(grants.CONSTANTS)}")
+    first = at[0]
+    refused = 0
+    for offset, (name, value) in enumerate(grants.schema_constants().items()):
+        changed = list(good)
+        changed[first + offset] = f"service constant {name} {value + 1}"
+        try:
+            judge(changed)
+        except ServiceError:
+            refused += 1
+            continue
+        raise ServiceError(f"control: the service judge accepted {name} one more than the schema states")
+    for label, lines in (("the constant lines missing", [line for line in good if not line.startswith("service constant ")]), ("the last constant line missing", good[: at[-1]] + good[at[-1] + 1 :])):
+        try:
+            judge(lines)
+        except ServiceError:
+            refused += 1
+            continue
+        raise ServiceError(f"control: the service judge accepted {label}")
+    return refused
 
 
 def all_controls() -> int:
@@ -271,8 +302,8 @@ def all_controls() -> int:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these; once
 # it is gone these still bind. Both counts are exact.
-PINNED_CASES = 50
-PINNED_CONTROLS = 126
+PINNED_CASES = 59
+PINNED_CONTROLS = 155
 ADMISSION = "slime-zenoh-service-core-"
 
 
