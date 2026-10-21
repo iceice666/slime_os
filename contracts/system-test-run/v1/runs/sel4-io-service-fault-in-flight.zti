@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-service-fault-in-flight";
+  imageClosureIdentity = "8450307ca55f8af9ed6ed70df93a273d56dc5033137ca32aade7cfeedc27fb7e";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

@@ -1,0 +1,24 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-tcp-listener";
+  imageClosureIdentity = "e7d081a218f96697c7e531709ff03cad15278820259686ab46038fd121dfb41f";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [
+    {
+      name = "virtio-net-device";
+      path = "";
+      identity = "";
+      writable = false;
+    };
+  ];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

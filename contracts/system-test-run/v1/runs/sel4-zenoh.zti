@@ -1,0 +1,17 @@
+{
+  formatVersion = 1;
+  name = "sel4-zenoh";
+  imageClosureIdentity = "e2518769305de4045f351e984ba6bc1c08c0606d8d385174681c117581a5b00f";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}
