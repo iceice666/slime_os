@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from harness import ROOT
 
 SCHEMA = ROOT / "contracts" / "zenoh-service-grants" / "v1" / "schema.zt"
 GENERATED = ROOT / "components" / "proto" / "src" / "zenoh_service_grants.rs"
+GENERATOR = ROOT / "scripts" / "generate" / "generate-zenoh-service-grants-bindings.py"
 
 # The keys the exam names k1 to k4. The first is the demo's, 129 bytes.
 KEYS = (
@@ -281,55 +284,28 @@ def schema_constants() -> dict[str, int]:
     return found
 
 
-def live_rust(text: str) -> str:
-    """`text` with Rust comments and string literals blanked, so a declaration is matched only where it is live.
-
-    Line comments, block comments (which nest in Rust) and double-quoted strings with backslash escapes are
-    blanked, and newlines are kept. A character literal holding a double quote is skipped whole. Raw strings
-    are not handled, because the generated constants file has none.
-    """
-    out: list[str] = []
-    i, depth, n = 0, 0, len(text)
-    while i < n:
-        two = text[i : i + 2]
-        if depth:
-            if two == "/*":
-                depth += 1
-                i += 2
-            elif two == "*/":
-                depth -= 1
-                i += 2
-            else:
-                out.append("\n" if text[i] == "\n" else " ")
-                i += 1
-        elif two == "/*":
-            depth = 1
-            i += 2
-        elif two == "//":
-            while i < n and text[i] != "\n":
-                i += 1
-        elif text[i] == '"':
-            i += 1
-            while i < n and text[i] != '"':
-                i += 2 if text[i] == "\\" else 1
-            i += 1
-            out.append(" ")
-        elif text[i : i + 3] == "'\"'":
-            out.append("   ")
-            i += 3
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
+# A generated constants file holds only these lines. Anything else, such as a string, a block comment or an
+# item of another kind, could hide a declaration from a pattern match, so the file is refused as a whole.
+_BLANK = re.compile(r"^[ \t]*$")
+_COMMENT = re.compile(r"^[ \t]*//")
+_ATTRIBUTE = re.compile(r"^[ \t]*#!?\[[^\]\n\"]*\][ \t]*$")
+_CONSTANT = re.compile(r"^[ \t]*pub const ([A-Z][A-Z0-9_]*): [a-z0-9]+ = (\d+);[ \t]*(//.*)?$")
 
 
 def generated_values(text: str) -> dict[str, list[int]]:
-    """Every live `pub const NAME: <integer type> = <number>;` line of the generated file, by name."""
-    live = live_rust(text)
+    """Every `pub const NAME: <integer type> = <number>;` line of the generated file, by name.
+
+    Each line must be blank, a whole-line `//` comment, an attribute or such a constant. Another line is refused.
+    """
     found: dict[str, list[int]] = {rust: [] for rust in CONSTANTS}
-    for rust in CONSTANTS:
-        for match in re.finditer(rf"^[ \t]*pub const {rust}: [a-z0-9]+ = (\d+);[ \t]*$", live, re.M):
-            found[rust].append(int(match.group(1)))
+    for number, line in enumerate(text.splitlines(), 1):
+        if _BLANK.match(line) or _COMMENT.match(line) or _ATTRIBUTE.match(line):
+            continue
+        match = _CONSTANT.match(line)
+        if match is None:
+            raise GrantsError(f"line {number} is not a comment, an attribute or a `pub const` line of a number: {line[:60]!r}")
+        if match.group(1) in found:
+            found[match.group(1)].append(int(match.group(2)))
     return found
 
 
@@ -346,11 +322,44 @@ def check_generated_text(text: str, name: str) -> int:
     return len(wanted)
 
 
+def run_generator_check(script: Path) -> None:
+    """The implementation's binding generator, run with `--check`, finds the generated file current.
+
+    Text alone cannot tell a generated file from a hand-written one, so the generator itself is the judge.
+    """
+    shown = script.relative_to(ROOT) if script.is_relative_to(ROOT) else script
+    if not script.is_file():
+        raise GrantsError(f"{shown} does not exist; the grants binding generator has not landed")
+    done = subprocess.run([sys.executable, str(script), "--check"], cwd=ROOT, capture_output=True, text=True, timeout=300, check=False)
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout).strip().splitlines()[-1:] or ["no output"]
+        raise GrantsError(f"{shown} --check exited {done.returncode}: {detail[0][:120]}")
+
+
 def check_generated() -> int:
     """The Rust constants the implementation generates equal the schema's, or the implementation has not landed."""
     if not GENERATED.is_file():
         raise GrantsError(f"{GENERATED.relative_to(ROOT)} does not exist; the grants bindings have not landed")
+    run_generator_check(GENERATOR)
     return check_generated_text(GENERATED.read_text(encoding="utf-8"), str(GENERATED.relative_to(ROOT)))
+
+
+def generator_controls() -> int:
+    """A generator that exits 0 is taken, and a missing one or one that exits 1 is refused."""
+    with tempfile.TemporaryDirectory(prefix="zenoh-grants-generator-") as scratch:
+        good, bad = Path(scratch) / "good.py", Path(scratch) / "bad.py"
+        good.write_text("import sys\nsys.exit(0 if sys.argv[1:] == ['--check'] else 2)\n", encoding="utf-8")
+        bad.write_text("import sys\nprint('stale', file=sys.stderr)\nsys.exit(1)\n", encoding="utf-8")
+        run_generator_check(good)
+        refused = 0
+        for label, script in (("a generator that does not exist", Path(scratch) / "missing.py"), ("a generator whose check fails", bad)):
+            try:
+                run_generator_check(script)
+            except GrantsError:
+                refused += 1
+                continue
+            raise GrantsError(f"control: the generated-file check took {label}")
+    return refused
 
 
 def generated_file(*, comment: str = "", extra: str = "") -> str:
@@ -373,6 +382,9 @@ def generated_controls() -> int:
         ("every constant inside a string", 'const S: &str = "' + honest.replace("\n", " ") + '";\n'),
         ("a constant declared twice with the schema's value", honest + f"pub const {first}: u32 = {value};\n"),
         ("a constant declared twice with another value", honest + f"pub const {first}: u32 = {value + 1};\n"),
+        ("every constant inside a raw string holding a quote", 'const S: &str = r#"a " b\n' + honest + '"#;\n'),
+        ("every constant inside a raw string with two hashes", 'const S: &str = r##"\n' + honest + '"##;\n'),
+        ("the constants and a function", honest + "fn f() {}\n"),
     )
     for label, text in bad:
         try:
@@ -407,13 +419,13 @@ def judge_cases() -> int:
 def all_controls() -> int:
     """Every refused record, every weakened contract and every drifted constant: the corruptions refused."""
     _accepted, refused = control_counts()
-    return refused + mutation_controls() + bound_controls() + arithmetic_controls() + generated_controls()
+    return refused + mutation_controls() + bound_controls() + arithmetic_controls() + generated_controls() + generator_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these.
 PINNED_CASES = 68
-PINNED_CONTROLS = 64
+PINNED_CONTROLS = 69
 ADMISSION = "slime-zenoh-service-grants-"
 
 
