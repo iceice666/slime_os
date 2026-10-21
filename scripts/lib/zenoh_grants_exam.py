@@ -297,6 +297,17 @@ def render_bindings() -> str:
     return GENERATED_HEADER + "\n" + "".join(f"pub const {rust}: u32 = {value};\n" for rust, value in schema_constants().items())
 
 
+def read_exact(path: Path) -> str:
+    """The file's text with every byte kept, so a CRLF or a lone CR is seen and not translated to LF.
+
+    A file that is not UTF-8 raises `GrantsError`, since the generator writes ASCII.
+    """
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise GrantsError(f"{path.name} is not UTF-8 text: {error.reason}") from error
+
+
 def check_generated_text(text: str, name: str) -> int:
     """The file equals the generator's output byte for byte; returns the number of constants it holds."""
     expected = render_bindings()
@@ -309,11 +320,16 @@ def check_generated_text(text: str, name: str) -> int:
     raise GrantsError(f"{name} differs from the generator's output")
 
 
+def check_generated_file(path: Path) -> int:
+    """`check_generated_text` on the bytes of `path`, named by its file name."""
+    return check_generated_text(read_exact(path), path.name)
+
+
 def check_generated() -> int:
     """The Rust file the implementation commits is the generator's output."""
     if not GENERATED.is_file():
         raise GrantsError(f"{GENERATED.relative_to(ROOT)} does not exist; the grants bindings have not landed, run `just zenoh_service_grants_gen`")
-    return check_generated_text(GENERATED.read_text(encoding="utf-8"), str(GENERATED.relative_to(ROOT)))
+    return check_generated_file(GENERATED)
 
 
 def generated_controls() -> int:
@@ -350,6 +366,30 @@ def generated_controls() -> int:
         except GrantsError:
             continue
         raise GrantsError(f"control: the generated-file check took {label}")
+    return len(bad) + bytes_controls(honest)
+
+
+def bytes_controls(honest: str) -> int:
+    """The same check on a file written to disk: the bytes are read as written, so a newline the text API would
+    translate is still seen. The honest bytes are taken, and each edit below is refused."""
+    with tempfile.TemporaryDirectory(prefix="zenoh-grants-bytes-") as scratch:
+        path = Path(scratch) / "zenoh_service_grants.rs"
+        path.write_bytes(honest.encode("utf-8"))
+        if check_generated_file(path) != len(CONSTANTS):
+            raise GrantsError("control: the honest bytes were not taken")
+        bad = (
+            ("CRLF line endings on disk", honest.replace("\n", "\r\n").encode("utf-8")),
+            ("one lone carriage return on disk", honest.replace("\n", "\r", 1).encode("utf-8")),
+            ("a UTF-8 byte order mark on disk", b"\xef\xbb\xbf" + honest.encode("utf-8")),
+            ("bytes that are not UTF-8 on disk", honest.encode("utf-8") + b"\xff"),
+        )
+        for label, data in bad:
+            path.write_bytes(data)
+            try:
+                check_generated_file(path)
+            except GrantsError:
+                continue
+            raise GrantsError(f"control: the generated-file check took {label}")
     return len(bad)
 
 
@@ -383,7 +423,7 @@ def all_controls() -> int:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these.
 PINNED_CASES = 68
-PINNED_CONTROLS = 73
+PINNED_CONTROLS = 77
 ADMISSION = "slime-zenoh-service-grants-"
 
 

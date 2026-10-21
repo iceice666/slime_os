@@ -25,7 +25,7 @@ import zenoh_grants_exam
 def write_atomic(path: Path, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(contents, encoding="utf-8")
+    temporary.write_bytes(contents.encode("utf-8"))
     temporary.replace(path)
 
 
@@ -39,7 +39,7 @@ def main() -> None:
         raise SystemExit(str(error)) from error
     output = zenoh_grants_exam.GENERATED
     if arguments.check:
-        if not output.exists() or output.read_text(encoding="utf-8") != rendered:
+        if not output.exists() or output.read_bytes() != rendered.encode("utf-8"):
             raise SystemExit(f"generated {output.relative_to(ROOT)} is stale; run `just zenoh_service_grants_gen`")
         print("Zenoh service grants constants are current")
         return

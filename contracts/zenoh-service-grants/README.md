@@ -16,4 +16,4 @@ Each remaining bound has a source.
 
 The record is closed. The derived `decode` ignores an unknown field. The contract therefore refuses one at the top level, in the limits and in every row.
 
-The decision is [`docs/decisions/zenoh-service.md`](../../docs/decisions/zenoh-service.md). The scope is `01a15cc9-dab5-765e-8437-bea8cc846e3d`. The checker is `scripts/check/check-zenoh-profile0.py --slice grants`. The generator is `scripts/generate/generate-zenoh-service-grants-bindings.py`, run by `just zenoh_service_grants_gen`. The implementation owns the generated Rust file and the path of a record from the system spec to the service.
+The decision is [`docs/decisions/zenoh-service.md`](../../docs/decisions/zenoh-service.md). The scope is `01a15cdf-1a91-7ac9-8afc-9233da3cb45b`. The checker is `scripts/check/check-zenoh-profile0.py --slice grants`. The generator is `scripts/generate/generate-zenoh-service-grants-bindings.py`, run by `just zenoh_service_grants_gen`. The implementation owns the generated Rust file and the path of a record from the system spec to the service.
