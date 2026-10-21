@@ -1,10 +1,10 @@
 ---
 schema: work-item/v2
-id: 01a15cdf-1a91-7ac9-8afc-9233da3cb45b
+id: 01a15cfa-29da-78d9-bade-bdd06c2922ba
 kind: task
 state: open
-created: 2026-10-21T05:11:27+00:00
-updated: 2026-10-21T05:11:27+00:00
+created: 2026-10-21T05:41:01+00:00
+updated: 2026-10-21T05:41:01+00:00
 parent: 01a0f5fa-f2c4-71cf-962b-c62cbea2ef68
 devloop:
   schema: dev-spec/v1
@@ -12,7 +12,7 @@ devloop:
   bodyProfile: fenced-zti/v1
   helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
   requirementsDigest: ab8ef15181498efbc8da23b858329cd1462eff50f68020acf7fc15355c15c3b8
-  admission: slime-zenoh-service-grants-20261021d
+  admission: slime-zenoh-service-grants-20261021e
   epoch: unstarted
   evidence: []
 ---
