@@ -153,8 +153,9 @@ The network checker boots 14 closures, and each has a record. Its arms share one
 timeout and one set of failure markers, but they attach different devices. Nine
 attach a virtio NIC and five attach nothing. `ARM_ENTRY_FUNCTIONS` in the generator
 names the functions that boot each arm. `extract` reads drives, devices and faults
-from those functions and the checker functions they call. It also reads each
-module-level assignment that those functions read. Three arms run inline in
+from those functions and the checker functions they call. A device, drive or
+network token may sit only in a function that some arm runs. A token in a
+module-level statement, or in a function that no arm runs, is refused. Three arms run inline in
 `main()`. Each is declared to attach nothing, and the generator refuses it if
 `main()` passes a QEMU argument. Two arms run `run_tcp_arm` with a different
 `driver_reset` flag. `ARM_FLAGS` gives each its flag, and `extract` drops the branch

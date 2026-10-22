@@ -437,14 +437,52 @@ def pruned_lines(function: ast.FunctionDef, text: str, flags: dict[str, bool], w
     return skipped
 
 
+def device_tokens(node: ast.AST) -> set[str]:
+    """The QEMU device, drive and network tokens written anywhere under `node`.
+
+    A token is a string equal to `-device`, `-drive`, `-netdev` or `usb-kbd`, a string that starts with
+    `virtio-<kind>-device`, or the name `additional_arguments` as a variable or a keyword.
+    """
+    found: set[str] = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            value = inner.value
+            if value in ("-device", "-drive", "-netdev", "usb-kbd") or re.match(r"virtio-[a-z]+-device", value):
+                found.add(value[:40])
+        elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
+            found.add("additional_arguments")
+        elif isinstance(inner, ast.keyword) and inner.arg == "additional_arguments":
+            found.add("additional_arguments")
+    return found
+
+
+def call_closure(functions: dict[str, ast.FunctionDef], entries: tuple[str, ...]) -> set[str]:
+    """`entries` and every function of the checker that they call, directly or through another."""
+    seen: set[str] = set()
+    pending = list(entries)
+    while pending:
+        name = pending.pop()
+        if name in seen or name not in functions:
+            continue
+        seen.add(name)
+        for node in ast.walk(functions[name]):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in functions:
+                pending.append(node.func.id)
+    return seen
+
+
 def arm_source(path: _Path, run: str, text: str) -> str:
     """The source an arm's drives, devices and faults are read from.
 
     A checker with no entry table is read whole. For a checker with one, the source is the functions the arm
     runs and the checker's own functions they call, less the branches that a flag in `ARM_FLAGS` rules out. It
-    also holds each module-level assignment that those functions read, directly or through another module-level
-    assignment. An arm declared with no entry function must find no QEMU argument anywhere in `main()`, so a device added
-    to an inline arm cannot go unrecorded.
+    also holds each plain module-level assignment that those functions read, which is how a fault word in a
+    module constant reaches an arm.
+
+    A device, drive or network token is not followed through names. It must sit in a function that some arm
+    runs, and a token in any module-level statement or in a function that no arm runs is refused. No form of
+    binding can hide a token from that rule. An arm declared with no entry function must find no QEMU argument
+    anywhere in `main()`, so a device added to an inline arm cannot go unrecorded.
     """
     arms = ARM_ENTRY_FUNCTIONS.get(path.name)
     if arms is None:
@@ -462,6 +500,20 @@ def arm_source(path: _Path, run: str, text: str) -> str:
     missing = [name for name in arms[run] if name not in functions]
     if missing:
         fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
+    # A device token may sit only in a function that some arm runs. A binding at module level, whatever its
+    # form, and a function that no arm runs cannot be tied to an arm, so a token there is refused. This does
+    # not follow names, and no form of assignment can hide a token from it.
+    owned: set[str] = set()
+    for entries in arms.values():
+        owned |= call_closure(functions, entries)
+    for node in body:
+        holder = node.name if isinstance(node, ast.FunctionDef) and node.name not in owned else None
+        if isinstance(node, ast.FunctionDef) and holder is None:
+            continue
+        tokens = device_tokens(node)
+        if tokens:
+            where = f"function {holder}, which no arm runs," if holder else f"the module-level statement at line {node.lineno}"
+            fail(f"{path.name}: {where} holds QEMU device token(s) {sorted(tokens)}, so no record can say which arm attaches them")
     flags = ARM_FLAGS.get(path.name, {}).get(run, {})
     if not arms[run]:
         if flags:

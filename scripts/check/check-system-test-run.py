@@ -844,20 +844,45 @@ def check_arm_controls() -> int:
         copy.write_text(source, encoding="utf-8")
         with patch.dict(generator.ARM_FLAGS, {NETWORK_CHECKER: {"sel4-io-tcp": {"not_a_parameter": True}}}):
             refuse("a flag that no function the arm runs takes", lambda: generator.extract(copy, "sel4-io-tcp"))
-        # A device held in a module-level name reaches the arms whose functions read that name, directly or through
-        # another module-level name, and no other arm.
+        # A device token may sit only in a function that some arm runs. A module-level statement of any form, and a
+        # function that no arm runs, are refused when they hold one, so no binding can hide a device from an arm.
         top = "TIMEOUT = 240\n"
         impair = "def run_impairment_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:\n"
-        for label, text, reached in (
-            ("a module tuple read by one arm", mutated(top, top + f"EXTRA_DEVICE = {pair}\n").replace(impair, impair + "    extra = EXTRA_DEVICE\n", 1), True),
-            ("a module tuple read through another module name", mutated(top, top + f"BASE_DEVICE = {pair}\nEXTRA_DEVICE = BASE_DEVICE\n").replace(impair, impair + "    extra = EXTRA_DEVICE\n", 1), True),
-            ("a module tuple that no arm reads", mutated(top, top + f"UNUSED_DEVICE = {pair}\n"), False),
+
+        def with_top(lines: str, use: str = "") -> str:
+            return mutated(top, top + lines).replace(impair, impair + use, 1)
+
+        for label, text in (
+            ("a module tuple read by an arm", with_top(f"EXTRA_DEVICE = {pair}\n", "    extra = EXTRA_DEVICE\n")),
+            ("a module tuple read through another module name", with_top(f"BASE_DEVICE = {pair}\nEXTRA_DEVICE = BASE_DEVICE\n", "    extra = EXTRA_DEVICE\n")),
+            ("a module tuple that no arm reads", with_top(f"UNUSED_DEVICE = {pair}\n")),
+            ("a destructured pair", with_top('ARG, DEV = "-device", "virtio-rng-device"\n', "    extra = (ARG, DEV)\n")),
+            ("a parenthesised destructuring", with_top('(ARG, DEV) = ("-device", "virtio-rng-device")\n', "    extra = (ARG, DEV)\n")),
+            ("a star target", with_top('ARG, *REST = "-device", "virtio-rng-device"\n', "    extra = (ARG, REST)\n")),
+            ("a chained assignment", with_top(f"FIRST = SECOND = {pair}\n", "    extra = SECOND\n")),
+            ("a module-level walrus", with_top(f"(WALRUS := {pair})\n", "    extra = WALRUS\n")),
+            ("an augmented assignment", with_top(f"EXTRA_DEVICE = ()\nEXTRA_DEVICE += {pair}\n", "    extra = EXTRA_DEVICE\n")),
+            ("a class attribute", with_top(f"class Config:\n    DEVICE = {pair}\n", "    extra = Config.DEVICE\n")),
+            ("a dict literal", with_top(f'CONFIG = {{"device": {pair}}}\n', '    extra = CONFIG["device"]\n')),
+            ("an annotated assignment", with_top(f"EXTRA_DEVICE: tuple = {pair}\n", "    extra = EXTRA_DEVICE\n")),
+            ("a module-level lambda", with_top(f"MAKE_DEVICE = lambda: {pair}\n", "    extra = MAKE_DEVICE()\n")),
+            ("a drive token at module level", with_top('DRIVE = ("-drive", "file=x")\n')),
+            ("a usb-kbd token at module level", with_top('KEYBOARD = "usb-kbd"\n')),
+            ("additional_arguments bound at module level", with_top("additional_arguments = ()\n")),
+            ("a function that no arm runs and that holds a device", source + f"\n\ndef helper_unused():\n    return {pair}\n"),
         ):
             copy.write_text(text, encoding="utf-8")
-            for arm in sorted(variants):
-                found = "virtio-rng-device" in generator.extract(copy, arm)["devices"]
-                if found != (reached and arm == "sel4-io-tcp-impairment"):
-                    fail(f"arm control: {label} {'reached' if found else 'missed'} {arm}")
+            compile(text, label, "exec")
+            refuse(label, lambda: generator.extract(copy, "sel4-io-tcp-impairment"))
+        for label, text in (
+            ("a function that no arm runs and that holds no token", source + "\n\ndef helper_unused():\n    return 1\n"),
+            ("a device inside the arm's own function", mutated(impair, impair + f"    extra = {pair}\n")),
+        ):
+            copy.write_text(text, encoding="utf-8")
+            if generator.extract(copy, "sel4-io-tcp-impairment")["devices"] != (
+                ["virtio-net-device", "virtio-rng-device"] if "own function" in label else ["virtio-net-device"]
+            ):
+                fail(f"arm control: {label} gave the wrong devices")
             refused += 1
         # An arm that runs inline in main() must attach nothing, so a device added there is refused.
         copy.write_text(mutated('    if arguments.arm in ("lifetime", "all"):\n',
