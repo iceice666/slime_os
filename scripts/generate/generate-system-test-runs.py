@@ -187,6 +187,9 @@ ARM_CHOICES: dict[str, dict[str, str]] = {
     },
 }
 
+# The name of the parsed-arguments variable and the attribute that selects an arm, as in `arguments.arm`.
+ARM_SELECTOR = ("arguments", "arm")
+
 ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
     "check-sel4-io-network-plane.py": {
         "sel4-io-network": (),
@@ -448,14 +451,40 @@ def qemu_tokens(node: ast.AST) -> set[str]:
     return found
 
 
+def check_launcher_uses(path: _Path, body: list[ast.stmt]) -> None:
+    """`run_plane` is the only launcher, and every use of its name is a direct call that hides no keyword.
+
+    `run_plane` appends `additional_arguments` to the QEMU command. A direct call that names its keywords shows
+    what it passes. A call that spreads a mapping or a sequence, a use of the name that is not a call, an
+    attribute named `run_plane`, and a string equal to the launcher or to the keyword could pass arguments that
+    the reading of a site does not see, so each is refused anywhere in the checker.
+    """
+    tree = ast.Module(body=body, type_ignores=[])
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "run_plane":
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Call) and parent.func is node):
+                fail(f"{path.name}: run_plane is used at line {node.lineno} other than as a direct call, so what it passes cannot be read")
+        elif isinstance(node, ast.Attribute) and node.attr == "run_plane":
+            fail(f"{path.name}: run_plane is reached as an attribute at line {node.lineno}, so what it passes cannot be read")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "run_plane":
+            if any(keyword.arg is None for keyword in node.keywords) or any(isinstance(argument, ast.Starred) for argument in node.args):
+                fail(f"{path.name}: the run_plane call at line {node.lineno} spreads a mapping or a sequence, so what it passes cannot be read")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in ("run_plane", "additional_arguments"):
+            fail(f"{path.name}: the string {node.value!r} at line {node.lineno} could name the launcher or its keyword at run time")
+
+
 def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[str]:
     """The devices a site passes, in order, with one entry for each `-device` argument.
 
     The arguments of a site are the elements of the tuple or list literals that the keyword `additional_arguments`
-    receives. Each such value must be a tuple or list literal of plain elements. A starred element, a variable, a
-    call and any flag outside `SITE_FLAGS` are refused. A `-device` must be followed by a string literal or an
-    f-string that starts with a `virtio-<kind>-device` name, and that name is the device. A definition nested in the
-    function may hold no QEMU token, so a pair cannot move out of reach, and no QEMU token may sit outside those tuples.
+    receives from a call to `run_plane`. Another call that carries the keyword is refused, because only
+    `run_plane` adds the arguments to QEMU. A literal must hold flag and value pairs. Each flag is a string
+    literal from `SITE_FLAGS`, so a computed flag, a variable flag, an odd count and a starred element are refused.
+    A `-device` value must be a string literal or an f-string that starts with a `virtio-<kind>-device` name, and
+    that name is the device. A `-netdev` or `-object` value must be a name, a string literal or an f-string. A
+    definition nested in the function may hold no QEMU token, and no QEMU token may sit outside those literals.
     """
     where = f"{path.name}: {name}"
     for inner in ast.walk(function):
@@ -463,47 +492,55 @@ def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[st
             held = qemu_tokens(inner)
             if held:
                 fail(f"{where} holds QEMU token(s) {sorted(held)} in a nested {type(inner).__name__.lower()}, so its arguments cannot be read where they are written")
-    carriers = [kw.value for call in ast.walk(function) if isinstance(call, ast.Call) for kw in call.keywords if kw.arg == "additional_arguments"]
+    carriers: list[ast.expr] = []
+    for call in ast.walk(function):
+        if not isinstance(call, ast.Call):
+            continue
+        for keyword in call.keywords:
+            if keyword.arg == "additional_arguments":
+                if not (isinstance(call.func, ast.Name) and call.func.id == "run_plane"):
+                    fail(f"{where} passes additional_arguments to a call that is not run_plane, which is the only call that adds them to QEMU")
+                carriers.append(keyword.value)
     if not carriers:
-        fail(f"{where} is declared as a site but passes no additional_arguments")
+        fail(f"{where} is declared as a site but passes no additional_arguments to run_plane")
     devices: list[str] = []
-    claimed: set[int] = set()
+    inside: set[int] = set()
     for carrier in carriers:
         if not isinstance(carrier, (ast.Tuple, ast.List)):
             fail(f"{where} passes additional_arguments that is not a tuple or list literal, so its arguments cannot be read")
+        inside.update(id(node) for node in ast.walk(carrier))
         elements = carrier.elts
-        position = 0
-        while position < len(elements):
-            element = elements[position]
-            claimed.add(id(element))
-            if isinstance(element, ast.Starred):
+        if len(elements) % 2:
+            fail(f"{where} passes an odd number of additional_arguments elements, so they are not flag and value pairs")
+        for flag_node, value_node in zip(elements[0::2], elements[1::2], strict=True):
+            if isinstance(flag_node, ast.Starred) or isinstance(value_node, ast.Starred):
                 fail(f"{where} passes a starred element in additional_arguments, so its arguments cannot be read")
-            flag = literal_text(element)
+            flag = literal_text(flag_node)
             if flag is None:
-                position += 1
-                continue
-            if flag.startswith("-") and flag not in SITE_FLAGS:
+                fail(f"{where} passes a flag in additional_arguments that is not a string literal, so what it names cannot be read")
+            if flag not in SITE_FLAGS:
                 fail(f"{where} passes the flag {flag!r}, which this generator does not record")
             if flag == "-device":
-                if position + 1 >= len(elements):
-                    fail(f"{where} ends additional_arguments with -device and no value")
-                value = leading_text(elements[position + 1])
+                value = leading_text(value_node)
                 found = DEVICE_NAME.match(value) if value else None
                 if found is None:
                     fail(f"{where} passes a -device whose value is not a literal that starts with a virtio-<kind>-device name")
                 devices.append(found.group(0))
-                claimed.add(id(elements[position + 1]))
-                position += 2
-                continue
-            position += 1
-    # Every QEMU token in the function must be one of the elements read above. A token anywhere else is a
+            else:
+                if not isinstance(value_node, (ast.Name, ast.Constant, ast.JoinedStr)) or (
+                    isinstance(value_node, ast.Constant) and not isinstance(value_node.value, str)
+                ):
+                    fail(f"{where} passes a {flag} value that is not a name, a string literal or an f-string")
+                text = leading_text(value_node)
+                if text is not None and text.startswith("-"):
+                    fail(f"{where} passes a {flag} value that looks like a flag")
+    # Every QEMU token in the function must sit inside one of those literals. A token anywhere else is a
     # second route to QEMU that the reading did not cover.
     for inner in ast.walk(function):
         if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
             value = inner.value
-            if (value in QEMU_FLAGS or value == "usb-kbd" or DEVICE_NAME.match(value)) and id(inner) not in claimed:
-                if not any(inner is part for element in (e for c in carriers for e in c.elts) for part in ast.walk(element)):
-                    fail(f"{where} holds the QEMU token {value[:40]!r} outside additional_arguments")
+            if (value in QEMU_FLAGS or value == "usb-kbd" or DEVICE_NAME.match(value)) and id(inner) not in inside:
+                fail(f"{where} holds the QEMU token {value[:40]!r} outside additional_arguments")
         elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
             fail(f"{where} uses additional_arguments as a name, so its arguments cannot be read")
     return devices
@@ -565,24 +602,107 @@ def reachable_units(units: dict[str, list[ast.stmt]], entries: tuple[str, ...]) 
     return seen
 
 
-def arm_branches(main: ast.FunctionDef) -> list[tuple[ast.If, set[str]]]:
-    """Each `if` in `main` whose test reads the `arm` attribute, with the arm names its test mentions.
+def arm_branches(path: _Path, main: ast.FunctionDef) -> list[tuple[ast.If, frozenset[str], bool]]:
+    """Each `if` in `main` whose test compares the `--arm` choice, with the choices it names and whether it is exact.
 
-    The arm names are the string literals in the test. A branch that is guarded by `arm` and by something else
-    still lists its arm names. The names are not matched to runs here: an inline arm is a run with no entry
-    function, and the generator refuses a site reference in `main` for those, as `arm_source` explains.
+    The choice is read as `arguments.arm`. Every use of it must be one comparison against string literals, with
+    `==`, `!=`, `in` or `not in`, and that comparison must sit in the test of an `if`, alone or in an `and` chain.
+    A comparison anywhere else, such as an assignment, a loop test, a conditional expression, a `match`, a call or
+    an alias of `arguments`, is refused, because the branch it guards could not be found.
+
+    A branch is exact when its test is such a comparison, or an `and` of them, and all of them are positive. Then
+    the branch runs only for the choices it names. A branch with a `!=`, a `not in`, an `or` or a `not` can run for
+    other choices, so it is not exact, and the checks treat it as running for every arm.
     """
-    branches = []
+    holder, attribute = ARM_SELECTOR
+    parents = {child: parent for parent in ast.walk(main) for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(main):
-        if isinstance(node, ast.If) and any(isinstance(inner, ast.Attribute) and inner.attr == "arm" for inner in ast.walk(node.test)):
-            names = {c.value for c in ast.walk(node.test) if isinstance(c, ast.Constant) and isinstance(c.value, str)}
-            branches.append((node, names))
-    return branches
+        if isinstance(node, ast.Name) and node.id == holder and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                fail(f"{path.name}: main() uses {holder} other than by attribute at line {node.lineno}, so the --arm branches cannot be found")
+    entries: dict[int, tuple[ast.If, set[str], bool]] = {}
+    for node in ast.walk(main):
+        if not (isinstance(node, ast.Attribute) and node.attr == attribute and isinstance(node.value, ast.Name) and node.value.id == holder):
+            continue
+        where = f"{path.name}: {holder}.{attribute} at line {node.lineno}"
+        compare = parents.get(node)
+        if not isinstance(compare, ast.Compare) or len(compare.ops) != 1:
+            fail(f"{where} is not one comparison, so the branch it guards cannot be found")
+        operator = compare.ops[0]
+        if not isinstance(operator, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
+            fail(f"{where} is compared with an operator other than ==, !=, in or not in")
+        if compare.left is node:
+            other = compare.comparators[0]
+        elif compare.comparators[0] is node and isinstance(operator, (ast.Eq, ast.NotEq)):
+            other = compare.left
+        else:
+            fail(f"{where} is on the wrong side of its comparison")
+        if isinstance(other, ast.Constant) and isinstance(other.value, str):
+            names = {other.value}
+        elif (
+            isinstance(other, (ast.Tuple, ast.Set, ast.List))
+            and other.elts
+            and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in other.elts)
+        ):
+            names = {item.value for item in other.elts}
+        else:
+            fail(f"{where} is compared with something other than string literals, so the choices it names cannot be read")
+        exact = not isinstance(operator, (ast.NotEq, ast.NotIn))
+        child, ancestor = compare, parents.get(compare)
+        while not (isinstance(ancestor, ast.If) and ancestor.test is child):
+            if isinstance(ancestor, ast.BoolOp):
+                exact = exact and isinstance(ancestor.op, ast.And)
+            elif isinstance(ancestor, ast.UnaryOp) and isinstance(ancestor.op, ast.Not):
+                exact = False
+            else:
+                fail(f"{where} is not in the test of an if, so the branch it guards cannot be found")
+            child, ancestor = ancestor, parents.get(ancestor)
+        known = entries.setdefault(id(ancestor), (ancestor, set(), True))
+        if exact:
+            known[1].update(names)
+        entries[id(ancestor)] = (ancestor, known[1], known[2] and exact)
+    return [(branch, frozenset(names), exact) for branch, names, exact in entries.values()]
+
+
+def check_main_branches(path: _Path, main: ast.FunctionDef, body: list[ast.stmt], sites: dict[str, tuple[str, ...]], inline_names: set[str]) -> None:
+    """No branch of `main` that can run an inline arm reads a site, and `main` reads none outside a branch.
+
+    An inline arm has no entry function, so its code is in `main`. A branch that is not exact can run for any
+    arm. The `else` of any branch can run for the choices that the branch does not name. Statements of `main`
+    outside every `--arm` branch run for every arm. Each of these must read no site, directly or through
+    another top-level name, and every inline arm must have an exact branch of its own.
+    """
+    units = top_level_units(body)
+
+    def sites_read(statements: Iterable[ast.stmt]) -> list[str]:
+        names = {inner.id for statement in statements for inner in ast.walk(statement) if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)}
+        return sorted(reachable_units(units, tuple(names)) & set(sites))
+
+    covered: set[int] = set()
+    exact_names: set[str] = set()
+    for branch, names, exact in arm_branches(path, main):
+        for statement in (*branch.body, *branch.orelse):
+            covered.update(id(inner) for inner in ast.walk(statement))
+        if exact:
+            exact_names |= names
+        running = (names & inline_names) if exact else inline_names
+        if running and (hit := sites_read(branch.body)):
+            fail(f"{path.name}: the branch of main() at line {branch.lineno} can run the inline arm(s) {sorted(running)} and reads the site(s) {hit}")
+        if inline_names and branch.orelse and (hit := sites_read(branch.orelse)):
+            fail(f"{path.name}: the else of the branch of main() at line {branch.lineno} can run an inline arm and reads the site(s) {hit}")
+    missing = inline_names - exact_names
+    if missing:
+        fail(f"{path.name}: main() has no branch for the inline arm(s) {sorted(missing)}")
+    outside = {inner.id for inner in ast.walk(main) if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load) and id(inner) not in covered}
+    if inline_names and (hit := sorted(reachable_units(units, tuple(outside)) & set(sites))):
+        fail(f"{path.name}: main() reads the site(s) {hit} outside every --arm branch, where every arm runs them")
 
 
 def check_qemu_sites(path: _Path, body: list[ast.stmt], sites: dict[str, tuple[str, ...]]) -> None:
     """Every QEMU token sits in a declared site, and each site passes exactly the devices it declares."""
     functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
+    check_launcher_uses(path, body)
     for name, declared in sites.items():
         if name not in functions:
             fail(f"{path.name}: QEMU_SITES names {name}, which the checker does not define")
@@ -622,24 +742,15 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
         fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
     check_qemu_sites(path, body, sites)
     main = functions.get("main")
-    if not arms[run] and main is not None:
-        # An inline arm's code is in `main`. Any branch of `main` whose test names an inline arm must read no
-        # site, directly or through another top-level name. The inline arms are the runs with no entry function.
-        choices = ARM_CHOICES.get(path.name, {})
-        absent = sorted(name for name, entries in arms.items() if not entries and name not in choices)
-        if absent:
-            fail(f"{path.name}: the inline arm(s) {absent} have no entry in ARM_CHOICES, so their branch of main() cannot be found")
-        inline_names = {choices[name] for name, entries in arms.items() if not entries}
-        units = top_level_units(body)
-        found_branches = {name for _branch, names in arm_branches(main) for name in names & inline_names}
-        if found_branches != inline_names:
-            fail(f"{path.name}: main() has no branch for the inline arm(s) {sorted(inline_names - found_branches)}")
-        for branch, names in arm_branches(main):
-            if names & inline_names:
-                read = {inner.id for statement in branch.body for inner in ast.walk(statement) if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)}
-                reached = reachable_units(units, tuple(read))
-                if reached & set(sites):
-                    fail(f"{path.name}: the branch of main() at line {branch.lineno} runs the inline arm {sorted(names & inline_names)} and reads the site(s) {sorted(reached & set(sites))}")
+    if main is None:
+        fail(f"{path.name}: the checker defines no main(), so its --arm branches cannot be read")
+    # An inline arm's code is in `main`. The branches of `main` are read for every arm, because a branch that
+    # can run an inline arm, and any statement outside the branches, must read no site.
+    choices = ARM_CHOICES.get(path.name, {})
+    absent = sorted(name for name, entries in arms.items() if not entries and name not in choices)
+    if absent:
+        fail(f"{path.name}: the inline arm(s) {absent} have no entry in ARM_CHOICES, so their branch of main() cannot be found")
+    check_main_branches(path, main, body, sites, {choices[name] for name, entries in arms.items() if not entries})
     units = top_level_units(body)
     reached = reachable_units(units, arms[run])
     attached = sorted(device for name in reached if name in sites for device in sites[name])

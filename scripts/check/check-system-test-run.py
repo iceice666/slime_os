@@ -901,8 +901,53 @@ def check_arm_controls() -> int:
         with patch.dict(generator.QEMU_SITES, {NETWORK_CHECKER: {key: value for key, value in generator.QEMU_SITES[NETWORK_CHECKER].items() if key != "run_http_request"}}):
             refuse("a site that holds QEMU tokens and is not declared", lambda: generator.extract(copy, "sel4-http"))
 
-        # An arm that runs inline in main() reaches no site of its own, so a branch of main() that runs such an
-        # arm and reads a site is refused. The branch is found by the arm name in its test.
+        # Only a call to run_plane adds additional_arguments to QEMU, so the keyword is read from that call alone.
+        # A flag that is not a literal, a value that is not a name, a literal or an f-string, and a launcher that is
+        # reached in any way but a direct call are refused, because what they pass cannot be read from the source.
+        plane_tail = "                input_steps=steps, input_character_delay=0.005,\n            )"
+        moved_nic = (
+            '                additional_arguments=(),\n' + plane_tail + '\n            metadata = {}\n'
+            '            metadata.update(additional_arguments=("-netdev", netdev, "-device", f"virtio-net-device,netdev=slimenet,mac={mac}"))'
+        )
+        refused_edit(
+            "the NIC tuple moved to a call that is not run_plane",
+            mutated(
+                '                additional_arguments=(\n                    "-netdev", netdev,\n                    "-device", f"virtio-net-device,netdev=slimenet,mac={mac}",\n'
+                '                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n' + plane_tail,
+                moved_nic,
+            ),
+            "sel4-net",
+        )
+        peer_pair = '"-device",\n                f"virtio-net-device,netdev=slimelink,mac={mac}",'
+        for label, addition in (
+            ('a flag built by concatenation', '"-" + "device",\n                "virtio-rng-device",'),
+            ("a flag built by an f-string", 'f"-{kind}",\n                "virtio-rng-device",'),
+            ("a flag that is a variable", 'flag,\n                "virtio-rng-device",'),
+            ("an odd number of elements", "str(3),"),
+        ):
+            refused_edit(f"{label} after a declared device", mutated(peer_pair, peer_pair + "\n                " + addition), "sel4-io-tcp")
+        net_pairs = '"-netdev", netdev,\n                    "-device", f"virtio-net-device,netdev=slimenet,mac={mac}",'
+        for label, value in (
+            ("a -netdev value that is a call", "build_netdev()"),
+            ("a -netdev value that is a number", "3"),
+            ("a -netdev value that is an attribute", "settings.netdev"),
+            ("a -netdev value that is a flag", '"-device"'),
+            ("a -netdev value that is an f-string starting with a flag", 'f"-device {kind}"'),
+        ):
+            refused_edit(label, mutated(net_pairs, net_pairs.replace("netdev,\n", value + ",\n", 1)), "sel4-net")
+        plane = "def run_authority_arm(image: Path) -> None:\n"
+        for label, text in (
+            ("run_plane reached through an alias", mutated(plane, plane + "    go = run_plane\n")),
+            ("run_plane reached as a module attribute", mutated(plane, plane + "    sel4_plane.run_plane(None)\n")),
+            ("run_plane called with a spread mapping", mutated("        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS", "        pins_path=PINS,\n        **extra,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS")),
+            ("the keyword name held in a string", mutated(plane, plane + '    key = "additional_arguments"\n')),
+            ("a second run_plane call that passes a device", mutated(plane, plane + '    run_plane(image=image, timeout=1, terminal_condition=None, fail=fail, additional_arguments=("-device", "virtio-rng-device"))\n')),
+        ):
+            refused_edit(label, text, "sel4-io-network")
+
+        # An arm that runs inline in main() reaches no site of its own, so a branch of main() that can run such an
+        # arm and reads a site is refused. The branches are read from the comparisons on the arm choice, and a
+        # comparison that cannot be read as a branch is refused, so no branch can hide behind a constant or an alias.
         lifetime = '    if arguments.arm in ("lifetime", "all"):\n'
         refused_edit(
             "a device passed in main() for an inline arm",
@@ -912,6 +957,27 @@ def check_arm_controls() -> int:
         for call in ("run_net_arm(None, '', None)", "run_with_peer(None, '', None, None, ())", "run_zenoh_external_arm(None)", "run_http_request(None, '')"):
             refused_edit(f"the lifetime branch of main() calls {call.split('(')[0]}", mutated(lifetime, lifetime + f"        {call}\n"), "sel4-io-lifetime")
         refused_edit("the lifetime branch reads a site as a value", mutated(lifetime, lifetime + "        held = [run_net_arm]\n"), "sel4-io-lifetime")
+        site_call = '        run_net_arm(None, "", None)\n'
+        for label, text in (
+            ("a second lifetime branch tested through a constant", mutated(lifetime, '    if arguments.arm == LIFETIME_CHOICE:\n' + site_call + lifetime).replace("TIMEOUT = 240\n", 'TIMEOUT = 240\nLIFETIME_CHOICE = "lifetime"\n', 1)),
+            ("a second lifetime branch tested through a local alias", mutated(lifetime, '    which = arguments.arm\n    if which == "lifetime":\n' + site_call + lifetime)),
+            ("a second lifetime branch with a computed name", mutated(lifetime, '    if arguments.arm in {"life" + "time"}:\n' + site_call + lifetime)),
+            ("a second lifetime branch with the operands swapped", mutated(lifetime, '    if "lifetime" == arguments.arm:\n' + site_call + lifetime)),
+            ("a branch that runs for every arm but one", mutated(lifetime, '    if arguments.arm != "net":\n' + site_call + lifetime)),
+            ("a branch joined to another arm by or", mutated(lifetime, '    if arguments.arm == "lifetime" or arguments.arm == "net":\n' + site_call + lifetime)),
+            ("an else of a branch that reads a site", mutated(lifetime, '    if arguments.arm == "net":\n        pass\n    else:\n' + site_call + lifetime)),
+            ("a site read outside every arm branch", mutated(lifetime, site_call + lifetime)),
+            ("the arm choice in a conditional expression", mutated(lifetime, '    held = 1 if arguments.arm == "lifetime" else 2\n' + lifetime)),
+            ("the arm choice in a while loop", mutated(lifetime, '    while arguments.arm == "lifetime":\n        break\n' + lifetime)),
+            ("the arm choice passed to a function", mutated(lifetime, '    print(arguments.arm)\n' + lifetime)),
+            ("the arguments object aliased", mutated(lifetime, '    held = arguments\n' + lifetime)),
+            ("the arm choice read by getattr", mutated(lifetime, '    if getattr(arguments, "arm") == "lifetime":\n' + site_call + lifetime)),
+        ):
+            refused_edit(label, text, "sel4-io-lifetime")
+        copy.write_text(mutated(lifetime, '    if arguments.arm == "net2":\n' + site_call + lifetime), encoding="utf-8")
+        if generator.extract(copy, "sel4-io-lifetime")["devices"] != []:
+            fail("arm control: a branch that names only another arm changed the lifetime record")
+        refused += 1
         refused_edit("the local branch of main() calls a site", mutated('    if arguments.arm in ("local", "all"):\n', '    if arguments.arm in ("local", "all"):\n        run_net_arm(None, "", None)\n'), "sel4-io-local")
         refused_edit(
             "the service-fault branch of main() calls a site",

@@ -160,14 +160,17 @@ device from the code.
 
 Extraction checks that the code agrees with the tables. A QEMU token may sit only in
 a site. A token in a module-level statement, in a function that is not a site, or in
-a definition nested in a site is refused. Each site gives `additional_arguments` as a
-tuple or list literal. Extraction reads it element by element and counts a repeated
-device as many times as it appears. It requires each `-device` to be followed by a
-literal that starts with a `virtio-` device name. A variable, a computed value, a
-starred element and a flag other than `-netdev`, `-device` and `-object` are refused.
+a definition nested in a site is refused. Each site gives `additional_arguments` to
+`run_plane` as a tuple or list literal of flag and value pairs. Extraction reads it
+element by element and counts a repeated device as many times as it appears. A flag
+must be a literal from `-netdev`, `-device` and `-object`. A `-device` value must be a
+literal that starts with a `virtio-` device name. A computed flag, a variable value, a
+starred element and an odd count are refused. So is the keyword on any other call.
 An arm attaches the devices of every site that it reads by any name. Its declaration
-must equal that set. Three arms run inline in `main()`. A branch of `main()` that
-runs one of them and reads a site is refused. The inventory controls compare the
+must equal that set. Three arms run inline in `main()`. Every use of `arguments.arm` must be a comparison
+with string literals in the test of an `if`, so no branch hides behind a constant. A
+branch that can run one of them, its `else`, and any statement outside the branches
+must read no site. The inventory controls compare the
 closures the checker builds with the runs it declares. A QEMU argument that reaches
 the launcher by a route other than `additional_arguments` is not covered.
 
