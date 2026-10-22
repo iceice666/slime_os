@@ -67,7 +67,8 @@ native milestone even when descendants remain unfinished.
 
 Create children only for independently trackable work with observable exit
 conditions. Admit one with `just devloop admit spec.zti --title "Describe the
-work" --kind task`, then `myque parent <CHILD_UUID> <PARENT_UUID>` and
+work" --admission <token> --policy .devloop/policy.json --kind task`, then
+`myque parent <CHILD_UUID> <PARENT_UUID>` and
 `just tasks_check`; follow the planning-PR process below. Do not change kinds or parent relationships merely
 to populate a progress bar. Browse the repository's
 [Milestones page](https://github.com/iceice666/slime_os/milestones) or filter
