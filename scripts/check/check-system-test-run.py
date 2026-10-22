@@ -848,6 +848,36 @@ def check_arm_controls() -> int:
         )
         refused_edit("a device name swapped in a declared site", mutated('f"virtio-net-device,netdev=slimenet,mac={mac}"', 'f"virtio-rng-device,netdev=slimenet,mac={mac}"'), "sel4-net")
 
+        # Each argument of a site is read where it is written. A second device of the same model, a pair moved
+        # into a nested helper, and a value that is not a device literal are refused, so a count over the whole
+        # function and a decoy literal elsewhere in it cannot satisfy the declaration.
+        net = '"-device", f"virtio-net-device,netdev=slimenet,mac={mac}",'
+        peer_pair = '"-device",\n                f"virtio-net-device,netdev=slimelink,mac={mac}",'
+        net_head = "def run_net_arm(image: Path, mac: str, transcript_path: Path | None) -> None:\n"
+        refused_edit("a second identical NIC in a site", mutated(net, net + " " + net), "sel4-net")
+        refused_edit("a second identical NIC in the peer site", mutated(peer_pair, peer_pair + "\n                " + peer_pair), "sel4-io-tcp")
+        refused_edit(
+            "an existing device pair moved into a nested helper inside its site",
+            mutated(net, "*helper_args(mac),").replace(net_head, net_head + '    def helper_args(mac):\n        return ("-device", f"virtio-net-device,netdev=slimenet,mac={mac}")\n', 1),
+            "sel4-net",
+        )
+        refused_edit("a device value computed beside a decoy literal", mutated(net, '"-device", f"{prefix}-{kind}", "-comment", "virtio-net-device",'), "sel4-net")
+        refused_edit("a device value that is a variable beside a decoy literal", mutated(net, '"-device", chosen, "-comment", "virtio-net-device",'), "sel4-net")
+        refused_edit("a device value built by concatenation beside a decoy literal", mutated(net, '"-device", "virtio-" + kind + "-device", "-comment", "virtio-net-device",'), "sel4-net")
+        refused_edit("a device whose name is a prefix value in an f-string", mutated(net, '"-device", f"{prefix}-net-device,netdev=slimenet",'), "sel4-net")
+        refused_edit(
+            "a -device that ends the arguments",
+            mutated('"-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps', '"-device",\n                ),\n                input_steps').replace(net, '"-netdev", netdev,', 1),
+            "sel4-net",
+        )
+        refused_edit("a starred element in the arguments", mutated(net, "*extra_arguments,"), "sel4-net")
+        refused_edit("a flag the generator does not record", mutated(net, net + ' "-drive", "file=x",'), "sel4-net")
+        refused_edit("a serial flag the generator does not record", mutated(net, net + ' "-serial", "null",'), "sel4-net")
+        refused_edit(
+            "additional_arguments that is a variable",
+            mutated("        timeout=TIMEOUT,\n        terminal_condition=terminal,\n        fail=fail,\n        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS", "        timeout=TIMEOUT,\n        terminal_condition=terminal,\n        fail=fail,\n        pins_path=PINS,\n        additional_arguments=held_arguments,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS"),
+        )
+
         # An arm reaches a site by any name it reads, and its declared devices must equal what its sites attach.
         # A site that an arm newly reaches changes what it attaches, so the declaration must change with it.
         refused_edit("a NIC site reached by an arm that declares none", mutated(auth, auth + "    run_net_arm\n"), "sel4-io-network")
@@ -871,12 +901,31 @@ def check_arm_controls() -> int:
         with patch.dict(generator.QEMU_SITES, {NETWORK_CHECKER: {key: value for key, value in generator.QEMU_SITES[NETWORK_CHECKER].items() if key != "run_http_request"}}):
             refuse("a site that holds QEMU tokens and is not declared", lambda: generator.extract(copy, "sel4-http"))
 
-        # An arm that runs inline in main() reaches no site, so a site called from main() is not attributed to it.
+        # An arm that runs inline in main() reaches no site of its own, so a branch of main() that runs such an
+        # arm and reads a site is refused. The branch is found by the arm name in its test.
+        lifetime = '    if arguments.arm in ("lifetime", "all"):\n'
         refused_edit(
             "a device passed in main() for an inline arm",
-            mutated('    if arguments.arm in ("lifetime", "all"):\n', '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),
+            mutated(lifetime, lifetime + '        launch = ("-device", "virtio-net-device")\n'),
             "sel4-io-lifetime",
         )
+        for call in ("run_net_arm(None, '', None)", "run_with_peer(None, '', None, None, ())", "run_zenoh_external_arm(None)", "run_http_request(None, '')"):
+            refused_edit(f"the lifetime branch of main() calls {call.split('(')[0]}", mutated(lifetime, lifetime + f"        {call}\n"), "sel4-io-lifetime")
+        refused_edit("the lifetime branch reads a site as a value", mutated(lifetime, lifetime + "        held = [run_net_arm]\n"), "sel4-io-lifetime")
+        refused_edit("the local branch of main() calls a site", mutated('    if arguments.arm in ("local", "all"):\n', '    if arguments.arm in ("local", "all"):\n        run_net_arm(None, "", None)\n'), "sel4-io-local")
+        refused_edit(
+            "the service-fault branch of main() calls a site",
+            mutated('    if arguments.arm in ("service-fault", "all"):\n', '    if arguments.arm in ("service-fault", "all"):\n        run_net_arm(None, "", None)\n'),
+            "sel4-io-service-fault-in-flight",
+        )
+        refused_edit(
+            "the branch of an inline arm removed from main()",
+            mutated(lifetime, '    if arguments.arm in ("renamed", "all"):\n'),
+            "sel4-io-lifetime",
+        )
+        copy.write_text(source, encoding="utf-8")
+        with patch.dict(generator.ARM_CHOICES, {NETWORK_CHECKER: {key: value for key, value in generator.ARM_CHOICES[NETWORK_CHECKER].items() if key != "sel4-io-local"}}):
+            refuse("an inline arm with no entry in ARM_CHOICES", lambda: generator.extract(copy, "sel4-io-local"))
 
         # The entry table must name functions the checker defines, and every arm needs an entry.
         entries = generator.ARM_ENTRY_FUNCTIONS[NETWORK_CHECKER]

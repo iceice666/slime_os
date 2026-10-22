@@ -177,6 +177,16 @@ QEMU_SITES: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 
+# The `--arm` choice of `main()` that runs each arm which has no entry function. The generator reads the
+# branches of `main()` that test those choices. A missing entry is a refusal.
+ARM_CHOICES: dict[str, dict[str, str]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-service-fault-in-flight": "service-fault",
+        "sel4-io-lifetime": "lifetime",
+        "sel4-io-local": "local",
+    },
+}
+
 ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
     "check-sel4-io-network-plane.py": {
         "sel4-io-network": (),
@@ -387,36 +397,116 @@ def closure_identity_for(name: str) -> str:
 
 DEVICE_NAME = re.compile(r"virtio-[a-z]+-device")
 
+# The flags a site may pass. A site is a function that builds the QEMU arguments after the base command, and
+# the real checker passes only these three. Any other flag is refused, so a disk or a serial port cannot be
+# added without a person extending this list.
+SITE_FLAGS = ("-netdev", "-device", "-object")
+# The first element of a tuple that holds QEMU arguments. A function that passes a tuple starting like this
+# but is not a site is refused.
+QEMU_FLAGS = ("-netdev", "-device", "-drive", "-object", "-usb", "-serial", "-display", "-chardev", "-global")
 
-def qemu_tokens(node: ast.AST) -> tuple[int, list[str], set[str]]:
-    """The QEMU tokens written anywhere under `node`: `-device` literals, device names and other tokens.
 
-    A device name is a string that starts with `virtio-<kind>-device`, or `usb-kbd`. The other tokens are the
-    strings `-drive` and `-netdev` and the name `additional_arguments`, as a variable or as a keyword. The
-    strings come from the syntax tree, so the quote style does not matter, and the constant text of an f-string
-    counts. The whole tree is read, including a nested function, a lambda and a class.
+def literal_text(node: ast.AST) -> str | None:
+    """The text of a string literal, or of an f-string whose pieces are all literal text, else None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def leading_text(node: ast.AST) -> str | None:
+    """The literal text a string value starts with: a literal, or the first piece of an f-string."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr) and node.values:
+        first = node.values[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+    return None
+
+
+def qemu_tokens(node: ast.AST) -> set[str]:
+    """Every QEMU token written anywhere under `node`, as the strings they hold.
+
+    A token is a string that equals a QEMU flag, a string that starts with a `virtio-<kind>-device` name, the
+    string `usb-kbd`, or the name `additional_arguments` as a variable or a keyword. The strings come from the
+    syntax tree, so the quote style does not matter. The whole tree is read, including nested definitions.
     """
-    device_flags = 0
-    names: list[str] = []
-    other: set[str] = set()
+    found: set[str] = set()
     for inner in ast.walk(node):
         if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
             value = inner.value
-            if value == "-device":
-                device_flags += 1
-            elif value == "usb-kbd":
-                names.append("usb-kbd")
-            elif value in ("-drive", "-netdev"):
-                other.add(value)
-            else:
-                found = DEVICE_NAME.match(value)
-                if found:
-                    names.append(found.group(0))
+            if value in QEMU_FLAGS or value == "usb-kbd" or DEVICE_NAME.match(value):
+                found.add(value[:40])
+        elif isinstance(inner, ast.JoinedStr):
+            first = leading_text(inner)
+            if first and DEVICE_NAME.match(first):
+                found.add(first[:40])
         elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
-            other.add("additional_arguments")
+            found.add("additional_arguments")
         elif isinstance(inner, ast.keyword) and inner.arg == "additional_arguments":
-            other.add("additional_arguments")
-    return device_flags, names, other
+            found.add("additional_arguments")
+    return found
+
+
+def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[str]:
+    """The devices a site passes, in order, with one entry for each `-device` argument.
+
+    The arguments of a site are the elements of the tuple or list literals that the keyword `additional_arguments`
+    receives. Each such value must be a tuple or list literal of plain elements. A starred element, a variable, a
+    call and any flag outside `SITE_FLAGS` are refused. A `-device` must be followed by a string literal or an
+    f-string that starts with a `virtio-<kind>-device` name, and that name is the device. A definition nested in the
+    function may hold no QEMU token, so a pair cannot move out of reach, and no QEMU token may sit outside those tuples.
+    """
+    where = f"{path.name}: {name}"
+    for inner in ast.walk(function):
+        if inner is not function and isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            held = qemu_tokens(inner)
+            if held:
+                fail(f"{where} holds QEMU token(s) {sorted(held)} in a nested {type(inner).__name__.lower()}, so its arguments cannot be read where they are written")
+    carriers = [kw.value for call in ast.walk(function) if isinstance(call, ast.Call) for kw in call.keywords if kw.arg == "additional_arguments"]
+    if not carriers:
+        fail(f"{where} is declared as a site but passes no additional_arguments")
+    devices: list[str] = []
+    claimed: set[int] = set()
+    for carrier in carriers:
+        if not isinstance(carrier, (ast.Tuple, ast.List)):
+            fail(f"{where} passes additional_arguments that is not a tuple or list literal, so its arguments cannot be read")
+        elements = carrier.elts
+        position = 0
+        while position < len(elements):
+            element = elements[position]
+            claimed.add(id(element))
+            if isinstance(element, ast.Starred):
+                fail(f"{where} passes a starred element in additional_arguments, so its arguments cannot be read")
+            flag = literal_text(element)
+            if flag is None:
+                position += 1
+                continue
+            if flag.startswith("-") and flag not in SITE_FLAGS:
+                fail(f"{where} passes the flag {flag!r}, which this generator does not record")
+            if flag == "-device":
+                if position + 1 >= len(elements):
+                    fail(f"{where} ends additional_arguments with -device and no value")
+                value = leading_text(elements[position + 1])
+                found = DEVICE_NAME.match(value) if value else None
+                if found is None:
+                    fail(f"{where} passes a -device whose value is not a literal that starts with a virtio-<kind>-device name")
+                devices.append(found.group(0))
+                claimed.add(id(elements[position + 1]))
+                position += 2
+                continue
+            position += 1
+    # Every QEMU token in the function must be one of the elements read above. A token anywhere else is a
+    # second route to QEMU that the reading did not cover.
+    for inner in ast.walk(function):
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            value = inner.value
+            if (value in QEMU_FLAGS or value == "usb-kbd" or DEVICE_NAME.match(value)) and id(inner) not in claimed:
+                if not any(inner is part for element in (e for c in carriers for e in c.elts) for part in ast.walk(element)):
+                    fail(f"{where} holds the QEMU token {value[:40]!r} outside additional_arguments")
+        elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
+            fail(f"{where} uses additional_arguments as a name, so its arguments cannot be read")
+    return devices
 
 
 def device_facts(nodes: Iterable[ast.AST]) -> tuple[int, list[str]]:
@@ -475,27 +565,37 @@ def reachable_units(units: dict[str, list[ast.stmt]], entries: tuple[str, ...]) 
     return seen
 
 
+def arm_branches(main: ast.FunctionDef) -> list[tuple[ast.If, set[str]]]:
+    """Each `if` in `main` whose test reads the `arm` attribute, with the arm names its test mentions.
+
+    The arm names are the string literals in the test. A branch that is guarded by `arm` and by something else
+    still lists its arm names. The names are not matched to runs here: an inline arm is a run with no entry
+    function, and the generator refuses a site reference in `main` for those, as `arm_source` explains.
+    """
+    branches = []
+    for node in ast.walk(main):
+        if isinstance(node, ast.If) and any(isinstance(inner, ast.Attribute) and inner.attr == "arm" for inner in ast.walk(node.test)):
+            names = {c.value for c in ast.walk(node.test) if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+            branches.append((node, names))
+    return branches
+
+
 def check_qemu_sites(path: _Path, body: list[ast.stmt], sites: dict[str, tuple[str, ...]]) -> None:
     """Every QEMU token sits in a declared site, and each site passes exactly the devices it declares."""
     functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
     for name, declared in sites.items():
         if name not in functions:
             fail(f"{path.name}: QEMU_SITES names {name}, which the checker does not define")
-        flags, names, other = qemu_tokens(functions[name])
-        if "-drive" in other:
-            fail(f"{path.name}: {name} passes a -drive, and this generator records no disk for the checker")
-        if flags != len(names) or sorted(set(names)) != sorted(set(declared)):
-            fail(
-                f"{path.name}: {name} declares devices {sorted(set(declared))}, but its code has {flags} '-device' "
-                f"string(s) and names {sorted(set(names))}, so the device it attaches cannot be read from it"
-            )
+        read = site_arguments(path, name, functions[name])
+        if sorted(read) != sorted(declared):
+            fail(f"{path.name}: {name} declares devices {sorted(declared)}, but its additional_arguments pass {sorted(read)}")
     for node in body:
         if isinstance(node, ast.FunctionDef) and node.name in sites:
             continue
-        flags, names, other = qemu_tokens(node)
-        if flags or names or other:
+        tokens = qemu_tokens(node)
+        if tokens:
             where = f"function {node.name}" if isinstance(node, ast.FunctionDef) else f"the statement at line {node.lineno}"
-            fail(f"{path.name}: {where} is not in QEMU_SITES and holds QEMU token(s) {sorted(set(names) | other | ({'-device'} if flags else set()))}")
+            fail(f"{path.name}: {where} is not in QEMU_SITES and holds QEMU token(s) {sorted(tokens)}")
 
 
 def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
@@ -503,7 +603,8 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
 
     A checker with no tables is read whole. For a checker with them, the devices are the arm's entry in
     `ARM_DEVICES`, after the code is checked against the tables as `ARM_ENTRY_FUNCTIONS` describes. The fault
-    source is the units that the arm reaches.
+    source is the units that the arm reaches. An arm with no entry function runs inline in `main`, and no
+    branch of `main` that names such an arm may read a site.
     """
     arms = ARM_ENTRY_FUNCTIONS.get(path.name)
     if arms is None:
@@ -515,19 +616,38 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
         fail(f"{path.name}: ARM_DEVICES and ARM_ENTRY_FUNCTIONS disagree on the arms {sorted(set(declared_by_arm) ^ set(arms))}")
     sites = QEMU_SITES.get(path.name, {})
     body = ast.parse(text).body
-    functions = {node.name for node in body if isinstance(node, ast.FunctionDef)}
+    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
     missing = [name for name in arms[run] if name not in functions]
     if missing:
         fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
     check_qemu_sites(path, body, sites)
+    main = functions.get("main")
+    if not arms[run] and main is not None:
+        # An inline arm's code is in `main`. Any branch of `main` whose test names an inline arm must read no
+        # site, directly or through another top-level name. The inline arms are the runs with no entry function.
+        choices = ARM_CHOICES.get(path.name, {})
+        absent = sorted(name for name, entries in arms.items() if not entries and name not in choices)
+        if absent:
+            fail(f"{path.name}: the inline arm(s) {absent} have no entry in ARM_CHOICES, so their branch of main() cannot be found")
+        inline_names = {choices[name] for name, entries in arms.items() if not entries}
+        units = top_level_units(body)
+        found_branches = {name for _branch, names in arm_branches(main) for name in names & inline_names}
+        if found_branches != inline_names:
+            fail(f"{path.name}: main() has no branch for the inline arm(s) {sorted(inline_names - found_branches)}")
+        for branch, names in arm_branches(main):
+            if names & inline_names:
+                read = {inner.id for statement in branch.body for inner in ast.walk(statement) if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)}
+                reached = reachable_units(units, tuple(read))
+                if reached & set(sites):
+                    fail(f"{path.name}: the branch of main() at line {branch.lineno} runs the inline arm {sorted(names & inline_names)} and reads the site(s) {sorted(reached & set(sites))}")
     units = top_level_units(body)
     reached = reachable_units(units, arms[run])
-    attached = sorted({device for name in reached if name in sites for device in sites[name]})
-    declared = sorted(set(declared_by_arm[run]))
-    if attached != declared:
+    attached = sorted(device for name in reached if name in sites for device in sites[name])
+    declared = sorted(declared_by_arm[run])
+    if len(set(attached)) != len(set(declared)) or sorted(set(attached)) != sorted(set(declared)):
         fail(
             f"{path.name}: {run} declares devices {declared}, but the sites it can reach, {sorted(reached & set(sites))}, "
-            f"attach {attached}"
+            f"attach {sorted(set(attached))}"
         )
     lines = text.splitlines()
     pieces = [

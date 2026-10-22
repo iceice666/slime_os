@@ -154,17 +154,22 @@ timeout and one set of failure markers, but they attach different devices. Nine
 attach a virtio NIC and five attach nothing. Three tables in the generator state this.
 `ARM_ENTRY_FUNCTIONS` names the functions that boot each arm. `QEMU_SITES` names the
 functions that pass QEMU arguments and the devices each passes. `ARM_DEVICES` names
-the devices each arm attaches. A person edits the tables, and `extract` does not infer
-a device from the code.
+the devices each arm attaches. `ARM_CHOICES` gives the `--arm` choice of each arm that
+has no entry function. A person edits the tables, and `extract` does not infer a
+device from the code.
 
 Extraction checks that the code agrees with the tables. A QEMU token may sit only in
 a site. A token in a module-level statement, in a function that is not a site, or in
-a nested definition is refused. Each site must pass exactly the devices it declares.
+a definition nested in a site is refused. Each site gives `additional_arguments` as a
+tuple or list literal. Extraction reads it element by element and counts a repeated
+device as many times as it appears. It requires each `-device` to be followed by a
+literal that starts with a `virtio-` device name. A variable, a computed value, a
+starred element and a flag other than `-netdev`, `-device` and `-object` are refused.
 An arm attaches the devices of every site that it reads by any name. Its declaration
-must equal that set. Three arms run inline in `main()`, and each reaches no site. The
-inventory controls compare the closures the checker builds with the runs it declares.
-A device name that a run-time computation builds without any device string in the
-code is not caught.
+must equal that set. Three arms run inline in `main()`. A branch of `main()` that
+runs one of them and reads a site is refused. The inventory controls compare the
+closures the checker builds with the runs it declares. A QEMU argument that reaches
+the launcher by a route other than `additional_arguments` is not covered.
 
 After an intended image-closure change, update only its test-run references with
 `python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.
