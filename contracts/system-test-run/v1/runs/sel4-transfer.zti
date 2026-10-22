@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-transfer";
-  imageClosureIdentity = "b750707cebadd1c3fedd88f5d56b864ef477a1fe466f344c77ce1df47bd35a6a";
+  imageClosureIdentity = "42eb731fd6d9d55de201c8766063e6be0b2ab0f3c08cb98b55f410099f81dccf";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [

@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-crossing";
-  imageClosureIdentity = "e5a763baba673e2a6e80bfd05ada4c37add9f2bdaa75cd04575898e12d821596";
+  imageClosureIdentity = "a285ba22167a5b2126e716d94820be87e18cba4a0e7602f8472e00a23034fe7e";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
