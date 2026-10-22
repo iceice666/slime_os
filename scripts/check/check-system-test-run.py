@@ -884,6 +884,50 @@ def check_arm_controls() -> int:
             ):
                 fail(f"arm control: {label} gave the wrong devices")
             refused += 1
+        # Devices are read from the syntax tree, so the quote style of a token does not matter. A device name
+        # that an f-string completes at run time cannot be recorded and is refused.
+        auth = "def run_authority_arm(image: Path) -> None:\n"
+        for label, token in (
+            ("a double-quoted device pair", '("-device", "virtio-rng-device")'),
+            ("a single-quoted device pair", "('-device', 'virtio-rng-device')"),
+            ("a triple-quoted device name", '("-device", """virtio-rng-device""")'),
+        ):
+            copy.write_text(mutated(auth, auth + f"    extra = {token}\n"), encoding="utf-8")
+            if generator.extract(copy, "sel4-io-network")["devices"] != ["virtio-rng-device"]:
+                fail(f"arm control: {label} in the authority arm was not recorded")
+            for other in sorted(variants):
+                if other != "sel4-io-network" and generator.extract(copy, other) != generator.extract(checker, other):
+                    fail(f"arm control: {label} in the authority arm changed {other}")
+            refused += 1
+        copy.write_text(
+            mutated("        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS",
+                    "        pins_path=PINS,\n        additional_arguments=('-device', 'virtio-rng-device'),\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS"),
+            encoding="utf-8",
+        )
+        if generator.extract(copy, "sel4-io-network")["devices"] != ["virtio-rng-device"]:
+            fail("arm control: a single-quoted additional_arguments keyword was not recorded")
+        refused += 1
+        copy.write_text(mutated(auth, auth + '    extra = ("-device", f"virtio-{kind}-device")\n'), encoding="utf-8")
+        refuse("a device name completed by an f-string", lambda: generator.extract(copy, "sel4-io-network"))
+        # A definition nested in an owned function is placed on its own, so a token in it is refused whether or
+        # not anything calls it.
+        for label, addition in (
+            ("an uncalled nested function holding a device", f'    def helper():\n        return {pair}\n'),
+            ("a called nested function holding a device", f'    def helper():\n        return {pair}\n    helper()\n'),
+            ("a nested lambda holding a device", f"    helper = lambda: {pair}\n"),
+            ("a nested class holding a device", f"    class Local:\n        device = {pair}\n"),
+        ):
+            copy.write_text(mutated(auth, auth + addition), encoding="utf-8")
+            refuse(label, lambda: generator.extract(copy, "sel4-io-network"))
+        # A flag may reach a call only through an imported module. A method on a local object keeps it.
+        for label, addition in (
+            ("the flag appended to a local list", "    forwarded = []\n    forwarded.append(driver_reset)\n    if forwarded[0]:\n        extra = " + pair + "\n"),
+            ("the flag passed to a method of a local object", "    box = []\n    box.extend([driver_reset])\n    if box[0]:\n        extra = " + pair + "\n"),
+        ):
+            copy.write_text(mutated(peer, peer + addition), encoding="utf-8")
+            refuse(label, lambda: generator.extract(copy, shared[0]))
+            refuse(f"{label}, for the other arm", lambda: generator.extract(copy, shared[1]))
+        copy.write_text(source, encoding="utf-8")
         # An arm that runs inline in main() must attach nothing, so a device added there is refused.
         copy.write_text(mutated('    if arguments.arm in ("lifetime", "all"):\n',
                                 '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),

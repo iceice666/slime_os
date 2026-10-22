@@ -155,7 +155,9 @@ attach a virtio NIC and five attach nothing. `ARM_ENTRY_FUNCTIONS` in the genera
 names the functions that boot each arm. `extract` reads drives, devices and faults
 from those functions and the checker functions they call. A device, drive or
 network token may sit only in a function that some arm runs. A token in a
-module-level statement, or in a function that no arm runs, is refused. Three arms run inline in
+module-level statement, in a function that no arm runs, or in a definition nested in
+an arm function is refused. Devices are read from the syntax tree, so quote style
+does not matter. Three arms run inline in
 `main()`. Each is declared to attach nothing, and the generator refuses it if
 `main()` passes a QEMU argument. Two arms run `run_tcp_arm` with a different
 `driver_reset` flag. `ARM_FLAGS` gives each its flag, and `extract` drops the branch
