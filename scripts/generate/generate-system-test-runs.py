@@ -380,18 +380,48 @@ def _statements_span(statements: list[ast.stmt]) -> range:
     return range(statements[0].lineno, statements[-1].end_lineno + 1) if statements else range(0)
 
 
-def pruned_lines(function: ast.FunctionDef, text: str, flags: dict[str, bool], where: str) -> set[int]:
+def check_flag_uses(function: ast.FunctionDef, flag: str, local_functions: set[str], where: str) -> None:
+    """Refuse every use of `flag` in `function` except the three that extraction can scope to an arm.
+
+    The flag may be the whole test of an `if` or a conditional expression, written bare or with `not`. It may
+    also be an argument of a call into another module, such as `link_peer.Peer(hold_first_tcp=flag)`. Any
+    other use is refused: an assignment or alias, a loop, an assert, a comprehension filter, a boolean
+    operand, and an argument of a function of the checker itself. The rule is on the flag's own name. It does
+    not follow a value that another module derives from the flag.
+    """
+    parents = {child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)}
+    for name in ast.walk(function):
+        if not (isinstance(name, ast.Name) and name.id == flag):
+            continue
+        if not isinstance(name.ctx, ast.Load):
+            fail(f"{where}: {flag} is assigned at line {name.lineno}, so the arm cannot be scoped")
+        node, parent = name, parents.get(name)
+        if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
+            node, parent = parent, parents.get(parent)
+        if isinstance(parent, (ast.If, ast.IfExp)) and parent.test is node:
+            continue
+        if node is name:
+            call = parents.get(parent) if isinstance(parent, ast.keyword) else parent
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+                continue
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in local_functions:
+                fail(f"{where}: {flag} is passed to {call.func.id} at line {name.lineno}, so the arm cannot be scoped")
+        fail(f"{where}: {flag} is used at line {name.lineno} in a way extraction cannot scope to an arm")
+
+
+def pruned_lines(function: ast.FunctionDef, text: str, flags: dict[str, bool], where: str, local_functions: set[str]) -> set[int]:
     """The source lines of `function` that an arm run with `flags` never executes.
 
     Only a branch on a parameter of the function itself, written as `if flag:` or `if not flag:`, is pruned.
-    Any other test that mentions the flag, and a conditional expression on it that holds a device or QEMU
-    argument, cannot be scoped to an arm, so extraction refuses it and leaves nothing unrecorded.
+    `check_flag_uses` refuses every other use of the flag, and a conditional expression on it that holds a
+    device or QEMU argument is refused here, so extraction leaves nothing unrecorded.
     """
     parameters = {argument.arg for argument in (*function.args.args, *function.args.kwonlyargs)}
     skipped: set[int] = set()
     for flag, value in flags.items():
         if flag not in parameters:
             continue
+        check_flag_uses(function, flag, local_functions, where)
         for node in ast.walk(function):
             if isinstance(node, ast.If) and _mentions(node.test, flag):
                 selected = _flag_test(node.test, flag)
@@ -441,7 +471,7 @@ def arm_source(path: _Path, run: str, text: str) -> str:
         if name in seen:
             continue
         seen.add(name)
-        skipped[name] = pruned_lines(functions[name], text, flags, f"{path.name}: {run}")
+        skipped[name] = pruned_lines(functions[name], text, flags, f"{path.name}: {run}", set(functions))
         for node in ast.walk(functions[name]):
             if (
                 isinstance(node, ast.Call)

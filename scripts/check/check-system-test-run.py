@@ -825,6 +825,22 @@ def check_arm_controls() -> int:
             encoding="utf-8",
         )
         refuse("a device inside a conditional expression on driver_reset", lambda: generator.extract(copy, shared[0]))
+        # Every use of the flag other than an `if`, a conditional expression or a call into another module is
+        # refused, whether or not a device sits under it.
+        peer = "    peer = link_peer.Peer(hold_first_tcp=driver_reset)\n"
+        pair = '("-device", "virtio-rng-device")'
+        for label, addition in (
+            ("a while loop on driver_reset", f"    while driver_reset:\n        extra = {pair}\n        break\n"),
+            ("an alias of driver_reset", f"    held = driver_reset\n    if held:\n        extra = {pair}\n"),
+            ("driver_reset in a comprehension filter", f"    extra = [{pair} for _ in range(1) if driver_reset]\n"),
+            ("driver_reset as a boolean operand", f"    held = driver_reset or False\n    if held:\n        extra = {pair}\n"),
+            ("driver_reset passed to a function of the checker", '    write_wire_transcript(None, "", driver_reset, ())\n'),
+            ("driver_reset assigned", "    driver_reset = False\n"),
+            ("an assert on driver_reset", "    assert driver_reset\n"),
+        ):
+            copy.write_text(mutated(peer, peer + addition), encoding="utf-8")
+            refuse(label, lambda: generator.extract(copy, shared[0]))
+            refuse(f"{label}, for the other arm", lambda: generator.extract(copy, shared[1]))
         copy.write_text(source, encoding="utf-8")
         with patch.dict(generator.ARM_FLAGS, {NETWORK_CHECKER: {"sel4-io-tcp": {"not_a_parameter": True}}}):
             refuse("a flag that no function the arm runs takes", lambda: generator.extract(copy, "sel4-io-tcp"))

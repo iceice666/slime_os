@@ -157,7 +157,7 @@ from those functions and the checker functions they call. Three arms run inline 
 `main()`. Each is declared to attach nothing, and the generator refuses it if
 `main()` passes a QEMU argument. Two arms run `run_tcp_arm` with a different
 `driver_reset` flag. `ARM_FLAGS` gives each its flag, and `extract` drops the branch
-that the flag rules out. The inventory controls compare the closures the checker
+that the flag rules out. It refuses any other use of the flag. The inventory controls compare the closures the checker
 builds with the runs it declares.
 
 After an intended image-closure change, update only its test-run references with
