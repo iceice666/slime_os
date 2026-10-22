@@ -137,21 +137,18 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
     ),
 }
 
-# A checker that boots several images attaches QEMU devices in the functions that boot each one, and its arms
-# share the checker's timeout and failure markers. For such a checker, drives, devices and faults are read
-# from the functions an arm runs, found by following calls between the checker's own functions. An arm whose
-# code sits inline in `main()` has no entry function, and `main()` must then pass no QEMU arguments at all.
+# A checker that boots several images passes QEMU arguments in a few functions, and its arms share the checker's
+# timeout and failure markers. Three tables describe such a checker, and a person edits them:
 #
-# Two arms can run the same function with a different flag, as `run_tcp_arm(driver_reset=...)` does. ARM_FLAGS
-# gives the flag values an arm runs with. Extraction drops the branch of an `if flag:` or `if not flag:` that
-# the value rules out, in the function that takes the flag. A test on the flag of any other shape is refused.
-ARM_FLAGS: dict[str, dict[str, dict[str, bool]]] = {
-    "check-sel4-io-network-plane.py": {
-        "sel4-io-tcp": {"driver_reset": False},
-        "sel4-io-driver-reset-in-flight": {"driver_reset": True},
-    },
-}
-
+#   ARM_ENTRY_FUNCTIONS  the functions that boot each arm. An arm that runs inline in `main()` has none.
+#   QEMU_SITES           the functions that pass QEMU arguments, and the devices each one attaches.
+#   ARM_DEVICES          the devices each arm attaches. A record states exactly this.
+#
+# Extraction does not infer a device from the code. It checks that the code agrees with the tables, and a
+# disagreement in either direction is a refusal. A QEMU token may sit only in a site. Each site passes exactly
+# the devices it declares. The sites that an arm can reach must attach exactly the devices the arm declares. The
+# reach counts every name that the arm's functions read, in nested definitions and in both branches of a
+# conditional, so it can over-state a device and cannot hide one that a name reaches.
 ARM_ENTRY_FUNCTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "check-sel4-io-network-plane.py": {
         "sel4-io-network": ("run_authority_arm",),
@@ -168,6 +165,34 @@ ARM_ENTRY_FUNCTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "sel4-zenoh-external": ("run_zenoh_external_arm",),
         "sel4-http": ("run_http_arm",),
         "sel4-http-public": ("run_http_public_arm",),
+    },
+}
+
+QEMU_SITES: dict[str, dict[str, tuple[str, ...]]] = {
+    "check-sel4-io-network-plane.py": {
+        "run_with_peer": ("virtio-net-device",),
+        "run_net_arm": ("virtio-net-device",),
+        "run_zenoh_external_arm": ("virtio-net-device",),
+        "run_http_request": ("virtio-net-device",),
+    },
+}
+
+ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-network": (),
+        "sel4-io-tcp": ("virtio-net-device",),
+        "sel4-io-tcp-impairment": ("virtio-net-device",),
+        "sel4-io-tcp-listener": ("virtio-net-device",),
+        "sel4-io-tcp-options": ("virtio-net-device",),
+        "sel4-io-driver-reset-in-flight": ("virtio-net-device",),
+        "sel4-io-service-fault-in-flight": (),
+        "sel4-io-lifetime": (),
+        "sel4-io-local": (),
+        "sel4-net": ("virtio-net-device",),
+        "sel4-zenoh": (),
+        "sel4-zenoh-external": ("virtio-net-device",),
+        "sel4-http": ("virtio-net-device",),
+        "sel4-http-public": ("virtio-net-device",),
     },
 }
 
@@ -360,305 +385,155 @@ def closure_identity_for(name: str) -> str:
     return compile_closure(candidate).identity.hex()
 
 
-def _flag_test(test: ast.expr, flag: str) -> bool | None:
-    """Whether `test` is `flag` (True), `not flag` (False), or neither (None)."""
-    if isinstance(test, ast.Name) and test.id == flag:
-        return True
-    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and isinstance(test.operand, ast.Name) and test.operand.id == flag:
-        return False
-    return None
+DEVICE_NAME = re.compile(r"virtio-[a-z]+-device")
 
 
-def _mentions(node: ast.AST, flag: str) -> bool:
-    return any(isinstance(inner, ast.Name) and inner.id == flag for inner in ast.walk(node))
+def qemu_tokens(node: ast.AST) -> tuple[int, list[str], set[str]]:
+    """The QEMU tokens written anywhere under `node`: `-device` literals, device names and other tokens.
 
-
-def _statements_span(statements: list[ast.stmt]) -> range:
-    return range(statements[0].lineno, statements[-1].end_lineno + 1) if statements else range(0)
-
-
-def imported_modules(body: list[ast.stmt]) -> set[str]:
-    """The names the checker binds with a top-level `import` statement."""
-    names: set[str] = set()
-    for node in body:
-        if isinstance(node, ast.Import):
-            names |= {alias.asname or alias.name.split(".")[0] for alias in node.names}
-    return names
-
-
-def call_root(call: ast.Call) -> str | None:
-    """The name at the start of a call's dotted target, as in `link_peer` for `link_peer.Peer(...)`, or None."""
-    target = call.func
-    while isinstance(target, ast.Attribute):
-        target = target.value
-    return target.id if isinstance(target, ast.Name) else None
-
-
-def parameters_and_locals(function: ast.FunctionDef) -> set[str]:
-    """Every name `function` binds: its parameters and each name it assigns, loops over or imports."""
-    names = {argument.arg for argument in (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)}
-    for inner in ast.walk(function):
-        if isinstance(inner, ast.Name) and isinstance(inner.ctx, (ast.Store, ast.Del)):
-            names.add(inner.id)
-        elif isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and inner is not function:
-            names.add(inner.name)
-        elif isinstance(inner, (ast.Import, ast.ImportFrom)):
-            names |= {alias.asname or alias.name.split(".")[0] for alias in inner.names}
-        elif isinstance(inner, ast.ExceptHandler) and inner.name:
-            names.add(inner.name)
-    return names
-
-
-def check_flag_uses(function: ast.FunctionDef, flag: str, local_functions: set[str], modules: set[str], where: str) -> None:
-    """Refuse every use of `flag` in `function` except the three that extraction can scope to an arm.
-
-    The flag may be the whole test of an `if` or a conditional expression, written bare or with `not`. It may
-    also be an argument of a call whose target starts at an imported module, such as
-    `link_peer.Peer(hold_first_tcp=flag)`. Any other use is refused: an assignment or alias, a loop, an assert,
-    a comprehension filter, a boolean operand, an argument of a function of the checker itself, and an
-    argument of a method on a local object such as `forwarded.append(flag)`. The rule is on the flag's own
-    name. It does not follow a value that another module derives from the flag.
+    A device name is a string that starts with `virtio-<kind>-device`, or `usb-kbd`. The other tokens are the
+    strings `-drive` and `-netdev` and the name `additional_arguments`, as a variable or as a keyword. The
+    strings come from the syntax tree, so the quote style does not matter, and the constant text of an f-string
+    counts. The whole tree is read, including a nested function, a lambda and a class.
     """
-    parents = {child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)}
-    for name in ast.walk(function):
-        if not (isinstance(name, ast.Name) and name.id == flag):
-            continue
-        if not isinstance(name.ctx, ast.Load):
-            fail(f"{where}: {flag} is assigned at line {name.lineno}, so the arm cannot be scoped")
-        node, parent = name, parents.get(name)
-        if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
-            node, parent = parent, parents.get(parent)
-        if isinstance(parent, (ast.If, ast.IfExp)) and parent.test is node:
-            continue
-        if node is name:
-            call = parents.get(parent) if isinstance(parent, ast.keyword) else parent
-            if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
-                root = call_root(call)
-                if root in modules and root not in parameters_and_locals(function):
-                    continue
-                fail(f"{where}: {flag} is passed to a method of {root or 'an expression'} at line {name.lineno}, which is not an imported module")
-            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in local_functions:
-                fail(f"{where}: {flag} is passed to {call.func.id} at line {name.lineno}, so the arm cannot be scoped")
-        fail(f"{where}: {flag} is used at line {name.lineno} in a way extraction cannot scope to an arm")
-
-
-def pruned_lines(
-    function: ast.FunctionDef, text: str, flags: dict[str, bool], where: str, local_functions: set[str], modules: set[str]
-) -> set[int]:
-    """The source lines of `function` that an arm run with `flags` never executes.
-
-    Only a branch on a parameter of the function itself, written as `if flag:` or `if not flag:`, is pruned.
-    `check_flag_uses` refuses every other use of the flag, and a conditional expression on it that holds a
-    device or QEMU argument is refused here, so extraction leaves nothing unrecorded.
-    """
-    parameters = {argument.arg for argument in (*function.args.args, *function.args.kwonlyargs)}
-    skipped: set[int] = set()
-    for flag, value in flags.items():
-        if flag not in parameters:
-            continue
-        check_flag_uses(function, flag, local_functions, modules, where)
-        for node in ast.walk(function):
-            if isinstance(node, ast.If) and _mentions(node.test, flag):
-                selected = _flag_test(node.test, flag)
-                if selected is None:
-                    fail(f"{where}: the test on {flag} at line {node.lineno} is not `{flag}` or `not {flag}`, so the arm cannot be scoped")
-                skipped.update(_statements_span(node.orelse if selected == value else node.body))
-            elif isinstance(node, ast.IfExp) and _mentions(node.test, flag):
-                if device_tokens(node.body) or device_tokens(node.orelse):
-                    fail(f"{where}: a conditional expression on {flag} at line {node.lineno} holds a QEMU argument, so the arm cannot be scoped")
-    return skipped
-
-
-def partial_device_name(node: ast.JoinedStr) -> bool:
-    """Whether an f-string starts a `virtio-` device name that a value completes.
-
-    `f"virtio-net-device,netdev=x,mac={mac}"` names its device in a literal and is not partial. `f"virtio-{kind}-device"`
-    is partial, because `kind` is not evaluated here, so the device it attaches cannot be recorded.
-    """
-    first = node.values[0] if node.values else None
-    return (
-        isinstance(first, ast.Constant)
-        and isinstance(first.value, str)
-        and first.value.startswith("virtio-")
-        and re.match(r"virtio-[a-z]+-device", first.value) is None
-    )
-
-
-def device_tokens(node: ast.AST) -> set[str]:
-    """The QEMU device, drive and network tokens written anywhere under `node`, as the strings they hold.
-
-    A token is a string equal to `-device`, `-drive`, `-netdev` or `usb-kbd`, a string that starts with
-    `virtio-<kind>-device`, or the name `additional_arguments` as a variable or a keyword. The strings come
-    from the syntax tree, so the quote style and a triple-quoted literal do not matter. The constant parts of
-    an f-string count as strings, so `f"virtio-{kind}-device"` holds `virtio-` and `-device`, which is the
-    token `-device`. The tree is read in full, so a token inside a nested function or a lambda is found.
-    """
-    found: set[str] = set()
+    device_flags = 0
+    names: list[str] = []
+    other: set[str] = set()
     for inner in ast.walk(node):
         if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
             value = inner.value
-            if value in ("-device", "-drive", "-netdev", "usb-kbd") or re.match(r"virtio-[a-z]+-device", value):
-                found.add(value[:40])
-        elif isinstance(inner, ast.JoinedStr) and inner.values:
-            # A device name built by an f-string depends on a value the generator does not evaluate. It is a
-            # token, so it is placed like any other, and `device_facts` refuses to record it for an arm.
-            if partial_device_name(inner):
-                found.add("f-string device name")
+            if value == "-device":
+                device_flags += 1
+            elif value == "usb-kbd":
+                names.append("usb-kbd")
+            elif value in ("-drive", "-netdev"):
+                other.add(value)
+            else:
+                found = DEVICE_NAME.match(value)
+                if found:
+                    names.append(found.group(0))
         elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
-            found.add("additional_arguments")
+            other.add("additional_arguments")
         elif isinstance(inner, ast.keyword) and inner.arg == "additional_arguments":
-            found.add("additional_arguments")
-    return found
+            other.add("additional_arguments")
+    return device_flags, names, other
 
 
 def device_facts(nodes: Iterable[ast.AST]) -> tuple[int, list[str]]:
-    """The number of `-drive` tokens and the sorted device names among `nodes`.
-
-    A device name is the `virtio-<kind>-device` prefix of a string, or `usb-kbd`. Reading the syntax tree gives
-    the same answer for `"x"`, `'x'` and a triple-quoted string, which a pattern over the source text did not.
-    """
+    """The number of `-drive` strings and the sorted device names among `nodes`, for a checker with no tables."""
     drives = 0
     devices: set[str] = set()
     for inner in nodes:
-        if isinstance(inner, ast.JoinedStr) and partial_device_name(inner):
-            fail("a device name built by an f-string cannot be recorded, because it depends on a value the generator does not evaluate")
         if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
-            value = inner.value
-            if value == "-drive":
+            if inner.value == "-drive":
                 drives += 1
-            elif value == "usb-kbd":
+            elif inner.value == "usb-kbd":
                 devices.add("usb-kbd")
             else:
-                found = re.match(r"(virtio-[a-z]+-device)", value)
+                found = DEVICE_NAME.match(inner.value)
                 if found:
-                    devices.add(found.group(1))
+                    devices.add(found.group(0))
     return drives, sorted(devices)
 
 
-def call_closure(functions: dict[str, ast.FunctionDef], entries: tuple[str, ...]) -> set[str]:
-    """`entries` and every function of the checker that they call, directly or through another."""
+def top_level_units(body: list[ast.stmt]) -> dict[str, list[ast.stmt]]:
+    """Each name that a top-level statement binds, with the statements that bind it.
+
+    A unit is a function, a class or an assignment. Reaching a name reaches every statement that binds it.
+    """
+    units: dict[str, list[ast.stmt]] = {}
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            units.setdefault(node.name, []).append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for inner in ast.walk(target):
+                    if isinstance(inner, ast.Name):
+                        units.setdefault(inner.id, []).append(node)
+    return units
+
+
+def reachable_units(units: dict[str, list[ast.stmt]], entries: tuple[str, ...]) -> set[str]:
+    """`entries` and every top-level name that they read, directly or through another, in any scope.
+
+    Every name counts, whether it is called, passed, aliased or read in a nested definition or in one branch
+    of a conditional. The reach can therefore name more units than the arm runs. It cannot miss one that a
+    name reaches.
+    """
     seen: set[str] = set()
     pending = list(entries)
     while pending:
         name = pending.pop()
-        if name in seen or name not in functions:
+        if name in seen or name not in units:
             continue
         seen.add(name)
-        for node in ast.walk(functions[name]):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in functions:
-                pending.append(node.func.id)
+        for node in units[name]:
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load) and inner.id in units:
+                    pending.append(inner.id)
     return seen
 
 
+def check_qemu_sites(path: _Path, body: list[ast.stmt], sites: dict[str, tuple[str, ...]]) -> None:
+    """Every QEMU token sits in a declared site, and each site passes exactly the devices it declares."""
+    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
+    for name, declared in sites.items():
+        if name not in functions:
+            fail(f"{path.name}: QEMU_SITES names {name}, which the checker does not define")
+        flags, names, other = qemu_tokens(functions[name])
+        if "-drive" in other:
+            fail(f"{path.name}: {name} passes a -drive, and this generator records no disk for the checker")
+        if flags != len(names) or sorted(set(names)) != sorted(set(declared)):
+            fail(
+                f"{path.name}: {name} declares devices {sorted(set(declared))}, but its code has {flags} '-device' "
+                f"string(s) and names {sorted(set(names))}, so the device it attaches cannot be read from it"
+            )
+    for node in body:
+        if isinstance(node, ast.FunctionDef) and node.name in sites:
+            continue
+        flags, names, other = qemu_tokens(node)
+        if flags or names or other:
+            where = f"function {node.name}" if isinstance(node, ast.FunctionDef) else f"the statement at line {node.lineno}"
+            fail(f"{path.name}: {where} is not in QEMU_SITES and holds QEMU token(s) {sorted(set(names) | other | ({'-device'} if flags else set()))}")
+
+
 def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
-    """The source an arm's faults are read from, and the drives and devices its tree holds.
+    """The source an arm's faults are read from, and the drives and devices the arm attaches.
 
-    A checker with no entry table is read whole. For a checker with one, the source is the functions the arm
-    runs and the checker's own functions they call, less the branches that a flag in `ARM_FLAGS` rules out. It
-    also holds each plain module-level assignment that those functions read, which is how a fault word in a
-    module constant reaches an arm.
-
-    A device, drive or network token is not followed through names. It must sit in a function that some arm
-    runs, and a token in any module-level statement or in a function that no arm runs is refused. No form of
-    binding can hide a token from that rule. An arm declared with no entry function must find no QEMU argument
-    anywhere in `main()`, so a device added to an inline arm cannot go unrecorded.
+    A checker with no tables is read whole. For a checker with them, the devices are the arm's entry in
+    `ARM_DEVICES`, after the code is checked against the tables as `ARM_ENTRY_FUNCTIONS` describes. The fault
+    source is the units that the arm reaches.
     """
     arms = ARM_ENTRY_FUNCTIONS.get(path.name)
     if arms is None:
         return (text, *device_facts(ast.walk(ast.parse(text))))
     if run not in arms:
         fail(f"{path.name}: {run} has no entry in ARM_ENTRY_FUNCTIONS")
+    declared_by_arm = ARM_DEVICES.get(path.name, {})
+    if set(declared_by_arm) != set(arms):
+        fail(f"{path.name}: ARM_DEVICES and ARM_ENTRY_FUNCTIONS disagree on the arms {sorted(set(declared_by_arm) ^ set(arms))}")
+    sites = QEMU_SITES.get(path.name, {})
     body = ast.parse(text).body
-    modules = imported_modules(body)
-    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
-    constants: dict[str, ast.stmt] = {}
-    for node in body:
-        if isinstance(node, ast.Assign):
-            constants.update({target.id: node for target in node.targets if isinstance(target, ast.Name)})
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            constants[node.target.id] = node
+    functions = {node.name for node in body if isinstance(node, ast.FunctionDef)}
     missing = [name for name in arms[run] if name not in functions]
     if missing:
         fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
-    # A device token may sit only in a function that some arm runs. A binding at module level, whatever its
-    # form, and a function that no arm runs cannot be tied to an arm, so a token there is refused. This does
-    # not follow names, and no form of assignment can hide a token from it.
-    owned: set[str] = set()
-    for entries in arms.values():
-        owned |= call_closure(functions, entries)
-    for node in body:
-        holder = node.name if isinstance(node, ast.FunctionDef) and node.name not in owned else None
-        if isinstance(node, ast.FunctionDef) and holder is None:
-            # An owned function may hold a token in its own body. A definition nested inside it, a lambda or a
-            # class, cannot be tied to the arm, because nothing says it is called, so a token there is refused.
-            for inner in ast.walk(node):
-                if inner is not node and isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
-                    nested = device_tokens(inner)
-                    if nested:
-                        label = getattr(inner, "name", "a lambda")
-                        fail(f"{path.name}: {label}, nested in {node.name}, holds QEMU device token(s) {sorted(nested)}, so no record can say which arm attaches them")
-            continue
-        tokens = device_tokens(node)
-        if tokens:
-            where = f"function {holder}, which no arm runs," if holder else f"the module-level statement at line {node.lineno}"
-            fail(f"{path.name}: {where} holds QEMU device token(s) {sorted(tokens)}, so no record can say which arm attaches them")
-    flags = ARM_FLAGS.get(path.name, {}).get(run, {})
-    if not arms[run]:
-        if flags:
-            fail(f"{path.name}: {run} has no entry function, so it cannot have flags")
-        main = functions.get("main")
-        if main is None or device_tokens(main):
-            fail(f"{path.name}: {run} is declared to attach nothing, but main() passes QEMU arguments or is absent")
-        return "", 0, []
-    lines = text.splitlines()
-    seen: set[str] = set()
-    skipped: dict[str, set[int]] = {}
-    pending = list(arms[run])
-    while pending:
-        name = pending.pop()
-        if name in seen:
-            continue
-        seen.add(name)
-        skipped[name] = pruned_lines(functions[name], text, flags, f"{path.name}: {run}", set(functions), modules)
-        for node in ast.walk(functions[name]):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in functions
-                and node.lineno not in skipped[name]
-            ):
-                pending.append(node.func.id)
-    unused = sorted(flag for flag in flags if not any(flag in {a.arg for a in (*functions[n].args.args, *functions[n].args.kwonlyargs)} for n in seen))
-    if unused:
-        fail(f"{path.name}: {run} sets flag(s) {unused} that no function it runs takes as a parameter")
-    # A module-level name that a function the arm runs reads belongs to the arm, and so does any module-level
-    # name that name's value reads. A reference in a branch the arm's flags rule out does not count. A local
-    # name that shadows a module-level one is over-included, which can only add a fact and never hide one.
-    referenced: set[str] = set()
-    queue = [(node, skipped[name]) for name in seen for node in ast.walk(functions[name])]
-    while queue:
-        node, dropped = queue.pop()
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in constants and node.lineno not in dropped:
-            if node.id not in referenced:
-                referenced.add(node.id)
-                queue.extend((inner, set()) for inner in ast.walk(constants[node.id]))
-    pieces = [
-        "\n".join(
-            line for number, line in enumerate(lines[node.lineno - 1 : node.end_lineno], node.lineno) if number not in skipped[name]
+    check_qemu_sites(path, body, sites)
+    units = top_level_units(body)
+    reached = reachable_units(units, arms[run])
+    attached = sorted({device for name in reached if name in sites for device in sites[name]})
+    declared = sorted(set(declared_by_arm[run]))
+    if attached != declared:
+        fail(
+            f"{path.name}: {run} declares devices {declared}, but the sites it can reach, {sorted(reached & set(sites))}, "
+            f"attach {attached}"
         )
-        for name in sorted(seen)
-        for node in (functions[name],)
+    lines = text.splitlines()
+    pieces = [
+        "\n".join(lines[node.lineno - 1 : node.end_lineno]) for name in sorted(reached) for node in units[name]
     ]
-    pieces += [
-        "\n".join(lines[constants[name].lineno - 1 : constants[name].end_lineno]) for name in sorted(referenced)
-    ]
-    live = [
-        inner
-        for name in sorted(seen)
-        for inner in ast.walk(functions[name])
-        if getattr(inner, "lineno", None) not in skipped[name]
-    ]
-    return "\n".join(pieces), *device_facts(live)
+    return "\n".join(pieces), 0, declared
 
 
 def extract(path: _Path, run: str | None = None) -> dict:

@@ -151,18 +151,20 @@ not evidence that a planned image has booted.
 
 The network checker boots 14 closures, and each has a record. Its arms share one
 timeout and one set of failure markers, but they attach different devices. Nine
-attach a virtio NIC and five attach nothing. `ARM_ENTRY_FUNCTIONS` in the generator
-names the functions that boot each arm. `extract` reads drives, devices and faults
-from those functions and the checker functions they call. A device, drive or
-network token may sit only in a function that some arm runs. A token in a
-module-level statement, in a function that no arm runs, or in a definition nested in
-an arm function is refused. Devices are read from the syntax tree, so quote style
-does not matter. Three arms run inline in
-`main()`. Each is declared to attach nothing, and the generator refuses it if
-`main()` passes a QEMU argument. Two arms run `run_tcp_arm` with a different
-`driver_reset` flag. `ARM_FLAGS` gives each its flag, and `extract` drops the branch
-that the flag rules out. It refuses any other use of the flag. The inventory controls compare the closures the checker
-builds with the runs it declares.
+attach a virtio NIC and five attach nothing. Three tables in the generator state this.
+`ARM_ENTRY_FUNCTIONS` names the functions that boot each arm. `QEMU_SITES` names the
+functions that pass QEMU arguments and the devices each passes. `ARM_DEVICES` names
+the devices each arm attaches. A person edits the tables, and `extract` does not infer
+a device from the code.
+
+Extraction checks that the code agrees with the tables. A QEMU token may sit only in
+a site. A token in a module-level statement, in a function that is not a site, or in
+a nested definition is refused. Each site must pass exactly the devices it declares.
+An arm attaches the devices of every site that it reads by any name. Its declaration
+must equal that set. Three arms run inline in `main()`, and each reaches no site. The
+inventory controls compare the closures the checker builds with the runs it declares.
+A device name that a run-time computation builds without any device string in the
+code is not caught.
 
 After an intended image-closure change, update only its test-run references with
 `python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.

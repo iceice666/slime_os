@@ -684,21 +684,18 @@ def check_inventory_controls() -> int:
     return refused
 
 
-# The network checker boots one image per arm. These arms attach a virtio NIC and the rest attach nothing:
-# the authority arm finds no backend by design, the three in-guest arms use no NIC, and the zenoh arm's two
-# nodes exchange samples inside the guest.
+# The network checker boots one image per arm. The generator declares each arm's devices in `ARM_DEVICES`, and
+# this gate checks that declaration against the checker's code in both directions.
 NETWORK_CHECKER = "check-sel4-io-network-plane.py"
-NIC_ARMS = frozenset({
-    "sel4-io-tcp", "sel4-io-tcp-impairment", "sel4-io-tcp-listener", "sel4-io-tcp-options",
-    "sel4-io-driver-reset-in-flight", "sel4-net", "sel4-zenoh-external", "sel4-http", "sel4-http-public",
-})
-NO_NIC_ARMS = frozenset({
-    "sel4-io-network", "sel4-io-service-fault-in-flight", "sel4-io-lifetime", "sel4-io-local", "sel4-zenoh",
-})
 
 
 def built_closures(checker: _Path) -> set[str]:
-    """Every closure a checker passes to `build_image`, with module constants and `module.CLOSURE` resolved."""
+    """Every closure a checker passes to `build_image`, with module constants and `module.CLOSURE` resolved.
+
+    `build_image` must be called by name with the closure as its one positional argument. A call with a
+    keyword, a starred argument or no argument, and any other use of the name `build_image`, such as an alias,
+    a default argument or a value passed on, is refused, so a closure cannot be built without being counted.
+    """
     import ast
 
     tree = ast.parse(checker.read_text(encoding="utf-8"))
@@ -728,21 +725,29 @@ def built_closures(checker: _Path) -> set[str]:
                 and value.value.id in imports
             ):
                 constants[node.targets[0].id] = resolve(value)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     built = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "build_image" and node.args:
-            built.add(resolve(node.args[0]))
+        if not (isinstance(node, ast.Name) and node.id == "build_image" and isinstance(node.ctx, ast.Load)):
+            continue
+        call = parents.get(node)
+        if not (isinstance(call, ast.Call) and call.func is node):
+            fail(f"{checker.name}: build_image is used at line {node.lineno} other than as a direct call")
+        if len(call.args) != 1 or call.keywords or isinstance(call.args[0], ast.Starred):
+            fail(f"{checker.name}: build_image at line {node.lineno} is not called with exactly one positional closure")
+        built.add(resolve(call.args[0]))
     return built
 
 
 def check_arm_controls() -> int:
-    """The network checker's arms are each recorded, each with only the devices that arm attaches."""
+    """The network checker's arms are each recorded, and the code agrees with the devices the tables declare."""
     import tempfile
     from unittest.mock import patch
 
     generator = GENERATOR_MODULE
     checker = generator.CHECK_ROOT / NETWORK_CHECKER
     refused = 0
+    declared = generator.ARM_DEVICES[NETWORK_CHECKER]
 
     def refuse(label, operation) -> None:
         nonlocal refused
@@ -756,8 +761,8 @@ def check_arm_controls() -> int:
             fail(f"arm control accepted {label}")
 
     variants = {name: closure for name, closure, _profile, _image in generator.run_variants(checker)}
-    if set(variants) != NIC_ARMS | NO_NIC_ARMS:
-        fail(f"arm control: the checker declares {sorted(set(variants) ^ (NIC_ARMS | NO_NIC_ARMS))} beyond or short of the expected arms")
+    if set(variants) != set(declared):
+        fail(f"arm control: the checker declares {sorted(set(variants) ^ set(declared))} beyond or short of ARM_DEVICES")
     if set(variants.values()) != built_closures(checker):
         fail(
             "arm control: the closures the network checker builds differ from the runs it declares: "
@@ -765,12 +770,12 @@ def check_arm_controls() -> int:
         )
     for name in sorted(variants):
         facts = generator.extract(checker, name)
-        expected = ["virtio-net-device"] if name in NIC_ARMS else []
-        if facts["devices"] != expected or facts["drives"] != 0 or facts["faults"] or facts["timeoutSeconds"] != 240:
-            fail(f"arm control: {name} extracts {facts}, expected devices {expected}, no drives, no faults and 240 s")
-    for name in NIC_ARMS | NO_NIC_ARMS:
+        if facts["devices"] != sorted(declared[name]) or facts["drives"] != 0 or facts["faults"] or facts["timeoutSeconds"] != 240:
+            fail(f"arm control: {name} extracts {facts}, expected devices {sorted(declared[name])}, no drives, no faults and 240 s")
         if not (RUN_ROOT / f"{name}.zti").is_file():
             fail(f"arm control: {name} has no run record")
+    if sum(1 for devices in declared.values() if devices) != 9 or sum(1 for devices in declared.values() if not devices) != 5:
+        fail("arm control: the network checker no longer has nine NIC arms and five arms with no device")
 
     source = checker.read_text(encoding="utf-8")
 
@@ -779,162 +784,101 @@ def check_arm_controls() -> int:
             fail(f"arm control: the text it mutates appears {source.count(old)} times in the checker, not once")
         return source.replace(old, new)
 
-    nic = '"-device", "virtio-net-device,netdev=probe",'
-    mutations = (
-        ("a NIC added to the authority arm",
-         mutated("        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS",
-                 f"        pins_path=PINS,\n        additional_arguments=({nic}),\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS"),
-         "sel4-io-network", True),
-        ("the NIC removed from the net arm",
-         mutated('"-device", f"virtio-net-device,netdev=slimenet,mac={mac}",\n                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps',
-                 '"-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps'),
-         "sel4-net", False),
-    )
+    pair = '("-device", "virtio-rng-device")'
+    auth = "def run_authority_arm(image: Path) -> None:\n"
+    peer = "    peer = link_peer.Peer(hold_first_tcp=driver_reset)\n"
+    top = "TIMEOUT = 240\n"
+    impair = "def run_impairment_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:\n"
+    helper = f"\n\ndef boot_rng(image):\n    return {pair}\n"
+
+    def with_top(lines: str, use: str = "") -> str:
+        return mutated(top, top + lines).replace(impair, impair + use, 1)
+
     with tempfile.TemporaryDirectory(prefix="slime-arm-controls-") as directory:
         copy = _Path(directory) / NETWORK_CHECKER
-        for label, text, arm, gained in mutations:
-            copy.write_text(text, encoding="utf-8")
-            changed = generator.extract(copy, arm)["devices"]
-            if changed != (["virtio-net-device"] if gained else []):
-                fail(f"arm control: {label} did not change {arm}'s devices to {gained}")
-            refused += 1
-            for other in sorted(variants):
-                if other != arm and generator.extract(copy, other) != generator.extract(checker, other):
-                    fail(f"arm control: {label} changed {other}'s facts")
-            refused += 1
-        # Two arms share run_tcp_arm and differ by its driver_reset flag. A device under one branch reaches only
-        # the arm that runs that branch, and a test of another shape on the flag is refused.
-        shared = ("sel4-io-tcp", "sel4-io-driver-reset-in-flight")
-        rng = 'extra = ("-device", "virtio-rng-device")'
-        branch = "    if driver_reset:\n        try:\n            link_peer.qualify_driver_reset_ledger"
-        for label, text, gains in (
-            ("a device only under `if driver_reset`", mutated(branch, f"    if driver_reset:\n        {rng}\n        try:\n            link_peer.qualify_driver_reset_ledger"), shared[1]),
-            ("a device only under the `else` of driver_reset", mutated("    else:\n        check_tcp_ledger(", f"    else:\n        {rng}\n        check_tcp_ledger("), shared[0]),
-        ):
-            copy.write_text(text, encoding="utf-8")
-            with_device = {arm: generator.extract(copy, arm)["devices"] for arm in shared}
-            other = shared[0] if gains == shared[1] else shared[1]
-            if with_device[gains] != ["virtio-net-device", "virtio-rng-device"] or with_device[other] != ["virtio-net-device"]:
-                fail(f"arm control: {label} did not reach only {gains}: {with_device}")
-            refused += 1
-        copy.write_text(mutated(branch, branch.replace("if driver_reset:", "if driver_reset and mac:")), encoding="utf-8")
-        refuse("a test of another shape on driver_reset", lambda: generator.extract(copy, shared[0]))
-        copy.write_text(
-            mutated("    chains = DRIVER_RESET_CHAINS if driver_reset else TCP_CHAINS\n",
-                    '    chains = DRIVER_RESET_CHAINS if driver_reset else ("-device", "virtio-rng-device")\n'),
-            encoding="utf-8",
-        )
-        refuse("a device inside a conditional expression on driver_reset", lambda: generator.extract(copy, shared[0]))
-        # Every use of the flag other than an `if`, a conditional expression or a call into another module is
-        # refused, whether or not a device sits under it.
-        peer = "    peer = link_peer.Peer(hold_first_tcp=driver_reset)\n"
-        pair = '("-device", "virtio-rng-device")'
-        for label, addition in (
-            ("a while loop on driver_reset", f"    while driver_reset:\n        extra = {pair}\n        break\n"),
-            ("an alias of driver_reset", f"    held = driver_reset\n    if held:\n        extra = {pair}\n"),
-            ("driver_reset in a comprehension filter", f"    extra = [{pair} for _ in range(1) if driver_reset]\n"),
-            ("driver_reset as a boolean operand", f"    held = driver_reset or False\n    if held:\n        extra = {pair}\n"),
-            ("driver_reset passed to a function of the checker", '    write_wire_transcript(None, "", driver_reset, ())\n'),
-            ("driver_reset assigned", "    driver_reset = False\n"),
-            ("an assert on driver_reset", "    assert driver_reset\n"),
-        ):
-            copy.write_text(mutated(peer, peer + addition), encoding="utf-8")
-            refuse(label, lambda: generator.extract(copy, shared[0]))
-            refuse(f"{label}, for the other arm", lambda: generator.extract(copy, shared[1]))
-        copy.write_text(source, encoding="utf-8")
-        with patch.dict(generator.ARM_FLAGS, {NETWORK_CHECKER: {"sel4-io-tcp": {"not_a_parameter": True}}}):
-            refuse("a flag that no function the arm runs takes", lambda: generator.extract(copy, "sel4-io-tcp"))
-        # A device token may sit only in a function that some arm runs. A module-level statement of any form, and a
-        # function that no arm runs, are refused when they hold one, so no binding can hide a device from an arm.
-        top = "TIMEOUT = 240\n"
-        impair = "def run_impairment_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:\n"
 
-        def with_top(lines: str, use: str = "") -> str:
-            return mutated(top, top + lines).replace(impair, impair + use, 1)
+        def refused_edit(label: str, text: str, arm: str = "sel4-io-tcp-impairment") -> None:
+            copy.write_text(text, encoding="utf-8")
+            compile(text, label, "exec")
+            refuse(label, lambda: generator.extract(copy, arm))
 
+        # Code that passes a QEMU token anywhere but in a declared site is refused, whatever its shape. The
+        # arm does not matter, because the placement check runs before any arm is read.
         for label, text in (
+            ("a device pair in the authority arm", mutated(auth, auth + f"    extra = {pair}\n")),
+            ("a single-quoted device pair", mutated(auth, auth + "    extra = ('-device', 'virtio-rng-device')\n")),
+            ("a triple-quoted device name", mutated(auth, auth + '    extra = ("-device", """virtio-rng-device""")\n')),
+            ("an additional_arguments keyword", mutated("        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS", "        pins_path=PINS,\n        additional_arguments=('-device', 'virtio-rng-device'),\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS")),
+            ("a device name completed by an f-string", mutated(auth, auth + '    extra = ("-device", f"virtio-{kind}-device")\n')),
+            ("a device name whose prefix is a value", mutated(auth, auth + '    prefix = "virtio"\n    extra = ("-device", f"{prefix}-rng-device")\n')),
+            ("a device name built by concatenation", mutated(auth, auth + '    extra = ("-device", "virtio-" + kind + "-device")\n')),
+            ("a device name built by formatting", mutated(auth, auth + '    extra = ("-device", "virtio-%s-device" % kind)\n')),
             ("a module tuple read by an arm", with_top(f"EXTRA_DEVICE = {pair}\n", "    extra = EXTRA_DEVICE\n")),
             ("a module tuple read through another module name", with_top(f"BASE_DEVICE = {pair}\nEXTRA_DEVICE = BASE_DEVICE\n", "    extra = EXTRA_DEVICE\n")),
             ("a module tuple that no arm reads", with_top(f"UNUSED_DEVICE = {pair}\n")),
             ("a destructured pair", with_top('ARG, DEV = "-device", "virtio-rng-device"\n', "    extra = (ARG, DEV)\n")),
-            ("a parenthesised destructuring", with_top('(ARG, DEV) = ("-device", "virtio-rng-device")\n', "    extra = (ARG, DEV)\n")),
             ("a star target", with_top('ARG, *REST = "-device", "virtio-rng-device"\n', "    extra = (ARG, REST)\n")),
-            ("a chained assignment", with_top(f"FIRST = SECOND = {pair}\n", "    extra = SECOND\n")),
             ("a module-level walrus", with_top(f"(WALRUS := {pair})\n", "    extra = WALRUS\n")),
             ("an augmented assignment", with_top(f"EXTRA_DEVICE = ()\nEXTRA_DEVICE += {pair}\n", "    extra = EXTRA_DEVICE\n")),
             ("a class attribute", with_top(f"class Config:\n    DEVICE = {pair}\n", "    extra = Config.DEVICE\n")),
             ("a dict literal", with_top(f'CONFIG = {{"device": {pair}}}\n', '    extra = CONFIG["device"]\n')),
-            ("an annotated assignment", with_top(f"EXTRA_DEVICE: tuple = {pair}\n", "    extra = EXTRA_DEVICE\n")),
             ("a module-level lambda", with_top(f"MAKE_DEVICE = lambda: {pair}\n", "    extra = MAKE_DEVICE()\n")),
             ("a drive token at module level", with_top('DRIVE = ("-drive", "file=x")\n')),
             ("a usb-kbd token at module level", with_top('KEYBOARD = "usb-kbd"\n')),
             ("additional_arguments bound at module level", with_top("additional_arguments = ()\n")),
-            ("a function that no arm runs and that holds a device", source + f"\n\ndef helper_unused():\n    return {pair}\n"),
+            ("a function that no arm runs and that holds a device", source + helper),
+            ("an uncalled nested function holding a device", mutated(auth, auth + f"    def helper():\n        return {pair}\n")),
+            ("a called nested function holding a device", mutated(auth, auth + f"    def helper():\n        return {pair}\n    helper()\n")),
+            ("a nested lambda holding a device", mutated(auth, auth + f"    helper = lambda: {pair}\n")),
+            ("a nested class holding a device", mutated(auth, auth + f"    class Local:\n        device = {pair}\n")),
+            ("a helper called under a flag conditional", mutated(peer, peer + "    held = boot_rng(None) if driver_reset else None\n") + helper),
+            ("a helper called by an uncalled nested function", mutated(auth, auth + "    def never_called():\n        return boot_rng(None)\n") + helper),
         ):
-            copy.write_text(text, encoding="utf-8")
-            compile(text, label, "exec")
-            refuse(label, lambda: generator.extract(copy, "sel4-io-tcp-impairment"))
-        for label, text in (
-            ("a function that no arm runs and that holds no token", source + "\n\ndef helper_unused():\n    return 1\n"),
-            ("a device inside the arm's own function", mutated(impair, impair + f"    extra = {pair}\n")),
-        ):
-            copy.write_text(text, encoding="utf-8")
-            if generator.extract(copy, "sel4-io-tcp-impairment")["devices"] != (
-                ["virtio-net-device", "virtio-rng-device"] if "own function" in label else ["virtio-net-device"]
-            ):
-                fail(f"arm control: {label} gave the wrong devices")
-            refused += 1
-        # Devices are read from the syntax tree, so the quote style of a token does not matter. A device name
-        # that an f-string completes at run time cannot be recorded and is refused.
-        auth = "def run_authority_arm(image: Path) -> None:\n"
-        for label, token in (
-            ("a double-quoted device pair", '("-device", "virtio-rng-device")'),
-            ("a single-quoted device pair", "('-device', 'virtio-rng-device')"),
-            ("a triple-quoted device name", '("-device", """virtio-rng-device""")'),
-        ):
-            copy.write_text(mutated(auth, auth + f"    extra = {token}\n"), encoding="utf-8")
-            if generator.extract(copy, "sel4-io-network")["devices"] != ["virtio-rng-device"]:
-                fail(f"arm control: {label} in the authority arm was not recorded")
-            for other in sorted(variants):
-                if other != "sel4-io-network" and generator.extract(copy, other) != generator.extract(checker, other):
-                    fail(f"arm control: {label} in the authority arm changed {other}")
-            refused += 1
-        copy.write_text(
-            mutated("        pins_path=PINS,\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS",
-                    "        pins_path=PINS,\n        additional_arguments=('-device', 'virtio-rng-device'),\n    )\n    match_marker_contract(transcript, AUTHORITY_CHAINS"),
-            encoding="utf-8",
+            refused_edit(label, text)
+
+        # A declared site must pass exactly the devices it declares. A device added to a site, a device removed
+        # from it, and a second device are refused, whichever arm is read.
+        site = mutated('"-device", f"virtio-net-device,netdev=slimenet,mac={mac}",', '"-device", f"virtio-net-device,netdev=slimenet,mac={mac}", "-device", "virtio-rng-device",')
+        refused_edit("a second device added to a declared site", site, "sel4-net")
+        refused_edit(
+            "the device removed from a declared site",
+            mutated('"-device", f"virtio-net-device,netdev=slimenet,mac={mac}",\n                    "-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps',
+                    '"-object", f"filter-dump,id=netcapture,netdev=slimenet,file={capture}",\n                ),\n                input_steps'),
+            "sel4-net",
         )
-        if generator.extract(copy, "sel4-io-network")["devices"] != ["virtio-rng-device"]:
-            fail("arm control: a single-quoted additional_arguments keyword was not recorded")
-        refused += 1
-        copy.write_text(mutated(auth, auth + '    extra = ("-device", f"virtio-{kind}-device")\n'), encoding="utf-8")
-        refuse("a device name completed by an f-string", lambda: generator.extract(copy, "sel4-io-network"))
-        # A definition nested in an owned function is placed on its own, so a token in it is refused whether or
-        # not anything calls it.
-        for label, addition in (
-            ("an uncalled nested function holding a device", f'    def helper():\n        return {pair}\n'),
-            ("a called nested function holding a device", f'    def helper():\n        return {pair}\n    helper()\n'),
-            ("a nested lambda holding a device", f"    helper = lambda: {pair}\n"),
-            ("a nested class holding a device", f"    class Local:\n        device = {pair}\n"),
-        ):
-            copy.write_text(mutated(auth, auth + addition), encoding="utf-8")
-            refuse(label, lambda: generator.extract(copy, "sel4-io-network"))
-        # A flag may reach a call only through an imported module. A method on a local object keeps it.
-        for label, addition in (
-            ("the flag appended to a local list", "    forwarded = []\n    forwarded.append(driver_reset)\n    if forwarded[0]:\n        extra = " + pair + "\n"),
-            ("the flag passed to a method of a local object", "    box = []\n    box.extend([driver_reset])\n    if box[0]:\n        extra = " + pair + "\n"),
-        ):
-            copy.write_text(mutated(peer, peer + addition), encoding="utf-8")
-            refuse(label, lambda: generator.extract(copy, shared[0]))
-            refuse(f"{label}, for the other arm", lambda: generator.extract(copy, shared[1]))
+        refused_edit("a device name swapped in a declared site", mutated('f"virtio-net-device,netdev=slimenet,mac={mac}"', 'f"virtio-rng-device,netdev=slimenet,mac={mac}"'), "sel4-net")
+
+        # An arm reaches a site by any name it reads, and its declared devices must equal what its sites attach.
+        # A site that an arm newly reaches changes what it attaches, so the declaration must change with it.
+        refused_edit("a NIC site reached by an arm that declares none", mutated(auth, auth + "    run_net_arm\n"), "sel4-io-network")
+        refused_edit("a NIC site passed as a value to an arm that declares none", mutated(auth, auth + "    held = [run_net_arm]\n"), "sel4-io-network")
+        refused_edit("a NIC site reached through an alias", mutated(auth, auth + "    held = run_net_arm\n    held\n"), "sel4-io-network")
+        refused_edit("a NIC site reached only from a nested function", mutated(auth, auth + "    def later():\n        return run_net_arm\n"), "sel4-io-network")
+        refused_edit("a NIC site reached only in a branch of a conditional", mutated(auth, auth + "    held = run_net_arm if image else None\n"), "sel4-io-network")
+        refused_edit("a helper that reaches a NIC site, read by an arm with none", mutated(auth, auth + "    run_helper_new\n") + "\n\ndef run_helper_new():\n    return run_net_arm\n", "sel4-io-network")
         copy.write_text(source, encoding="utf-8")
-        # An arm that runs inline in main() must attach nothing, so a device added there is refused.
-        copy.write_text(mutated('    if arguments.arm in ("lifetime", "all"):\n',
-                                '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),
-                        encoding="utf-8")
-        for inline in ("sel4-io-lifetime", "sel4-io-local", "sel4-io-service-fault-in-flight"):
-            refuse(f"a device passed in main() for {inline}", lambda inline=inline: generator.extract(copy, inline))
-        copy.write_text(source, encoding="utf-8")
+        for label, arm, table in (
+            ("an arm whose declaration lacks a device its sites attach", "sel4-net", {"sel4-net": ()}),
+            ("an arm whose declaration adds a device its sites do not attach", "sel4-io-network", {"sel4-io-network": ("virtio-net-device",)}),
+            ("an arm whose declaration names the wrong device", "sel4-net", {"sel4-net": ("virtio-rng-device",)}),
+        ):
+            with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, **table}}):
+                refuse(label, lambda arm=arm: generator.extract(copy, arm))
+        with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {key: value for key, value in declared.items() if key != "sel4-http"}}):
+            refuse("an arm in the entry table with no device declaration", lambda: generator.extract(copy, "sel4-http"))
+        with patch.dict(generator.QEMU_SITES, {NETWORK_CHECKER: {**generator.QEMU_SITES[NETWORK_CHECKER], "run_nothing": ("virtio-net-device",)}}):
+            refuse("a site that the checker does not define", lambda: generator.extract(copy, "sel4-net"))
+        with patch.dict(generator.QEMU_SITES, {NETWORK_CHECKER: {key: value for key, value in generator.QEMU_SITES[NETWORK_CHECKER].items() if key != "run_http_request"}}):
+            refuse("a site that holds QEMU tokens and is not declared", lambda: generator.extract(copy, "sel4-http"))
+
+        # An arm that runs inline in main() reaches no site, so a site called from main() is not attributed to it.
+        refused_edit(
+            "a device passed in main() for an inline arm",
+            mutated('    if arguments.arm in ("lifetime", "all"):\n', '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),
+            "sel4-io-lifetime",
+        )
+
+        # The entry table must name functions the checker defines, and every arm needs an entry.
         entries = generator.ARM_ENTRY_FUNCTIONS[NETWORK_CHECKER]
         for label, replacement in (
             ("an arm with no entry", {key: value for key, value in entries.items() if key != "sel4-http"}),
@@ -942,6 +886,23 @@ def check_arm_controls() -> int:
         ):
             with patch.dict(generator.ARM_ENTRY_FUNCTIONS, {NETWORK_CHECKER: replacement}):
                 refuse(label, lambda: generator.extract(copy, "sel4-http"))
+
+        # Every closure the checker builds must be a declared run, whatever way the call is written.
+        main_call = 'run_http_arm(build_image("sel4-http"), arguments.transcript, arguments.http_case)'
+        for label, addition in (
+            ("a build_image call with a keyword closure", '\n        build_image(closure="sel4-new")'),
+            ("a build_image alias", '\n        boot = build_image\n        boot("sel4-new")'),
+            ("a build_image call with a starred argument", '\n        build_image(*["sel4-new"])'),
+            ("a build_image call with a computed closure", '\n        name = "sel4-new"\n        build_image(name)'),
+            ("build_image passed as a value", "\n        held = [build_image]"),
+        ):
+            copy.write_text(mutated(main_call, main_call + addition), encoding="utf-8")
+            refuse(label, lambda: built_closures(copy))
+        copy.write_text(mutated(main_call, main_call + '\n        build_image("sel4-new")'), encoding="utf-8")
+        if "sel4-new" not in built_closures(copy):
+            fail("arm control: a positional build_image call for a new closure was not counted")
+        refused += 1
+
         # A run record for a declared arm cannot go missing.
         runs = _Path(directory) / "runs"
         runs.mkdir()
