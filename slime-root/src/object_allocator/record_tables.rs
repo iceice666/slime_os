@@ -44,11 +44,24 @@ const fn reuse_size(size_bits: usize) -> Option<usize> {
     }
 }
 
+/// `figure - removed`. A maintained figure never holds less than its records
+/// do, so one that would fall below zero has left them: it stays at zero and
+/// marks its table out of step, whose requests then refuse, rather than
+/// wrapping in a build without overflow checks.
+fn less(figure: usize, removed: usize, out_of_step: &mut bool) -> usize {
+    figure.checked_sub(removed).unwrap_or_else(|| {
+        *out_of_step = true;
+        0
+    })
+}
+
 /// Allocation descriptors, one per capability an arena owns or may own.
 pub(super) struct AllocationTable {
     records: Segmented<AllocationRecord>,
     /// Records whose owner is not `u16::MAX`: arena-owned and stress-held.
     owned: usize,
+    /// A write removed more than `owned` held.
+    out_of_step: bool,
     /// Owned records read since the last reset, in host tests only.
     #[cfg(test)]
     reads: core::cell::Cell<usize>,
@@ -59,6 +72,7 @@ impl AllocationTable {
         Self {
             records: Segmented::new(),
             owned: 0,
+            out_of_step: false,
             #[cfg(test)]
             reads: core::cell::Cell::new(0),
         }
@@ -127,7 +141,18 @@ impl AllocationTable {
         let before = entry.owner != u16::MAX;
         let after = record.owner != u16::MAX;
         *entry = record;
-        self.owned = self.owned + usize::from(after) - usize::from(before);
+        self.owned = less(
+            self.owned + usize::from(after),
+            usize::from(before),
+            &mut self.out_of_step,
+        );
+    }
+
+    /// Whether `owned` has left the records: a write removed more than it
+    /// held, or it counts more records than the table has. Descriptor
+    /// funding refuses while it has.
+    pub const fn out_of_step(&self) -> bool {
+        self.out_of_step || self.owned > self.records.len()
     }
 
     pub fn update<R>(
@@ -172,6 +197,12 @@ impl AllocationTable {
     pub fn drift_for_test(&mut self) {
         self.owned += 1;
     }
+
+    /// Put the owned count at zero while owned records remain.
+    #[cfg(test)]
+    pub fn drift_short_for_test(&mut self) {
+        self.owned = 0;
+    }
 }
 
 impl Index<usize> for AllocationTable {
@@ -188,10 +219,22 @@ impl Index<usize> for AllocationTable {
 pub(super) enum ExtentDrift {
     Present,
     FreeBytes,
-    Reuse { size_bits: usize },
-    ReuseCursor { size_bits: usize },
+    Reuse {
+        size_bits: usize,
+    },
+    ReuseCursor {
+        size_bits: usize,
+    },
     Vacancy,
-    RoomChain { arena: usize },
+    RoomChain {
+        arena: usize,
+    },
+    /// A figure at zero while its records still hold some.
+    PresentShort,
+    FreeBytesShort,
+    ReuseShort {
+        size_bits: usize,
+    },
 }
 
 /// Extent records, one per untyped region an arena, a reservation or the
@@ -215,6 +258,8 @@ pub(super) struct ExtentTable {
     /// Arenas whose backing arrives on demand in mixed sizes, which select
     /// best fit by extent size rather than first fit by index.
     elastic: [bool; MAX_TASK_ARENAS],
+    /// A write removed more than a figure held.
+    out_of_step: bool,
     /// Present records read since the last reset, in host tests only.
     #[cfg(test)]
     reads: core::cell::Cell<usize>,
@@ -232,6 +277,7 @@ impl ExtentTable {
             room_head: [NO_LINK; MAX_TASK_ARENAS],
             room_len: [0; MAX_TASK_ARENAS],
             elastic: [false; MAX_TASK_ARENAS],
+            out_of_step: false,
             #[cfg(test)]
             reads: core::cell::Cell::new(0),
         }
@@ -255,6 +301,13 @@ impl ExtentTable {
     /// Bytes of every common-free record.
     pub const fn free_bytes(&self) -> usize {
         self.free_bytes
+    }
+
+    /// Whether a figure has left the records: a write removed more than it
+    /// held, or `present` counts more records than the table has. Selection
+    /// and new extent records refuse while one has.
+    pub const fn out_of_step(&self) -> bool {
+        self.out_of_step || self.present > self.records.len()
     }
 
     pub const fn needs_directory_page(&self) -> bool {
@@ -430,7 +483,8 @@ impl ExtentTable {
     /// in the order the walk prefers. The walk is bounded by the chain's
     /// recorded length and by the table's capacity, and a link that names no
     /// extent with room of this arena, or breaks the order, refuses the
-    /// request rather than mapping from what it names.
+    /// request rather than mapping from what it names. A table whose figures
+    /// are out of step refuses the same way.
     pub fn room_select(
         &self,
         id: TaskArenaId,
@@ -441,6 +495,9 @@ impl ExtentTable {
         let broken = AllocError::ArenaTableFull {
             limit: MAX_TASK_EXTENTS,
         };
+        if self.out_of_step() {
+            return Err(broken);
+        }
         let too_small = AllocError::ArenaTooSmall {
             size_bits,
             required: 1usize << size_bits,
@@ -485,14 +542,24 @@ impl ExtentTable {
 
     fn commit(&mut self, index: usize, mut after: Option<ExtentRecord>) {
         let before = *self.records.get(index).expect("record index");
-        self.present = self.present + usize::from(after.is_some()) - usize::from(before.is_some());
+        self.present = less(
+            self.present + usize::from(after.is_some()),
+            usize::from(before.is_some()),
+            &mut self.out_of_step,
+        );
         if after.is_none() {
             self.vacant_from = self.vacant_from.min(index);
         }
         if let Some(record) = before.filter(ExtentRecord::is_common_free) {
-            self.free_bytes -= 1usize << record.size_bits;
+            self.free_bytes = less(
+                self.free_bytes,
+                1usize << record.size_bits,
+                &mut self.out_of_step,
+            );
             if let Some(size) = reuse_size(record.size_bits) {
-                self.free_count[size] -= 1;
+                // At most the count it replaces, so it fits the u32 it came from.
+                self.free_count[size] =
+                    less(self.free_count[size] as usize, 1, &mut self.out_of_step) as u32;
             }
         }
         if let Some(record) = after.filter(ExtentRecord::is_common_free) {
@@ -588,6 +655,7 @@ impl ExtentTable {
                 } else {
                     self.set_link(previous as usize, record.link);
                 }
+                // The loop has run, so `room_len` is at least one here.
                 self.room_len[arena] -= 1;
                 return;
             }
@@ -711,6 +779,12 @@ impl ExtentTable {
                         .unwrap_or(NO_LINK);
                     self.room_len[arena] -= 1;
                 }
+            }
+            ExtentDrift::PresentShort => self.present = 0,
+            ExtentDrift::FreeBytesShort => self.free_bytes = 0,
+            ExtentDrift::ReuseShort { size_bits } => {
+                let size = reuse_size(size_bits).expect("reuse size");
+                self.free_count[size] = 0;
             }
         }
     }

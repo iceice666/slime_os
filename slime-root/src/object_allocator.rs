@@ -2922,7 +2922,7 @@ impl ObjectAllocator {
         {
             if matches!(selected, Err(AllocError::ArenaTableFull { .. })) {
                 assert!(
-                    !self.extents.room_chain_sound(id.index()),
+                    self.extents.out_of_step() || !self.extents.room_chain_sound(id.index()),
                     "recount: a sound room chain refused a request"
                 );
             } else {
@@ -3105,6 +3105,11 @@ impl ObjectAllocator {
         #[cfg(test)]
         self.allocations
             .provision_host(MAX_TASK_ALLOCATIONS.max(free), AllocationRecord::EMPTY);
+        // A figure out of step with the records could never be satisfied by
+        // growing the table, so refuse before mapping a page.
+        if self.allocations.out_of_step() {
+            return Err(Self::private_record_error());
+        }
         while !self.has_allocation_descriptors(free) {
             if self
                 .allocations
@@ -3191,7 +3196,9 @@ impl ObjectAllocator {
             self.allocations.recount_owned(),
             "recount: owned allocation records"
         );
-        (self.allocations.len() - owned)
+        self.allocations
+            .len()
+            .saturating_sub(owned)
             .saturating_sub(self.reserved_descriptors())
             .saturating_sub(self.operational_floor(self.operational_resources.descriptors))
     }
@@ -3254,6 +3261,13 @@ impl ObjectAllocator {
         #[cfg(test)]
         self.extents
             .provision_host(MAX_TASK_EXTENTS.max(free), None);
+        // As for allocation descriptors: no page could bring a figure out of
+        // step back to its records.
+        if self.extents.out_of_step() {
+            return Err(AllocError::ArenaTableFull {
+                limit: MAX_TASK_EXTENTS,
+            });
+        }
         while self.extent_descriptors_free() < free {
             if self
                 .extents
@@ -3292,7 +3306,9 @@ impl ObjectAllocator {
             self.extents.recount_present(),
             "recount: present extent records"
         );
-        (self.extents.len() - present)
+        self.extents
+            .len()
+            .saturating_sub(present)
             .saturating_sub(self.operational_floor(self.operational_resources.extents))
     }
 
@@ -8086,5 +8102,78 @@ mod tests {
             });
             assert_eq!(failed, None, "{link}");
         }
+    }
+
+    /// A write that removes more than a maintained figure holds leaves the
+    /// figure at zero and its table out of step instead of wrapping. The next
+    /// request refuses by the name a broken chain or a full table carries,
+    /// before anything reaches the kernel or a metadata page is mapped.
+    #[test]
+    fn a_figure_that_would_fall_below_zero_refuses_by_name_instead_of_wrapping() {
+        use super::record_tables::ExtentDrift;
+        type Short = fn(&mut ObjectAllocator);
+        let broken = Err(AllocError::ArenaTableFull {
+            limit: MAX_TASK_EXTENTS,
+        });
+        let cases: [(&str, Short); 3] = [
+            ("present extent records", |allocator| {
+                allocator.extents.drift_for_test(ExtentDrift::PresentShort)
+            }),
+            ("reusable extent bytes", |allocator| {
+                allocator
+                    .extents
+                    .drift_for_test(ExtentDrift::FreeBytesShort)
+            }),
+            ("returned extents of one size", |allocator| {
+                allocator
+                    .extents
+                    .drift_for_test(ExtentDrift::ReuseShort { size_bits: 13 })
+            }),
+        ];
+        for (figure, short) in cases {
+            let failed = room_chain_panic(move |allocator, arena, _, _| {
+                seed_reusable_extents(allocator, ExtentKind::PrivateData, 13, 1);
+                let returned = allocator.extents.walk_reusable(13).unwrap();
+                short(allocator);
+                allocator.extents.set(returned, None);
+                let free = allocator.allocation_descriptors_free();
+                let mut kernel = RecordingPrivateKernel::default();
+                let refused = allocator
+                    .acquire_private_in(
+                        arena,
+                        PrivateObjectKind::Granule,
+                        sel4::cap_type::Granule::object_blueprint(),
+                        ExtentSource::Common,
+                        &mut kernel,
+                    )
+                    .map(|_| ());
+                assert_eq!(refused, broken, "{figure}: the growth request");
+                assert!(kernel.requests.is_empty(), "{figure}: the kernel was asked");
+                assert_eq!(allocator.allocation_descriptors_free(), free);
+                assert_eq!(
+                    allocator.ensure_extent_descriptors(1),
+                    broken,
+                    "{figure}: a fresh extent record"
+                );
+            });
+            assert_eq!(failed, None, "{figure}");
+        }
+        let failed = room_chain_panic(|allocator, arena, _, _| {
+            let owned = allocator
+                .allocations
+                .iter()
+                .position(|record| record.owner != u16::MAX)
+                .unwrap();
+            allocator.allocations.drift_short_for_test();
+            allocator.allocations.set(owned, AllocationRecord::EMPTY);
+            assert_eq!(
+                allocator.provision_private_slots(arena, 1),
+                Err(AllocError::ArenaSlotTableFull {
+                    limit: MAX_TASK_ALLOCATIONS,
+                }),
+                "owned allocation records: a descriptor page"
+            );
+        });
+        assert_eq!(failed, None, "owned allocation records");
     }
 }
