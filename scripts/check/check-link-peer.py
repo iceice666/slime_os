@@ -11,6 +11,7 @@ import dataclasses
 import struct
 import sys
 import threading
+from collections.abc import Callable
 from itertools import pairwise
 from unittest.mock import patch
 from pathlib import Path
@@ -21,6 +22,7 @@ import link_peer as lp  # noqa: E402
 import tcp_impairment_peer as tip  # noqa: E402
 import tcp_listener_peer as tlp  # noqa: E402
 import tcp_options_peer as top  # noqa: E402
+import tcp_buffers_peer as tbp  # noqa: E402
 from harness import load_script  # noqa: E402
 
 GUEST_MAC = bytes.fromhex("5254005" "34c01")
@@ -2201,6 +2203,599 @@ def check_options_controls(ledger: top.Ledger) -> int:
     return count
 
 
+# The socket-buffer script against a model guest: a reduced smoltcp client
+# with declared receive and transmit buffers, the window scale and SYN window
+# its receive buffer implies, Reno slow start from a 2048-byte congestion
+# window, and Nagle; a model service with a four-socket pool whose closed
+# sockets wait in TIME-WAIT, reporting every open; and the buffers probe's
+# program, the large holder first. Like the models above, it proves the
+# script and the qualifier agree on what a conforming guest does before the
+# controls corrupt it.
+
+BUFFERS_LIMITS = {port: 16 for port in tbp.SCENARIOS}
+BUFFERS_WRITE_BYTES = 4096
+BUFFERS_RETRANSMIT_TIMEOUT = 1.0
+BUFFERS_CWND = 2048
+BUFFERS_TIME_WAIT = 1.0
+BUFFERS_CONNECT_RETRY = 0.05
+BUFFERS_GUEST_MSS = 1460
+
+
+@dataclasses.dataclass
+class BuffersModelSocket:
+    """smoltcp's client behavior under one holder's declared buffers."""
+
+    port: int
+    local_port: int
+    isn: int
+    buffers: tbp.Buffers
+    syn_due: float = 0.0
+    state: str = "syn-sent"
+    peer_isn: int = 0
+    mss: int = 536
+    peer_shift: int = 0
+    tx: bytearray = dataclasses.field(default_factory=bytearray)
+    snd_una: int = 0
+    snd_nxt: int = 0
+    fin_queued: bool = False
+    fin_sent: bool = False
+    fin_acked: bool = False
+    remote_window: int = 0
+    rwnd: int = 65536
+    cwnd: int = BUFFERS_CWND
+    rx: bytearray = dataclasses.field(default_factory=bytearray)
+    rcv_nxt: int = 0
+    peer_fin: bool = False
+    handshake_ack: bool = False
+    ack_due: bool = False
+    advertised_zero: bool = False
+    retransmit_due: float | None = None
+
+    @property
+    def shift(self) -> int:
+        return tbp.expected_shift(self.buffers.rx_bytes)
+
+    def frame(self, flags: int, offset: int = 0, payload: bytes = b"") -> bytes:
+        syn = bool(flags & lp.TCP_SYN)
+        free = self.buffers.rx_bytes - len(self.rx)
+        window = min(free, 0xFFFF) if syn else free >> self.shift
+        if not syn:
+            self.advertised_zero = window == 0
+        acknowledgment = (self.peer_isn + 1 + self.rcv_nxt + int(self.peer_fin)) & lp.TCP_SEQUENCE_MASK if flags & lp.TCP_ACK else 0
+        sequence = self.isn if syn else self.isn + 1 + offset
+        options = b"\x02\x04" + BUFFERS_GUEST_MSS.to_bytes(2, "big") + b"\x01\x03\x03" + bytes([self.shift]) if syn else b""
+        segment = lp.tcp(lp.GUEST_IP, lp.PEER_IP, self.local_port, self.port, sequence, acknowledgment, flags, payload, window, options)
+        return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment))
+
+    def write(self, data: bytes) -> int:
+        count = min(len(data), self.buffers.tx_bytes - len(self.tx))
+        self.tx.extend(data[:count])
+        return count
+
+    def read(self) -> bytes:
+        data = bytes(self.rx)
+        self.rx.clear()
+        if data and self.advertised_zero:
+            # smoltcp announces a window that reopens from zero.
+            self.ack_due = True
+        return data
+
+    def tick(self, now: float) -> list[bytes]:
+        if self.state == "syn-sent":
+            if now < self.syn_due:
+                return []
+            self.syn_due = now + BUFFERS_RETRANSMIT_TIMEOUT
+            return [self.frame(lp.TCP_SYN)]
+        if self.state != "established":
+            return []
+        out: list[bytes] = []
+        if self.handshake_ack:
+            out.append(self.frame(lp.TCP_ACK))
+            self.handshake_ack = False
+        end = self.snd_una + len(self.tx)
+        if self.retransmit_due is not None and now >= self.retransmit_due:
+            self.snd_nxt = self.snd_una
+            self.fin_sent = self.fin_acked
+            self.cwnd = max(self.cwnd // 2, self.mss)
+            self.retransmit_due = None
+        limit = min(self.remote_window, self.cwnd)
+        while self.snd_nxt < end:
+            size = min(self.mss, end - self.snd_nxt, self.snd_una + limit - self.snd_nxt)
+            if size <= 0 or size < self.mss and self.snd_nxt > self.snd_una:
+                break
+            start = self.snd_nxt - self.snd_una
+            out.append(self.frame(lp.TCP_ACK | lp.TCP_PSH, self.snd_nxt, bytes(self.tx[start : start + size])))
+            self.snd_nxt += size
+            self.ack_due = False
+            if self.retransmit_due is None:
+                self.retransmit_due = now + BUFFERS_RETRANSMIT_TIMEOUT
+        if self.fin_queued and not self.fin_sent and self.snd_nxt == end:
+            out.append(self.frame(lp.TCP_ACK | lp.TCP_FIN, end))
+            self.fin_sent = True
+            self.ack_due = False
+            if self.retransmit_due is None:
+                self.retransmit_due = now + BUFFERS_RETRANSMIT_TIMEOUT
+        if self.ack_due:
+            out.append(self.frame(lp.TCP_ACK, self.snd_nxt + int(self.fin_sent)))
+            self.ack_due = False
+        if self.fin_acked and self.peer_fin:
+            self.state = "done"
+        return out
+
+    def receive(self, frame: lp.Frame, now: float) -> None:
+        if self.state not in ("syn-sent", "established"):
+            return
+        if frame.tcp_flags & lp.TCP_RST:
+            self.state = "closed"
+            return
+        if self.state == "syn-sent":
+            if frame.tcp_flags == lp.TCP_SYN | lp.TCP_ACK and frame.tcp_acknowledgment == (self.isn + 1) & lp.TCP_SEQUENCE_MASK:
+                self.peer_isn = frame.tcp_sequence
+                self.mss = tbp.mss_of(frame.tcp_options) or 536
+                self.peer_shift = tbp.window_shift(frame.tcp_options) or 0
+                self.remote_window = frame.tcp_window
+                self.state = "established"
+                self.handshake_ack = True
+            return
+        if not frame.tcp_flags & lp.TCP_ACK:
+            return
+        offset = (frame.tcp_sequence - self.peer_isn - 1) & lp.TCP_SEQUENCE_MASK
+        payload = frame.tcp_payload
+        acked = (frame.tcp_acknowledgment - self.isn - 1) & lp.TCP_SEQUENCE_MASK
+        end = self.snd_una + len(self.tx)
+        window = frame.tcp_window << self.peer_shift
+        if self.snd_una <= acked <= end + int(self.fin_sent):
+            if acked > self.snd_una or self.fin_sent and not self.fin_acked and acked == end + 1:
+                advanced = min(acked, end) - self.snd_una
+                del self.tx[:advanced]
+                self.snd_una = min(acked, end)
+                self.fin_acked = self.fin_acked or self.fin_sent and acked == end + 1
+                self.cwnd = min(self.cwnd + advanced, self.rwnd)
+                in_flight = self.snd_nxt > self.snd_una or self.fin_sent and not self.fin_acked
+                self.retransmit_due = now + BUFFERS_RETRANSMIT_TIMEOUT if in_flight else None
+            self.remote_window = window
+            self.rwnd = max(self.rwnd, window)
+            self.snd_nxt = max(self.snd_nxt, self.snd_una)
+        if payload:
+            if offset == self.rcv_nxt:
+                room = self.buffers.rx_bytes - len(self.rx)
+                accepted = payload[:room]
+                self.rx.extend(accepted)
+                self.rcv_nxt += len(accepted)
+            self.ack_due = True
+        if frame.tcp_flags & lp.TCP_FIN and offset + len(payload) == self.rcv_nxt and not self.peer_fin:
+            self.peer_fin = True
+            self.ack_due = True
+
+
+class BuffersModelService:
+    """The service's four-socket pool: a closed socket waits in TIME-WAIT before reuse."""
+
+    def __init__(self) -> None:
+        self.free_at = [0.0] * tbp.POOL_SOCKETS
+        self.busy = [False] * tbp.POOL_SOCKETS
+        self.reports: list[tbp.OpenReport] = []
+
+    def open(self, holder: str, local_port: int, now: float) -> int | None:
+        index = next((index for index in range(tbp.POOL_SOCKETS) if not self.busy[index] and now >= self.free_at[index]), None)
+        if index is None:
+            return None
+        self.busy[index] = True
+        buffers = tbp.HOLDERS[holder]
+        self.reports.append(tbp.OpenReport(tbp.HOLDER_NAMES[holder], index, local_port, buffers.rx_bytes, buffers.tx_bytes))
+        return index
+
+    def release(self, index: int, now: float) -> None:
+        self.busy[index] = False
+        self.free_at[index] = now + BUFFERS_TIME_WAIT
+
+
+class BuffersModelProbe:
+    """One holder's scenario sequence, driving one model socket at a time."""
+
+    def __init__(self, holder: str, base_port: int, isn_base: int, service: BuffersModelService, start: float | None) -> None:
+        self.holder = holder
+        self.buffers = tbp.HOLDERS[holder]
+        self.ports = tbp.HOLDER_PORTS[holder]
+        self.base_port = base_port
+        self.isn_base = isn_base
+        self.service = service
+        self.step = -1
+        self.socket: BuffersModelSocket | None = None
+        self.index: int | None = None
+        self.connect_due: float | None = start
+        self.results: list[tuple[int, bytes]] = []
+        self.done = False
+        self.started = False
+
+    def begin(self, now: float) -> None:
+        self.started = True
+        self.connect_due = now
+
+    def next_step(self, now: float) -> None:
+        self.step += 1
+        if self.step == len(self.ports):
+            self.done = True
+            self.socket = None
+            return
+        self.connect_due = now
+
+    def tick(self, now: float) -> list[bytes]:
+        if self.done or not self.started:
+            return []
+        if self.socket is None:
+            if self.step < 0:
+                self.next_step(now)
+            if self.connect_due is None or now < self.connect_due:
+                return []
+            local_port = self.base_port + self.step
+            index = self.service.open(self.holder, local_port, now)
+            if index is None:
+                self.connect_due = now + BUFFERS_CONNECT_RETRY
+                return []
+            port = self.ports[self.step]
+            self.index = index
+            self.socket = BuffersModelSocket(port, local_port, self.isn_base + self.step * 0x100000, self.buffers, syn_due=now)
+            self.scenario = tbp.SCENARIOS[port]
+            self.stream = tbp.guest_stream_for(port)
+            self.expected = tbp.peer_stream_for(port)
+            self.written = 0
+            self.received = bytearray()
+            self.established_at: float | None = None
+        socket = self.socket
+        if socket.state == "established":
+            self.application(socket, now)
+        out = socket.tick(now)
+        if socket.state in ("done", "closed"):
+            assert self.index is not None
+            self.service.release(self.index, now)
+            self.results.append((socket.port, bytes(self.received)))
+            self.socket = None
+            self.next_step(now)
+        return out
+
+    def application(self, socket: BuffersModelSocket, now: float) -> None:
+        if self.established_at is None:
+            self.established_at = now
+        while self.written < len(self.stream):
+            count = socket.write(self.stream[self.written : self.written + BUFFERS_WRITE_BYTES])
+            if not count:
+                break
+            self.written += count
+        if self.scenario != "rx-window" or now >= self.established_at + tbp.RECEIVE_STALL_MS / 1000:
+            self.received.extend(socket.read())
+        if self.received == self.expected and self.written == len(self.stream) and not socket.fin_queued:
+            socket.fin_queued = True
+
+
+def buffers_simulate() -> tuple[tbp.BuffersPeer, BuffersModelService, dict[str, BuffersModelProbe]]:
+    peer = tbp.BuffersPeer()
+    service = BuffersModelService()
+    probes = {
+        "large": BuffersModelProbe("large", 49400, 0x71000000, service, 0.0),
+        "baseline": BuffersModelProbe("baseline", 49500, 0x72000000, service, None),
+    }
+    probes["large"].begin(0.0)
+    arp = lp.ethernet(lp.BROADCAST, GUEST_MAC, lp.ETHERTYPE_ARP, lp.arp(lp.ARP_REQUEST, GUEST_MAC, lp.GUEST_IP, bytes(6), lp.PEER_IP))
+    to_peer: list[tuple[float, bytes]] = [(MODEL_LATENCY, arp)]
+    to_guest: list[tuple[float, bytes]] = []
+    next_poll = 0.0
+    tick = 0
+    drain = 0
+    while drain < 500 and tick < 120_000:
+        tick += 1
+        drain += int(all(probe.done for probe in probes.values()))
+        now = tick * MODEL_TICK
+        if probes["large"].done and not probes["baseline"].started:
+            probes["baseline"].begin(now)
+        due = [raw for when, raw in to_peer if when <= now]
+        to_peer = [(when, raw) for when, raw in to_peer if when > now]
+        for raw in due:
+            to_guest.extend((now + MODEL_LATENCY, reply) for reply in peer.handle(raw, now))
+        if now >= next_poll:
+            to_guest.extend((now + MODEL_LATENCY, reply) for reply in peer.poll(now))
+            next_poll = now + MODEL_POLL
+        due = [raw for when, raw in to_guest if when <= now]
+        to_guest = [(when, raw) for when, raw in to_guest if when > now]
+        for raw in due:
+            frame = lp.decode(raw)
+            if frame is None or frame.kind != "tcp":
+                continue
+            for probe in probes.values():
+                if probe.socket is not None and frame.tcp_destination_port == probe.socket.local_port:
+                    probe.socket.receive(frame, now)
+        for probe in probes.values():
+            to_peer.extend((now + MODEL_LATENCY, raw) for raw in probe.tick(now))
+    expect(all(probe.done for probe in probes.values()), f"the buffers model guests did not finish every scenario: {peer.ledger.summary()}")
+    return peer, service, probes
+
+
+def buffers_guest(port: int, sequence: int, acknowledgment: int, flags: int, payload: bytes = b"", window: int = 1024, options: bytes = b"", source_port: int = 50000) -> bytes:
+    segment = lp.tcp(lp.GUEST_IP, lp.PEER_IP, source_port, port, sequence, acknowledgment, flags, payload, window, options)
+    return lp.ethernet(lp.PEER_MAC, GUEST_MAC, lp.ETHERTYPE_IPV4, lp.ipv4(lp.GUEST_IP, lp.PEER_IP, lp.IP_PROTOCOL_TCP, segment))
+
+
+def buffers_open(peer: tbp.BuffersPeer, port: int, shift: int, window: int) -> tbp.Connection:
+    options = b"\x02\x04\x05\xb4\x01\x03\x03" + bytes([shift])
+    replies = peer.handle(buffers_guest(port, 100, 0, lp.TCP_SYN, window=min(window, 0xFFFF), options=options), 0.0)
+    expect(len(replies) == 1 and lp.decode(replies[0]).tcp_options == tbp.SYNACK_OPTIONS, "a buffers SYN did not receive exactly one SYN-ACK declaring the peer MSS and window scale")
+    connection = peer.ledger.connections[-1]
+    peer.handle(buffers_guest(port, 101, connection.peer_isn + 1, lp.TCP_ACK, window=window >> shift), 0.0)
+    expect(connection.handshake and connection.guest_shift == shift, "a buffers handshake settled against the script")
+    return connection
+
+
+def check_buffers_scripts() -> None:
+    for buffers in tbp.HOLDERS.values():
+        expect(buffers.rx_bytes in tbp.ADMITTED_BUFFER_BYTES and buffers.tx_bytes in tbp.ADMITTED_BUFFER_BYTES, "a declared buffer is outside network-application/v4")
+        expect(buffers.tx_bytes % tbp.PEER_MSS == 0 and buffers.rx_bytes % tbp.PEER_MSS == 0, "the peer MSS must divide every declared buffer")
+    expect(tbp.LARGE.tx_bytes > tbp.BASELINE.tx_bytes and tbp.LARGE.rx_bytes > tbp.BASELINE.rx_bytes, "the large holder must declare larger buffers than the baseline")
+    expect(tbp.RAMP_BYTES - tbp.LARGE.tx_bytes + BUFFERS_CWND >= tbp.LARGE.tx_bytes, "the ramp must grow Reno's window past the large transmit buffer before the hold")
+    expect(tbp.TX_STREAM_BYTES >= tbp.RAMP_BYTES + 2 * tbp.LARGE.tx_bytes and tbp.HOLD_SECONDS < BUFFERS_RETRANSMIT_TIMEOUT, "the tx stream must outlast the hold, which must end inside smoltcp's one-second retransmission floor")
+    expect(tbp.PEER_WINDOW >= 2 * tbp.LARGE.tx_bytes, "the peer window must never limit the large transmit buffer")
+    expect([tbp.expected_shift(value) for value in (2048, 32768, 65536)] == [0, 0, 1], "the window scale derivation disagrees with smoltcp")
+    expect(not set(tbp.ADMITTED_BUFFER_BYTES) & set(tbp.REFUSED_BUFFER_BYTES) and all(value & (value - 1) == 0 for value in tbp.ADMITTED_BUFFER_BYTES), "the admitted buffer sizes must be powers of two disjoint from the refused ones")
+    expect(len(tbp.SCENARIOS) == 6 and set(tbp.PORT_HOLDER) == set(tbp.SCENARIOS), "every scenario port belongs to exactly one holder")
+    # tx-flight: per-segment acknowledgments until the ramp, then a hold.
+    peer = tbp.BuffersPeer()
+    connection = buffers_open(peer, tbp.HOLDER_PORTS["large"][0], 1, 65536)
+    ack = connection.peer_isn + 1
+    offset = 0
+    while offset + 1024 < tbp.RAMP_BYTES:
+        replies = peer.handle(buffers_guest(connection.port, 101 + offset, ack, lp.TCP_ACK | lp.TCP_PSH, tbp.TX_STREAM[offset : offset + 1024]), 0.0)
+        expect(len(replies) == 1 and lp.decode(replies[0]).tcp_acknowledgment == 101 + offset + 1024, "a ramp segment was not acknowledged at once")
+        offset += 1024
+    expect(peer.handle(buffers_guest(connection.port, 101 + offset, ack, lp.TCP_ACK | lp.TCP_PSH, tbp.TX_STREAM[offset : offset + 1024]), 0.0) == [], "the segment reaching the ramp was acknowledged")
+    offset += 1024
+    expect(peer.handle(buffers_guest(connection.port, 101 + offset, ack, lp.TCP_ACK | lp.TCP_PSH, tbp.TX_STREAM[offset : offset + 1024]), 0.1) == [], "a segment inside the hold was acknowledged")
+    expect(peer.poll(tbp.HOLD_SECONDS - 0.01) == [], "the hold ended early")
+    released = [lp.decode(raw) for raw in peer.poll(tbp.HOLD_SECONDS)]
+    expect(len(released) == 1 and released[0].tcp_acknowledgment == 101 + offset + 1024, "the hold did not end with one acknowledgment of everything received")
+    # rx-window: the peer fills the window, probes a closed one, resends from the edge once it reopens.
+    peer = tbp.BuffersPeer()
+    connection = buffers_open(peer, tbp.HOLDER_PORTS["baseline"][1], 0, 2048)
+    expect(peer.poll(0.0) == [], "the peer sent beyond the window it filled at the handshake")
+    sent = [entry.frame for entry in peer.ledger.sent if entry.frame.tcp_payload]
+    expect([len(frame.tcp_payload) for frame in sent] == [1024, 1024], "the peer did not fill exactly the 2048-byte window")
+    expect(peer.handle(buffers_guest(connection.port, 101, connection.peer_isn + 1 + 2048, lp.TCP_ACK, window=0), 0.0) == [], "the peer sent into a zero window")
+    probe = [lp.decode(raw) for raw in peer.poll(tbp.RETRY_INTERVAL_SECONDS)]
+    expect(len(probe) == 1 and probe[0].tcp_payload == tbp.RX_STREAMS["baseline"][2048:2049], "a closed window did not draw a one-byte probe")
+    resumed = [lp.decode(raw) for raw in peer.handle(buffers_guest(connection.port, 101, connection.peer_isn + 1 + 2048, lp.TCP_ACK, window=2048), 0.6)]
+    expect([connection.peer_isn + 1 + 2048 + 1024 * index for index in range(2)] == [frame.tcp_sequence for frame in resumed], "the reopened window was not refilled from the guest's acknowledgment")
+
+
+def check_buffers_simulation() -> tuple[tbp.Ledger, list[tbp.OpenReport]]:
+    peer, service, probes = buffers_simulate()
+    summaries, rates = tbp.qualify_buffers_ledger(peer.ledger, GUEST_MAC, BUFFERS_LIMITS, service.reports)
+    expect(len(summaries) == 7 and len(rates) == 2 and all(rate.bytes == tbp.THROUGHPUT_BYTES and rate.elapsed_ns > 0 for rate in rates), f"the buffers qualifier did not summarize every scenario: {summaries}")
+    outcomes = {port: received for probe in probes.values() for port, received in probe.results}
+    expect(all(outcomes[port] == tbp.peer_stream_for(port) for port in tbp.SCENARIOS), "a model scenario did not receive the peer's stream")
+    return peer.ledger, service.reports
+
+
+def forge_buffers(observation: tbp.Observation, **changes: object) -> tbp.Observation:
+    frame = observation.frame
+    fields: dict[str, object] = {"sequence": frame.tcp_sequence, "acknowledgment": frame.tcp_acknowledgment, "flags": frame.tcp_flags, "payload": frame.tcp_payload, "window": frame.tcp_window, "options": frame.tcp_options}
+    fields.update(changes)
+    assert frame.ip_source is not None and frame.ip_destination is not None and frame.tcp_source_port is not None and frame.tcp_destination_port is not None
+    segment = lp.tcp(frame.ip_source, frame.ip_destination, frame.tcp_source_port, frame.tcp_destination_port, fields["sequence"], fields["acknowledgment"], fields["flags"], fields["payload"], fields["window"], fields["options"])  # type: ignore[arg-type]
+    decoded = lp.decode(lp.ethernet(frame.destination, frame.source, lp.ETHERTYPE_IPV4, lp.ipv4(frame.ip_source, frame.ip_destination, lp.IP_PROTOCOL_TCP, segment)))
+    assert decoded is not None
+    return dataclasses.replace(observation, frame=decoded)
+
+
+def check_buffers_controls(ledger: tbp.Ledger, reports: list[tbp.OpenReport]) -> int:
+    count = 0
+
+    def flow(altered: tbp.Ledger, port: int) -> tuple[tbp.Flow, list[int], list[int]]:
+        found = next(entry for entry in tbp.split_flows(altered, GUEST_MAC) if entry.port == port)
+        return found, [altered.received.index(entry) for entry in found.guest], [altered.sent.index(entry) for entry in found.peer]
+
+    def refused(fragment: str, mutate: object, mutate_reports: object = None) -> None:
+        nonlocal count
+        altered = copy.deepcopy(ledger)
+        altered_reports = list(reports)
+        if mutate is not None:
+            mutate(altered)  # type: ignore[operator]
+        if mutate_reports is not None:
+            altered_reports = mutate_reports(altered_reports)  # type: ignore[operator]
+        try:
+            tbp.qualify_buffers_ledger(altered, GUEST_MAC, BUFFERS_LIMITS, altered_reports)
+        except ValueError as error:
+            expect(fragment in str(error), f"a buffers control was refused for another reason: expected {fragment!r}, got {error}")
+            count += 1
+            return
+        fail(f"buffers qualification accepted corrupted evidence: {fragment}")
+
+    def port(holder: str, scenario: str) -> int:
+        return tbp.HOLDER_PORTS[holder][tbp.SCENARIO_ORDER.index(scenario)]
+
+    def pre_ramp_ack(altered: tbp.Ledger, holder: str) -> int:
+        found, _, peer = flow(altered, port(holder, "tx-flight"))
+        tbp.handshake(found)
+        ramp = next(entry for entry, offset in tbp.guest_data(found) if offset + len(entry.frame.tcp_payload) >= tbp.RAMP_BYTES)
+        return max((position for position in peer if altered.sent[position].order < ramp.order and altered.sent[position].frame.tcp_flags == lp.TCP_ACK), key=lambda position: altered.sent[position].order)
+
+    def shift_ack(holder: str, delta: int):
+        def mutate(altered: tbp.Ledger) -> None:
+            position = pre_ramp_ack(altered, holder)
+            frame = altered.sent[position].frame
+            altered.sent[position] = forge_buffers(altered.sent[position], acknowledgment=(frame.tcp_acknowledgment + delta) & lp.TCP_SEQUENCE_MASK)
+        return mutate
+
+    def short_hold(altered: tbp.Ledger) -> None:
+        position = pre_ramp_ack(altered, "large")
+        found, _, peer = flow(altered, port("large", "tx-flight"))
+        after = next(index for index in peer if altered.sent[index].order > altered.sent[position].order + 1 and altered.sent[index].frame.tcp_flags & lp.TCP_ACK and altered.sent[index].time - altered.sent[position].time > tbp.HOLD_SECONDS / 2)
+        altered.sent[after] = dataclasses.replace(altered.sent[after], time=altered.sent[after].time - tbp.HOLD_SECONDS / 2)
+
+    def syn(holder: str, scenario: str, **changes: object):
+        def mutate(altered: tbp.Ledger) -> None:
+            _, guest, _ = flow(altered, port(holder, scenario))
+            for position in guest:
+                if altered.received[position].frame.tcp_flags == lp.TCP_SYN:
+                    altered.received[position] = forge_buffers(altered.received[position], **changes)
+        return mutate
+
+    def syn_shift(holder: str, shift: int):
+        def mutate(altered: tbp.Ledger) -> None:
+            _, guest, _ = flow(altered, port(holder, "rx-window"))
+            for position in guest:
+                frame = altered.received[position].frame
+                if frame.tcp_flags == lp.TCP_SYN:
+                    altered.received[position] = forge_buffers(altered.received[position], options=frame.tcp_options[:-1] + bytes([shift]))
+        return mutate
+
+    def zero_window(delta: int):
+        def mutate(altered: tbp.Ledger) -> None:
+            _, guest, _ = flow(altered, port("large", "rx-window"))
+            position = next(index for index in guest if altered.received[index].frame.tcp_window == 0 and altered.received[index].frame.tcp_flags & lp.TCP_ACK and not altered.received[index].frame.tcp_flags & lp.TCP_SYN)
+            frame = altered.received[position].frame
+            altered.received[position] = forge_buffers(altered.received[position], acknowledgment=(frame.tcp_acknowledgment + delta) & lp.TCP_SEQUENCE_MASK)
+        return mutate
+
+    def corrupt_stream(altered: tbp.Ledger) -> None:
+        found, _, _ = flow(altered, port("large", "throughput"))
+        tbp.handshake(found)
+        entry = tbp.guest_data(found)[3][0]
+        position = altered.received.index(entry)
+        payload = entry.frame.tcp_payload
+        altered.received[position] = forge_buffers(entry, payload=bytes([payload[0] ^ 1]) + payload[1:])
+
+    def short_throughput(altered: tbp.Ledger) -> None:
+        found, _, _ = flow(altered, port("baseline", "throughput"))
+        tbp.handshake(found)
+        last = max(tbp.guest_data(found), key=lambda item: item[1])[1]
+        for entry, offset in tbp.guest_data(found):
+            if offset == last:
+                altered.received.remove(entry)
+
+    def wide_window(altered: tbp.Ledger) -> None:
+        _, guest, _ = flow(altered, port("baseline", "tx-flight"))
+        position = guest[-1]
+        altered.received[position] = forge_buffers(altered.received[position], window=tbp.BASELINE.rx_bytes + 1)
+
+    def early_baseline(altered: tbp.Ledger) -> None:
+        _, guest, _ = flow(altered, port("baseline", "tx-flight"))
+        last_large, _, _ = flow(altered, port("large", "throughput"))
+        altered.received[guest[0]] = dataclasses.replace(altered.received[guest[0]], order=last_large.last_order - 0.5)
+
+    def report(change: Callable[[tbp.OpenReport], tbp.OpenReport], holder: str = "baseline"):
+        def mutate(values: list[tbp.OpenReport]) -> list[tbp.OpenReport]:
+            index = next(index for index, value in enumerate(values) if value.holder == tbp.HOLDER_NAMES[holder])
+            return [*values[:index], change(values[index]), *values[index + 1 :]]
+        return mutate
+
+    def no_reuse(values: list[tbp.OpenReport]) -> list[tbp.OpenReport]:
+        large = {value.socket for value in values if value.holder == tbp.HOLDER_NAMES["large"]}
+        spare = next(index for index in range(tbp.POOL_SOCKETS) if index not in large)
+        return [dataclasses.replace(value, socket=spare) if value.holder == tbp.HOLDER_NAMES["baseline"] else value for value in values]
+
+    def foreign_source(altered: tbp.Ledger) -> None:
+        altered.received[0] = dataclasses.replace(altered.received[0], frame=dataclasses.replace(altered.received[0].frame, source=bytes(6)))
+
+    def malformed(altered: tbp.Ledger) -> None:
+        altered.malformed_received = 1
+
+    refused("unacknowledged bytes in flight", shift_ack("large", 1))
+    refused("unacknowledged bytes in flight", shift_ack("large", -1))
+    refused("unacknowledged bytes in flight", shift_ack("baseline", -1))
+    refused("withheld acknowledgments", short_hold)
+    refused("window scale", syn_shift("large", 0))
+    refused("window scale", syn_shift("large", 2))
+    refused("window scale", syn_shift("baseline", 1))
+    refused("SYN window", syn("large", "rx-window", window=0xFFFE))
+    refused("SYN window", syn("baseline", "tx-flight", window=tbp.BASELINE.rx_bytes - 1))
+    refused("first zero window", zero_window(-1))
+    refused("first zero window", zero_window(1))
+    refused("declared stream bytes", corrupt_stream)
+    refused("did not reach the peer completely", short_throughput)
+    refused("receive buffer", wide_window)
+    refused("came before the last buffers-large connection closed", early_baseline)
+    refused("not the declared", None, report(lambda value: dataclasses.replace(value, rx_bytes=tbp.LARGE.rx_bytes)))
+    refused("not the declared", None, report(lambda value: dataclasses.replace(value, tx_bytes=tbp.LARGE.tx_bytes)))
+    refused("which no wire connection used", None, report(lambda value: dataclasses.replace(value, local_port=1)))
+    refused("but the wire connection belongs to", None, report(lambda value: dataclasses.replace(value, holder=tbp.HOLDER_NAMES["large"])))
+    refused("outside the 4-socket pool", None, report(lambda value: dataclasses.replace(value, socket=tbp.POOL_SOCKETS)))
+    refused("the service reported 5 connections", None, lambda values: values[:-1])
+    refused("no buffers-baseline connection opened on a socket", None, no_reuse)
+    refused("source MAC", foreign_source)
+    refused("unclassifiable", malformed)
+    return count
+
+
+def buffers_rows() -> tuple[dict[str, dict[str, str]], list[dict[str, str]]]:
+    applications = {
+        name: {"role": "client", "backend": "external", "nagle": "true", "rxBufferBytes": str(tbp.HOLDERS[holder].rx_bytes), "txBufferBytes": str(tbp.HOLDERS[holder].tx_bytes)}
+        for holder, name in tbp.HOLDER_NAMES.items()
+    }
+    destinations = [
+        {"holder": tbp.HOLDER_NAMES[holder], "address": "10.0.0.2", "addressKind": "ipv4", "transport": "tcp", "port": str(port), "rights": "connect,send,recv", "retryLimit": "16"}
+        for holder, ports in tbp.HOLDER_PORTS.items()
+        for port in ports
+    ]
+    return applications, destinations
+
+
+def check_buffers_composition_controls() -> int:
+    applications, destinations = buffers_rows()
+    expect(tbp.judge_application_rows(applications) == 10, "the honest buffers rows did not yield every fact")
+    expect(tbp.judge_destination_rows(destinations) == BUFFERS_LIMITS, "the honest buffers destinations did not yield every retry limit")
+    count = 0
+
+    def refused(fragment: str, judge: Callable[[], object]) -> None:
+        nonlocal count
+        try:
+            judge()
+        except ValueError as error:
+            expect(fragment in str(error), f"a buffers composition control was refused for another reason: expected {fragment!r}, got {error}")
+            count += 1
+            return
+        fail(f"buffers composition judge accepted a corrupted row: {fragment}")
+
+    def application(name: str, **changes: str) -> dict[str, dict[str, str]]:
+        altered = copy.deepcopy(applications)
+        altered[name].update(changes)
+        return altered
+
+    large, baseline = tbp.HOLDER_NAMES["large"], tbp.HOLDER_NAMES["baseline"]
+    for value in (*tbp.REFUSED_BUFFER_BYTES, 32768):
+        refused("rxBufferBytes", lambda value=value: tbp.judge_application_rows(application(large, rxBufferBytes=str(value))))
+    refused("txBufferBytes", lambda: tbp.judge_application_rows(application(baseline, txBufferBytes="65536")))
+    refused("nagle", lambda: tbp.judge_application_rows(application(large, nagle="false")))
+    refused("backend", lambda: tbp.judge_application_rows(application(baseline, backend="loopback")))
+    refused("exactly the application rows", lambda: tbp.judge_application_rows({large: applications[large]}))
+    refused("exactly the application rows", lambda: tbp.judge_application_rows({**applications, "intruder": applications[large]}))
+    refused("one destination per scenario port", lambda: tbp.judge_destination_rows(destinations[1:]))
+    refused("not an exact 10.0.0.2 TCP", lambda: tbp.judge_destination_rows([dict(destinations[0], address="10.0.0.3"), *destinations[1:]]))
+    refused("retry limit", lambda: tbp.judge_destination_rows([dict(destinations[0], retryLimit="0"), *destinations[1:]]))
+    refused("may carry listen", lambda: tbp.judge_destination_rows([dict(destinations[0], rights="connect,send,recv,listen"), *destinations[1:]]))
+
+    manifest = {"networkApplications": [{"holder": name, **row} for name, row in applications.items()]}
+
+    def honest(candidate: dict) -> bytes:
+        for row in candidate["networkApplications"]:
+            for field in tbp.BUFFER_FIELDS:
+                if int(row[field]) not in tbp.ADMITTED_BUFFER_BYTES:
+                    raise SystemExit(f"buffer sizes exceed contract: {field}")
+        return b""
+
+    def lax(candidate: dict) -> bytes:
+        return b""
+
+    def strict(candidate: dict) -> bytes:
+        if any(int(row[field]) == 65536 for row in candidate["networkApplications"] for field in tbp.BUFFER_FIELDS):
+            raise SystemExit("buffer sizes exceed contract")
+        return honest(candidate)
+
+    verdicts = tbp.judge_builder(honest, manifest)
+    expect(verdicts == (2 * 2 * len(tbp.ADMITTED_BUFFER_BYTES), 2 * 2 * len(tbp.REFUSED_BUFFER_BYTES)), f"the honest builder did not yield every verdict: {verdicts}")
+    refused("which network-application/v4 refuses", lambda: tbp.judge_builder(lax, manifest))
+    refused("which network-application/v4 admits", lambda: tbp.judge_builder(strict, manifest))
+    refused("lacks a buffers holder row", lambda: tbp.judge_builder(honest, {"networkApplications": manifest["networkApplications"][:1]}))
+    return count
+
+
 def main() -> None:
     check_checksums()
     check_frames_decode_and_pad()
@@ -2221,12 +2816,16 @@ def main() -> None:
     listener_controls = check_listener_controls(check_listener_simulation())
     check_options_scripts()
     options_controls = check_options_controls(check_options_simulation())
+    check_buffers_scripts()
+    buffers_controls = check_buffers_controls(*check_buffers_simulation())
+    buffers_composition_controls = check_buffers_composition_controls()
     (kind,) = struct.unpack("!H", struct.pack("!H", lp.ETHERTYPE_ARP))
     expect(kind == lp.ETHERTYPE_ARP, "struct sanity")
     print("link peer check: ARP/ICMP preserved; bounded real TCP echo, checksums, stream delivery, windows, retransmissions, refusal, and close verified")
     print("link peer check: scripted reorder, loss, silence and window impairments qualified against a model stack; 24 corrupted-evidence controls refused")
     print(f"link peer check: scripted external-listener refusals, half-close, simultaneous close and unread/unsent close qualified against a model stack; {listener_controls} corrupted-evidence controls refused")
     print(f"link peer check: scripted Nagle, loss recovery, keep-alive, hop limit and idle-timeout scenarios qualified against model guests under both declared bindings; {options_controls} corrupted-evidence controls refused")
+    print(f"link peer check: scripted transmit in-flight, receive window, throughput and socket-reuse scenarios qualified against model guests under both declared buffer sizes; {buffers_controls} corrupted-evidence controls and {buffers_composition_controls} composition and builder controls refused")
 
 
 if __name__ == "__main__":
