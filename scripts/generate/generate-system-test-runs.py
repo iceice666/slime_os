@@ -496,19 +496,25 @@ def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[st
     for call in ast.walk(function):
         if not isinstance(call, ast.Call):
             continue
-        for keyword in call.keywords:
-            if keyword.arg == "additional_arguments":
-                if not (isinstance(call.func, ast.Name) and call.func.id == "run_plane"):
-                    fail(f"{where} passes additional_arguments to a call that is not run_plane, which is the only call that adds them to QEMU")
-                carriers.append(keyword.value)
+        launches = isinstance(call.func, ast.Name) and call.func.id == "run_plane"
+        given = [keyword.value for keyword in call.keywords if keyword.arg == "additional_arguments"]
+        if given and not launches:
+            fail(f"{where} passes additional_arguments to a call that is not run_plane, which is the only call that adds them to QEMU")
+        if launches:
+            if len(given) != 1:
+                fail(f"{where} calls run_plane at line {call.lineno} without additional_arguments, so that launch path attaches no declared device")
+            carriers.append(given[0])
     if not carriers:
         fail(f"{where} is declared as a site but passes no additional_arguments to run_plane")
     devices: list[str] = []
     inside: set[int] = set()
+    per_launch: list[list[str]] = []
     for carrier in carriers:
         if not isinstance(carrier, (ast.Tuple, ast.List)):
             fail(f"{where} passes additional_arguments that is not a tuple or list literal, so its arguments cannot be read")
         inside.update(id(node) for node in ast.walk(carrier))
+        launch_devices: list[str] = []
+        per_launch.append(launch_devices)
         elements = carrier.elts
         if len(elements) % 2:
             fail(f"{where} passes an odd number of additional_arguments elements, so they are not flag and value pairs")
@@ -525,7 +531,7 @@ def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[st
                 found = DEVICE_NAME.match(value) if value else None
                 if found is None:
                     fail(f"{where} passes a -device whose value is not a literal that starts with a virtio-<kind>-device name")
-                devices.append(found.group(0))
+                launch_devices.append(found.group(0))
             else:
                 if not isinstance(value_node, (ast.Name, ast.Constant, ast.JoinedStr)) or (
                     isinstance(value_node, ast.Constant) and not isinstance(value_node.value, str)
@@ -534,6 +540,11 @@ def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[st
                 text = leading_text(value_node)
                 if text is not None and text.startswith("-"):
                     fail(f"{where} passes a {flag} value that looks like a flag")
+    # Every launch path must attach the same devices. A site is declared once, so a path that attaches fewer
+    # devices than another would make the record claim a device that the path does not attach.
+    if any(sorted(launch) != sorted(per_launch[0]) for launch in per_launch):
+        fail(f"{where} has launch paths that attach different devices, {[sorted(launch) for launch in per_launch]}")
+    devices = per_launch[0]
     # Every QEMU token in the function must sit inside one of those literals. A token anywhere else is a
     # second route to QEMU that the reading did not cover.
     for inner in ast.walk(function):
@@ -755,10 +766,10 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
     reached = reachable_units(units, arms[run])
     attached = sorted(device for name in reached if name in sites for device in sites[name])
     declared = sorted(declared_by_arm[run])
-    if len(set(attached)) != len(set(declared)) or sorted(set(attached)) != sorted(set(declared)):
+    if attached != declared:
         fail(
             f"{path.name}: {run} declares devices {declared}, but the sites it can reach, {sorted(reached & set(sites))}, "
-            f"attach {sorted(set(attached))}"
+            f"attach {attached}"
         )
     lines = text.splitlines()
     pieces = [

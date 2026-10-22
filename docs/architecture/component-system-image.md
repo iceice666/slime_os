@@ -160,8 +160,9 @@ device from the code.
 
 Extraction checks that the code agrees with the tables. A QEMU token may sit only in
 a site. A token in a module-level statement, in a function that is not a site, or in
-a definition nested in a site is refused. Each site gives `additional_arguments` to
-`run_plane` as a tuple or list literal of flag and value pairs. Extraction reads it
+a definition nested in a site is refused. Every `run_plane` call in a site gives
+`additional_arguments` as a tuple or list literal of flag and value pairs. Every
+launch path of the site must attach the same devices. Extraction reads each literal
 element by element and counts a repeated device as many times as it appears. A flag
 must be a literal from `-netdev`, `-device` and `-object`. A `-device` value must be a
 literal that starts with a `virtio-` device name. A computed flag, a variable value, a

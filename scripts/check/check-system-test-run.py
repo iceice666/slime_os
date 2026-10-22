@@ -935,6 +935,50 @@ def check_arm_controls() -> int:
             ("a -netdev value that is an f-string starting with a flag", 'f"-device {kind}"'),
         ):
             refused_edit(label, mutated(net_pairs, net_pairs.replace("netdev,\n", value + ",\n", 1)), "sel4-net")
+        # Every run_plane call in a site must carry additional_arguments, and every launch path of a site must
+        # attach the same devices, so a path that attaches nothing cannot hide behind the path that attaches a NIC.
+        peer_call = "        transcript = run_plane(\n            image=image,\n            timeout=TIMEOUT,\n            terminal_condition=terminal,\n            fail=fail,\n            pins_path=PINS,\n            additional_arguments=("
+        early = "        if peer is not None:\n            return run_plane(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS)\n"
+        refused_edit("an early run_plane in a site with no additional_arguments", mutated(peer_call, early + peer_call), "sel4-io-tcp")
+        refused_edit(
+            "an early run_plane in a site with an empty additional_arguments",
+            mutated(peer_call, early.replace("pins_path=PINS)", "pins_path=PINS, additional_arguments=())") + peer_call),
+            "sel4-io-tcp",
+        )
+        refused_edit(
+            "a second launch path in a site with a different device",
+            mutated(peer_call, early.replace("pins_path=PINS)", 'pins_path=PINS, additional_arguments=("-device", "virtio-rng-device"))') + peer_call),
+            "sel4-io-tcp",
+        )
+        refused_edit(
+            "a launch path in a site that gives additional_arguments as a name",
+            mutated(peer_call, early.replace("pins_path=PINS)", "pins_path=PINS, additional_arguments=held)") + peer_call),
+            "sel4-io-tcp",
+        )
+
+        # A repeated device counts each time. Two NICs in a site are refused until both the site table and the arm
+        # table say two, and the record then lists two. One table updated and the other not is refused.
+        net_pair = '"-device", f"virtio-net-device,netdev=slimenet,mac={mac}",'
+        two_nics = mutated(net_pair, net_pair + " " + net_pair)
+        copy.write_text(two_nics, encoding="utf-8")
+        both = ("virtio-net-device", "virtio-net-device")
+        sites_table = generator.QEMU_SITES[NETWORK_CHECKER]
+        with patch.dict(generator.QEMU_SITES, {NETWORK_CHECKER: {**sites_table, "run_net_arm": both}}):
+            refuse("two NICs with the arm table still saying one", lambda: generator.extract(copy, "sel4-net"))
+            with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, "sel4-net": both}}):
+                if generator.extract(copy, "sel4-net")["devices"] != list(both):
+                    fail("arm control: two declared NICs were not recorded as two devices")
+                refused += 1
+                if generator.render("sel4-net", "0" * 64, "qemu-arm-virt", generator.extract(copy, "sel4-net")).count('name = "virtio-net-device";') != 2:
+                    fail("arm control: a record for two NICs does not list two devices")
+                refused += 1
+        with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, "sel4-net": both}}):
+            refuse("two NICs with the site table still saying one", lambda: generator.extract(copy, "sel4-net"))
+        with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, "sel4-net": both}}):
+            copy.write_text(source, encoding="utf-8")
+            refuse("an arm table that says two NICs for one", lambda: generator.extract(copy, "sel4-net"))
+        copy.write_text(source, encoding="utf-8")
+
         plane = "def run_authority_arm(image: Path) -> None:\n"
         for label, text in (
             ("run_plane reached through an alias", mutated(plane, plane + "    go = run_plane\n")),
