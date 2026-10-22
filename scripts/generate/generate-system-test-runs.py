@@ -441,8 +441,9 @@ def arm_source(path: _Path, run: str, text: str) -> str:
     """The source an arm's drives, devices and faults are read from.
 
     A checker with no entry table is read whole. For a checker with one, the source is the functions the arm
-    runs and the checker's own functions they call, less the branches that a flag in `ARM_FLAGS` rules out.
-    An arm declared with no entry function must find no QEMU argument anywhere in `main()`, so a device added
+    runs and the checker's own functions they call, less the branches that a flag in `ARM_FLAGS` rules out. It
+    also holds each module-level assignment that those functions read, directly or through another module-level
+    assignment. An arm declared with no entry function must find no QEMU argument anywhere in `main()`, so a device added
     to an inline arm cannot go unrecorded.
     """
     arms = ARM_ENTRY_FUNCTIONS.get(path.name)
@@ -450,7 +451,14 @@ def arm_source(path: _Path, run: str, text: str) -> str:
         return text
     if run not in arms:
         fail(f"{path.name}: {run} has no entry in ARM_ENTRY_FUNCTIONS")
-    functions = {node.name: node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef)}
+    body = ast.parse(text).body
+    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
+    constants: dict[str, ast.stmt] = {}
+    for node in body:
+        if isinstance(node, ast.Assign):
+            constants.update({target.id: node for target in node.targets if isinstance(target, ast.Name)})
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            constants[node.target.id] = node
     missing = [name for name in arms[run] if name not in functions]
     if missing:
         fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
@@ -483,13 +491,28 @@ def arm_source(path: _Path, run: str, text: str) -> str:
     unused = sorted(flag for flag in flags if not any(flag in {a.arg for a in (*functions[n].args.args, *functions[n].args.kwonlyargs)} for n in seen))
     if unused:
         fail(f"{path.name}: {run} sets flag(s) {unused} that no function it runs takes as a parameter")
-    return "\n".join(
+    # A module-level name that a function the arm runs reads belongs to the arm, and so does any module-level
+    # name that name's value reads. A reference in a branch the arm's flags rule out does not count. A local
+    # name that shadows a module-level one is over-included, which can only add a fact and never hide one.
+    referenced: set[str] = set()
+    queue = [(node, skipped[name]) for name in seen for node in ast.walk(functions[name])]
+    while queue:
+        node, dropped = queue.pop()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in constants and node.lineno not in dropped:
+            if node.id not in referenced:
+                referenced.add(node.id)
+                queue.extend((inner, set()) for inner in ast.walk(constants[node.id]))
+    pieces = [
         "\n".join(
             line for number, line in enumerate(lines[node.lineno - 1 : node.end_lineno], node.lineno) if number not in skipped[name]
         )
         for name in sorted(seen)
         for node in (functions[name],)
-    )
+    ]
+    pieces += [
+        "\n".join(lines[constants[name].lineno - 1 : constants[name].end_lineno]) for name in sorted(referenced)
+    ]
+    return "\n".join(pieces)
 
 
 def extract(path: _Path, run: str | None = None) -> dict:

@@ -844,6 +844,21 @@ def check_arm_controls() -> int:
         copy.write_text(source, encoding="utf-8")
         with patch.dict(generator.ARM_FLAGS, {NETWORK_CHECKER: {"sel4-io-tcp": {"not_a_parameter": True}}}):
             refuse("a flag that no function the arm runs takes", lambda: generator.extract(copy, "sel4-io-tcp"))
+        # A device held in a module-level name reaches the arms whose functions read that name, directly or through
+        # another module-level name, and no other arm.
+        top = "TIMEOUT = 240\n"
+        impair = "def run_impairment_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:\n"
+        for label, text, reached in (
+            ("a module tuple read by one arm", mutated(top, top + f"EXTRA_DEVICE = {pair}\n").replace(impair, impair + "    extra = EXTRA_DEVICE\n", 1), True),
+            ("a module tuple read through another module name", mutated(top, top + f"BASE_DEVICE = {pair}\nEXTRA_DEVICE = BASE_DEVICE\n").replace(impair, impair + "    extra = EXTRA_DEVICE\n", 1), True),
+            ("a module tuple that no arm reads", mutated(top, top + f"UNUSED_DEVICE = {pair}\n"), False),
+        ):
+            copy.write_text(text, encoding="utf-8")
+            for arm in sorted(variants):
+                found = "virtio-rng-device" in generator.extract(copy, arm)["devices"]
+                if found != (reached and arm == "sel4-io-tcp-impairment"):
+                    fail(f"arm control: {label} {'reached' if found else 'missed'} {arm}")
+            refused += 1
         # An arm that runs inline in main() must attach nothing, so a device added there is refused.
         copy.write_text(mutated('    if arguments.arm in ("lifetime", "all"):\n',
                                 '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),
