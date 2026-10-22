@@ -102,6 +102,7 @@ For how the planes work and how to add one, read
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
+| `just issue_projection_retired_check` | Work items are not projected into GitHub Issues: refuses while `myque-project.yml` exists, policy names it, a workflow or script runs `myque-gh apply`, or contributor guidance asks for `myque-gh pr link`; fails until the projection retirement lands. |
 | `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
 | `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |
 | `just devloop_diagnostics_controls` | The diagnostics judge's corrupted-result and actual-CLI transport controls; passing controls do not qualify the repair. |
