@@ -26,6 +26,9 @@ Owners:
 - composition: `contracts/system-spec/v1/systems/sel4-zenoh.zti` (generation 168),
   from which `contracts/generation-manifest/v1/compositions/sel4-zenoh.zti` is
   derived;
+- the external variant: `contracts/system-spec/v1/systems/sel4-zenoh-external.zti`
+  (generation 169) and the nodes `components/applications/ros2-demo-publisher-external`
+  and `ros2-demo-subscriber-external` (see [External listener](#external-listener));
 - the demo it serves: [`contracts/rpi5-ros2-demo/v2`](../../contracts/rpi5-ros2-demo/v2/README.md);
 - plan and decision: [`../plans/ros2-wire-compatibility.md`](../plans/ros2-wire-compatibility.md),
   [`../decisions/zenoh-profile0-transport.md`](../decisions/zenoh-profile0-transport.md).
@@ -169,15 +172,48 @@ authority.
 Each console line is written in one `debug_write`, because the two nodes run
 concurrently and a line built from several writes can be interleaved.
 
+## External listener
+
+`sel4-zenoh-external` (generation 169) is the same demo with the publisher dialling a
+stock `eclipse-zenoh` 1.0.0 listener on the host through a virtio NIC, so a packet
+leaves the VM and can be captured. It contains `init`, `network-service`,
+`virtio-net-driver`, `ros2-demo-publisher` and `ros2-demo-subscriber` and one network
+interface (`10.0.2.15/24`, gateway `10.0.2.2`, MAC `52:54:00:53:4c:01`). The publisher
+holds one destination, exact IPv4 TCP to `10.0.2.2:17447` with `connect`, `send` and
+`recv`, and is a rightless client on the `external` backend. The subscriber holds no
+network authority and its executable exits at once.
+
+The instance names stay `ros2-demo-publisher` and `ros2-demo-subscriber`, which the exam
+pins; only their `executable` differs (`ros2-demo-publisher-external`,
+`ros2-demo-subscriber-external`). The publisher reuses `zenoh_node` and `zenoh_link`
+unchanged; the subscriber links only `slime-rt` and exits at once, so no Zenoh code runs
+on its side. The publisher's endpoint is a compile-time constant; the network service enforces the real
+destination row, so a wrong constant is refused there and grants nothing. The publisher
+still sends its four refused requests. The scouting probe, a UDP connect, is refused by
+the external backend as `unsupported` and not `denied`, because its TCP-only engine
+checks the transport before the destination table; the publisher accepts that reply for
+that probe only and prints the same `denial class=scouting` line.
+
+`just zenoh_external_check` judges one run from three witnesses held against each other:
+the derived composition, a QEMU `filter-dump` capture at the virtio-net device (one TCP
+connection to `10.0.2.2:17447`, ARP only besides it), and the record the stock listener
+wrote of what its own subscriber delivered. The guest's batches are held to
+`scripts/lib/zenoh_wire.py`. The listener is a hash-pinned wheel from a registry, so the
+recipe is explicit and in no aggregate. See the
+[decision](../decisions/zenoh-external-listener.md).
+
 ## Limitations
 
-- The exchange crosses the loopback backend, so there is no packet capture. The
+- `sel4-zenoh` crosses the loopback backend, so there is no packet capture there. The
   nodes' reported batches observe their codecs and session at the service's
   application boundary, not the stack's wire, and the guest chooses what it
-  prints.
-- The exchange crosses the loopback backend, so the arm's evidence is the nodes'
-  own reports at the service boundary. Under QEMU the corrected exam accepts the
-  booted guest; see the plan for what was observed and on which image.
+  prints. `sel4-zenoh-external` is the composition with a capture.
+- `sel4-zenoh`'s evidence is the nodes' own reports at the service boundary. Under
+  QEMU the corrected exam accepts the booted guest; see the plan for what was
+  observed and on which image.
+- The external exam runs on QEMU user networking, not a physical NIC. Its translation
+  of the guest's connection to the host's loopback is not the wire a real network
+  shows. It covers one peer: `eclipse-zenoh` 1.0.0, peer mode, scouting and gossip off.
 - A Zenoh ID ending in `0x00`, or all zero, is refused: upstream holds it as a
   little-endian integer, drops trailing zero bytes and refuses zero, so the bytes
   would not round-trip.
@@ -214,4 +250,7 @@ concurrently and a line built from several writes can be interleaved.
   closures. It fetches them from a registry, so the recipe is explicit and not in CI;
   `cargo deny` run on that crate reports `paste` as unmaintained (RUSTSEC-2024-0436) and
   Zlib-licensed transitive crates, which the root `deny.toml` does not allow;
-- `just rpi5_ros2_zenoh_check` — the QEMU exchange; explicit, not part of `all`.
+- `just rpi5_ros2_zenoh_check` — the QEMU exchange; explicit, not part of `all`;
+- `just zenoh_external_check` — the guest connecting out to a stock listener, judged
+  from the composition, a packet capture and the listener's record; explicit, not part
+  of `all`.

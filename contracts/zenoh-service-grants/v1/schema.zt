@@ -1,0 +1,229 @@
+-- What the Zenoh service may do for each holder, and the limits it is declared with.
+--
+-- The service owns one Zenoh link and serves any number of local holders. A holder's authority is a
+-- row here: an exact key and whether the holder may publish to it, subscribe to it, or both. A key
+-- string in a request grants nothing; only a row present in an admitted record does.
+--
+-- Nothing here chooses how many holders, keys or delivery slots there are. The declaration says, and
+-- this contract checks that it is consistent with the memory it also declares. The bounds that remain
+-- each have a source, named beside them.
+
+Limits :: type {
+  holders : Int;
+  ringSlots : Int;
+  sampleBytes : Int;
+  keyBytes : Int;
+  localSubscriptions : Int;
+  stackBytes : Int;
+};
+
+Grant :: type {
+  holder : Text;
+  key : Text;
+  publish : Bool;
+  subscribe : Bool;
+};
+
+Grants :: type {
+  formatVersion : Int;
+  limits : Limits;
+  grants : List Grant;
+};
+
+FromData @Limits :: derive
+FromData @Grant :: derive
+FromData @Grants :: derive
+
+formatVersion :: Int = 1;
+
+-- Source: the same 16-bit and 32-bit widths the link carries. A key is at most 65535 bytes because
+-- its length travels as a 16-bit field in the profile (`zenoh-link-limits/v1` `maxKeyLengthBytes`).
+maxKeyBytes :: Int = 65535;
+
+-- Arithmetic, not a design cap. Holders, delivery slots, rows and local subscriptions are each at most
+-- 65535, and a slot holds at most 1048576 payload bytes, so the largest product the contract forms,
+-- 65535 * 65535 * (1048576 + 32), is 4.5e15 and stays under the 9.2e18 its 63-bit integers hold. A
+-- declaration past a bound is refused and not evaluated.
+maxCount :: Int = 65535;
+maxSampleBytes :: Int = 1048576;
+
+-- A holder is named as a binding is: 1 to 32 lowercase letters, digits, hyphens and underscores
+-- (`network-application/v3`).
+maxHolderNameBytes :: Int = 32;
+
+-- What the service's arrays cost beyond their payload: a delivery slot holds a subscription id, a
+-- sequence, a timestamp and a length; a row holds a holder index, two rights and a reference to its
+-- key, and the core keeps a second reference to each distinct key; a holder holds its ring's cursors
+-- and its loss count; the core holds its tables' headers. Each is an upper bound on the
+-- implementation's `size_of`. The service core exam prints those sizes and refuses one above its bound.
+slotOverheadBytes :: Int = 32;
+rowOverheadBytes :: Int = 48;
+holderOverheadBytes :: Int = 64;
+serviceFixedBytes :: Int = 1024;
+
+d ::= import stdlib.data;
+l ::= import stdlib.list;
+n ::= import stdlib.num;
+r ::= import stdlib.result;
+t ::= import stdlib.text;
+
+-- The record is closed. `decode` reads the fields it knows and ignores the rest, so a field the
+-- contract does not name would pass unseen; this refuses it at the top level, in the limits and in
+-- every row.
+grantsFields :: List Text = { "formatVersion"; "limits"; "grants"; };
+limitsFields :: List Text = { "holders"; "ringSlots"; "sampleBytes"; "keyBytes"; "localSubscriptions"; "stackBytes"; };
+grantFields :: List Text = { "holder"; "key"; "publish"; "subscribe"; };
+
+member :: Text -> List Text -> Bool
+  = name names => match names { | {;} => false; | {head; ...tail} => if head == name then true else member name tail; };
+
+allMembers :: List Text -> List Text -> Bool
+  = names found => match found { | {;} => true; | {head; ...tail} => member head names && allMembers names tail; };
+
+nameOf :: d.DataField -> Text
+  = field => field.name;
+
+closedRecord :: List Text -> Data -> Bool
+  = names data => match d.asRecord data {
+    | #ok { value = fields; } => allMembers names (l.map nameOf fields);
+    | #err { error = _; } => true;
+  };
+
+allRowsClosed :: List Data -> Bool
+  = items => match items { | {;} => true; | {head; ...tail} => closedRecord grantFields head && allRowsClosed tail; };
+
+closedRows :: Data -> Bool
+  = data => match d.field "grants" data {
+    | #ok { value = value; } => match d.asList value { | #ok { value = items; } => allRowsClosed items; | #err { error = _; } => true; };
+    | #err { error = _; } => true;
+  };
+
+closedLimits :: Data -> Bool
+  = data => match d.field "limits" data {
+    | #ok { value = value; } => closedRecord limitsFields value;
+    | #err { error = _; } => true;
+  };
+
+closedGrants :: Data -> Bool
+  = data => closedRecord grantsFields data && closedLimits data && closedRows data;
+
+-- A character set is checked by removing every allowed character: nothing may remain.
+withoutChars :: List Text -> Text -> Text
+  = allowed value => match allowed {
+    | {;} => value;
+    | {head; ...tail} => withoutChars tail (t.replace head "" value);
+  };
+
+nameChars :: List Text = { "a"; "b"; "c"; "d"; "e"; "f"; "g"; "h"; "i"; "j"; "k"; "l"; "m"; "n"; "o"; "p"; "q"; "r"; "s"; "t"; "u"; "v"; "w"; "x"; "y"; "z"; "0"; "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9"; "-"; "_"; };
+
+-- A key is ASCII letters, digits and `/ _ - : . ~`. The wildcards `*` and `$`, the query and fragment
+-- marks `?` and `#`, and everything outside ASCII are absent from the set, so each is refused. The demo's
+-- key and an `rmw_zenoh` key (`<domain>/<topic>/<type>/<hash>`) are inside it.
+keyChars :: List Text = { "a"; "b"; "c"; "d"; "e"; "f"; "g"; "h"; "i"; "j"; "k"; "l"; "m"; "n"; "o"; "p"; "q"; "r"; "s"; "t"; "u"; "v"; "w"; "x"; "y"; "z"; "A"; "B"; "C"; "D"; "E"; "F"; "G"; "H"; "I"; "J"; "K"; "L"; "M"; "N"; "O"; "P"; "Q"; "R"; "S"; "T"; "U"; "V"; "W"; "X"; "Y"; "Z"; "0"; "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9"; "/"; "_"; "-"; ":"; "."; "~"; };
+
+segmentsNonEmpty :: List Text -> Bool
+  = parts => match parts { | {;} => true; | {head; ...tail} => t.length head > 0 && segmentsNonEmpty tail; };
+
+holderOk :: Text -> Bool
+  = name => t.length name >= 1 && t.length name <= maxHolderNameBytes && t.length (withoutChars nameChars name) == 0;
+
+-- A key has no empty segment, so no leading or trailing slash and no `//`.
+keyOk :: Limits -> Text -> Bool
+  = lim key => t.length key >= 1 && t.length key <= lim.keyBytes
+    && t.length (withoutChars keyChars key) == 0
+    && segmentsNonEmpty (t.split "/" key);
+
+rowOk :: Limits -> Grant -> Bool
+  = lim g => holderOk g.holder && keyOk lim g.key && (g.publish || g.subscribe);
+
+allRowsOk :: Limits -> List Grant -> Bool
+  = lim items => match items { | {;} => true; | {head; ...tail} => rowOk lim head && allRowsOk lim tail; };
+
+rowCount :: List Grant -> Int
+  = items => match items { | {;} => 0; | { _; ...rest } => 1 + rowCount rest; };
+
+-- Two rows may not name the same holder and key: the rights of a pair are one row.
+hasPair :: Grant -> List Grant -> Bool
+  = g items => match items {
+    | {;} => false;
+    | {head; ...rest} => if head.holder == g.holder && head.key == g.key then true else hasPair g rest;
+  };
+
+pairsDistinct :: List Grant -> Bool
+  = items => match items { | {;} => true; | {head; ...rest} => if hasPair head rest then false else pairsDistinct rest; };
+
+-- The holders the rows name, once each.
+holderNames :: List Grant -> List Text -> List Text
+  = items seen => match items {
+    | {;} => seen;
+    | {head; ...rest} => if member head.holder seen then holderNames rest seen else holderNames rest (l.append seen (l.singleton head.holder));
+  };
+
+-- The keys some holder may subscribe to, once each. The service declares one subscription to its peer
+-- for each, so the session must be able to hold that many of its own.
+subscribeKeys :: List Grant -> List Text -> List Text
+  = items seen => match items {
+    | {;} => seen;
+    | {head; ...rest} => if head.subscribe && not (member head.key seen) then subscribeKeys rest (l.append seen (l.singleton head.key)) else subscribeKeys rest seen;
+  };
+
+nameCount :: List Text -> Int
+  = items => match items { | {;} => 0; | { _; ...rest } => 1 + nameCount rest; };
+
+-- The delivery rings: every holder has `ringSlots` slots of `sampleBytes` payload and their headers.
+ringBytes :: Limits -> Int
+  = lim => lim.holders * lim.ringSlots * (lim.sampleBytes + slotOverheadBytes);
+
+-- The memory the owning component declares for the service's fixed storage.
+requiredStack :: Limits -> Int -> Int
+  = lim rows => serviceFixedBytes + lim.holders * holderOverheadBytes + ringBytes lim + rows * (lim.keyBytes + rowOverheadBytes);
+
+limitsOk :: Limits -> Int -> Bool
+  = lim rows => lim.holders >= 1 && lim.holders <= maxCount
+    && lim.ringSlots >= 1 && lim.ringSlots <= maxCount
+    && lim.sampleBytes >= 1 && lim.sampleBytes <= maxSampleBytes
+    && lim.keyBytes >= 1 && lim.keyBytes <= maxKeyBytes
+    && lim.localSubscriptions >= 1 && lim.localSubscriptions <= maxCount
+    && lim.stackBytes >= requiredStack lim rows;
+
+-- Checked in an order that never evaluates a product on a count past its bound.
+grantsOk :: Grants -> Bool
+  = rec => rec.formatVersion == formatVersion
+    && rowCount rec.grants >= 1 && rowCount rec.grants <= maxCount
+    && rec.limits.holders >= 1 && rec.limits.holders <= maxCount
+    && rec.limits.ringSlots >= 1 && rec.limits.ringSlots <= maxCount
+    && rec.limits.sampleBytes >= 1 && rec.limits.sampleBytes <= maxSampleBytes
+    && rec.limits.keyBytes >= 1 && rec.limits.keyBytes <= maxKeyBytes
+    && limitsOk rec.limits (rowCount rec.grants)
+    && allRowsOk rec.limits rec.grants
+    && pairsDistinct rec.grants
+    && nameCount (holderNames rec.grants (l.empty ())) <= rec.limits.holders
+    && nameCount (subscribeKeys rec.grants (l.empty ())) <= rec.limits.localSubscriptions;
+
+unknownField :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a field the contract does not name"; }; };
+
+invalidGrants :: DecodeIssue
+  = { path = {;}; error = #custom { message = "a declaration the contract's arithmetic or rows refuse"; }; };
+
+decodeGrants :: Data -> Validation DecodeIssue Grants
+  = data => if closedGrants data then (match decode data {
+    | #valid { value = rec; } => if grantsOk rec then #valid { value = rec; } else r.invalidOne invalidGrants;
+    | #invalid { errors = es; } => #invalid { errors = es; };
+  }) else r.invalidOne unknownField;
+
+{
+  Limits =;
+  Grant =;
+  Grants =;
+  decodeGrants =;
+  formatVersion =;
+  maxKeyBytes =;
+  maxCount =;
+  maxSampleBytes =;
+  maxHolderNameBytes =;
+  slotOverheadBytes =;
+  rowOverheadBytes =;
+  holderOverheadBytes =;
+  serviceFixedBytes =;
+}

@@ -1,0 +1,50 @@
+{
+  formatVersion = 1;
+  name = "ros2-demo-subscriber-external";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "The sel4-zenoh-external subscriber: holds no network authority, the listener being a stock peer on the host, and exits at once.";
+  implementation = {
+    provider = "workspace";
+    binary = "ros2-demo-subscriber-external";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [];
+  interfaces = [];
+  dependencies = [];
+  communication = { semantic = "none"; qos = []; };
+  configuration = [];
+  lifecycle = [ "Initialize"; "Start"; "Running"; "Error"; ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "none";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the zenoh_external_check gate boots the sel4-zenoh-external composition";
+    expectedResult = "the component exits at once; the gate refuses a transcript holding this failure marker";
+    passFailCriteria = "[ros2-demo-subscriber] fail: ";
+    requiredTestEnvironment = "zenoh_external_check";
+  };
+}

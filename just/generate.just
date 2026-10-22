@@ -21,6 +21,12 @@ zenoh_stock_gen:
 zenoh_undeclare_gen:
     python3 scripts/generate/generate-zenoh-undeclare-bindings.py
 
+# Renders the constants of contracts/zenoh-service-grants/v1 as components/proto/src/zenoh_service_grants.rs.
+# The grants exam requires the committed file to equal this output byte for byte.
+[group('generate')]
+zenoh_service_grants_gen:
+    python3 scripts/generate/generate-zenoh-service-grants-bindings.py
+
 
 [group('generate')]
 block_gen:

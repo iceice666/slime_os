@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-b40-aliased";
-  baseClosureIdentity = "6c4b26aa95c561355f00ac1da1f822ea096c70e74ce40acc08546f970663e1d8";
+  baseClosureIdentity = "5e0f69b49b992ac4731d0e8e92135daf1269e64b96e6380cbd13dfb7c7c0866c";
   mutation = "aliased";
   expectedRefusal = "CSpaceMismatch";
 }
