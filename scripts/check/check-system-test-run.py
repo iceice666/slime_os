@@ -802,6 +802,32 @@ def check_arm_controls() -> int:
                 if other != arm and generator.extract(copy, other) != generator.extract(checker, other):
                     fail(f"arm control: {label} changed {other}'s facts")
             refused += 1
+        # Two arms share run_tcp_arm and differ by its driver_reset flag. A device under one branch reaches only
+        # the arm that runs that branch, and a test of another shape on the flag is refused.
+        shared = ("sel4-io-tcp", "sel4-io-driver-reset-in-flight")
+        rng = 'extra = ("-device", "virtio-rng-device")'
+        branch = "    if driver_reset:\n        try:\n            link_peer.qualify_driver_reset_ledger"
+        for label, text, gains in (
+            ("a device only under `if driver_reset`", mutated(branch, f"    if driver_reset:\n        {rng}\n        try:\n            link_peer.qualify_driver_reset_ledger"), shared[1]),
+            ("a device only under the `else` of driver_reset", mutated("    else:\n        check_tcp_ledger(", f"    else:\n        {rng}\n        check_tcp_ledger("), shared[0]),
+        ):
+            copy.write_text(text, encoding="utf-8")
+            with_device = {arm: generator.extract(copy, arm)["devices"] for arm in shared}
+            other = shared[0] if gains == shared[1] else shared[1]
+            if with_device[gains] != ["virtio-net-device", "virtio-rng-device"] or with_device[other] != ["virtio-net-device"]:
+                fail(f"arm control: {label} did not reach only {gains}: {with_device}")
+            refused += 1
+        copy.write_text(mutated(branch, branch.replace("if driver_reset:", "if driver_reset and mac:")), encoding="utf-8")
+        refuse("a test of another shape on driver_reset", lambda: generator.extract(copy, shared[0]))
+        copy.write_text(
+            mutated("    chains = DRIVER_RESET_CHAINS if driver_reset else TCP_CHAINS\n",
+                    '    chains = DRIVER_RESET_CHAINS if driver_reset else ("-device", "virtio-rng-device")\n'),
+            encoding="utf-8",
+        )
+        refuse("a device inside a conditional expression on driver_reset", lambda: generator.extract(copy, shared[0]))
+        copy.write_text(source, encoding="utf-8")
+        with patch.dict(generator.ARM_FLAGS, {NETWORK_CHECKER: {"sel4-io-tcp": {"not_a_parameter": True}}}):
+            refuse("a flag that no function the arm runs takes", lambda: generator.extract(copy, "sel4-io-tcp"))
         # An arm that runs inline in main() must attach nothing, so a device added there is refused.
         copy.write_text(mutated('    if arguments.arm in ("lifetime", "all"):\n',
                                 '    if arguments.arm in ("lifetime", "all"):\n        launch = ("-device", "virtio-net-device")\n'),

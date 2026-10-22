@@ -140,6 +140,17 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 # share the checker's timeout and failure markers. For such a checker, drives, devices and faults are read
 # from the functions an arm runs, found by following calls between the checker's own functions. An arm whose
 # code sits inline in `main()` has no entry function, and `main()` must then pass no QEMU arguments at all.
+#
+# Two arms can run the same function with a different flag, as `run_tcp_arm(driver_reset=...)` does. ARM_FLAGS
+# gives the flag values an arm runs with. Extraction drops the branch of an `if flag:` or `if not flag:` that
+# the value rules out, in the function that takes the flag. A test on the flag of any other shape is refused.
+ARM_FLAGS: dict[str, dict[str, dict[str, bool]]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-tcp": {"driver_reset": False},
+        "sel4-io-driver-reset-in-flight": {"driver_reset": True},
+    },
+}
+
 ARM_ENTRY_FUNCTIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "check-sel4-io-network-plane.py": {
         "sel4-io-network": ("run_authority_arm",),
@@ -349,14 +360,60 @@ def closure_identity_for(name: str) -> str:
 
 
 QEMU_ARGUMENT = re.compile(r'"-device"|"-drive"|"-netdev"|additional_arguments')
+DEVICE_TOKEN = re.compile(r'"-device"|"-drive"|"-netdev"|additional_arguments|virtio-[a-z]+-device|usb-kbd')
+
+
+def _flag_test(test: ast.expr, flag: str) -> bool | None:
+    """Whether `test` is `flag` (True), `not flag` (False), or neither (None)."""
+    if isinstance(test, ast.Name) and test.id == flag:
+        return True
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) and isinstance(test.operand, ast.Name) and test.operand.id == flag:
+        return False
+    return None
+
+
+def _mentions(node: ast.AST, flag: str) -> bool:
+    return any(isinstance(inner, ast.Name) and inner.id == flag for inner in ast.walk(node))
+
+
+def _statements_span(statements: list[ast.stmt]) -> range:
+    return range(statements[0].lineno, statements[-1].end_lineno + 1) if statements else range(0)
+
+
+def pruned_lines(function: ast.FunctionDef, text: str, flags: dict[str, bool], where: str) -> set[int]:
+    """The source lines of `function` that an arm run with `flags` never executes.
+
+    Only a branch on a parameter of the function itself, written as `if flag:` or `if not flag:`, is pruned.
+    Any other test that mentions the flag, and a conditional expression on it that holds a device or QEMU
+    argument, cannot be scoped to an arm, so extraction refuses it and leaves nothing unrecorded.
+    """
+    parameters = {argument.arg for argument in (*function.args.args, *function.args.kwonlyargs)}
+    skipped: set[int] = set()
+    for flag, value in flags.items():
+        if flag not in parameters:
+            continue
+        for node in ast.walk(function):
+            if isinstance(node, ast.If) and _mentions(node.test, flag):
+                selected = _flag_test(node.test, flag)
+                if selected is None:
+                    fail(f"{where}: the test on {flag} at line {node.lineno} is not `{flag}` or `not {flag}`, so the arm cannot be scoped")
+                skipped.update(_statements_span(node.orelse if selected == value else node.body))
+            elif isinstance(node, ast.IfExp) and _mentions(node.test, flag):
+                held = DEVICE_TOKEN.search(ast.get_source_segment(text, node.body) or "") or DEVICE_TOKEN.search(
+                    ast.get_source_segment(text, node.orelse) or ""
+                )
+                if held:
+                    fail(f"{where}: a conditional expression on {flag} at line {node.lineno} holds a QEMU argument, so the arm cannot be scoped")
+    return skipped
 
 
 def arm_source(path: _Path, run: str, text: str) -> str:
     """The source an arm's drives, devices and faults are read from.
 
     A checker with no entry table is read whole. For a checker with one, the source is the functions the arm
-    runs and the checker's own functions they call. An arm declared with no entry function must find no QEMU
-    argument anywhere in `main()`, so a device added to an inline arm cannot go unrecorded.
+    runs and the checker's own functions they call, less the branches that a flag in `ARM_FLAGS` rules out.
+    An arm declared with no entry function must find no QEMU argument anywhere in `main()`, so a device added
+    to an inline arm cannot go unrecorded.
     """
     arms = ARM_ENTRY_FUNCTIONS.get(path.name)
     if arms is None:
@@ -367,22 +424,42 @@ def arm_source(path: _Path, run: str, text: str) -> str:
     missing = [name for name in arms[run] if name not in functions]
     if missing:
         fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
+    flags = ARM_FLAGS.get(path.name, {}).get(run, {})
     if not arms[run]:
+        if flags:
+            fail(f"{path.name}: {run} has no entry function, so it cannot have flags")
         main = functions.get("main")
         if main is None or QEMU_ARGUMENT.search(ast.get_source_segment(text, main) or ""):
             fail(f"{path.name}: {run} is declared to attach nothing, but main() passes QEMU arguments or is absent")
         return ""
+    lines = text.splitlines()
     seen: set[str] = set()
+    skipped: dict[str, set[int]] = {}
     pending = list(arms[run])
     while pending:
         name = pending.pop()
         if name in seen:
             continue
         seen.add(name)
+        skipped[name] = pruned_lines(functions[name], text, flags, f"{path.name}: {run}")
         for node in ast.walk(functions[name]):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in functions:
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in functions
+                and node.lineno not in skipped[name]
+            ):
                 pending.append(node.func.id)
-    return "\n".join(ast.get_source_segment(text, functions[name]) or "" for name in sorted(seen))
+    unused = sorted(flag for flag in flags if not any(flag in {a.arg for a in (*functions[n].args.args, *functions[n].args.kwonlyargs)} for n in seen))
+    if unused:
+        fail(f"{path.name}: {run} sets flag(s) {unused} that no function it runs takes as a parameter")
+    return "\n".join(
+        "\n".join(
+            line for number, line in enumerate(lines[node.lineno - 1 : node.end_lineno], node.lineno) if number not in skipped[name]
+        )
+        for name in sorted(seen)
+        for node in (functions[name],)
+    )
 
 
 def extract(path: _Path, run: str | None = None) -> dict:
