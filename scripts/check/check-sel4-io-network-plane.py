@@ -22,6 +22,12 @@ The tcp-options arm boots `sel4-io-tcp-options` behind a peer
 (`scripts/lib/tcp_options_peer.py`) that holds acknowledgments, drops a
 segment, answers keep-alives and falls mute so each binding's declared Nagle,
 keep-alive, hop limit and idle timeout shows on the wire; it is also explicit.
+The tcp-buffers arm boots `sel4-io-tcp-buffers` behind a peer
+(`scripts/lib/tcp_buffers_peer.py`) that withholds acknowledgments, streams
+into a stalled receiver and acknowledges a long stream at once, so each
+holder's declared socket buffers show on the wire; before it boots, it holds
+the generation builder to the buffer sizes network-application/v4 admits and
+refuses. It is also explicit.
 The net arm boots `sel4-net`, the product shell beside the network stack, and
 types seven Slisp lines into the resident shell one at a time: a spawned
 numeric fetch judged against the controlled HTTP peer, and refusals that must
@@ -54,6 +60,7 @@ import link_peer  # noqa: E402
 import tcp_impairment_peer  # noqa: E402
 import tcp_listener_peer  # noqa: E402
 import tcp_options_peer  # noqa: E402
+import tcp_buffers_peer  # noqa: E402
 import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
@@ -89,6 +96,11 @@ OPTIONS_FIXTURE = COMPOSITIONS / "sel4-io-tcp-options.zti"
 OPTIONS_PROBE = "io-tcp-options-probe"
 OPTIONS_HOLDERS = {"baseline": "options-baseline", "tuned": "options-tuned"}
 OPTIONS_GENERATION = 163
+BUFFERS_CLOSURE = "sel4-io-tcp-buffers"
+BUFFERS_FIXTURE = COMPOSITIONS / "sel4-io-tcp-buffers.zti"
+BUFFERS_SYSTEM = ROOT / "contracts" / "system-spec" / "v1" / "systems" / "sel4-io-tcp-buffers.zti"
+BUFFERS_PROBE = "io-tcp-buffers-probe"
+BUFFERS_GENERATION = 170
 NET_CLOSURE = "sel4-net"
 NET_FIXTURE = COMPOSITIONS / "sel4-net.zti"
 NET_GENERATION = 164
@@ -450,6 +462,52 @@ OPTIONS_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("options health", (rf"SLIME_GRAPH HEALTHY generation={OPTIONS_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
 )
 
+# The socket-buffer arm. The service states each holder's declared buffers and
+# the external pool they size, and reports every connection it opens; the
+# large holder finishes before the baseline holder starts, and each reports
+# its scenarios in program order. The wire evidence and the per-connection
+# reports are judged by the peer's qualifier.
+_BP = tcp_buffers_peer
+
+
+def _buffers_probe(holder: str) -> tuple[str, ...]:
+    rx = len(_BP.RX_STREAMS[holder])
+    return (
+        rf"\[io-tcp-buffers-probe\] role={holder} attached=1",
+        rf"\[io-tcp-buffers-probe\] role={holder} scenario=tx-flight sent={_BP.TX_STREAM_BYTES} done=1",
+        rf"\[io-tcp-buffers-probe\] role={holder} scenario=rx-window stalled_ms={_BP.RECEIVE_STALL_MS} received={rx} identical=1",
+        rf"\[io-tcp-buffers-probe\] role={holder} scenario=throughput sent={_BP.THROUGHPUT_BYTES} done=1",
+        rf"\[io-tcp-buffers-probe\] role={holder} scenarios=3 shutdown=1",
+    )
+
+
+def _buffers_declaration(holder: str) -> str:
+    declared = _BP.HOLDERS[holder]
+    return rf"\[network-service\] tcp buffers holder={_BP.HOLDER_NAMES[holder]} rx_bytes={declared.rx_bytes} tx_bytes={declared.tx_bytes}"
+
+
+BUFFERS_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("buffers admission", (rf"SLIME_ROOT generation admitted number={BUFFERS_GENERATION} executables=[0-9]+ instances=[0-9]+ grants=[0-9]+ ",)),
+    # The service names rows in holder-identity order, so each declaration is its own chain.
+    ("buffers large declaration", (_buffers_declaration("large"),)),
+    ("buffers baseline declaration", (_buffers_declaration("baseline"),)),
+    ("buffers pool", (
+        rf"\[network-service\] tcp pool backend=external sockets={_BP.POOL_SOCKETS} rx_bytes={_BP.LARGE.rx_bytes} tx_bytes={_BP.LARGE.tx_bytes}",
+    )),
+    ("buffers service", (
+        r"\[network-service\] application connection handles live=0",
+        r"\[network-service\] link released",
+    )),
+    ("buffers driver", (
+        r"\[virtio-net-driver\] negotiated legacy features=0 queues rx=16 tx=16 epoch=1",
+        r"\[virtio-net-driver\] rx drained=[0-9]+ replenished=[0-9]+ stalled=0 tx-stalled=0 device-refused=0",
+    )),
+    ("buffers large", _buffers_probe("large")),
+    ("buffers baseline", _buffers_probe("baseline")),
+    ("buffers holder order", (_buffers_probe("large")[-1], _buffers_probe("baseline")[1])),
+    ("buffers health", (rf"SLIME_GRAPH HEALTHY generation={BUFFERS_GENERATION} required=[0-9]+ live=0 completed=[0-9]+ failed=0",)),
+)
+
 # The shell arm. Each case is one line typed into the resident Slisp shell,
 # sent only after the previous case's chains and settle marker have all
 # matched. A case's chains are ordered within themselves but not against each
@@ -565,7 +623,7 @@ ZENOH_CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 # Every arm participates in the shared missing/reordered/failure controls.
-CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS + OPTIONS_CHAINS + NET_CHAINS + ZENOH_CHAINS
+CHAINS = AUTHORITY_CHAINS + TCP_CHAINS + LOCAL_CHAINS + LIFETIME_CHAINS + SERVICE_FAULT_CHAINS + DRIVER_RESET_CHAINS + HTTP_CHAINS + IMPAIRMENT_CHAINS + LISTENER_CHAINS + OPTIONS_CHAINS + BUFFERS_CHAINS + NET_CHAINS + ZENOH_CHAINS
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_GRAPH FAIL",
@@ -577,6 +635,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[io-tcp-impairment-probe\] fail: ",
     r"\[io-tcp-listener-probe\] fail: ",
     r"\[io-tcp-options-probe\] fail: ",
+    r"\[io-tcp-buffers-probe\] fail: ",
     r"\[io-local-network-probe\] fail: ",
     r"\[ros2-demo-publisher\] fail: ",
     r"\[ros2-demo-subscriber\] fail: ",
@@ -910,6 +969,68 @@ def run_options_arm(image: Path, mac: str, retry_limits: dict[int, int], transcr
         fail(f"options wire evidence: {error}")
     for summary in summaries:
         print(f"[options] {summary}")
+
+
+def check_buffers_fixture() -> tuple[str, dict[int, int]]:
+    """Return the interface MAC and per-port retry limits once the composition declares exactly the buffers the peer scripts."""
+    if not BUFFERS_FIXTURE.is_file():
+        fail(f"{BUFFERS_FIXTURE.relative_to(ROOT)} does not exist; the socket-buffer composition has not landed")
+    text = BUFFERS_FIXTURE.read_text(encoding="utf-8")
+    macs = MAC_DECLARATION.findall(text)
+    if len(macs) != 1:
+        fail(f"buffers fixture declares {len(macs)} interface MACs, expected exactly one")
+    for pattern in (rf"generation\s*=\s*{BUFFERS_GENERATION};", r"networkInterfaces\s*=\s*\[", r'address\s*=\s*"10\.0\.0\.1"', r'name\s*=\s*"network-service"', r'name\s*=\s*"virtio-net-driver"', rf'executable\s*=\s*"{BUFFERS_PROBE}"', *(rf'name\s*=\s*"{holder}"' for holder in tcp_buffers_peer.HOLDER_NAMES.values())):
+        if re.search(pattern, text) is None:
+            fail(f"buffers fixture is missing {pattern!r}")
+    applications = {row.get("holder", ""): row for row in fixture_destinations(text, "networkApplications")}
+    try:
+        tcp_buffers_peer.judge_application_rows(applications)
+        limits = tcp_buffers_peer.judge_destination_rows(fixture_destinations(text))
+    except ValueError as error:
+        fail(f"buffers composition: {error}")
+    manifest = NETWORK_SERVICE_MANIFEST.read_text(encoding="utf-8")
+    if "socket-tcp-reno" not in manifest or "socket-tcp-cubic" in manifest:
+        fail("the network service must enable exactly socket-tcp-reno and not socket-tcp-cubic")
+    return macs[0], limits
+
+
+def check_buffers_builder() -> tuple[int, int]:
+    """Hold the generation builder to the buffer sizes network-application/v4 admits and refuses, on the derived rows."""
+    from harness import load_script
+    from system_spec import SystemSpecError, compile_system, derive_manifest
+
+    try:
+        manifest = derive_manifest(compile_system(BUFFERS_SYSTEM))
+    except SystemSpecError as error:
+        fail(f"{BUFFERS_SYSTEM.relative_to(ROOT)}: {error}")
+    builder = load_script("buffers_arm_builder", "build/build-generation.py")
+    try:
+        builder.build_network_applications(manifest)
+        return tcp_buffers_peer.judge_builder(builder.build_network_applications, manifest)
+    except ValueError as error:
+        fail(f"buffers builder verdicts: {error}")
+    except SystemExit as error:
+        fail(f"the builder refused the declared buffers composition: {error}")
+
+
+def run_buffers_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
+    peer = tcp_buffers_peer.BuffersPeer()
+    transcript = run_with_peer(image, mac, tcp_buffers_peer.serve, peer, BUFFERS_CHAINS)
+    write_wire_transcript(transcript_path, transcript, peer.ledger.summary(), (("received", peer.ledger.received), ("sent", peer.ledger.sent)))
+    try:
+        match_marker_contract(transcript, BUFFERS_CHAINS, FAILURE_MARKERS, fail)
+    except SystemExit:
+        print(transcript)
+        raise
+    print(f"[buffers-peer] {peer.ledger.summary()}")
+    try:
+        summaries, rates = tcp_buffers_peer.qualify_buffers_ledger(peer.ledger, bytes.fromhex(mac.replace(":", "")), retry_limits, tcp_buffers_peer.open_reports(transcript))
+    except ValueError as error:
+        fail(f"buffers wire evidence: {error}")
+    for summary in summaries:
+        print(f"[buffers] {summary}")
+    for rate in rates:
+        print(rate.line())
 
 
 def run_listener_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
@@ -1375,7 +1496,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "tcp-buffers", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
     parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their mutated evidence, without QEMU or a listener")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
@@ -1433,6 +1554,17 @@ def main() -> None:
             "seL4 I/O tcp options check: per-binding Nagle, keep-alive, hop limit and idle timeout declared "
             "in generation data and observed on the wire, Reno selected and stated, a client mutation refused, "
             "and both mute connections reclaimed by typed timeout proved"
+        )
+    if arguments.arm == "tcp-buffers":
+        mac, limits = check_buffers_fixture()
+        accepted, refused = check_buffers_builder()
+        print(f"[buffers] builder accepted={accepted} refused={refused}")
+        run_buffers_arm(build_image(BUFFERS_CLOSURE), mac, limits, arguments.transcript)
+        print(
+            "seL4 I/O tcp buffers check: per-holder receive and transmit buffers declared in generation data, "
+            "bounded by the builder, applied per connection and observed on the wire as the transmit in-flight "
+            "limit, the SYN window scale and the zero-window point, with socket reuse across holders and the "
+            "throughput stream recorded proved"
         )
     if arguments.arm == "net":
         mac = check_net_fixture()
