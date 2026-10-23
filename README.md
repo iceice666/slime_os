@@ -110,7 +110,7 @@ Exploratory directions are registered in [`docs/directions/`](docs/directions/RE
 ## Plan and work items
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for GitHub intake, planning-before-implementation,
-PR linking, and evidence-based completion. See [HUMAN.md](HUMAN.md) for the
+naming the implemented item, and evidence-based completion. See [HUMAN.md](HUMAN.md) for the
 decisions the people on the project own and how to read an agent-written PR.
 
 Work-item identity, state, hierarchy, dependencies, and observed closure evidence live in `.tasks/items/`, one Markdown file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque). Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: optional, mutable, and never resolved through by a checker or dependency edge.

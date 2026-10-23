@@ -67,8 +67,8 @@ refuses a post-cutoff item that carries no devloop record.
    are there; `just tasks_next` lists what is actionable.
 
 3. **Start and implement.** `myque start <ITEM>`, then the implementation PR,
-   which links the landed UUID with the pinned `myque-gh pr link` invocation in
-   the PR template. Merging does not complete anything.
+   which names the landed UUID in its description. Merging does not complete
+   anything.
 
 4. **Close on what you observed.** Record the exact commands, results, scope
    and limits in one unique `## Closure evidence` section, then:
@@ -374,17 +374,13 @@ partially published branch/PR before retrying; never prune history automatically
   `just devloop_diagnostics_controls` qualifies only the judge's refusals,
   never the repair; neither command records evidence on a real item.
 
-## Projection
+## No GitHub projection
 
-`myque-gh` projects canonical items into GitHub Issues from `main`. A
-spec-driven description is rendered by devloop into readable Markdown — never
-published as stored requirements data — and a renderer that fails refuses the
-run before any remote change. Retired items keep resolving for relationships
-and pull-request links, and say that their body is available only from retained
-history.
-
-Never use GitHub auto-close keywords against projected Issues, and never
-hand-edit `myque:*` markers or the `myque-gh` PR trailer.
+Work items are not projected into GitHub Issues or milestones
+([decision](../decisions/no-github-issue-projection.md)). `.tasks/` is the only
+work-item state. `just devloop render <UUID>` prints a spec-driven item as
+readable Markdown, and `just tasks_list` and `just tasks_graph` render the
+store. Never use GitHub auto-close keywords to complete work.
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) owns the full PR workflow.
 
 ## Next

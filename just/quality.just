@@ -123,6 +123,16 @@ pr_scope_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# Work items are not projected into GitHub Issues: refuses while the projection
+# workflow exists, policy names it, a workflow or script runs `myque-gh apply`,
+# or contributor guidance still asks for `myque-gh pr link`.
+[group('quality')]
+issue_projection_retired_check:
+    @if test -e .github/workflows/myque-project.yml; then echo '.github/workflows/myque-project.yml still exists' >&2; exit 1; fi
+    @if grep -q 'myque-project.yml' .devloop/policy.json; then echo '.devloop/policy.json still names myque-project.yml' >&2; exit 1; fi
+    @if grep -rlq 'myque-gh apply' .github scripts; then echo 'a workflow or script still runs myque-gh apply' >&2; exit 1; fi
+    @if grep -rlq 'myque-gh pr link\|myque-gh/[0-9a-f]*#myque-gh -- pr link' CONTRIBUTING.md .github docs/getting-started .agents; then echo 'contributor guidance still asks for myque-gh pr link' >&2; exit 1; fi
+
 # End-to-end diagnostics from a failing gate through the pinned CLI, including
 # retained output, cached failure, bounds and refusals. Explicit qualification.
 [group('quality')]

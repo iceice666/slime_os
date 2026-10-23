@@ -3,9 +3,9 @@
 ## The short version
 
 Slime OS uses GitHub for collaboration, but canonical project state lives in
-MyQue under `.tasks/items/`. Human-created Issues are intake for bugs and
-proposals; bot-created Issues carrying MyQue identity markers are projections
-of accepted canonical work.
+MyQue under `.tasks/items/`. GitHub Issues are intake for bugs and proposals.
+Work items are not projected into Issues or milestones; see
+[the decision](docs/decisions/no-github-issue-projection.md).
 
 **For a product or grader change, first land a dedicated work-item PR. Only
 after the item exists on `main` may you open an implementation PR.** Do not
@@ -35,43 +35,23 @@ Open a [GitHub Issue](https://github.com/iceice666/slime_os/issues) for a bug,
 proposal, question, or discussion. For bugs, include the target, revision,
 reproduction steps, expected result, and observed output when available.
 Ordinary reporters do **not** need to install MyQue or edit `.tasks`.
-Accepted work is later represented as a canonical MyQue item.
+Accepted work is later represented as a canonical MyQue item. The Issue does
+not track that item; the item's file under `.tasks/` is its only state.
 
-### Bot Issues are projections
+### Bot Issues are retired projections
 
-An Issue created by `github-actions[bot]` carrying both markers is managed:
+Issues created by `github-actions[bot]` whose body begins with
+`<!-- myque:id=<UUID> -->` came from the retired projection. They are closed
+and no longer track their item. Read the item under `.tasks/` instead.
 
-```html
-<!-- myque:id=<UUID> -->
-<!-- myque:projection=github/v1 -->
-```
-
-Comment, discuss, volunteer, and add ordinary human-owned labels there.
-Leave **title, body, open/closed state, `myque:*` labels, parent/sub-issue
-relationships, and milestone assignment** to the projector. Propose changes to
-canonical state through MyQue instead; do not edit the identity markers.
-
-### Native milestones are projections
-
-Projected `kind: milestone` items also have a managed GitHub milestone. Leave
-its **title, description, and open/closed state** to the projector; do not
-pre-create same-title milestones, which cause a title conflict. Names use the
-canonical body's title without the optional human key prefix.
-
-An Issue belongs to its nearest strict `kind: milestone` ancestor in the
-canonical `parent` chain. A milestone's own Issue is not a member of itself;
-it can belong to an ancestor milestone. Epics do not create native milestones,
-and dependencies, tags, and body checklists do not create membership. There is
-no new `milestone:` front-matter field. Canonical terminal state closes the
-native milestone even when descendants remain unfinished.
+### Work-item hierarchy
 
 Create children only for independently trackable work with observable exit
 conditions. Admit one with `just devloop admit spec.zti --title "Describe the
 work" --kind task`, then `myque parent <CHILD_UUID> <PARENT_UUID>` and
-`just tasks_check`; follow the planning-PR process below. Do not change kinds or parent relationships merely
-to populate a progress bar. Browse the repository's
-[Milestones page](https://github.com/iceice666/slime_os/milestones) or filter
-Issues by milestone. Until real child work exists, a milestone may be empty.
+`just tasks_check`; follow the planning-PR process below. Do not change kinds
+or parent relationships merely to populate a progress bar. `just tasks_graph`
+and `just tasks_list` render the hierarchy from the store.
 
 ### MyQue is canonical
 
@@ -254,7 +234,7 @@ was unchanged. Missing or malformed revision policies refuse classification.
 | **derived** | regenerated closure records under `contracts/system-image-closure/v2/{closures,negative}/` and `contracts/system-test-run/v1/runs/` | mirrors whatever else changed; never decides |
 | **other** | `.github/` paths outside `codePaths`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
 
-The CI, MyQue projection, closeout and retirement workflow files are explicitly
+The CI, closeout and retirement workflow files are explicitly
 in `codePaths`: their contents affect shared-tool cache qualification, so edits
 stale evidence and follow the product-classified planning-first rule. Other
 workflow files remain process changes unless explicitly covered.
@@ -283,31 +263,13 @@ Use the existing [change](.github/PULL_REQUEST_TEMPLATE/change.md) or
 what changed, the claim, risks/invariants, review surface, exact verification,
 evidence class, target or image identity when relevant, known limits, and
 canonical related work. Link existing evidence instead of duplicating it.
-
-### Machine-linking with myque-gh
-
-After opening the implementation PR, run **`myque-gh pr link` using the pinned
-invocation in the PR template's source comment**. It takes the PR and item,
-with `--store . --repo iceice666/slime_os --ref HEAD --apply`; authenticated
-`gh` and permission to edit the PR body are required. Use the canonical UUID
-for durable references. The human-readable `Related` section alone is not a
-machine association.
-
-The tool manages this trailer; **do not hand-edit it**:
-
-```html
-<!-- myque:pr-links=github/v1 -->
-<!-- myque:implements=<UUID> -->
-<!-- myque:pr-links:end -->
-```
-
-Projection refreshes automatically; workflow dispatch is not a contributor step.
+Name the implemented item by its canonical UUID in the PR description.
 
 ### No GitHub auto-close
 
-Do not use `Closes #123`, `Fixes #123`, or `Resolves #123` against managed MyQue
-projection Issues. GitHub does not own their completion. Explicit PR-to-work
-association belongs to `myque-gh`.
+Do not use `Closes #123`, `Fixes #123`, or `Resolves #123` to complete work.
+GitHub does not own work-item completion; the item's devloop record or
+`## Closure evidence` section does.
 
 ### Verification
 
@@ -350,8 +312,7 @@ mandatory acceptance obligations against recorded evidence and then transitions
 the item under the revision it checked. A direct `myque close` bypasses that
 boundary; use it only for items that carry no `devloop` record.
 
-Commit the canonical `.tasks` transition. After it reaches `main`, `myque-gh`
-subsequently closes the projected Issue. Leave unfinished work unfinished.
+Commit the canonical `.tasks` transition. Leave unfinished work unfinished.
 
 ### Automated closeout PRs
 
@@ -461,7 +422,7 @@ plain pinned toolchain and `Swatinem/rust-cache`.
 
 Work-item CI uses `nix develop .#projection`, including its trusted retirement
 verifier. It shares the architecture-qualified `projection-v2-*` Nix cache with
-projection, closeout and retirement; all four keys include the flake and local
+closeout and retirement; all three keys include the flake and local
 devloop/Zutai derivations. Main push CI can populate the shared tool cache even
 when another consumer's trigger only permits restores. Legacy `myque-*` entries
 are not deleted by the workflows: retirement requires a measured replacement,
@@ -479,11 +440,11 @@ seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in
 `sel4/pins.toml` and enforced by `sel4_pin_check`. QEMU runs without
 hardware-device access.
 
-SDK publication (`publish-sdk.yml`, on the dedicated signing runner) and
-MyQue's issue projection (`myque-project.yml`) stay separate from ordinary CI:
-they rely on GitHub-specific permissions, events, and secrets. The projector
-reacts to this workflow's completion and reconciles on a schedule. SDK
-publication, signing keys, and issue history retain their separate owners.
+SDK publication (`publish-sdk.yml`, on the dedicated signing runner) stays
+separate from ordinary CI: it relies on GitHub-specific permissions, events,
+and secrets. SDK publication and signing keys retain their separate owners.
+The `.#projection` shell keeps its name for the cache key; it no longer
+projects anything.
 
 ## Further reading
 

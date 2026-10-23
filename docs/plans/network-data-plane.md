@@ -441,6 +441,68 @@ The gate observes external connections only; the loopback backend applies the
 same rows through the shared engine, and its host tests are implementation
 evidence, not this gate. No physical NIC is qualified.
 
+### Declared TCP socket buffer sizes
+
+Work item `01a1638d-23a4-7f36-ae0e-7bf1f522f40f` lets each application row
+declare its socket buffers. It is not implemented: every socket still has the
+2048-byte buffers above. `just io_tcp_buffers_check` holds the wire to the
+declarations below and fails until the `sel4-io-tcp-buffers` composition lands.
+
+**Why.** The transmit buffer bounds the bytes a connection may have
+unacknowledged, so one connection moves at most 2048 bytes per round trip.
+A 4.95 MB/s stream needs a round trip below 0.41 ms at that size.
+
+**Declaration.** `network-application/v4` keeps every v3 field and carves two
+fields from the reserved tail, so `entryBytes` stays 320. The builder and the
+decoder refuse any other value.
+
+| Field | Wire | Bound |
+| --- | --- | --- |
+| `rxBufferBytes` | `rx_buffer_bytes : u32` | a power of two from 2048 to 65536 |
+| `txBufferBytes` | `tx_buffer_bytes : u32` | a power of two from 2048 to 65536 |
+
+Every existing row declares 2048 for both. The service sizes each connection
+from the row that opens or accepts it. It allocates four sockets per backend
+at the largest declared receive and transmit sizes of that backend's rows.
+At activation it states each row and each backend's pool, and it reports every
+connection it opens:
+
+```text
+[network-service] tcp buffers holder=<holder> rx_bytes=<n> tx_bytes=<n>
+[network-service] tcp pool backend=external sockets=4 rx_bytes=<n> tx_bytes=<n>
+[network-service] tcp open holder=<holder> socket=<index> local_port=<port> rx_bytes=<n> tx_bytes=<n>
+```
+
+| Declared value | Qualified composition |
+| --- | --- |
+| `buffers-large` | receive 65536, transmit 65536, Nagle on |
+| `buffers-baseline` | receive 2048, transmit 2048, Nagle on |
+| Peer | `10.0.0.2`, MSS 1024, window 131072 (field 32768, scale shift 2) |
+
+**Wire policy and qualification.** Composition `sel4-io-tcp-buffers`
+(generation 170) runs `io-tcp-buffers-probe` as the two holders above. Each
+holder holds one exact `10.0.0.2` destination per scenario port. The large
+holder runs first, and the baseline holder starts after its last connection
+closes. The frame peer (`scripts/lib/tcp_buffers_peer.py`) answers each port on
+a script. The 1024-byte MSS divides both buffers, so Nagle cannot hold a short
+tail below either limit.
+
+| Ports (large, baseline) | Peer script | Required wire effect |
+| --- | --- | --- |
+| 4300, 4310 | acknowledges every segment until it holds 131072 bytes, then withholds acknowledgments for 600 ms | the guest has exactly its transmit buffer unacknowledged at the end of the hold, never more; the 262144-byte stream completes |
+| 4301, 4311 | streams twice the receive buffer while the probe does not read for 2000 ms, probes a zero window every 500 ms | the SYN carries window 65535 and scale shift 1 (large) or 2048 and shift 0 (baseline); the first zero window acknowledges exactly the receive buffer |
+| 4302, 4312 | acknowledges every segment at once | the 1048576-byte stream completes; the arm prints the elapsed time and judges no rate |
+
+The ramp grows Reno's congestion window, which starts at 2048 bytes and gains
+every acknowledged byte in slow start, past the large buffer before the hold.
+The hold ends inside smoltcp's one-second retransmission floor. The arm pairs
+every `tcp open` line with one wire connection by its local port. It requires
+at least one baseline connection on a socket a large connection used. Before
+it boots, the arm passes the derived rows with each admitted and refused value
+to the builder. `check-link-peer.py` runs the script against a model guest
+under both sizes and refuses the corrupted-evidence and composition variants
+first.
+
 ## smoltcp support matrix
 
 Pinned release: smoltcp `0.13.0`, crate checksum `ac729b0a77bd092a3f06ddaddc59fe0d67f48ba0de45a9abe707c2842c7f8767`.

@@ -102,6 +102,7 @@ For how the planes work and how to add one, read
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
+| `just issue_projection_retired_check` | Work items are not projected into GitHub Issues: refuses while `myque-project.yml` exists, policy names it, a workflow or script runs `myque-gh apply`, or contributor guidance asks for `myque-gh pr link`; fails until the projection retirement lands. |
 | `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
 | `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |
 | `just devloop_diagnostics_controls` | The diagnostics judge's corrupted-result and actual-CLI transport controls; passing controls do not qualify the repair. |
@@ -216,6 +217,7 @@ For how the planes work and how to add one, read
 | `just io_tcp_impairment_check` | Scripted reordering, loss, a silent peer and zero windows held to the declared TCP bounds, judged from the wire. |
 | `just io_tcp_listener_check` | One exact external listener: admitted accept, silent and reset refusals, half-close, simultaneous close and unread/unsent close judged from the wire. |
 | `just io_tcp_options_check` | Per-binding Nagle, keep-alive, hop limit and idle timeout declared in generation data and judged from the wire, with Reno selected; fails until the `sel4-io-tcp-options` composition lands. |
+| `just io_tcp_buffers_check` | Per-holder TCP receive and transmit buffers declared in generation data: builder bounds, the transmit in-flight limit, SYN window scale, zero-window point and socket reuse judged from the wire, throughput recorded; fails until the `sel4-io-tcp-buffers` composition lands. |
 | `just sel4_net_check` | The resident Slisp shell spawns http-get with a string argument on `sel4-net`; the body is judged against the controlled peer and refusals against the wire, with the spawn, product-graph, Slisp and host regressions. |
 | `just sel4_entropy_check` | Entropy authority on `sel4-entropy`: seeded draws judged against the host HMAC-DRBG, hardware draws distinct and fail-closed without virtio-rng, budgets and request sizes refused. |
 | `just io_tcp_host_check` | Host tests of the production TCP engine against real host smoltcp peers. |

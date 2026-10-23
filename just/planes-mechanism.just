@@ -34,6 +34,15 @@ io_tcp_listener_check: sel4_pin_check link_peer_check
 io_tcp_options_check: sel4_pin_check link_peer_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-options
 
+# Per-holder TCP receive and transmit buffers declared in generation data:
+# builder bounds, the transmit in-flight limit, SYN window scale, zero-window
+# point and socket reuse judged from the wire, throughput recorded. The 2048-byte
+# impairment and options exams run first as the regression. Explicit, never
+# part of `all`.
+[group('planes / mechanism')]
+io_tcp_buffers_check: sel4_pin_check link_peer_check io_tcp_impairment_check io_tcp_options_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-buffers
+
 # The product shell beside the network stack: seven Slisp lines typed one at a
 # time into the resident shell, a spawned numeric fetch judged against the
 # controlled peer, and refusals that leave no forbidden packet on the wire, with
