@@ -1067,6 +1067,37 @@ def check_arm_controls() -> int:
         refused_edit("the name of a site held in a string", mutated(tcp_head, tcp_head + "    held = 'run_with_peer'\n"), "sel4-io-tcp")
         refused_edit("run_plane imported a second time", mutated(tcp_head, tcp_head + "    from sel4_plane import run_plane\n"), "sel4-io-tcp")
 
+        # The constants and modules that supply a closure to build_image are bound once at the top level, so a local
+        # of the same name cannot change what a call builds. Each is refused whether it sits in main(), in an arm
+        # function or in a parameter list, and an attribute of an imported module may not be stored.
+        authority_branch = '    if arguments.arm in ("authority", "all"):\n'
+        authority_fn = "def run_authority_arm(image: Path) -> None:\n"
+        other = '"sel4-channel-fixture"'
+        for label, text, arm in (
+            ("CLOSURE assigned in main() before the call", mutated(authority_branch, f"    CLOSURE = {other}\n" + authority_branch), "sel4-io-network"),
+            ("CLOSURE assigned inside the authority branch", mutated(authority_branch, authority_branch + f"        CLOSURE = {other}\n"), "sel4-io-network"),
+            ("TCP_CLOSURE assigned in an arm function", mutated(tcp_head, tcp_head + f"    TCP_CLOSURE = {other}\n"), "sel4-io-tcp"),
+            ("a parameter named CLOSURE", mutated(authority_fn, authority_fn.replace("image: Path", "image: Path, CLOSURE=None")), "sel4-io-network"),
+            ("CLOSURE declared global in an arm function", mutated(authority_fn, authority_fn + "    global CLOSURE\n"), "sel4-io-network"),
+            ("CLOSURE bound by a for loop", mutated(authority_fn, authority_fn + "    for CLOSURE in ():\n        pass\n"), "sel4-io-network"),
+            ("CLOSURE bound by a walrus", mutated(authority_fn, authority_fn + "    (CLOSURE := 1)\n"), "sel4-io-network"),
+            ("CLOSURE assigned a second time at the top level", source + f"\n\nCLOSURE = {other}\n", "sel4-io-network"),
+            ("zenoh_capture rebound below the top level", mutated(tcp_head, tcp_head + "    import os as zenoh_capture\n"), "sel4-zenoh-external"),
+            ("zenoh_capture.CLOSURE stored", mutated(authority_fn, authority_fn + f"    zenoh_capture.CLOSURE = {other}\n"), "sel4-zenoh-external"),
+        ):
+            refused_edit(label, text, arm)
+
+        # Every route to build_image that is not a direct call by name is refused: an attribute of any object, a
+        # subscript, a call of a call and a lookup through the module table.
+        for label, addition in (
+            ("build_image called through sys.modules", f'    sys.modules[__name__].build_image({other})\n'),
+            ("build_image called as an attribute of a module", f'    checker.build_image({other})\n'),
+            ("a callee that is a subscript", f'    table["x"]({other})\n'),
+            ("a callee that is a call", f'    pick()({other})\n'),
+            ("a callee that is a conditional expression", f'    (build_image if flag else print)({other})\n'),
+        ):
+            refused_edit(label, mutated(authority_fn, authority_fn + addition), "sel4-io-network")
+
         # A run record for a declared arm cannot go missing.
         runs = _Path(directory) / "runs"
         runs.mkdir()

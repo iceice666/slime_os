@@ -703,8 +703,11 @@ def imported_modules(tree: ast.Module) -> set[str]:
     return names
 
 
-def build_image_calls(path: _Path, tree: ast.Module) -> dict[int, str]:
-    """Each direct call to `build_image`, by the id of its node, with the closure it names.
+def build_image_calls(path: _Path, tree: ast.Module) -> tuple[dict[int, str], set[str]]:
+    """Each direct call to `build_image`, by the id of its node, with the closure it names, and the value names.
+
+    The value names are the module-level constants and the imported modules that supply a closure. A caller must
+    keep each of them bound once, because a local of the same name would change what the call builds.
 
     `build_image` must be called by name with the closure as its one positional argument. A call with a keyword, a
     starred argument or no argument, and any other use of the name, such as an alias, a default argument or a
@@ -721,15 +724,21 @@ def build_image_calls(path: _Path, tree: ast.Module) -> dict[int, str]:
         return found.group(1)
 
     constants: dict[str, str] = {}
+    used: set[str] = set()
 
     def resolve(node: ast.AST) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
         if isinstance(node, ast.Name) and node.id in constants:
+            used.add(node.id)
+            used.update(via_module.get(node.id, ()))
             return constants[node.id]
         if isinstance(node, ast.Attribute) and node.attr == "CLOSURE" and isinstance(node.value, ast.Name) and node.value.id in imports:
+            used.add(node.value.id)
             return library_closure(node.value.id)
         fail(f"{path.name}: cannot resolve the closure named by {ast.dump(node)[:80]}")
+
+    via_module: dict[str, set[str]] = {}
 
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -738,6 +747,7 @@ def build_image_calls(path: _Path, tree: ast.Module) -> dict[int, str]:
                 constants[node.targets[0].id] = value.value
             elif isinstance(value, ast.Attribute) and value.attr == "CLOSURE" and isinstance(value.value, ast.Name) and value.value.id in imports:
                 constants[node.targets[0].id] = library_closure(value.value.id)
+                via_module[node.targets[0].id] = {value.value.id}
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     calls: dict[int, str] = {}
     for node in ast.walk(tree):
@@ -749,15 +759,15 @@ def build_image_calls(path: _Path, tree: ast.Module) -> dict[int, str]:
         if len(call.args) != 1 or call.keywords or isinstance(call.args[0], ast.Starred):
             fail(f"{path.name}: build_image at line {node.lineno} is not called with exactly one positional closure")
         calls[id(call)] = resolve(call.args[0])
-    return calls
+    return calls, used
 
 
 def built_closures(path: _Path) -> set[str]:
     """Every closure that the checker builds, for the gate that compares them with the declared runs."""
-    return set(build_image_calls(path, ast.parse(path.read_text(encoding="utf-8"))).values())
+    return set(build_image_calls(path, ast.parse(path.read_text(encoding="utf-8")))[0].values())
 
 
-def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str]) -> None:
+def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str], values: set[str]) -> None:
     """No name that an arm reaches is rebound, and no builtin that looks a name up is used.
 
     The reach follows names, so a function that is rebound locally, passed in as a parameter, declared global,
@@ -765,8 +775,30 @@ def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str]) -> N
     protected function is therefore defined once, at the top level and without a decorator. `run_plane` is
     imported once, at the top level. Any other binding of a protected name, in any scope, is refused. So is a
     string equal to one, and a name or attribute that looks a binding up by text or replaces it.
+
+    `values` are the module-level constants and the imported modules that supply a closure to `build_image`.
+    Each is bound exactly once at the top level, by a plain assignment or a plain `import`, and nowhere else, so a
+    local of the same name cannot change the closure a call builds. No attribute of an imported module is stored.
+    An attribute named like a protected function and a call whose callee is neither a name nor an attribute are
+    refused, so `build_image` cannot be reached through a module, a table or a subscript.
     """
     direct = {id(node) for node in tree.body}
+    allowed_stores: set[int] = set()
+    top_bindings: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in values:
+            allowed_stores.add(id(node.targets[0]))
+            top_bindings[node.targets[0].id] = top_bindings.get(node.targets[0].id, 0) + 1
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                if bound in values:
+                    top_bindings[bound] = top_bindings.get(bound, 0) + 1
+    for name in sorted(values):
+        if top_bindings.get(name) != 1:
+            fail(f"{path.name}: {name} supplies a closure to build_image, so it must be bound exactly once at the top level, and it is bound {top_bindings.get(name, 0)} times")
+    imported = imported_modules(tree)
+    guarded = protected | values
     defined: dict[str, int] = {}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in protected:
@@ -787,12 +819,12 @@ def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str]) -> N
         if isinstance(node, ast.Name):
             if node.id in BANNED_NAMES:
                 fail(f"{where} uses {node.id}, which looks a binding up by text or replaces it")
-            if isinstance(node.ctx, (ast.Store, ast.Del)) and node.id in protected:
+            if isinstance(node.ctx, (ast.Store, ast.Del)) and node.id in guarded and id(node) not in allowed_stores:
                 fail(f"{where} rebinds {node.id}, which an arm reaches")
-        elif isinstance(node, ast.arg) and node.arg in protected:
+        elif isinstance(node, ast.arg) and node.arg in guarded:
             fail(f"{where} names a parameter {node.arg}, which hides the {node.arg} that an arm reaches")
-        elif isinstance(node, (ast.Global, ast.Nonlocal)) and set(node.names) & protected:
-            fail(f"{where} declares {sorted(set(node.names) & protected)} global or nonlocal")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and set(node.names) & guarded:
+            fail(f"{where} declares {sorted(set(node.names) & guarded)} global or nonlocal")
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in protected and id(node) not in direct:
             fail(f"{where} defines {node.name} again inside another scope")
         elif isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef)) and node.name in protected:
@@ -801,6 +833,10 @@ def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str]) -> N
             bound = {(alias.asname or alias.name.split(".")[0]) if isinstance(node, ast.Import) else (alias.asname or alias.name) for alias in node.names}
             if bound & protected and node not in allowed_import:
                 fail(f"{where} imports {sorted(bound & protected)}, which an arm reaches")
+            if bound & values and id(node) not in direct:
+                fail(f"{where} imports {sorted(bound & values)} again below the top level")
+        elif isinstance(node, ast.Call) and not isinstance(node.func, (ast.Name, ast.Attribute)):
+            fail(f"{where} calls something that is neither a name nor an attribute, so what it calls cannot be read")
         elif isinstance(node, ast.ExceptHandler) and node.name in protected:
             fail(f"{where} binds {node.name} in an except clause")
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in protected:
@@ -809,6 +845,10 @@ def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str]) -> N
             fail(f"{where} binds {node.rest} in a match pattern")
         elif isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
             fail(f"{where} uses the attribute {node.attr}, which reaches a binding without writing its name")
+        elif isinstance(node, ast.Attribute) and node.attr in protected:
+            fail(f"{where} reaches {node.attr} as an attribute, which hides the call from the reading of the reach")
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)) and isinstance(node.value, ast.Name) and node.value.id in imported:
+            fail(f"{where} stores an attribute of the imported module {node.value.id}, which could change a closure")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in strings:
             fail(f"{where} holds the string {node.value!r}, which could look up a function that an arm reaches")
 
@@ -905,7 +945,7 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
     if unbranched:
         fail(f"{path.name}: main() has no branch for the arm(s) {unbranched}")
     units = top_level_units(body)
-    build_calls = build_image_calls(path, tree)
+    build_calls, value_names = build_image_calls(path, tree)
 
     def reach(name: str) -> tuple[set[str], list[ast.AST]]:
         statements = [*by_choice.get(choices[name], []), *every]
@@ -917,7 +957,7 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
     reaches = {name: reach(name) for name in arms}
     protected = {"main", "build_image", "run_plane", *sites, *(entry for entries in arms.values() for entry in entries)}
     protected |= {unit for reached, _nodes in reaches.values() for unit in reached if unit in functions}
-    check_name_bindings(path, tree, protected)
+    check_name_bindings(path, tree, protected, value_names)
     reached, nodes = reaches[run]
     attached = sorted(device for name in reached if name in sites for device in sites[name])
     declared = sorted(declared_by_arm[run])
