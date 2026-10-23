@@ -151,12 +151,11 @@ not evidence that a planned image has booted.
 
 The network checker boots 14 closures, and each has a record. Its arms share one
 timeout and one set of failure markers, but they attach different devices. Nine
-attach a virtio NIC and five attach nothing. Three tables in the generator state this.
+attach a virtio NIC and five attach nothing. Four tables in the generator state this.
 `ARM_ENTRY_FUNCTIONS` names the functions that boot each arm. `QEMU_SITES` names the
 functions that pass QEMU arguments and the devices each passes. `ARM_DEVICES` names
-the devices each arm attaches. `ARM_CHOICES` gives the `--arm` choice of each arm that
-has no entry function. A person edits the tables, and `extract` does not infer a
-device from the code.
+the devices each arm attaches. `ARM_CHOICES` gives the `--arm` choice of each arm. A
+person edits the tables, and `extract` does not infer a device from the code.
 
 Extraction checks that the code agrees with the tables. A QEMU token may sit only in
 a site. A token in a module-level statement, in a function that is not a site, or in
@@ -167,13 +166,19 @@ element by element and counts a repeated device as many times as it appears. A f
 must be a literal from `-netdev`, `-device` and `-object`. A `-device` value must be a
 literal that starts with a `virtio-` device name. A computed flag, a variable value, a
 starred element and an odd count are refused. So is the keyword on any other call.
-An arm attaches the devices of every site that it reads by any name. Its declaration
-must equal that set. Three arms run inline in `main()`. Every use of `arguments.arm` must be a comparison
-with string literals in the test of an `if`, so no branch hides behind a constant. A
-branch that can run one of them, its `else`, and any statement outside the branches
-must read no site. The inventory controls compare the
-closures the checker builds with the runs it declares. A QEMU argument that reaches
-the launcher by a route other than `additional_arguments` is not covered.
+
+An arm attaches the devices of every site that it reaches by any name. The reach
+starts at the arm's entry functions and at the branches of `main()` for its `--arm`
+choice. A branch that is not exact, every `else`, and the statements outside the
+branches count for every arm. The arm's declaration must equal the devices of the
+sites it reaches. Every use of `arguments.arm` must be a comparison with string
+literals in the test of an `if`, so no branch hides behind a constant. Each arm must
+build exactly its own closure in what it reaches, so two call sites that swap their
+closures are refused. No function that an arm reaches may be rebound. An assignment,
+a parameter, a `global` declaration, a loop variable, a second definition, an import
+and a decorator are each refused. A string equal to a function name is refused, and
+so are `globals`, `getattr`, `eval` and similar names. A QEMU argument that
+reaches the launcher by a route other than `run_plane` is not covered.
 
 After an intended image-closure change, update only its test-run references with
 `python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.

@@ -690,53 +690,8 @@ NETWORK_CHECKER = "check-sel4-io-network-plane.py"
 
 
 def built_closures(checker: _Path) -> set[str]:
-    """Every closure a checker passes to `build_image`, with module constants and `module.CLOSURE` resolved.
-
-    `build_image` must be called by name with the closure as its one positional argument. A call with a
-    keyword, a starred argument or no argument, and any other use of the name `build_image`, such as an alias,
-    a default argument or a value passed on, is refused, so a closure cannot be built without being counted.
-    """
-    import ast
-
-    tree = ast.parse(checker.read_text(encoding="utf-8"))
-    imports = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
-
-    def library_closure(module: str) -> str:
-        found = re.search(r'^CLOSURE = "([a-z0-9-]+)"', (ROOT / "scripts/lib" / f"{module}.py").read_text(encoding="utf-8"), re.M)
-        if found is None:
-            fail(f"{module}.py declares no CLOSURE constant")
-        return found.group(1)
-
-    def resolve(node) -> str:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.Name) and node.id in constants:
-            return constants[node.id]
-        if isinstance(node, ast.Attribute) and node.attr == "CLOSURE" and isinstance(node.value, ast.Name):
-            return library_closure(node.value.id)
-        fail(f"{checker.name}: cannot resolve the closure named by {ast.dump(node)[:80]}")
-
-    constants: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            value = node.value
-            if (isinstance(value, ast.Constant) and isinstance(value.value, str)) or (
-                isinstance(value, ast.Attribute) and value.attr == "CLOSURE" and isinstance(value.value, ast.Name)
-                and value.value.id in imports
-            ):
-                constants[node.targets[0].id] = resolve(value)
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-    built = set()
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Name) and node.id == "build_image" and isinstance(node.ctx, ast.Load)):
-            continue
-        call = parents.get(node)
-        if not (isinstance(call, ast.Call) and call.func is node):
-            fail(f"{checker.name}: build_image is used at line {node.lineno} other than as a direct call")
-        if len(call.args) != 1 or call.keywords or isinstance(call.args[0], ast.Starred):
-            fail(f"{checker.name}: build_image at line {node.lineno} is not called with exactly one positional closure")
-        built.add(resolve(call.args[0]))
-    return built
+    """Every closure a checker passes to `build_image`, read by the generator, which refuses any other use of the name."""
+    return GENERATOR_MODULE.built_closures(checker)
 
 
 def check_arm_controls() -> int:
@@ -1010,7 +965,7 @@ def check_arm_controls() -> int:
             ("a branch that runs for every arm but one", mutated(lifetime, '    if arguments.arm != "net":\n' + site_call + lifetime)),
             ("a branch joined to another arm by or", mutated(lifetime, '    if arguments.arm == "lifetime" or arguments.arm == "net":\n' + site_call + lifetime)),
             ("an else of a branch that reads a site", mutated(lifetime, '    if arguments.arm == "net":\n        pass\n    else:\n' + site_call + lifetime)),
-            ("a site read outside every arm branch", mutated(lifetime, site_call + lifetime)),
+            ("a site read outside every arm branch", mutated(lifetime, site_call.removeprefix("    ") + lifetime)),
             ("the arm choice in a conditional expression", mutated(lifetime, '    held = 1 if arguments.arm == "lifetime" else 2\n' + lifetime)),
             ("the arm choice in a while loop", mutated(lifetime, '    while arguments.arm == "lifetime":\n        break\n' + lifetime)),
             ("the arm choice passed to a function", mutated(lifetime, '    print(arguments.arm)\n' + lifetime)),
@@ -1061,6 +1016,56 @@ def check_arm_controls() -> int:
         if "sel4-new" not in built_closures(copy):
             fail("arm control: a positional build_image call for a new closure was not counted")
         refused += 1
+
+        # Each arm must build exactly its own closure, so two call sites that swap their closures keep the set of
+        # names the same and are still refused. A second closure, a foreign closure and no closure are refused too.
+        authority_build = "image = build_image(CLOSURE) if not arguments.no_build else IMAGE"
+        tcp_build = "image = build_image(TCP_CLOSURE)"
+        swapped = (
+            mutated(authority_build, "image = build_image(@A@) if not arguments.no_build else IMAGE")
+            .replace(tcp_build, "image = build_image(@T@)")
+            .replace("build_image(@A@)", "build_image(TCP_CLOSURE)")
+            .replace("build_image(@T@)", "build_image(CLOSURE)")
+        )
+        if swapped.count("build_image(CLOSURE)") != 1 or swapped.count("build_image(TCP_CLOSURE)") != 1 or swapped == source:
+            fail("arm control: the swap of the two closures was not built")
+        for arm in ("sel4-io-network", "sel4-io-tcp"):
+            refused_edit(f"CLOSURE and TCP_CLOSURE swapped, read for {arm}", swapped, arm)
+        refused_edit("an arm that builds a second closure", mutated("        image = build_image(TCP_CLOSURE)\n", "        image = build_image(TCP_CLOSURE)\n        build_image(NET_CLOSURE)\n"), "sel4-io-tcp")
+        refused_edit("an arm that builds a closure that is not its own", mutated("run_impairment_arm(build_image(IMPAIRMENT_CLOSURE)", "run_impairment_arm(build_image(LISTENER_CLOSURE)"), "sel4-io-tcp-impairment")
+        refused_edit("an arm whose branch builds no closure", mutated('        image = build_image("sel4-io-lifetime")\n', "        image = None\n"), "sel4-io-lifetime")
+
+        # A site read in the branch of an arm that has an entry function counts for that arm, and a site read in
+        # the branch of another arm does not. The branch is found by the arm choice and not by the entry list.
+        authority = '    if arguments.arm in ("authority", "all"):\n'
+        refused_edit("a site called in the authority branch of main()", mutated(authority, authority + '        run_net_arm(None, "", None)\n'), "sel4-io-network")
+        copy.write_text(mutated('    if arguments.arm == "net":\n', '    if arguments.arm == "net":\n        held = run_zenoh_external_arm\n'), encoding="utf-8")
+        refused_edit("a second site read in the net branch of main()", copy.read_text(encoding="utf-8"), "sel4-net")
+
+        # A name that an arm reaches must not be rebound. A local assignment, a parameter, a global declaration, a
+        # second definition, an import, a decorator and a lookup by text would each send a call somewhere that the
+        # reach did not look, so each is refused.
+        tcp_head = "def run_tcp_arm(image: Path, mac: str, transcript_path: Path | None, *, driver_reset: bool = False) -> None:\n"
+        refused_edit(
+            "a local that rebinds a site to a function with no device",
+            mutated(tcp_head, tcp_head + "    run_with_peer = run_without_device\n") + "\n\ndef run_without_device(*a, **k):\n    return run_plane(image=None, timeout=1, terminal_condition=None, fail=fail)\n",
+            "sel4-io-tcp",
+        )
+        refused_edit("a parameter that hides a site", mutated(tcp_head, tcp_head.replace("driver_reset: bool = False", "driver_reset: bool = False, run_with_peer=None")), "sel4-io-tcp")
+        refused_edit("a global declaration of a site", mutated(tcp_head, tcp_head + "    global run_with_peer\n    run_with_peer = None\n"), "sel4-io-tcp")
+        refused_edit("a for loop that binds a site name", mutated(tcp_head, tcp_head + "    for run_with_peer in ():\n        pass\n"), "sel4-io-tcp")
+        refused_edit("a with statement that binds a site name", mutated(tcp_head, tcp_head + "    with open('x') as run_with_peer:\n        pass\n"), "sel4-io-tcp")
+        refused_edit("an import under a site name", mutated(tcp_head, tcp_head + "    import os as run_with_peer\n"), "sel4-io-tcp")
+        refused_edit("a second top-level definition of a site", source + "\n\ndef run_with_peer(*a, **k):\n    return None\n", "sel4-io-tcp")
+        refused_edit("a nested definition of a site name", mutated(tcp_head, tcp_head + "    def run_with_peer(*a, **k):\n        return None\n"), "sel4-io-tcp")
+        refused_edit("a decorator on a site", mutated("def run_with_peer(", "@staticmethod\ndef run_with_peer("), "sel4-io-tcp")
+        refused_edit("a function an arm reaches rebound as an entry", mutated(tcp_head, tcp_head + "    check_tcp_ledger = print\n"), "sel4-io-tcp")
+        refused_edit("a lookup of a function by text with globals", mutated(tcp_head, tcp_head + "    globals()['run_with_peer']\n"), "sel4-io-tcp")
+        refused_edit("a lookup of a function by text with getattr", mutated(tcp_head, tcp_head + "    getattr(sys.modules[__name__], 'run_with_peer')\n"), "sel4-io-tcp")
+        refused_edit("an eval in the checker", mutated(tcp_head, tcp_head + "    eval('1')\n"), "sel4-io-tcp")
+        refused_edit("a dunder attribute", mutated(tcp_head, tcp_head + "    run_tcp_arm.__globals__\n"), "sel4-io-tcp")
+        refused_edit("the name of a site held in a string", mutated(tcp_head, tcp_head + "    held = 'run_with_peer'\n"), "sel4-io-tcp")
+        refused_edit("run_plane imported a second time", mutated(tcp_head, tcp_head + "    from sel4_plane import run_plane\n"), "sel4-io-tcp")
 
         # A run record for a declared arm cannot go missing.
         runs = _Path(directory) / "runs"
