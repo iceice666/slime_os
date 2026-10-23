@@ -44,7 +44,7 @@ The rest of this page is the timeline those conventions produce.
   ④ start & implement ─── just devloop start <UUID>; edit; regenerate closures; run the gate
         │
         ▼
-  ⑤ implementation PR ─── template; myque-gh pr link; CI green; merge
+  ⑤ implementation PR ─── template; item UUID in the body; CI green; merge
         │
         ▼
   ⑥ record evidence ────── just devloop gate / human ...; just devloop complete <UUID>
@@ -141,17 +141,14 @@ Use the [change](../../.github/PULL_REQUEST_TEMPLATE/change.md) or
 [system-change](../../.github/PULL_REQUEST_TEMPLATE/system-change.md)
 template. Its `Verification` table wants exact commands, the observed result,
 and an evidence class: *direct* (you ran it), *inherited* (a prior recorded
-run), or *inference* (not observed). After opening, link the PR to the item
-with the pinned `myque-gh pr link` invocation from the template's source
-comment; the tool writes a trailer you never hand-edit.
+run), or *inference* (not observed). Name the implemented item by its canonical
+UUID in the description.
 
-- **Never** write `Closes #123` / `Fixes #123` / `Resolves #123` against a
-  bot-projected Issue: GitHub does not own completion here, and the
-  auto-close would lie.
-- **Why the ceremony:** the projected Issue, the milestone, and the
-  "implements" link are all derived from `.tasks/` and this trailer by
-  `myque-gh`; a hand edit is overwritten or, worse, becomes a second source
-  of truth.
+- **Never** write `Closes #123` / `Fixes #123` / `Resolves #123` to complete
+  work: GitHub does not own completion here, and the auto-close would lie.
+- **Why no Issue link:** work items are not projected into GitHub Issues
+  ([decision](../decisions/no-github-issue-projection.md)). `.tasks/` is the
+  only work-item state, so there is no second copy to keep in step.
 
 ### ⑥ Record evidence, then complete
 
