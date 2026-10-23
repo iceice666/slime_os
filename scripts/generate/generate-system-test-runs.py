@@ -462,6 +462,10 @@ def qemu_tokens(node: ast.AST) -> set[str]:
     return found
 
 
+# The module that defines the launcher. It is imported only for `run_plane`, by name and without an alias.
+LAUNCHER_MODULE = "sel4_plane"
+
+
 def check_launcher_uses(path: _Path, body: list[ast.stmt]) -> None:
     """`run_plane` is the only launcher, and every use of its name is a direct call that hides no keyword.
 
@@ -473,6 +477,18 @@ def check_launcher_uses(path: _Path, body: list[ast.stmt]) -> None:
     tree = ast.Module(body=body, type_ignores=[])
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "run_plane" and alias.asname not in (None, "run_plane"):
+                    fail(f"{path.name}: run_plane is imported as {alias.asname!r} at line {node.lineno}, so a call through that name could not be read")
+                if alias.name == "*":
+                    fail(f"{path.name}: a star import at line {node.lineno} could bind the launcher under a name that was not read")
+            if node.module == LAUNCHER_MODULE and any(alias.name != "run_plane" for alias in node.names):
+                fail(f"{path.name}: line {node.lineno} imports something other than run_plane from {LAUNCHER_MODULE}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == LAUNCHER_MODULE:
+                    fail(f"{path.name}: {LAUNCHER_MODULE} is imported as a module at line {node.lineno}, which would reach run_plane as an attribute")
         if isinstance(node, ast.Name) and node.id == "run_plane":
             parent = parents.get(node)
             if not (isinstance(parent, ast.Call) and parent.func is node):
@@ -969,6 +985,12 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
         fail(f"{path.name}: {run} is declared to boot {own!r}, but the code it reaches builds {sorted(built)}")
     lines = text.splitlines()
     pieces = ["\n".join(lines[node.lineno - 1 : node.end_lineno]) for name in sorted(reached) for node in units[name]]
+    # The statements of main() that run for this arm are part of what it runs, so the fault patterns read them
+    # too: the exact branches for its choice, every branch that is not exact, every else, and the statements
+    # outside the branches.
+    selected = [*by_choice.get(choices[run], []), *every]
+    pieces += ["\n".join(lines[node.lineno - 1 : node.end_lineno]) for node in selected]
+    pieces += [lines[node.lineno - 1] for node in outside if isinstance(node, ast.stmt) and node.lineno <= len(lines)]
     return "\n".join(pieces), 0, declared
 
 

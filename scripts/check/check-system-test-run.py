@@ -1098,6 +1098,37 @@ def check_arm_controls() -> int:
         ):
             refused_edit(label, mutated(authority_fn, authority_fn + addition), "sel4-io-network")
 
+        # The launcher is imported once, by name and without an alias, and its module is not imported as a whole.
+        # A call through another name for it would launch QEMU without the keyword that the reading of a site needs.
+        plane_import = "from sel4_plane import run_plane  # noqa: E402\n"
+        early_launch = "        if peer is not None:\n            return launch(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS)\n"
+        peer_launch = "        transcript = run_plane(\n            image=image,\n            timeout=TIMEOUT,\n            terminal_condition=terminal,\n            fail=fail,\n            pins_path=PINS,\n            additional_arguments=("
+        aliased = mutated(plane_import, plane_import + "from sel4_plane import run_plane as launch  # noqa: E402\n").replace(peer_launch, early_launch + peer_launch, 1)
+        for label, text in (
+            ("run_plane imported under another name and called without the keyword", aliased),
+            ("run_plane imported under another name and not used", mutated(plane_import, plane_import + "from sel4_plane import run_plane as launch  # noqa: E402\n")),
+            ("sel4_plane imported as a module", mutated(plane_import, plane_import + "import sel4_plane as plane  # noqa: E402\n")),
+            ("something else imported from sel4_plane", mutated(plane_import, plane_import + "from sel4_plane import qemu_base_command  # noqa: E402\n")),
+            ("a star import", mutated(plane_import, plane_import + "from sel4_plane import *  # noqa: E402\n")),
+        ):
+            refused_edit(label, text, "sel4-io-tcp")
+
+        # The fault words are read from what an arm runs in main() as well as from the functions it reaches. A word
+        # in a branch for another arm, or in a function that no arm runs, does not count for this arm.
+        tcp_branch = '    if arguments.arm in ("tcp", "all"):\n'
+        for label, text, arm, expected in (
+            ("a fault word in the main() branch of its own arm", mutated(tcp_branch, tcp_branch + "        device_fault = 1\n"), "sel4-io-tcp", ["device"]),
+            ("a fault word in the main() branch of another arm", mutated(tcp_branch, '    if arguments.arm == "net2":\n        device_fault = 1\n' + tcp_branch), "sel4-io-tcp", []),
+            ("a fault word in a function that no arm runs", source + "\n\ndef helper_unused():\n    device_fault = 1\n", "sel4-io-tcp", []),
+            ("a fault word in a function the arm runs", mutated(tcp_head, tcp_head + "    note = 'DEVICE_FAULT'\n"), "sel4-io-tcp", ["device"]),
+            ("a fault word in a branch that is not exact", mutated(tcp_branch, '    if arguments.arm != "net":\n        device_fault = 1\n' + tcp_branch), "sel4-io-tcp", ["device"]),
+        ):
+            copy.write_text(text, encoding="utf-8")
+            if generator.extract(copy, arm)["faults"] != expected:
+                fail(f"arm control: {label} gave faults {generator.extract(copy, arm)['faults']}, not {expected}")
+            refused += 1
+        copy.write_text(source, encoding="utf-8")
+
         # A run record for a declared arm cannot go missing.
         runs = _Path(directory) / "runs"
         runs.mkdir()
