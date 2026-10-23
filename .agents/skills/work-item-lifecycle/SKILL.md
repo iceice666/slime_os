@@ -128,16 +128,17 @@ of base and head `codePaths`.
 | **process** | CI workflows outside `codePaths`, `CONTRIBUTING.md`, `AGENTS.md`, `.agents/`, `docs/`, other paths outside `codePaths` | no item |
 
 - A planning PR never carries product code; the checker refuses the mix.
-- The CI, MyQue projection, closeout, and retirement workflow files are
+- The CI, closeout, and retirement workflow files are
   covered by `codePaths`, so their edits stale shared-tool evidence and
   require landed-item ownership.
 - Within the product tree or grader closure, only a genuine typo, broken
   link, format-only change, or mechanical maintenance with no behavioral or
   project-state consequence skips the landed-item requirement; judge
   semantics, not line count.
-- Never use GitHub auto-close keywords (`Closes`, `Fixes`, `Resolves`)
-  against projected Issues, and never hand-edit `myque:*` markers or the
-  `myque-gh` PR trailer.
+- Never use GitHub auto-close keywords (`Closes`, `Fixes`, `Resolves`) to
+  complete work. Work items are not projected into GitHub Issues
+  (`docs/decisions/no-github-issue-projection.md`); name the implemented
+  item's UUID in the PR description.
 - A PR that touches `just/` or `Justfile` regenerates the closures and
   refreshes the test-run records in its own derived commit within the same
   PR (see the generated-code rule in `AGENTS.md`).
@@ -172,7 +173,7 @@ The old frozen backlog index is archived, not a live obligation. New and
 reopened defects belong only to the canonical store. Historical evidence uses
 the repository identity, full commit, and original path described in
 `docs/history.md`; archived task snapshots never participate in current
-validation or projection.
+validation.
 
 `roadmap/` retains explicitly identified unextracted requirements and their
 surrounding historical context. Its classification index routes extracted

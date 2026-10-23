@@ -28,6 +28,10 @@ readable and link to the decision that replaced them.
 - [Spec-driven work-item bodies](spec-driven-work-item-bodies.md) — accepted;
   what Slime OS owns once MyQue, devloop, and myque-gh publish the envelope,
   requirements, evidence, and projection contracts it pins.
+  Its projection part is amended by the record below.
+- [Work items are not projected into GitHub Issues](no-github-issue-projection.md)
+  — accepted; `.tasks/` is the only work-item surface, and the Issue projection
+  workflow is retired after it duplicated 468 Issues during a GitHub outage.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
