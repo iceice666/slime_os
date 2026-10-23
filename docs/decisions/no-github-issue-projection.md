@@ -39,6 +39,8 @@ Work items are not projected into GitHub Issues or milestones.
 - The projected Issues were closed as `not_planned`, each with a comment that
   names the item's file under `.tasks/`. The duplicates lost their identity
   header.
+- The 43 open native milestones were closed, each with a note in its
+  description that points to this record.
 - The myque-gh flake input and the `.#projection` nix shell stay. The closeout
   and retirement workflows run their Python scripts in that shell, and its
   name is part of the shared tool cache key.
@@ -61,8 +63,6 @@ Work items are not projected into GitHub Issues or milestones.
   the store.
 - Pull requests merged before this decision may still carry a
   `myque:implements` trailer. Nothing reads it.
-- The 43 native milestones the projection created stay as they were and no
-  longer change.
 
 ## Revisit when
 
