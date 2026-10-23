@@ -481,6 +481,8 @@ def check_launcher_uses(path: _Path, body: list[ast.stmt]) -> None:
             for alias in node.names:
                 if alias.name == "run_plane" and alias.asname not in (None, "run_plane"):
                     fail(f"{path.name}: run_plane is imported as {alias.asname!r} at line {node.lineno}, so a call through that name could not be read")
+                if alias.name == "run_plane" and (node.module != LAUNCHER_MODULE or node.level != 0):
+                    fail(f"{path.name}: run_plane is imported at line {node.lineno} from {'.' * node.level}{node.module or ''}, not from {LAUNCHER_MODULE}")
                 if alias.name == "*":
                     fail(f"{path.name}: a star import at line {node.lineno} could bind the launcher under a name that was not read")
             if node.module == LAUNCHER_MODULE and any(alias.name != "run_plane" for alias in node.names):
@@ -990,7 +992,13 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
     # outside the branches.
     selected = [*by_choice.get(choices[run], []), *every]
     pieces += ["\n".join(lines[node.lineno - 1 : node.end_lineno]) for node in selected]
-    pieces += [lines[node.lineno - 1] for node in outside if isinstance(node, ast.stmt) and node.lineno <= len(lines)]
+    inside_branches = {
+        number
+        for branch, _names, _exact in arm_branches(path, main)
+        for statement in (*branch.body, *branch.orelse)
+        for number in range(statement.lineno, statement.end_lineno + 1)
+    }
+    pieces += [lines[number - 1] for number in range(main.lineno, main.end_lineno + 1) if number not in inside_branches]
     return "\n".join(pieces), 0, declared
 
 

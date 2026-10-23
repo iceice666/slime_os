@@ -1110,6 +1110,9 @@ def check_arm_controls() -> int:
             ("sel4_plane imported as a module", mutated(plane_import, plane_import + "import sel4_plane as plane  # noqa: E402\n")),
             ("something else imported from sel4_plane", mutated(plane_import, plane_import + "from sel4_plane import qemu_base_command  # noqa: E402\n")),
             ("a star import", mutated(plane_import, plane_import + "from sel4_plane import *  # noqa: E402\n")),
+            ("run_plane imported from another module", mutated(plane_import, "from shim import run_plane  # noqa: E402\n")),
+            ("run_plane imported from a submodule of sel4_plane", mutated(plane_import, "from sel4_plane.sub import run_plane  # noqa: E402\n")),
+            ("run_plane imported by a relative import", mutated(plane_import, "from . import run_plane  # noqa: E402\n")),
         ):
             refused_edit(label, text, "sel4-io-tcp")
 
@@ -1118,6 +1121,8 @@ def check_arm_controls() -> int:
         tcp_branch = '    if arguments.arm in ("tcp", "all"):\n'
         for label, text, arm, expected in (
             ("a fault word in the main() branch of its own arm", mutated(tcp_branch, tcp_branch + "        device_fault = 1\n"), "sel4-io-tcp", ["device"]),
+            ("a fault word in a main() statement outside the branches", mutated(authority_branch, '    print("DEVICE_FAULT")\n' + authority_branch), "sel4-io-tcp", ["device"]),
+            ("a fault word on a later line of a statement outside the branches", mutated(authority_branch, '    print(\n        "DEVICE_FAULT"\n    )\n' + authority_branch), "sel4-io-tcp", ["device"]),
             ("a fault word in the main() branch of another arm", mutated(tcp_branch, '    if arguments.arm == "net2":\n        device_fault = 1\n' + tcp_branch), "sel4-io-tcp", []),
             ("a fault word in a function that no arm runs", source + "\n\ndef helper_unused():\n    device_fault = 1\n", "sel4-io-tcp", []),
             ("a fault word in a function the arm runs", mutated(tcp_head, tcp_head + "    note = 'DEVICE_FAULT'\n"), "sel4-io-tcp", ["device"]),

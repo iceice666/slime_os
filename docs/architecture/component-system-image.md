@@ -181,8 +181,8 @@ so are `globals`, `getattr`, `eval` and similar names. The constants and importe
 modules that supply a closure to `build_image` are bound once at the top level.
 A local of the same name is refused. A protected function is reached only by its
 plain name, so an attribute call or a callee that is not a name is refused. The
-launcher `run_plane` is imported once by name, without an alias, so a call through
-another name is refused. A QEMU argument that reaches the launcher by a route other
+launcher `run_plane` is imported once from `sel4_plane` by name, without an alias.
+A call through another name or an import from another module is refused. A QEMU argument that reaches the launcher by a route other
 than `run_plane` is not covered.
 
 After an intended image-closure change, update only its test-run references with
