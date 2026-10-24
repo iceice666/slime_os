@@ -116,7 +116,7 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
     ),
     # The network checker boots one image per arm. Its default arm is `sel4-io-network`, and the other
-    # thirteen are named here, each by the closure it builds.
+    # fourteen are named here, each by the closure it builds. The socket-buffer arm is planned until its composition lands.
     "sel4-io-network": tuple(
         (name, name, "qemu-arm-virt")
         for name in (
@@ -124,6 +124,7 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
             "sel4-io-tcp-impairment",
             "sel4-io-tcp-listener",
             "sel4-io-tcp-options",
+            "sel4-io-tcp-buffers",
             "sel4-io-driver-reset-in-flight",
             "sel4-io-service-fault-in-flight",
             "sel4-io-lifetime",
@@ -156,6 +157,7 @@ ARM_ENTRY_FUNCTIONS: dict[str, dict[str, tuple[str, ...]]] = {
         "sel4-io-tcp-impairment": ("run_impairment_arm",),
         "sel4-io-tcp-listener": ("run_listener_arm",),
         "sel4-io-tcp-options": ("run_options_arm",),
+        "sel4-io-tcp-buffers": ("run_buffers_arm",),
         "sel4-io-driver-reset-in-flight": ("run_tcp_arm",),
         "sel4-io-service-fault-in-flight": (),
         "sel4-io-lifetime": (),
@@ -186,6 +188,7 @@ ARM_CHOICES: dict[str, dict[str, str]] = {
         "sel4-io-tcp-impairment": "tcp-impairment",
         "sel4-io-tcp-listener": "tcp-listener",
         "sel4-io-tcp-options": "tcp-options",
+        "sel4-io-tcp-buffers": "tcp-buffers",
         "sel4-io-driver-reset-in-flight": "driver-reset",
         "sel4-io-service-fault-in-flight": "service-fault",
         "sel4-io-lifetime": "lifetime",
@@ -208,6 +211,7 @@ ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
         "sel4-io-tcp-impairment": ("virtio-net-device",),
         "sel4-io-tcp-listener": ("virtio-net-device",),
         "sel4-io-tcp-options": ("virtio-net-device",),
+        "sel4-io-tcp-buffers": ("virtio-net-device",),
         "sel4-io-driver-reset-in-flight": ("virtio-net-device",),
         "sel4-io-service-fault-in-flight": (),
         "sel4-io-lifetime": (),
@@ -223,7 +227,19 @@ ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
 # A planning exclusion belongs to one invocation, never to its whole checker.
 # Any implementation artifact appearing requires removing the exclusion first.
 # Rows are (canonical item UUID, checker filename, closure name, artifact paths).
-PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {}
+PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    "sel4-io-tcp-buffers": (
+        "01a1638d-23a4-7f36-ae0e-7bf1f522f40f",
+        "check-sel4-io-network-plane.py",
+        "sel4-io-tcp-buffers",
+        (
+            "contracts/generation-manifest/v1/compositions/sel4-io-tcp-buffers.zti",
+            "contracts/system-image-closure/v2/closures/sel4-io-tcp-buffers.zti",
+            "contracts/system-spec/v1/systems/sel4-io-tcp-buffers.zti",
+            "contracts/system-test-run/v1/runs/sel4-io-tcp-buffers.zti",
+        ),
+    ),
+}
 
 # Checkers that boot no seL4 QEMU plane of their own, so they own no test run:
 # board gates, host-only contract gates, aggregate composers that delegate to

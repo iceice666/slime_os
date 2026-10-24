@@ -716,21 +716,25 @@ def check_arm_controls() -> int:
             fail(f"arm control accepted {label}")
 
     variants = {name: closure for name, closure, _profile, _image in generator.run_variants(checker)}
-    if set(variants) != set(declared):
-        fail(f"arm control: the checker declares {sorted(set(variants) ^ set(declared))} beyond or short of ARM_DEVICES")
-    if set(variants.values()) != built_closures(checker):
+    planned = {name: row[2] for name, row in generator.PLANNED_RUNS.items() if row[1] == NETWORK_CHECKER}
+    if set(variants) | set(planned) != set(declared) or set(variants) & set(planned):
+        fail(f"arm control: the checker declares {sorted((set(variants) | set(planned)) ^ set(declared))} beyond or short of ARM_DEVICES")
+    if {*variants.values(), *planned.values()} != built_closures(checker):
         fail(
             "arm control: the closures the network checker builds differ from the runs it declares: "
-            f"{sorted(set(variants.values()) ^ built_closures(checker))}"
+            f"{sorted({*variants.values(), *planned.values()} ^ built_closures(checker))}"
         )
-    for name in sorted(variants):
+    for name in sorted({*variants, *planned}):
         facts = generator.extract(checker, name)
         if facts["devices"] != sorted(declared[name]) or facts["drives"] != 0 or facts["faults"] or facts["timeoutSeconds"] != 240:
             fail(f"arm control: {name} extracts {facts}, expected devices {sorted(declared[name])}, no drives, no faults and 240 s")
-        if not (RUN_ROOT / f"{name}.zti").is_file():
+        if name in planned:
+            if (RUN_ROOT / f"{name}.zti").exists():
+                fail(f"arm control: {name} is planned and already has a run record")
+        elif not (RUN_ROOT / f"{name}.zti").is_file():
             fail(f"arm control: {name} has no run record")
-    if sum(1 for devices in declared.values() if devices) != 9 or sum(1 for devices in declared.values() if not devices) != 5:
-        fail("arm control: the network checker no longer has nine NIC arms and five arms with no device")
+    if sum(1 for devices in declared.values() if devices) != 10 or sum(1 for devices in declared.values() if not devices) != 5:
+        fail("arm control: the network checker no longer has ten NIC arms and five arms with no device")
 
     source = checker.read_text(encoding="utf-8")
 
@@ -1133,6 +1137,22 @@ def check_arm_controls() -> int:
                 fail(f"arm control: {label} gave faults {generator.extract(copy, arm)['faults']}, not {expected}")
             refused += 1
         copy.write_text(source, encoding="utf-8")
+
+        # An arm whose closure has not landed is planned. Its registration stays in PLANNED_RUNS until the closure
+        # and the record exist. Without it the arm is a run with a missing closure, and its tables are still read.
+        buffers = "sel4-io-tcp-buffers"
+        without_plan = {key: value for key, value in generator.PLANNED_RUNS.items() if key != buffers}
+        with patch.dict(generator.PLANNED_RUNS, without_plan, clear=True):
+            refuse("a built closure with no record and no planning registration", lambda: generator.run_variants(checker))
+        with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, buffers: ()}}):
+            refuse("a planned arm that declares no device but attaches one", lambda: generator.extract(checker, buffers))
+        with patch.dict(generator.ARM_CHOICES, {NETWORK_CHECKER: {**generator.ARM_CHOICES[NETWORK_CHECKER], buffers: "tcp"}}):
+            refuse("a planned arm read from the branch of another arm", lambda: generator.extract(checker, buffers))
+        buffers_call = "run_buffers_arm(build_image(BUFFERS_CLOSURE)"
+        refused_edit("a planned arm that builds the closure of another arm", mutated(buffers_call, "run_buffers_arm(build_image(TCP_CLOSURE)"), buffers)
+        stale = {**generator.PLANNED_RUNS, buffers: (*generator.PLANNED_RUNS[buffers][:3], (*generator.PLANNED_RUNS[buffers][3], "scripts/check/check-system-test-run.py"))}
+        with patch.dict(generator.PLANNED_RUNS, stale, clear=True):
+            refuse("a planning registration whose artifact already exists", lambda: generator.run_variants(checker))
 
         # A run record for a declared arm cannot go missing.
         runs = _Path(directory) / "runs"

@@ -149,9 +149,10 @@ markers. Changing one arm must not silently alter the other's frozen declaration
 isolation before running the complete declaration gate. These are host checks,
 not evidence that a planned image has booted.
 
-The network checker boots 14 closures, and each has a record. Its arms share one
-timeout and one set of failure markers, but they attach different devices. Nine
-attach a virtio NIC and five attach nothing. Four tables in the generator state this.
+The network checker boots 15 closures. Fourteen have a record. The fifteenth,
+`sel4-io-tcp-buffers`, is in `PLANNED_RUNS` until its composition lands. Its arms
+share one timeout and one set of failure markers, but they attach different devices.
+Ten attach a virtio NIC and five attach nothing. Four tables in the generator state this.
 `ARM_ENTRY_FUNCTIONS` names the functions that boot each arm. `QEMU_SITES` names the
 functions that pass QEMU arguments and the devices each passes. `ARM_DEVICES` names
 the devices each arm attaches. `ARM_CHOICES` gives the `--arm` choice of each arm. A
