@@ -15,7 +15,9 @@ test = false
 boot-contracts = { path = "../../../boot-contracts" }
 slime-components = { path = "../../lib" }
 slime-proto = { path = "../../proto" }
-slime-rt = { path = "../../runtime" }
+# Socket pools above the minimum buffer size come from the task-private
+# region, sized from the rows a generation declares.
+slime-rt = { path = "../../runtime", features = ["private-heap"] }
 smoltcp = { version = "=0.13.0", default-features = false, features = [
     "medium-ethernet",
     "proto-ipv4",

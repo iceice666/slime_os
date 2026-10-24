@@ -301,6 +301,9 @@ SystemNetworkApplication :: type {
   idleTimeoutMs : Int;
   hopLimit : Int;
   nagle : Bool;
+  -- network-application/v4 buffer sizes for every socket the row opens or accepts.
+  rxBufferBytes : Int;
+  txBufferBytes : Int;
 };
 
 -- B83 exact per-ring block authority, as `BlockRingAuthorityEntry`.

@@ -692,8 +692,10 @@
       retryLimit = 0;
       rights = [];
       role = "client";
+      rxBufferBytes = 2048;
       supervisionBinding = "";
       timerBudget = 0;
+      txBufferBytes = 2048;
     };
   ];
   waitSet = [

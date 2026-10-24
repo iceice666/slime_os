@@ -2,7 +2,7 @@
 
 use crate::{dns, resolver};
 use boot_contracts::network_application::{
-    Application, Backend, NetworkApplications, Role, SocketOptions,
+    Application, Backend, NetworkApplications, Role, SocketOptions, valid_buffer_bytes,
 };
 use boot_contracts::network_destination::{
     Address, NetworkDestinations, RIGHT_CONNECT, RIGHT_RECV, RIGHT_SEND, Transport,
@@ -18,7 +18,9 @@ use smoltcp::wire::{
 };
 
 pub const SOCKETS: usize = 4;
-pub const BUFFER_BYTES: usize = 2048;
+/// The buffer size every row declared before rows could declare one, and the
+/// size a holder without a row gets.
+pub const BUFFER_BYTES: usize = boot_contracts::network_application::MIN_BUFFER_BYTES as usize;
 pub const MAX_INCARNATION: u64 = (1 << 30) - 1;
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const FIRST_EPHEMERAL_PORT: u16 = 49152;
@@ -29,6 +31,8 @@ pub const DEFAULT_OPTIONS: SocketOptions = SocketOptions {
     idle_timeout_ms: OPERATION_TIMEOUT.total_millis() as u32,
     hop_limit: 64,
     nagle: true,
+    rx_buffer_bytes: BUFFER_BYTES as u32,
+    tx_buffer_bytes: BUFFER_BYTES as u32,
 };
 
 /// Apply one row's declared options and the fixed service policy. Every open
@@ -149,9 +153,18 @@ pub enum Event {
     ListenerClosed {
         children: usize,
     },
+    /// A connection began on pool socket `socket` with the holder's declared
+    /// buffer sizes.
+    Opened {
+        holder: [u8; 32],
+        socket: usize,
+        local_port: u16,
+        rx_bytes: u32,
+        tx_bytes: u32,
+    },
 }
 
-const EVENTS: usize = 4;
+const EVENTS: usize = 2 * SOCKETS;
 
 /// One external listener's ingress rule: TCP to `local:port` reaches the stack
 /// only from `admitted`. Anything else is dropped before smoltcp can answer it
@@ -266,6 +279,16 @@ struct NameConnect {
 pub struct Engine<'a> {
     sockets: SocketSet<'a>,
     handles: [SocketHandle; SOCKETS],
+    /// Socket `i` owns bytes `[i * rx_capacity, (i + 1) * rx_capacity)` of
+    /// `pool_rx` and the same range of `pool_tx` for the engine's lifetime;
+    /// its live socket borrows the declared prefix of each range.
+    pool_rx: *mut u8,
+    pool_tx: *mut u8,
+    rx_capacity: usize,
+    tx_capacity: usize,
+    /// The receive and transmit sizes each pool socket was built with.
+    shapes: [(usize, usize); SOCKETS],
+    _pool: core::marker::PhantomData<&'a mut [u8]>,
     connections: [Option<Connection>; SOCKETS],
     listeners: [Option<Listener>; SOCKETS],
     namespace: u64,
@@ -278,8 +301,10 @@ pub struct Engine<'a> {
     name_connect: Option<NameConnect>,
     dns_observation: Option<DnsObservation>,
     peaks: Peaks,
-    /// Connections ended by a typed timeout whose release is unreported.
-    timeout_reclaimed: usize,
+    /// The socket bytes of each connection ended by a typed timeout whose
+    /// release is unreported, oldest first.
+    timeout_reclaimed: [usize; SOCKETS],
+    timeouts: usize,
     loopback: bool,
     excess_refusals: u32,
     events: [Option<Event>; EVENTS],
@@ -293,31 +318,37 @@ pub struct Peaks {
 }
 
 impl<'a> Engine<'a> {
+    /// `rx` and `tx` are the pool: [`SOCKETS`] equal ranges each, whose
+    /// length is the largest buffer any socket of this engine may be given.
     pub fn new(
         storage: &'a mut [SocketStorage<'a>],
-        rx: &'a mut [[u8; BUFFER_BYTES]; SOCKETS],
-        tx: &'a mut [[u8; BUFFER_BYTES]; SOCKETS],
+        rx: &'a mut [u8],
+        tx: &'a mut [u8],
         epoch: u64,
         backend: u8,
     ) -> Result<Self, Status> {
-        if epoch == 0 || epoch > MAX_INCARNATION || backend > 1 || storage.len() < SOCKETS {
+        let (rx_capacity, tx_capacity) = (rx.len() / SOCKETS, tx.len() / SOCKETS);
+        if epoch == 0
+            || epoch > MAX_INCARNATION
+            || backend > 1
+            || storage.len() < SOCKETS
+            || !rx.len().is_multiple_of(SOCKETS)
+            || !tx.len().is_multiple_of(SOCKETS)
+            || !valid_buffer_bytes(rx_capacity as u32)
+            || !valid_buffer_bytes(tx_capacity as u32)
+        {
             return Err(Status::Exhausted);
         }
         let dns_capacity = storage.len() > SOCKETS && backend == 0;
-        let mut sockets = SocketSet::new(&mut storage[..]);
-        let mut buffers = rx.iter_mut().zip(tx.iter_mut());
-        let handles = core::array::from_fn(|_| {
-            let (rx, tx) = buffers.next().expect("one buffer pair per socket");
-            let mut socket = Socket::new(
-                SocketBuffer::new(&mut rx[..]),
-                SocketBuffer::new(&mut tx[..]),
-            );
-            apply(&mut socket, DEFAULT_OPTIONS);
-            sockets.add(socket)
-        });
-        Ok(Self {
-            sockets,
-            handles,
+        let mut engine = Self {
+            sockets: SocketSet::new(&mut storage[..]),
+            handles: [SocketHandle::default(); SOCKETS],
+            pool_rx: rx.as_mut_ptr(),
+            pool_tx: tx.as_mut_ptr(),
+            rx_capacity,
+            tx_capacity,
+            shapes: [(rx_capacity, tx_capacity); SOCKETS],
+            _pool: core::marker::PhantomData,
             connections: [None; SOCKETS],
             listeners: [None; SOCKETS],
             // The caller must durably allocate a fresh incarnation before admission.
@@ -332,11 +363,93 @@ impl<'a> Engine<'a> {
             name_connect: None,
             dns_observation: None,
             peaks: Peaks::default(),
-            timeout_reclaimed: 0,
+            timeout_reclaimed: [0; SOCKETS],
+            timeouts: 0,
             loopback: backend == 1,
             excess_refusals: 0,
             events: [None; EVENTS],
-        })
+        };
+        for index in 0..SOCKETS {
+            // SAFETY: socket `index` is built over its own pool ranges exactly once here.
+            let mut socket = unsafe { engine.socket_over(index, rx_capacity, tx_capacity) };
+            apply(&mut socket, DEFAULT_OPTIONS);
+            engine.handles[index] = engine.sockets.add(socket);
+        }
+        Ok(engine)
+    }
+
+    /// The largest receive and transmit buffer a socket of this engine may get.
+    pub const fn capacity(&self) -> (usize, usize) {
+        (self.rx_capacity, self.tx_capacity)
+    }
+
+    /// A socket over the first `rx` and `tx` bytes of socket `index`'s pool ranges.
+    ///
+    /// # Safety
+    ///
+    /// No other live socket may borrow socket `index`'s ranges: the caller has
+    /// removed and dropped the socket previously built over them, if any.
+    unsafe fn socket_over(&self, index: usize, rx: usize, tx: usize) -> Socket<'a> {
+        debug_assert!(index < SOCKETS && rx <= self.rx_capacity && tx <= self.tx_capacity);
+        // SAFETY: `new` received both ranges as `&'a mut` and kept no other
+        // reference; the ranges of distinct indices are disjoint, and the caller
+        // guarantees no live socket aliases these.
+        let (rx, tx) = unsafe {
+            (
+                core::slice::from_raw_parts_mut::<'a, u8>(
+                    self.pool_rx.add(index * self.rx_capacity),
+                    rx,
+                ),
+                core::slice::from_raw_parts_mut::<'a, u8>(
+                    self.pool_tx.add(index * self.tx_capacity),
+                    tx,
+                ),
+            )
+        };
+        Socket::new(SocketBuffer::new(rx), SocketBuffer::new(tx))
+    }
+
+    /// Give the free socket `index` the buffers `options` declare, rebuilding
+    /// it when its current buffers differ. smoltcp fixes a socket's buffers and
+    /// its window scale at construction, so a pooled socket that served one
+    /// row must be rebuilt before it serves a row of another size.
+    fn shape(&mut self, index: usize, options: SocketOptions) -> bool {
+        let declared = (
+            options.rx_buffer_bytes as usize,
+            options.tx_buffer_bytes as usize,
+        );
+        if declared.0 > self.rx_capacity || declared.1 > self.tx_capacity {
+            return false;
+        }
+        if self.shapes[index] != declared {
+            // The removed socket's borrow of this slot's ranges ends here.
+            let _ = self.sockets.remove(self.handles[index]);
+            // SAFETY: the socket over these ranges was removed and dropped above.
+            let socket = unsafe { self.socket_over(index, declared.0, declared.1) };
+            self.handles[index] = self.sockets.add(socket);
+            self.shapes[index] = declared;
+        }
+        true
+    }
+
+    /// The bytes socket `index` reserves: both of its buffers.
+    const fn socket_bytes(&self, index: usize) -> usize {
+        self.shapes[index].0 + self.shapes[index].1
+    }
+
+    fn record_open(&mut self, index: usize, holder: [u8; 32]) {
+        let local_port = self
+            .sockets
+            .get::<Socket>(self.handles[index])
+            .local_endpoint()
+            .map_or(0, |endpoint| endpoint.port);
+        self.record(Event::Opened {
+            holder,
+            socket: index,
+            local_port,
+            rx_bytes: self.shapes[index].0 as u32,
+            tx_bytes: self.shapes[index].1 as u32,
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -444,11 +557,13 @@ impl<'a> Engine<'a> {
     /// The resources one connection that ended in a typed timeout released
     /// when its holder disposed of the handle; one report per connection.
     pub fn take_timeout_reclamation(&mut self) -> Option<Reclaimed> {
-        self.timeout_reclaimed = self.timeout_reclaimed.checked_sub(1)?;
+        self.timeouts = self.timeouts.checked_sub(1)?;
+        let bytes = self.timeout_reclaimed[0];
+        self.timeout_reclaimed.rotate_left(1);
         Some(Reclaimed {
             handles: 1,
             sockets: 1,
-            bytes: 2 * BUFFER_BYTES,
+            bytes,
         })
     }
 
@@ -609,6 +724,7 @@ impl<'a> Engine<'a> {
         socket.set_timeout(Some(Duration::from_secs(2)));
         let endpoints = socket.local_endpoint().zip(socket.remote_endpoint());
         self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
+        self.record_open(pending.index, connection.holder);
         if let Some(destination) = destinations.destination(connection.destination)
             && let Address::Dns(name) = destination.address
         {
@@ -835,6 +951,7 @@ impl<'a> Engine<'a> {
         self.last_now = now;
         let handles = self.allocated();
         let mut sockets = 0;
+        let mut bytes = 0;
         for index in 0..SOCKETS {
             if self.connections[index].is_some()
                 || self.resets[index].is_some()
@@ -847,6 +964,7 @@ impl<'a> Engine<'a> {
             {
                 self.abort_socket(index);
                 sockets += 1;
+                bytes += self.socket_bytes(index);
             }
         }
         self.cancel_dns();
@@ -855,7 +973,7 @@ impl<'a> Engine<'a> {
         Reclaimed {
             handles,
             sockets,
-            bytes: sockets * 2 * BUFFER_BYTES,
+            bytes,
         }
     }
 
@@ -926,13 +1044,16 @@ impl<'a> Engine<'a> {
             || children >= listener.accepted_limit
             || children + 1 > listener.timer_budget
             || children + 1 > listener.queue_depth
-            || (children + 1) * (2 * BUFFER_BYTES as u32) > listener.byte_budget
+            || (children + 1) * listener.options.socket_bytes() > listener.byte_budget
         {
             return false;
         }
         let Some(socket_index) = self.free_socket() else {
             return false;
         };
+        if !self.shape(socket_index, listener.options) {
+            return false;
+        }
         let socket = self.sockets.get_mut::<Socket>(self.handles[socket_index]);
         if socket
             .listen((
@@ -1099,6 +1220,7 @@ impl<'a> Engine<'a> {
             .as_mut()
             .expect("active listener")
             .socket = None;
+        self.record_open(slot, holder);
         self.arm_listener(index);
         Outcome::Complete(Completion {
             capability: id,
@@ -1304,13 +1426,13 @@ impl<'a> Engine<'a> {
             self.abort_socket(index);
             self.connections[index] = None;
             reclaimed.sockets += 1;
+            reclaimed.bytes += self.socket_bytes(index);
         }
         for listener in &mut self.listeners {
             if listener.is_some_and(|listener| listener.holder == holder) {
                 *listener = None;
             }
         }
-        reclaimed.bytes = reclaimed.sockets * 2 * BUFFER_BYTES;
         reclaimed
     }
 
@@ -1390,7 +1512,7 @@ impl<'a> Engine<'a> {
                         unread: queues.0,
                         unsent: queues.1,
                         terminal: Terminal::Reset,
-                        bytes: 2 * BUFFER_BYTES,
+                        bytes: self.socket_bytes(index),
                     });
                 }
                 return Outcome::Complete(Completion::status(Status::Success));
@@ -1516,13 +1638,16 @@ impl<'a> Engine<'a> {
         if charged >= destination.socket_limit
             || charged >= destination.queue_depth
             || charged >= destination.timer_budget
-            || (charged + 1) * (2 * BUFFER_BYTES as u32) > destination.byte_budget
+            || (charged + 1) * options.socket_bytes() > destination.byte_budget
         {
             return fail(Status::Exhausted);
         }
         let Some(index) = self.free_socket() else {
             return fail(Status::Exhausted);
         };
+        if !self.shape(index, options) {
+            return fail(Status::Exhausted);
+        }
         let Some(serial) = self.serial.checked_add(1) else {
             return fail(Status::Exhausted);
         };
@@ -1553,6 +1678,7 @@ impl<'a> Engine<'a> {
         };
         if !named {
             self.next_port = port.checked_add(1).unwrap_or(FIRST_EPHEMERAL_PORT);
+            self.record_open(index, holder);
         }
         self.serial = serial;
         let id = self.namespace | u64::from(serial);
@@ -1665,11 +1791,12 @@ impl<'a> Engine<'a> {
                 unread: connection.close_queues.0,
                 unsent: connection.close_queues.1,
                 terminal,
-                bytes: 2 * BUFFER_BYTES,
+                bytes: self.socket_bytes(index),
             });
         }
-        if status == Status::Timeout {
-            self.timeout_reclaimed += 1;
+        if status == Status::Timeout && self.timeouts < SOCKETS {
+            self.timeout_reclaimed[self.timeouts] = self.socket_bytes(index);
+            self.timeouts += 1;
         }
         self.connections[index] = None;
         Some(Completion::status(status))
@@ -1846,6 +1973,10 @@ mod tests {
                 .copy_from_slice(&10_000u32.to_le_bytes());
             row[app::OFF_ENTRY_HOP_LIMIT] = 64;
             row[app::OFF_ENTRY_NAGLE] = 1;
+            row[app::OFF_ENTRY_RX_BUFFER_BYTES..app::OFF_ENTRY_RX_BUFFER_BYTES_END]
+                .copy_from_slice(&app::MIN_BUFFER_BYTES.to_le_bytes());
+            row[app::OFF_ENTRY_TX_BUFFER_BYTES..app::OFF_ENTRY_TX_BUFFER_BYTES_END]
+                .copy_from_slice(&app::MIN_BUFFER_BYTES.to_le_bytes());
             row[app::OFF_ENTRY_ROLE] = if index == 1 {
                 app::ROLE_LISTENER
             } else {
@@ -1901,7 +2032,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 44, 1).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            44,
+            1,
+        )
+        .unwrap();
         let mut device = crate::loopback::Loopback::new();
         let iface = Interface::new(
             Config::new(HardwareAddress::Ethernet(EthernetAddress([
@@ -1988,7 +2126,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 44, 1).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            44,
+            1,
+        )
+        .unwrap();
         let mut device = Loopback::new();
         let mut iface = Interface::new(
             Config::new(HardwareAddress::Ethernet(EthernetAddress([
@@ -2457,7 +2602,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            1,
+            0,
+        )
+        .unwrap();
         let mut link = Link::default();
         let mut iface = interface(&mut link, 1);
         let mut bytes = declarations(RIGHT_CONNECT, 16384, 4, 4);
@@ -2510,7 +2662,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 2, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            2,
+            0,
+        )
+        .unwrap();
         engine.resets[0] = Some(Reset {
             local: IpEndpoint::new(IpAddress::v4(10, 0, 0, 1), FIRST_EPHEMERAL_PORT),
             remote: IpEndpoint::new(IpAddress::v4(10, 0, 0, 2), FIRST_EPHEMERAL_PORT + 1),
@@ -2559,7 +2718,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 1).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            1,
+            1,
+        )
+        .unwrap();
         let mut device = Loopback::new();
         let mut iface = Interface::new(
             Config::new(HardwareAddress::Ethernet(EthernetAddress([
@@ -2689,8 +2855,14 @@ mod tests {
                 let mut storage = [SocketStorage::EMPTY; SOCKETS];
                 let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
                 let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-                let mut engine =
-                    Engine::new(&mut storage, &mut rx, &mut tx, epoch, backend).unwrap();
+                let mut engine = Engine::new(
+                    &mut storage,
+                    rx.as_flattened_mut(),
+                    tx.as_flattened_mut(),
+                    epoch,
+                    backend,
+                )
+                .unwrap();
                 let first = engine.next_id().unwrap();
                 assert_eq!(
                     first,
@@ -2718,7 +2890,13 @@ mod tests {
             let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
             let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
             assert!(matches!(
-                Engine::new(&mut storage, &mut rx, &mut tx, epoch, backend),
+                Engine::new(
+                    &mut storage,
+                    rx.as_flattened_mut(),
+                    tx.as_flattened_mut(),
+                    epoch,
+                    backend
+                ),
                 Err(Status::Exhausted)
             ));
         }
@@ -2729,7 +2907,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 7, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            7,
+            0,
+        )
+        .unwrap();
         let mut link = Link::default();
         let mut iface = interface(&mut link, 1);
         let bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, 4096, 1, 4);
@@ -2847,7 +3032,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            1,
+            0,
+        )
+        .unwrap();
         let mut link = Link::default();
         let mut iface = interface(&mut link, 1);
         for (budget, timers) in [(4095, 4), (16384, 0)] {
@@ -2990,7 +3182,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            1,
+            0,
+        )
+        .unwrap();
         let mut link = Link::default();
         let mut iface = interface(&mut link, 1);
         let icmp = Icmpv4Repr::EchoRequest {
@@ -3066,7 +3265,14 @@ mod tests {
             let mut storage = [SocketStorage::EMPTY; SOCKETS];
             let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
             let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-            let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+            let mut engine = Engine::new(
+                &mut storage,
+                rx.as_flattened_mut(),
+                tx.as_flattened_mut(),
+                1,
+                0,
+            )
+            .unwrap();
             let mut link = Link::default();
             let mut iface = interface(&mut link, 1);
             let bytes = declarations(RIGHT_CONNECT, 4096, 1, 1);
@@ -3154,7 +3360,14 @@ mod tests {
         let mut storage = [SocketStorage::EMPTY; SOCKETS];
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 9, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            9,
+            0,
+        )
+        .unwrap();
         let mut local_link = Link::default();
         let mut peer_link = Link::default();
         let mut local_iface = interface(&mut local_link, 1);

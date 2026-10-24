@@ -1,19 +1,20 @@
-# Network application authority, version 3
+# Network application authority, version 4
 
-`v3/schema.zt` defines the generation resource for explicit application
-bindings, exact TCP listener authority and each binding's declared TCP socket
-options. Generate its Python layout and Rust constants with
-`python3 scripts/generate/generate-boot-bindings.py`.
-`boot-contracts/src/network_application.rs` owns semantic decoding. `v1/` and
-`v2/` remain as the retained sources of format versions 1 and 2: version 1
-named a listener's admitted peer only as a local holder, and version 2 declared
-no socket options. The decoder refuses both.
+`v4/schema.zt` defines the generation resource for explicit application
+bindings, exact TCP listener authority, each binding's declared TCP socket
+options and its declared socket buffer sizes. Generate its Python layout and
+Rust constants with `python3 scripts/generate/generate-boot-bindings.py`.
+`boot-contracts/src/network_application.rs` owns semantic decoding. `v1/`,
+`v2/` and `v3/` remain as the retained sources of format versions 1 to 3:
+version 1 named a listener's admitted peer only as a local holder, version 2
+declared no socket options, and version 3 declared no buffer sizes. The decoder
+refuses all three.
 
 ## Encoding
 
 The 32-byte header contains magic `SLIMENA\0`, format version, header size,
 zero required flags, application count, and exact total length. The header
-carries format version 3. At most four
+carries format version 4. At most four
 320-byte entries follow, sorted strictly by their 32-byte holder identities.
 Zero and duplicate holders, trailing bytes, unknown discriminants/flags/rights,
 and nonzero reserved bytes are refused. Holder identities use the existing
@@ -60,6 +61,22 @@ option: the service holds no operation that selects or changes one. Delayed
 ACK, the connect and close deadlines and the congestion controller are fixed
 service policy, not declarations.
 
+## Socket buffer sizes
+
+Every row declares the receive and transmit buffer sizes the service gives each
+socket it opens or accepts for that holder. Version 4 carves them from version
+3's reserved tail, so an entry stays 320 bytes.
+
+| Field | Wire | Bound | Meaning |
+| --- | --- | --- | --- |
+| `rxBufferBytes` | `rx_buffer_bytes : u32` | a power of two from 2048 to 65536 | The socket's receive buffer; above 65535 the SYN announces window scale shift 1 |
+| `txBufferBytes` | `tx_buffer_bytes : u32` | a power of two from 2048 to 65536 | The socket's transmit buffer, which bounds its unacknowledged bytes |
+
+The builder and the decoder refuse any other value. A socket reserves both
+buffers, so a destination's byte budget must cover `rxBufferBytes +
+txBufferBytes` per connection, and a listener's byte budget covers both buffers
+of every socket it may accept. A request never names a buffer size.
+
 ## Service incarnation parameter
 
 The generated `INCARNATION_PARAMETER_KEY = 1` names the network service's own
@@ -101,8 +118,9 @@ The contract, encoder, decoder and service admit **only backlog one**; all
 other values fail closed. That slot
 includes a handshake or a connected socket awaiting accept. Accepted-socket
 limit is independently 1–4, and a successful accept may rearm the pending slot
-while earlier accepted children remain live. Byte budget is at most 16384 and
-at least 4096 times the accepted limit. Timer budget is 1–4; queue depth is a
+while earlier accepted children remain live. Byte budget is at most 524288 and
+at least both buffers (`rxBufferBytes + txBufferBytes`) times the accepted
+limit. Timer budget is 1–4; queue depth is a
 power of two from 2 through 4. The pending slot and accepted children share
 these byte, timer and queue ceilings and the backend's four-socket pool.
 

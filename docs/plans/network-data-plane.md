@@ -444,9 +444,10 @@ evidence, not this gate. No physical NIC is qualified.
 ### Declared TCP socket buffer sizes
 
 Work item `01a1638d-23a4-7f36-ae0e-7bf1f522f40f` lets each application row
-declare its socket buffers. It is not implemented: every socket still has the
-2048-byte buffers above. `just io_tcp_buffers_check` holds the wire to the
-declarations below and fails until the `sel4-io-tcp-buffers` composition lands.
+declare its socket buffers. `just io_tcp_buffers_check` holds the wire to the
+declarations below; [the architecture
+page](../architecture/network-service.md#declared-socket-buffers) owns how the
+service applies them.
 
 **Why.** The transmit buffer bounds the bytes a connection may have
 unacknowledged, so one connection moves at most 2048 bytes per round trip.
@@ -528,11 +529,11 @@ owning slices, chiefly the media and backend classification.
 | IEEE 802.15.4 medium | medium | `src/iface/interface/ieee802154.rs` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Outside the admitted Ethernet backend | Declared by the owning slice | Owning slice's recipe |
 | IPv4 static interface | protocol | `src/iface/interface/ipv4.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Address, prefix and gateway come from generation data | 1 address, 1 route | `just io_network_qualification_check` |
 | ICMPv4 echo reply | protocol | `src/iface/interface/ipv4.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Automatic reply to the service's own address only | Same frame budget | `just io_network_qualification_check` |
-| TCP external connect | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service-held; clients reach it only through exact destination grants | 4 sockets, 2048-byte buffers, 10 s timeout | `just io_network_qualification_check` |
-| TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, 2048-byte buffers | `just io_tcp_check` |
+| TCP external connect | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service-held; clients reach it only through exact destination grants | 4 sockets, buffers declared per `network-application/v4` row (2048–65536 bytes each, 2048 without a row), 10 s timeout | `just io_network_qualification_check`, `just io_tcp_buffers_check` |
+| TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, buffers declared per row (2048–65536 bytes each) | `just io_tcp_check` |
 | TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | `network-application/v2` listener row: one interface address and port, one exact admitted IPv4; other sources dropped before smoltcp | Backlog 1, 1–4 accepted connections at 4096 bytes each, shared 4-socket pool | `just io_tcp_listener_check` |
 | TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | supported | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | 4 out-of-order ranges, 2048-byte RX and TX per socket, retransmissions within the destination `retryLimit`, 10 s socket timeout | `just io_tcp_impairment_check` |
-| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v3` row and applied to every socket it opens or accepts, never client-chosen; ack delay stays fixed service policy and Reno the only controller | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` |
+| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v4` row and applied to every socket it opens or accepts, never client-chosen; ack delay stays fixed service policy and Reno the only controller | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` |
 | TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9, 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Fixed service policy; the socket idle timeout is each row's declared `idleTimeoutMs` | 10 s connect and close deadlines, no ack delay | `just io_network_qualification_check` |
 | UDP resolver socket | socket | `src/socket/udp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service resolver only; answers never authorize destinations | 1 socket, 512-byte packets | `just io_network_qualification_check` |
 | UDP application endpoints | socket | `src/socket/udp.rs` | planned | QEMU `LinkDevice` | 01a0e239-b54c-7782-8dd6-b403038fa3dd | Exact local bind and per-peer datagram grants | Declared by the owning slice | Owning slice's recipe |

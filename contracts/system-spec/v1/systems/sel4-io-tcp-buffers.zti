@@ -1,0 +1,142 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-tcp-buffers";
+  generation = 170;
+  targetRequirement = "aarch64-sel4-qemu-virt";
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  bootAttempts = 3;
+  components = [ "init"; "io-tcp-buffers-probe"; "network-service"; "virtio-net-driver"; ];
+  placements = [
+    { component = "init"; spawnBudget = 0; };
+    { component = "io-tcp-buffers-probe"; dependencies = []; };
+    { component = "network-service"; dependencies = [ "virtio-net-driver"; ]; };
+    { component = "virtio-net-driver"; };
+  ];
+  instances = [
+    { name = "init"; executable = "init"; };
+    { name = "virtio-net-driver"; executable = "virtio-net-driver"; mappingCount = 10; loanCount = 10; };
+    { name = "network-service"; executable = "network-service"; dependencies = [ "virtio-net-driver"; ]; bufferBytePages = 14; bufferCount = 14; mappingCount = 14; loanCount = 14; privatePageQuota = 160; };
+    { name = "buffers-large"; executable = "io-tcp-buffers-probe"; dependencies = []; mappingCount = 2; loanCount = 2; };
+    { name = "buffers-baseline"; executable = "io-tcp-buffers-probe"; dependencies = []; mappingCount = 2; loanCount = 2; };
+  ];
+  grants = [
+    { name = "buffers-large-control"; capabilityKind = "endpoint"; source = "buffers-large"; target = "network-service"; rights = [ "send"; "recv"; ]; transferable = false; };
+    { name = "buffers-large-provision"; capabilityKind = "endpoint"; source = "network-service"; target = "buffers-large"; rights = [ "send"; "recv"; ]; transferable = true; };
+    { name = "buffers-baseline-control"; capabilityKind = "endpoint"; source = "buffers-baseline"; target = "network-service"; rights = [ "send"; "recv"; ]; transferable = false; };
+    { name = "buffers-baseline-provision"; capabilityKind = "endpoint"; source = "network-service"; target = "buffers-baseline"; rights = [ "send"; "recv"; ]; transferable = true; };
+    { name = "network-service-link-peer"; capabilityKind = "endpoint"; source = "network-service"; target = "virtio-net-driver"; rights = [ "send"; "recv"; ]; transferable = true; };
+    { name = "network-service-buffer-factory"; capabilityKind = "sharedBufferFactory"; source = "init"; target = "network-service"; rights = [ "bufferCreate"; ]; transferable = false; };
+    { name = "virtio-net-device"; capabilityKind = "device"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "mapMmio"; ]; transferable = false; };
+    { name = "virtio-net-mmio"; capabilityKind = "mmioRegion"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "mapMmio"; ]; transferable = false; };
+    { name = "virtio-net-interrupt"; capabilityKind = "interruptSource"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "irqAck"; ]; transferable = false; };
+    { name = "virtio-net-dma"; capabilityKind = "dmaAccount"; source = "virtio-net-driver"; target = "virtio-net-driver"; rights = [ "dmaPin"; "dmaRelease"; ]; transferable = false; };
+  ];
+  slotPins = [
+    { holder = "network-service"; grant = "network-service-link-peer"; slot = 0; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "network-service-buffer-factory"; slot = 1; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "buffers-large-control"; slot = 2; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "buffers-baseline-control"; slot = 3; reason = "componentAbi"; };
+    { holder = "network-service"; grant = "buffers-large-provision"; slot = 29; reason = "encodedLayout"; };
+    { holder = "network-service"; grant = "buffers-baseline-provision"; slot = 30; reason = "encodedLayout"; };
+    { holder = "virtio-net-driver"; grant = "network-service-link-peer"; slot = 0; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-device"; slot = 1; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-mmio"; slot = 2; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-interrupt"; slot = 3; reason = "componentAbi"; };
+    { holder = "virtio-net-driver"; grant = "virtio-net-dma"; slot = 4; reason = "componentAbi"; };
+  ];
+  extraBindings = [];
+  mintedBindings = [];
+  commandBindings = [];
+  defaultImageBytes = 65536;
+  imageSizes = [ { component = "network-service"; bytes = 262144; }; ];
+  sharedBufferBudgetObject = true;
+  bootLayoutObject = true;
+  interfaceSchemas = [];
+  state = [];
+  notifications = [
+    { name = "io-link-tx-request-ready"; source = "network-service"; target = "virtio-net-driver"; };
+    { name = "io-link-rx-request-ready"; source = "network-service"; target = "virtio-net-driver"; };
+    { name = "io-link-tx-completion-ready"; source = "virtio-net-driver"; target = "network-service"; };
+    { name = "io-link-rx-completion-ready"; source = "virtio-net-driver"; target = "network-service"; };
+    { name = "io-link-state-changed"; source = "virtio-net-driver"; target = "network-service"; };
+    { name = "buffers-network-request"; source = "buffers-large"; target = "network-service"; };
+    { name = "buffers-large-done"; source = "network-service"; target = "buffers-large"; };
+    { name = "buffers-baseline-done"; source = "network-service"; target = "buffers-baseline"; };
+    { name = "buffers-handoff"; source = "buffers-large"; target = "buffers-baseline"; };
+  ];
+  notificationBindings = [
+    { grant = "io-link-tx-request-ready"; holder = "network-service"; role = "signal"; slot = 0; };
+    { grant = "io-link-tx-request-ready"; holder = "virtio-net-driver"; role = "wait"; slot = 0; };
+    { grant = "io-link-rx-request-ready"; holder = "network-service"; role = "signal"; slot = 1; };
+    { grant = "io-link-rx-request-ready"; holder = "virtio-net-driver"; role = "wait"; slot = 1; };
+    { grant = "io-link-tx-completion-ready"; holder = "virtio-net-driver"; role = "signal"; slot = 2; };
+    { grant = "io-link-tx-completion-ready"; holder = "network-service"; role = "wait"; slot = 2; };
+    { grant = "io-link-rx-completion-ready"; holder = "virtio-net-driver"; role = "signal"; slot = 3; };
+    { grant = "io-link-rx-completion-ready"; holder = "network-service"; role = "wait"; slot = 3; };
+    { grant = "io-link-state-changed"; holder = "virtio-net-driver"; role = "signal"; slot = 4; };
+    { grant = "io-link-state-changed"; holder = "network-service"; role = "wait"; slot = 4; };
+    { grant = "buffers-network-request"; holder = "buffers-large"; role = "signal"; slot = 0; };
+    { grant = "buffers-network-request"; holder = "buffers-baseline"; role = "signal"; slot = 1; };
+    { grant = "buffers-network-request"; holder = "network-service"; role = "wait"; slot = 5; };
+    { grant = "buffers-large-done"; holder = "network-service"; role = "signal"; slot = 6; };
+    { grant = "buffers-large-done"; holder = "buffers-large"; role = "wait"; slot = 1; };
+    { grant = "buffers-baseline-done"; holder = "network-service"; role = "signal"; slot = 7; };
+    { grant = "buffers-baseline-done"; holder = "buffers-baseline"; role = "wait"; slot = 0; };
+    { grant = "buffers-handoff"; holder = "buffers-large"; role = "signal"; slot = 2; };
+    { grant = "buffers-handoff"; holder = "buffers-baseline"; role = "wait"; slot = 2; };
+  ];
+  bootProfiles = [];
+  clockAuthority = [
+    { holder = "network-service"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-network-request"; timerBadgeBit = 7; };
+    { holder = "buffers-large"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-large-done"; timerBadgeBit = 7; };
+    { holder = "buffers-baseline"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-baseline-done"; timerBadgeBit = 6; };
+  ];
+  clockAuthorityObject = true;
+  ioResourceBudget = [
+    { holder = "virtio-net-driver"; bufferLoans = 16; dmaMappings = 18; dmaPages = 20; irqSources = 1; mmioBytes = 4096; mmioMappings = 1; outstandingRequests = 16; };
+  ];
+  ioResourceBudgetObject = true;
+  networkDestinations = [
+    { holder = "buffers-large"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4300; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 131072; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+    { holder = "buffers-large"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4301; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 131072; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+    { holder = "buffers-large"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4302; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 131072; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+    { holder = "buffers-baseline"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4310; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 4096; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+    { holder = "buffers-baseline"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4311; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 4096; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+    { holder = "buffers-baseline"; transport = "tcp"; addressKind = "ipv4"; address = "10.0.0.2"; port = 4312; rights = [ "connect"; "send"; "recv"; ]; queueDepth = 4; byteBudget = 4096; timerBudget = 4; retryLimit = 16; reconnectLimit = 0; socketLimit = 1; listenerLimit = 0; dnsRecordLimit = 0; };
+  ];
+  networkDestinationsObject = true;
+  networkApplications = [
+    { holder = "buffers-large"; controlBinding = "buffers-large-control"; provisionBinding = "buffers-large-provision"; supervisionBinding = ""; requestNotification = "buffers-network-request"; completionNotification = "buffers-large-done"; role = "client"; backend = "external"; localAddress = "0.0.0.0"; localPort = 0; admittedPeer = ""; admittedPeerAddress = ""; rights = []; backlog = 0; acceptedSocketLimit = 0; byteBudget = 0; timerBudget = 0; queueDepth = 0; retryLimit = 0; reconnectLimit = 0; keepaliveMs = 0; idleTimeoutMs = 10000; hopLimit = 64; nagle = true; rxBufferBytes = 65536; txBufferBytes = 65536; };
+    { holder = "buffers-baseline"; controlBinding = "buffers-baseline-control"; provisionBinding = "buffers-baseline-provision"; supervisionBinding = ""; requestNotification = "buffers-network-request"; completionNotification = "buffers-baseline-done"; role = "client"; backend = "external"; localAddress = "0.0.0.0"; localPort = 0; admittedPeer = ""; admittedPeerAddress = ""; rights = []; backlog = 0; acceptedSocketLimit = 0; byteBudget = 0; timerBudget = 0; queueDepth = 0; retryLimit = 0; reconnectLimit = 0; keepaliveMs = 0; idleTimeoutMs = 10000; hopLimit = 64; nagle = true; rxBufferBytes = 2048; txBufferBytes = 2048; };
+  ];
+  networkApplicationsObject = true;
+  networkInterfaces = [
+    { holder = "network-service"; address = "10.0.0.1"; prefixLen = 24; gateway = "0.0.0.0"; mac = "52:54:00:53:4c:01"; };
+  ];
+  networkInterfacesObject = true;
+  blockRingAuthority = [];
+  blockRingAuthorityObject = false;
+  waitSet = [
+    { waiter = "network-service"; notification = "buffers-network-request"; badgeBit = 0; kind = "stream"; drainSlot = 2; };
+    { waiter = "network-service"; notification = "buffers-network-request"; badgeBit = 1; kind = "stream"; drainSlot = 3; };
+    { waiter = "network-service"; notification = "buffers-network-request"; badgeBit = 7; kind = "timer"; };
+    { waiter = "buffers-large"; notification = "buffers-large-done"; badgeBit = 6; kind = "stream"; drainSlot = 0; };
+    { waiter = "buffers-large"; notification = "buffers-large-done"; badgeBit = 7; kind = "timer"; };
+    { waiter = "buffers-baseline"; notification = "buffers-baseline-done"; badgeBit = 7; kind = "stream"; drainSlot = 0; };
+    { waiter = "buffers-baseline"; notification = "buffers-baseline-done"; badgeBit = 6; kind = "timer"; };
+  ];
+  waitSetObject = true;
+  lifecyclePolicy = {
+    initialState = "Initialize";
+    terminalState = "Error";
+    transitions = [ { from = "Initialize"; to = "Running"; }; { from = "Running"; to = "Error"; }; ];
+    restarts = [];
+    dependencies = [];
+    parameters = [ { holder = "network-service"; subject = "network-service"; read = true; write = true; }; ];
+  };
+  recording = [];
+  recordingObject = false;
+  deploymentConstraint = "AArch64 seL4 QEMU per-binding TCP buffer sizes behind a scripted frame peer; no physical NIC claim.";
+  acceptanceCriteria = "Two client bindings declare 65536-byte and 2048-byte buffers; each connection gets its row's buffers, the in-flight limit, SYN window scale and zero-window point show on the wire, and a reused socket shows the smaller limits.";
+}

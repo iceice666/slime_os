@@ -1,0 +1,174 @@
+-- Exact application bindings, bounded listener authority, declared TCP
+-- socket options and declared socket buffer sizes, version 4.
+--
+-- Version 3 carved the TCP options from version 2's reserved tail. Version 4
+-- keeps every version 3 field and the 320-byte entry, and carves the receive
+-- and transmit buffer sizes the service gives every socket a row opens or
+-- accepts. Each is a power of two from minBufferBytes to maxBufferBytes. A
+-- listener's byte budget covers both buffers of every socket it may accept.
+-- A client never chooses or changes either.
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 4;
+incarnationParameterKey :: Int = 1;
+headerBytes :: Int = 32;
+entryBytes :: Int = 320;
+maxApplications :: Int = 4;
+bindingBytes :: Int = 32;
+minQueueDepth :: Int = 2;
+maxQueueDepth :: Int = 4;
+maxByteBudget :: Int = 524288;
+maxTimerBudget :: Int = 4;
+maxRetryLimit :: Int = 16;
+maxReconnectLimit :: Int = 16;
+maxBacklog :: Int = 1;
+maxAcceptedSockets :: Int = 4;
+roleClient :: Int = 1;
+roleListener :: Int = 2;
+backendExternal :: Int = 1;
+backendLoopback :: Int = 2;
+rightListen :: Int = 8;
+rightSend :: Int = 2;
+rightRecv :: Int = 4;
+knownRights :: Int = 14;
+peerNone :: Int = 0;
+peerHolder :: Int = 1;
+peerIpv4 :: Int = 2;
+minKeepaliveMs :: Int = 100;
+maxKeepaliveMs :: Int = 60000;
+minHopLimit :: Int = 1;
+maxHopLimit :: Int = 255;
+minIdleTimeoutMs :: Int = 1000;
+maxIdleTimeoutMs :: Int = 60000;
+minBufferBytes :: Int = 2048;
+maxBufferBytes :: Int = 65536;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+ApplicationHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  application_count : Int;
+  total_len : Int;
+};
+headerSchema ::= schema ApplicationHeader;
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "application_count"; width = 4; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+};
+ApplicationEntry :: type {
+  holder_identity : Int;
+  control_binding : Int;
+  provision_binding : Int;
+  supervision_binding : Int;
+  request_notification : Int;
+  completion_notification : Int;
+  allowed_peer_identity : Int;
+  local_ipv4 : Int;
+  local_port : Int;
+  rights : Int;
+  role : Int;
+  backend : Int;
+  peer_kind : Int;
+  reserved0 : Int;
+  backlog : Int;
+  accepted_socket_limit : Int;
+  byte_budget : Int;
+  timer_budget : Int;
+  queue_depth : Int;
+  retry_limit : Int;
+  reconnect_limit : Int;
+  admitted_peer_ipv4 : Int;
+  keepalive_ms : Int;
+  idle_timeout_ms : Int;
+  hop_limit : Int;
+  nagle : Int;
+  rx_buffer_bytes : Int;
+  tx_buffer_bytes : Int;
+  reserved : Int;
+};
+entrySchema ::= schema ApplicationEntry;
+entryLayout :: List WireField = {
+  { name = "holder_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "control_binding"; width = 32; signed = false; byteArray = true; };
+  { name = "provision_binding"; width = 32; signed = false; byteArray = true; };
+  { name = "supervision_binding"; width = 32; signed = false; byteArray = true; };
+  { name = "request_notification"; width = 32; signed = false; byteArray = true; };
+  { name = "completion_notification"; width = 32; signed = false; byteArray = true; };
+  { name = "allowed_peer_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "local_ipv4"; width = 4; signed = false; byteArray = true; };
+  { name = "local_port"; width = 2; signed = false; byteArray = false; };
+  { name = "rights"; width = 2; signed = false; byteArray = false; };
+  { name = "role"; width = 1; signed = false; byteArray = false; };
+  { name = "backend"; width = 1; signed = false; byteArray = false; };
+  { name = "peer_kind"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 1; signed = false; byteArray = true; };
+  { name = "backlog"; width = 4; signed = false; byteArray = false; };
+  { name = "accepted_socket_limit"; width = 4; signed = false; byteArray = false; };
+  { name = "byte_budget"; width = 4; signed = false; byteArray = false; };
+  { name = "timer_budget"; width = 4; signed = false; byteArray = false; };
+  { name = "queue_depth"; width = 4; signed = false; byteArray = false; };
+  { name = "retry_limit"; width = 4; signed = false; byteArray = false; };
+  { name = "reconnect_limit"; width = 4; signed = false; byteArray = false; };
+  { name = "admitted_peer_ipv4"; width = 4; signed = false; byteArray = true; };
+  { name = "keepalive_ms"; width = 4; signed = false; byteArray = false; };
+  { name = "idle_timeout_ms"; width = 4; signed = false; byteArray = false; };
+  { name = "hop_limit"; width = 1; signed = false; byteArray = false; };
+  { name = "nagle"; width = 1; signed = false; byteArray = false; };
+  { name = "rx_buffer_bytes"; width = 4; signed = false; byteArray = false; };
+  { name = "tx_buffer_bytes"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 34; signed = false; byteArray = true; };
+};
+format ::= {
+  formatVersion =;
+  incarnationParameterKey =;
+  headerBytes =;
+  entryBytes =;
+  maxApplications =;
+  bindingBytes =;
+  minQueueDepth =;
+  maxQueueDepth =;
+  maxByteBudget =;
+  maxTimerBudget =;
+  maxRetryLimit =;
+  maxReconnectLimit =;
+  maxBacklog =;
+  maxAcceptedSockets =;
+  roleClient =;
+  roleListener =;
+  backendExternal =;
+  backendLoopback =;
+  rightListen =;
+  rightSend =;
+  rightRecv =;
+  knownRights =;
+  peerNone =;
+  peerHolder =;
+  peerIpv4 =;
+  minKeepaliveMs =;
+  maxKeepaliveMs =;
+  minHopLimit =;
+  maxHopLimit =;
+  minIdleTimeoutMs =;
+  maxIdleTimeoutMs =;
+  minBufferBytes =;
+  maxBufferBytes =;
+  headerFields = headerSchema.fields ?? {;}; entryFields = entrySchema.fields ?? {;};
+  headerLayout =; entryLayout =;
+};
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    fs.writeAll caps.write (t.join "" { root; "/network_application.py"; }) bindings.python;
+    fs.writeAll caps.write (t.join "" { root; "/network_application.rs"; }) bindings.rust
+  ];
+main

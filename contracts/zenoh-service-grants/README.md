@@ -8,7 +8,7 @@ Each remaining bound has a source.
 
 - A key is at most 65535 bytes, because its length travels as a 16-bit field in the profile ([`zenoh-link-limits/v1`](../zenoh-link-limits/README.md)).
 - A count is at most 65535 and a sample at most 1048576 bytes. The largest product the contract forms then stays under the 63-bit integers of its arithmetic.
-- A holder is named as a binding is in `network-application/v3`. It uses 1 to 32 lowercase letters, digits, hyphens and underscores.
+- A holder is named as a binding is in `network-application/v4`. It uses 1 to 32 lowercase letters, digits, hyphens and underscores.
 - A key uses ASCII letters, digits and the characters `/ _ - : . ~`. It has no empty segment. The contract refuses a wildcard, a query mark, a fragment mark and a non-ASCII character. The demo's key and an `rmw_zenoh` key (`<domain>/<topic>/<type>/<hash>`) are inside that set.
 - The rows may not name more holders than the record declares.
 - The service declares one subscription to its peer for each distinct subscribe key. Those keys may not exceed the local subscriptions that the record declares.
