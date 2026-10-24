@@ -149,6 +149,44 @@ markers. Changing one arm must not silently alter the other's frozen declaration
 isolation before running the complete declaration gate. These are host checks,
 not evidence that a planned image has booted.
 
+The network checker boots 15 closures. Fourteen have a record. The fifteenth,
+`sel4-io-tcp-buffers`, is in `PLANNED_RUNS` until its composition lands. Its arms
+share one timeout and one set of failure markers, but they attach different devices.
+Ten attach a virtio NIC and five attach nothing. Four tables in the generator state this.
+`ARM_ENTRY_FUNCTIONS` names the functions that boot each arm. `QEMU_SITES` names the
+functions that pass QEMU arguments and the devices each passes. `ARM_DEVICES` names
+the devices each arm attaches. `ARM_CHOICES` gives the `--arm` choice of each arm. A
+person edits the tables, and `extract` does not infer a device from the code.
+
+Extraction checks that the code agrees with the tables. A QEMU token may sit only in
+a site. A token in a module-level statement, in a function that is not a site, or in
+a definition nested in a site is refused. Every `run_plane` call in a site gives
+`additional_arguments` as a tuple or list literal of flag and value pairs. Every
+launch path of the site must attach the same devices. Extraction reads each literal
+element by element and counts a repeated device as many times as it appears. A flag
+must be a literal from `-netdev`, `-device` and `-object`. A `-device` value must be a
+literal that starts with a `virtio-` device name. A computed flag, a variable value, a
+starred element and an odd count are refused. So is the keyword on any other call.
+
+An arm attaches the devices of every site that it reaches by any name. The reach
+starts at the arm's entry functions and at the branches of `main()` for its `--arm`
+choice. Each entry function must be read by that branch, so a branch cannot call another
+function in its place. A branch that is not exact, every `else`, and the statements outside the
+branches count for every arm. The arm's declaration must equal the devices of the
+sites it reaches. Every use of `arguments.arm` must be a comparison with string
+literals in the test of an `if`, so no branch hides behind a constant. Each arm must
+build exactly its own closure in what it reaches, so two call sites that swap their
+closures are refused. No function that an arm reaches may be rebound. An assignment,
+a parameter, a `global` declaration, a loop variable, a second definition, an import
+and a decorator are each refused. A string equal to a function name is refused, and
+so are `globals`, `getattr`, `eval` and similar names. The constants and imported
+modules that supply a closure to `build_image` are bound once at the top level.
+A local of the same name is refused. A protected function is reached only by its
+plain name, so an attribute call or a callee that is not a name is refused. The
+launcher `run_plane` is imported once from `sel4_plane` by name, without an alias.
+A call through another name or an import from another module is refused. A QEMU argument that reaches the launcher by a route other
+than `run_plane` is not covered.
+
 After an intended image-closure change, update only its test-run references with
 `python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.
 This checks the entire batch before writing and refuses any execution-field
