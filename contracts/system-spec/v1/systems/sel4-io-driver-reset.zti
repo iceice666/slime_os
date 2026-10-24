@@ -331,7 +331,7 @@
       keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
-      nagle = true;
+      nagle = true; rxBufferBytes = 2048; txBufferBytes = 2048;
       provisionBinding = "network-tcp-probe-provision";
       queueDepth = 0;
       reconnectLimit = 0;

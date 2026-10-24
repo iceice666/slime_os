@@ -449,7 +449,12 @@ STORE_COMPONENTS = frozenset(
 # come from the task-private region. It is the first *product* component here
 # rather than a probe, which is the point — the mechanism is only load-bearing
 # once something that ships uses it.
-PRIVATE_HEAP_COMPONENTS = frozenset({"fabric-service", "private-heap-probe"})
+#
+# `network-service` links it for socket pools above the minimum buffer size, which
+# only a generation declaring a larger network-application buffer needs. It is not
+# in `PRIVATE_HEAP_REQUIRED`: a generation whose rows declare the minimum size runs
+# on the static pools and takes no quota.
+PRIVATE_HEAP_COMPONENTS = frozenset({"fabric-service", "network-service", "private-heap-probe"})
 # Of those, the ones that cannot provision at all without a quota (C10.4).
 #
 # A subset rather than the same set: linking the allocator and *requiring* a

@@ -341,7 +341,7 @@ Semantics not visible in the table:
 | Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |
 | Boot-layout entries | `MAX_ENTRIES = 64` | `boot-contracts/src/generated/boot_layout.rs` |
 | Admitted executables / instances | `MAX_ADMITTED_EXECUTABLES = 48`, `MAX_ADMITTED_INSTANCES = 48` | `slime-root/src/generation.rs` |
-| Graph service iterations | `MAX_GRAPH_ITERATIONS = 32768` | `slime-root/src/main.rs` (B28); bounds a livelock rather than the gate timeout |
+| Graph service iterations | `MAX_GRAPH_ITERATIONS = 131072` for a finite plane; a resident product graph reports a checkpoint at 32768 and has no limit | `slime-root/src/graph_runtime.rs` (B28); bounds a livelock rather than the gate timeout |
 
 A task's kernel objects are allocated from a per-task arena, so termination
 reclaims its TCBs, CNode, VSpace, IPC buffers, and frames rather than leaking

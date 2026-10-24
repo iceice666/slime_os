@@ -397,13 +397,15 @@ def build_network_interfaces(declarations: list[dict]) -> bytes:
 
 
 def build_network_applications(manifest: dict) -> bytes:
-    """Encode exact application bindings, listener policy and TCP options (network-application/v3).
+    """Encode exact application bindings, listener policy, TCP options and buffer sizes (network-application/v4).
 
     A loopback listener admits one declared local client holder; an external
     listener listens on an address the service's declared interface owns and
     admits one exact remote unicast IPv4 address, any source port. Every row,
-    client or listener, declares the TCP options the service applies to each
-    socket it opens or accepts for that holder.
+    client or listener, declares the TCP options and the receive and transmit
+    buffer sizes the service applies to each socket it opens or accepts for
+    that holder. A listener's byte budget covers both buffers of every socket
+    it may accept.
     """
     c = wire_contracts
     declarations = manifest.get("networkApplications") or []
@@ -487,6 +489,14 @@ def build_network_applications(manifest: dict) -> bytes:
             and c.NETWORK_APPLICATION_MIN_HOP_LIMIT <= hop_limit <= c.NETWORK_APPLICATION_MAX_HOP_LIMIT
         ):
             fail("network application: socket options exceed contract")
+        rx_buffer, tx_buffer = (declaration[field] for field in ("rxBufferBytes", "txBufferBytes"))
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in (rx_buffer, tx_buffer)):
+            fail("network application: invalid buffer size")
+        if not all(
+            c.NETWORK_APPLICATION_MIN_BUFFER_BYTES <= value <= c.NETWORK_APPLICATION_MAX_BUFFER_BYTES and value & (value - 1) == 0
+            for value in (rx_buffer, tx_buffer)
+        ):
+            fail("network application: buffer sizes exceed contract")
         peer = declaration["admittedPeer"]
         peer_address_text = declaration["admittedPeerAddress"]
         peer_kind = c.NETWORK_APPLICATION_PEER_NONE
@@ -513,7 +523,7 @@ def build_network_applications(manifest: dict) -> bytes:
                     fail("network application: external listener admits no exact remote IPv4 address")
                 peer_kind = c.NETWORK_APPLICATION_PEER_IPV4
                 peer_address = remote.packed
-            if not (backlog == 1 and 1 <= sockets <= c.NETWORK_APPLICATION_MAX_ACCEPTED_SOCKETS and sockets * c.NETWORK_APPLICATION_BYTES_PER_ACCEPTED_SOCKET <= byte_budget <= c.NETWORK_APPLICATION_MAX_BYTE_BUDGET and 1 <= timers <= c.NETWORK_APPLICATION_MAX_TIMER_BUDGET and c.NETWORK_APPLICATION_MIN_QUEUE_DEPTH <= queue <= c.NETWORK_APPLICATION_MAX_QUEUE_DEPTH and queue & (queue - 1) == 0 and retries <= c.NETWORK_APPLICATION_MAX_RETRY_LIMIT and reconnects <= c.NETWORK_APPLICATION_MAX_RECONNECT_LIMIT):
+            if not (backlog == 1 and 1 <= sockets <= c.NETWORK_APPLICATION_MAX_ACCEPTED_SOCKETS and sockets * (rx_buffer + tx_buffer) <= byte_budget <= c.NETWORK_APPLICATION_MAX_BYTE_BUDGET and 1 <= timers <= c.NETWORK_APPLICATION_MAX_TIMER_BUDGET and c.NETWORK_APPLICATION_MIN_QUEUE_DEPTH <= queue <= c.NETWORK_APPLICATION_MAX_QUEUE_DEPTH and queue & (queue - 1) == 0 and retries <= c.NETWORK_APPLICATION_MAX_RETRY_LIMIT and reconnects <= c.NETWORK_APPLICATION_MAX_RECONNECT_LIMIT):
                 fail("network application: listener bounds exceed contract")
             endpoint = (address, port)
             if endpoint in listener_endpoints:
@@ -525,7 +535,7 @@ def build_network_applications(manifest: dict) -> bytes:
                     fail("network application: admitted peer is not a distinct declared local client")
         identity = network_destination_holder_identity(holder)
         peer_identity = network_destination_holder_identity(peer) if peer else bytes(32)
-        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, peer_kind, bytes(1), *limits, peer_address, keepalive, idle_timeout, hop_limit, int(nagle), bytes(42))
+        packed = c.NETWORK_APPLICATION_ENTRY.pack(identity, *encoded_names, peer_identity, address, port, rights, role, backend, peer_kind, bytes(1), *limits, peer_address, keepalive, idle_timeout, hop_limit, int(nagle), rx_buffer, tx_buffer, bytes(34))
         entries.append((identity, packed))
     entries.sort(key=lambda entry: entry[0])
     total = c.NETWORK_APPLICATION_HEADER_BYTES + len(entries) * c.NETWORK_APPLICATION_ENTRY_BYTES

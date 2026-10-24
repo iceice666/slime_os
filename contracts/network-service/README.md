@@ -13,7 +13,7 @@ performs TCP I/O; a successful legacy endpoint request is not transport evidence
 The client resolves separate declared control and provisioning endpoints. The
 control endpoint is nontransferable; it carries the endpoint `OP_ATTACH` request
 with all operation fields zero. After admitting the binding declared by
-[`network-application/v3`](../network-application/README.md), the service allocates two distinct backing buffers through
+[`network-application/v4`](../network-application/README.md), the service allocates two distinct backing buffers through
 its explicit shared-buffer factory: one ring page and one 4096-byte payload page.
 It formats an IO0 ring with `QUEUE_SLOTS = 4`, then delegates a writable
 `SharedBufferLoan` for each page to the client on the provisioning endpoint,
@@ -220,10 +220,15 @@ root device incarnation rather than restarting at a constant value. The host
 harness also exercises the production queued-request settlement helper.
 
 External and loopback backends each own four fixed socket slots in separate
-engines. Their socket-buffer arrays are static service-owned storage. Each socket
-has a 2048-byte receive buffer and a 2048-byte transmit buffer. Admission checks the exact holder,
+engines. Each backend's pool gives every slot the largest receive and transmit
+buffer any of that backend's application rows declares, at least 2048 bytes.
+A pool at 2048 bytes is static service-owned storage; a larger pool comes from
+the service's private memory at attach. Each connection gets the buffer sizes
+its holder's row declares, 2048 bytes each for a holder without a row, and a
+pooled socket is rebuilt when its next connection's row declares other sizes.
+Admission checks the exact holder,
 transport, IPv4 address, port, and connect right before changing a socket. Each
-live connection reserves 4096 bytes against its destination's `byte_budget`,
+live connection reserves both of its buffers against its destination's `byte_budget`,
 one unit against `socket_limit`, one unit against `queue_depth`, and one timer
 against `timer_budget`. These are conservative per-connection reservations, not
 per-packet allocations. Send and receive independently require their declared
@@ -271,7 +276,7 @@ after an orderly peer FIN and drainage of queued receive bytes. Applications
 must handle partial transfers and distinguish EOF from temporary unreadiness.
 
 Connect and close have ten-second deadlines. Each socket also carries the idle
-timeout its application row declares (`network-application/v3`, ten seconds
+timeout its application row declares (`network-application/v4`, ten seconds
 for a holder without a row): smoltcp aborts a connect, or an established
 connection with unacknowledged data or keep-alive on, that hears nothing from
 its peer for that long, with one reset. The engine records every connection's

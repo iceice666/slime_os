@@ -16,6 +16,8 @@ const TUNED: SocketOptions = SocketOptions {
     idle_timeout_ms: 2000,
     hop_limit: 7,
     nagle: false,
+    rx_buffer_bytes: BUFFER_BYTES as u32,
+    tx_buffer_bytes: BUFFER_BYTES as u32,
 };
 
 /// One external client row for `HOLDER` declaring `options`.
@@ -45,6 +47,10 @@ fn applications(options: SocketOptions) -> Vec<u8> {
         .copy_from_slice(&options.idle_timeout_ms.to_le_bytes());
     row[app::OFF_ENTRY_HOP_LIMIT] = options.hop_limit;
     row[app::OFF_ENTRY_NAGLE] = u8::from(options.nagle);
+    row[app::OFF_ENTRY_RX_BUFFER_BYTES..app::OFF_ENTRY_RX_BUFFER_BYTES_END]
+        .copy_from_slice(&options.rx_buffer_bytes.to_le_bytes());
+    row[app::OFF_ENTRY_TX_BUFFER_BYTES..app::OFF_ENTRY_TX_BUFFER_BYTES_END]
+        .copy_from_slice(&options.tx_buffer_bytes.to_le_bytes());
     bytes
 }
 
@@ -199,7 +205,14 @@ fn engine_parts() -> (
 #[test]
 fn every_open_applies_the_declared_row_and_reno_and_the_wire_carries_its_hop_limit() {
     let (mut storage, mut rx, mut tx) = engine_parts();
-    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 21, 0).unwrap();
+    let mut engine = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        21,
+        0,
+    )
+    .unwrap();
     assert_eq!(engine.congestion_control(), b"reno");
     let destination_bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, 4096, 1, 1);
     let application_bytes = applications(TUNED);
@@ -230,7 +243,14 @@ fn every_open_applies_the_declared_row_and_reno_and_the_wire_carries_its_hop_lim
     // pooled socket regains even after a tuned connection used it.
     pending(session.handle(&mut engine, request(wire::OP_CLOSE, id), &mut [], net.now()));
     let (mut storage, mut rx, mut tx) = engine_parts();
-    let mut plain = Engine::new(&mut storage, &mut rx, &mut tx, 22, 0).unwrap();
+    let mut plain = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        22,
+        0,
+    )
+    .unwrap();
     let mut net = Net::new();
     let id = pending(plain.handle(
         &session.destinations,
@@ -258,7 +278,14 @@ fn every_open_applies_the_declared_row_and_reno_and_the_wire_carries_its_hop_lim
 #[test]
 fn keep_alive_probes_are_never_charged_as_retries_and_hold_an_answered_connection() {
     let (mut storage, mut rx, mut tx) = engine_parts();
-    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 23, 0).unwrap();
+    let mut engine = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        23,
+        0,
+    )
+    .unwrap();
     // The destination's retry limit is two; six probes must not exhaust it.
     let destination_bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, 4096, 1, 1);
     let application_bytes = applications(TUNED);
@@ -306,13 +333,22 @@ fn a_silent_peer_ends_the_connection_with_one_reset_and_a_typed_timeout() {
                 idle_timeout_ms: 4000,
                 hop_limit: 64,
                 nagle: true,
+                rx_buffer_bytes: BUFFER_BYTES as u32,
+                tx_buffer_bytes: BUFFER_BYTES as u32,
             },
             true,
         ),
         (TUNED, false),
     ] {
         let (mut storage, mut rx, mut tx) = engine_parts();
-        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 24, 0).unwrap();
+        let mut engine = Engine::new(
+            &mut storage,
+            rx.as_flattened_mut(),
+            tx.as_flattened_mut(),
+            24,
+            0,
+        )
+        .unwrap();
         let destination_bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, 4096, 1, 1);
         let application_bytes = applications(options);
         let mut net = Net::new();
@@ -410,5 +446,177 @@ fn a_silent_peer_ends_the_connection_with_one_reset_and_a_typed_timeout() {
                 .count(),
             1
         );
+    }
+}
+
+fn opened(engine: &mut Engine<'_>) -> (usize, u32, u32) {
+    loop {
+        match engine.take_event().expect("an opening was recorded") {
+            Event::Opened {
+                holder,
+                socket,
+                rx_bytes,
+                tx_bytes,
+                ..
+            } => {
+                assert_eq!(holder, HOLDER);
+                return (socket, rx_bytes, tx_bytes);
+            }
+            _ => continue,
+        }
+    }
+}
+
+#[test]
+fn declared_buffers_size_each_connection_and_a_reused_socket_is_rebuilt() {
+    let large = SocketOptions {
+        rx_buffer_bytes: 65536,
+        tx_buffer_bytes: 65536,
+        ..TUNED
+    };
+    let baseline = SocketOptions {
+        rx_buffer_bytes: 2048,
+        tx_buffer_bytes: 2048,
+        ..TUNED
+    };
+    let mut storage = [SocketStorage::EMPTY; SOCKETS];
+    let mut rx = vec![0u8; SOCKETS * 65536];
+    let mut tx = vec![0u8; SOCKETS * 65536];
+    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 22, 0).unwrap();
+    assert_eq!(engine.capacity(), (65536, 65536));
+    let destination_bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, 131072, 1, 1);
+    let mut net = Net::new();
+    let mut context_link = Link::default();
+    let large_bytes = applications(large);
+    let mut session = Session {
+        destinations: NetworkDestinations::decode(&destination_bytes).unwrap(),
+        applications: NetworkApplications::decode(&large_bytes).unwrap(),
+        context: interface(&mut context_link, 1),
+    };
+    let id = established(&mut engine, &mut net, &mut session);
+    let index = engine.find(HOLDER, id).unwrap();
+    let socket = engine.sockets.get::<Socket>(engine.handles[index]);
+    assert_eq!(
+        (socket.recv_capacity(), socket.send_capacity()),
+        (65536, 65536)
+    );
+    assert_eq!(opened(&mut engine), (index, 65536, 65536));
+    // The guest's SYN announces the window scale its receive buffer implies.
+    let syn = net
+        .published
+        .iter()
+        .find_map(|(_, frame)| {
+            let ip = Ipv4Packet::new_checked(&frame[14..]).ok()?;
+            let tcp = TcpPacket::new_checked(ip.payload()).ok()?;
+            (tcp.syn() && !tcp.ack()).then(|| (tcp.window_len(), tcp.options().to_vec()))
+        })
+        .expect("the guest sent a SYN");
+    assert_eq!(syn.0, 65535);
+    assert!(
+        syn.1.windows(3).any(|option| option == [3, 3, 1]),
+        "{:?}",
+        syn.1
+    );
+    // The whole transmit buffer is accepted before the peer reads anything.
+    let mut payload = vec![0x5a; 65536 + 1];
+    let sent = complete(session.handle(
+        &mut engine,
+        request(wire::OP_SEND, id),
+        &mut payload,
+        net.now(),
+    ));
+    assert_eq!(sent.transferred, 65536);
+    net.run(&mut engine, 2000);
+    // Releasing the holder returns both 65536-byte buffers. Its queued reset
+    // holds the socket until the operation timeout passes.
+    let reclaimed = engine.release_holder(HOLDER);
+    assert_eq!(
+        (reclaimed.handles, reclaimed.sockets, reclaimed.bytes),
+        (1, 1, 2 * 65536)
+    );
+    net.run(&mut engine, 11_000);
+    assert_eq!(engine.free_socket(), Some(index));
+    // The peer's one socket saw the reset; it listens again for the next holder.
+    for (_, peer) in net.peers.iter_mut() {
+        if let Some(socket) = <Socket as smoltcp::socket::AnySocket>::downcast_mut(peer) {
+            socket.abort();
+            socket.listen(PORT).unwrap();
+        }
+    }
+
+    // The same pool socket serves a 2048-byte row next, rebuilt to its size.
+    let baseline_bytes = applications(baseline);
+    session.applications = NetworkApplications::decode(&baseline_bytes).unwrap();
+    let id = established(&mut engine, &mut net, &mut session);
+    let reused = engine.find(HOLDER, id).unwrap();
+    assert_eq!(reused, index);
+    let socket = engine.sockets.get::<Socket>(engine.handles[reused]);
+    assert_eq!(
+        (socket.recv_capacity(), socket.send_capacity()),
+        (2048, 2048)
+    );
+    assert_eq!(opened(&mut engine), (reused, 2048, 2048));
+    let reclaimed = engine.release_holder(HOLDER);
+    assert_eq!((reclaimed.sockets, reclaimed.bytes), (1, 2 * 2048));
+}
+
+#[test]
+fn buffer_budgets_and_pool_capacity_bound_every_connection() {
+    let large = SocketOptions {
+        rx_buffer_bytes: 65536,
+        tx_buffer_bytes: 65536,
+        ..TUNED
+    };
+    let large_bytes = applications(large);
+    // A destination budget one byte short of both buffers refuses the connect.
+    for (budget, capacity, admitted) in [
+        (131071, 65536, false),
+        (131072, 65536, true),
+        (131072, 2048, false),
+    ] {
+        let mut storage = [SocketStorage::EMPTY; SOCKETS];
+        let mut rx = vec![0u8; SOCKETS * capacity];
+        let mut tx = vec![0u8; SOCKETS * capacity];
+        let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 23, 0).unwrap();
+        let destination_bytes = declarations(RIGHT_CONNECT | RIGHT_SEND | RIGHT_RECV, budget, 1, 1);
+        let mut net = Net::new();
+        let mut context_link = Link::default();
+        let mut session = Session {
+            destinations: NetworkDestinations::decode(&destination_bytes).unwrap(),
+            applications: NetworkApplications::decode(&large_bytes).unwrap(),
+            context: interface(&mut context_link, 1),
+        };
+        let outcome = session.handle(
+            &mut engine,
+            request(wire::OP_CONNECT, 0),
+            &mut [],
+            net.now(),
+        );
+        if admitted {
+            assert!(matches!(outcome, Outcome::Pending { .. }), "{outcome:?}");
+        } else {
+            assert_eq!(
+                complete(outcome).status,
+                Status::Exhausted,
+                "budget={budget} capacity={capacity}"
+            );
+            assert_eq!(engine.allocated(), 0);
+        }
+        net.run(&mut engine, 10);
+    }
+    // A pool whose per-socket range is not an admitted buffer size is refused.
+    for (rx_bytes, tx_bytes) in [
+        (SOCKETS * 1024, SOCKETS * 2048),
+        (SOCKETS * 2048, SOCKETS * 131072),
+        (SOCKETS * 3072, SOCKETS * 2048),
+        (SOCKETS * 2048 + 1, SOCKETS * 2048),
+    ] {
+        let mut storage = [SocketStorage::EMPTY; SOCKETS];
+        let mut rx = vec![0u8; rx_bytes];
+        let mut tx = vec![0u8; tx_bytes];
+        assert!(matches!(
+            Engine::new(&mut storage, &mut rx, &mut tx, 24, 0),
+            Err(Status::Exhausted)
+        ));
     }
 }

@@ -583,7 +583,11 @@ impl phy::Device for Link {
         let mut capabilities = DeviceCapabilities::default();
         capabilities.medium = Medium::Ethernet;
         capabilities.max_transmission_unit = MTU;
-        capabilities.max_burst_size = Some(TX_FRAMES);
+        // No burst size: smoltcp clamps every advertised receive window to
+        // `max_burst_size` segments, which would hide a declared receive
+        // buffer above four segments from the peer. A burst past the four RX
+        // slots waits in the device queue; on a lossy link it is retransmitted.
+        capabilities.max_burst_size = None;
         // The driver negotiates no offload, so every checksum is computed and
         // verified here.
         let mut checksum = ChecksumCapabilities::default();

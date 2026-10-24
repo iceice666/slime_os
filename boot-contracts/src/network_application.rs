@@ -1,12 +1,13 @@
-//! Exact application bindings, bounded listener authority and declared TCP
-//! socket options.
+//! Exact application bindings, bounded listener authority, declared TCP
+//! socket options and declared socket buffer sizes.
 //!
 //! A loopback listener admits one declared local client holder; an external
 //! listener admits one exact remote IPv4 address. Neither is a wildcard, and
 //! an external listener's local address is checked against the service's
 //! declared interface where that declaration is visible, not here. Every row
 //! declares the TCP options the service applies to each socket it opens or
-//! accepts for that holder; no request can select or change them.
+//! accepts for that holder, including the size of its receive and transmit
+//! buffers; no request can select or change them.
 
 pub use crate::network_destination::holder_identity;
 include!("generated/network_application.rs");
@@ -65,13 +66,28 @@ pub struct Application<'a> {
 
 /// The TCP options one row declares. Keep-alive zero means off; the idle
 /// timeout aborts a connection that hears nothing from its peer for that long
-/// while it has unacknowledged data or keep-alive on.
+/// while it has unacknowledged data or keep-alive on. The buffer sizes are
+/// each a power of two from [`MIN_BUFFER_BYTES`] to [`MAX_BUFFER_BYTES`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SocketOptions {
     pub keepalive_ms: u32,
     pub idle_timeout_ms: u32,
     pub hop_limit: u8,
     pub nagle: bool,
+    pub rx_buffer_bytes: u32,
+    pub tx_buffer_bytes: u32,
+}
+
+impl SocketOptions {
+    /// The bytes one socket of this row reserves: both of its buffers.
+    pub const fn socket_bytes(&self) -> u32 {
+        self.rx_buffer_bytes + self.tx_buffer_bytes
+    }
+}
+
+/// Whether `bytes` is a buffer size this format admits.
+pub const fn valid_buffer_bytes(bytes: u32) -> bool {
+    bytes.is_power_of_two() && bytes >= MIN_BUFFER_BYTES && bytes <= MAX_BUFFER_BYTES
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -235,6 +251,8 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
             idle_timeout_ms: u32_at(bytes, OFF_ENTRY_IDLE_TIMEOUT_MS),
             hop_limit: bytes[OFF_ENTRY_HOP_LIMIT],
             nagle: bytes[OFF_ENTRY_NAGLE] == 1,
+            rx_buffer_bytes: u32_at(bytes, OFF_ENTRY_RX_BUFFER_BYTES),
+            tx_buffer_bytes: u32_at(bytes, OFF_ENTRY_TX_BUFFER_BYTES),
         },
     };
     let options = entry.options;
@@ -243,6 +261,8 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
             && !(MIN_KEEPALIVE_MS..=MAX_KEEPALIVE_MS).contains(&options.keepalive_ms))
         || !(MIN_IDLE_TIMEOUT_MS..=MAX_IDLE_TIMEOUT_MS).contains(&options.idle_timeout_ms)
         || !(MIN_HOP_LIMIT..=MAX_HOP_LIMIT).contains(&options.hop_limit)
+        || !valid_buffer_bytes(options.rx_buffer_bytes)
+        || !valid_buffer_bytes(options.tx_buffer_bytes)
     {
         return Err(DecodeError::Impossible);
     }
@@ -299,7 +319,7 @@ fn decode_entry(bytes: &[u8]) -> Result<Application<'_>, DecodeError> {
                 || entry.accepted_socket_limit > MAX_ACCEPTED_SOCKETS
                 || entry.backlog > entry.accepted_socket_limit
                 || entry.byte_budget > MAX_BYTE_BUDGET
-                || entry.byte_budget < BYTES_PER_ACCEPTED_SOCKET * entry.accepted_socket_limit
+                || entry.byte_budget < options.socket_bytes() * entry.accepted_socket_limit
                 || entry.timer_budget == 0
                 || entry.timer_budget > MAX_TIMER_BUDGET
                 || !(MIN_QUEUE_DEPTH..=MAX_QUEUE_DEPTH).contains(&entry.queue_depth)
@@ -364,6 +384,8 @@ mod tests {
         put32(&mut bytes, OFF_ENTRY_IDLE_TIMEOUT_MS, 10_000);
         bytes[OFF_ENTRY_HOP_LIMIT] = 64;
         bytes[OFF_ENTRY_NAGLE] = 1;
+        put32(&mut bytes, OFF_ENTRY_RX_BUFFER_BYTES, MIN_BUFFER_BYTES);
+        put32(&mut bytes, OFF_ENTRY_TX_BUFFER_BYTES, MIN_BUFFER_BYTES);
         bytes
     }
     fn listener() -> [u8; ENTRY_BYTES] {
@@ -773,6 +795,8 @@ mod tests {
                     idle_timeout_ms: 2000,
                     hop_limit: 7,
                     nagle: false,
+                    rx_buffer_bytes: MIN_BUFFER_BYTES,
+                    tx_buffer_bytes: MIN_BUFFER_BYTES,
                 }
             );
             for (offset, value, valid) in [
@@ -830,6 +854,73 @@ mod tests {
         put32(&mut version_two, OFF_HEADER_FORMAT_VERSION, 2);
         assert_eq!(
             NetworkApplications::decode(&version_two).err(),
+            Some(DecodeError::UnsupportedVersion)
+        );
+    }
+
+    #[test]
+    fn declared_buffer_sizes_are_decoded_and_bounded_for_every_role() {
+        let peer = client(1, BACKEND_LOOPBACK);
+        let admitted = [2048, 4096, 8192, 16384, 32768, 65536];
+        let refused = [0, 1024, 2047, 3072, 65535, 131072, u32::MAX];
+        for row in [client(1, BACKEND_EXTERNAL), external_listener()] {
+            for offset in [OFF_ENTRY_RX_BUFFER_BYTES, OFF_ENTRY_TX_BUFFER_BYTES] {
+                for value in admitted {
+                    let mut entry = row;
+                    put32(&mut entry, offset, value);
+                    if entry[OFF_ENTRY_ROLE] == ROLE_LISTENER {
+                        put32(&mut entry, OFF_ENTRY_BYTE_BUDGET, MAX_BYTE_BUDGET);
+                    }
+                    let bytes = object(&[entry]);
+                    let options = NetworkApplications::decode(&bytes)
+                        .unwrap()
+                        .application(0)
+                        .unwrap()
+                        .options;
+                    let declared = if offset == OFF_ENTRY_RX_BUFFER_BYTES {
+                        options.rx_buffer_bytes
+                    } else {
+                        options.tx_buffer_bytes
+                    };
+                    assert_eq!(declared, value, "offset={offset} value={value}");
+                }
+                for value in refused {
+                    let mut entry = row;
+                    put32(&mut entry, offset, value);
+                    assert_eq!(
+                        NetworkApplications::decode(&object(&[entry])).err(),
+                        Some(DecodeError::Impossible),
+                        "offset={offset} value={value}"
+                    );
+                }
+            }
+        }
+        // A listener's budget covers both buffers of every socket it may accept.
+        let mut large = listener();
+        put32(&mut large, OFF_ENTRY_RX_BUFFER_BYTES, 65536);
+        put32(&mut large, OFF_ENTRY_TX_BUFFER_BYTES, 65536);
+        put32(&mut large, OFF_ENTRY_ACCEPTED_SOCKET_LIMIT, 4);
+        put32(&mut large, OFF_ENTRY_BACKLOG, 1);
+        put32(&mut large, OFF_ENTRY_TIMER_BUDGET, 4);
+        put32(&mut large, OFF_ENTRY_BYTE_BUDGET, 4 * 131072);
+        assert!(NetworkApplications::decode(&object(&[peer, large])).is_ok());
+        put32(&mut large, OFF_ENTRY_BYTE_BUDGET, 4 * 131072 - 1);
+        assert_eq!(
+            NetworkApplications::decode(&object(&[peer, large])).err(),
+            Some(DecodeError::Impossible)
+        );
+        // A nonzero byte in the shortened reserved tail is refused.
+        let mut reserved = client(1, BACKEND_EXTERNAL);
+        reserved[OFF_ENTRY_RESERVED] = 1;
+        assert_eq!(
+            NetworkApplications::decode(&object(&[reserved])).err(),
+            Some(DecodeError::InvalidEntry)
+        );
+        // Version 3 rows, which carry no buffer sizes, are refused whole.
+        let mut version_three = object(&[client(1, BACKEND_EXTERNAL)]);
+        put32(&mut version_three, OFF_HEADER_FORMAT_VERSION, 3);
+        assert_eq!(
+            NetworkApplications::decode(&version_three).err(),
             Some(DecodeError::UnsupportedVersion)
         );
     }
