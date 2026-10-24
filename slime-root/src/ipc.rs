@@ -1754,6 +1754,10 @@ mod tests {
             row[OFF_ENTRY_IDLE_TIMEOUT_MS..OFF_ENTRY_IDLE_TIMEOUT_MS_END]
                 .copy_from_slice(&MIN_IDLE_TIMEOUT_MS.to_le_bytes());
             row[OFF_ENTRY_HOP_LIMIT] = MIN_HOP_LIMIT;
+            row[OFF_ENTRY_RX_BUFFER_BYTES..OFF_ENTRY_RX_BUFFER_BYTES_END]
+                .copy_from_slice(&MIN_BUFFER_BYTES.to_le_bytes());
+            row[OFF_ENTRY_TX_BUFFER_BYTES..OFF_ENTRY_TX_BUFFER_BYTES_END]
+                .copy_from_slice(&MIN_BUFFER_BYTES.to_le_bytes());
         }
         let table = NetworkApplications::decode(&bytes).unwrap();
         let mut out = [0xa5; MAX_APPLICATIONS * ENTRY_BYTES];
