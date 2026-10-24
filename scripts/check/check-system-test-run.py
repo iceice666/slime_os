@@ -1138,6 +1138,18 @@ def check_arm_controls() -> int:
             refused += 1
         copy.write_text(source, encoding="utf-8")
 
+        # An arm's declared entry functions must be read by the branch of main() for its choice. Without that, a
+        # branch could call a function with a different device and the declaration would still hold.
+        net_call = "run_net_arm(build_image(NET_CLOSURE), mac, arguments.transcript)"
+        options_call = "run_options_arm(build_image(OPTIONS_CLOSURE), mac, limits, arguments.transcript)"
+        for label, text, arm in (
+            ("the net branch calls the authority entry instead of its own", mutated(net_call, "run_authority_arm(build_image(NET_CLOSURE))"), "sel4-net"),
+            ("the net branch drops the call to its entry", mutated(net_call, "build_image(NET_CLOSURE)"), "sel4-net"),
+            ("the options branch drops the call to its entry", mutated(options_call, "build_image(OPTIONS_CLOSURE)"), "sel4-io-tcp-options"),
+            ("the buffers branch calls the options entry instead of its own", mutated("run_buffers_arm(build_image(BUFFERS_CLOSURE)", "run_options_arm(build_image(BUFFERS_CLOSURE)"), "sel4-io-tcp-buffers"),
+        ):
+            refused_edit(label, text, arm)
+
         # An arm whose closure has not landed is planned. Its registration stays in PLANNED_RUNS until the closure
         # and the record exist. Without it the arm is a run with a missing closure, and its tables are still read.
         buffers = "sel4-io-tcp-buffers"

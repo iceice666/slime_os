@@ -983,7 +983,11 @@ def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
 
     def reach(name: str) -> tuple[set[str], list[ast.AST]]:
         statements = [*by_choice.get(choices[name], []), *every]
-        reached = reachable_units(units, (*arms[name], *sorted(names_read(statements, outside))))
+        read_by_main = names_read(statements, outside)
+        unread = [entry for entry in arms[name] if entry not in read_by_main]
+        if unread:
+            fail(f"{path.name}: {name} declares the entry function(s) {unread}, but the branch of main() for {choices[name]!r} never reads them")
+        reached = reachable_units(units, (*arms[name], *sorted(read_by_main)))
         nodes: list[ast.AST] = [inner for unit in reached for statement in units[unit] for inner in ast.walk(statement)]
         nodes += [inner for statement in statements for inner in ast.walk(statement)]
         return reached, [*nodes, *outside]

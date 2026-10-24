@@ -170,7 +170,8 @@ starred element and an odd count are refused. So is the keyword on any other cal
 
 An arm attaches the devices of every site that it reaches by any name. The reach
 starts at the arm's entry functions and at the branches of `main()` for its `--arm`
-choice. A branch that is not exact, every `else`, and the statements outside the
+choice. Each entry function must be read by that branch, so a branch cannot call another
+function in its place. A branch that is not exact, every `else`, and the statements outside the
 branches count for every arm. The arm's declaration must equal the devices of the
 sites it reaches. Every use of `arguments.arm` must be a comparison with string
 literals in the test of an `if`, so no branch hides behind a constant. Each arm must
