@@ -1277,7 +1277,18 @@ pub(super) fn launch_instance_graph(
 /// — 96 bytes of script — on top of four components' startup, every command's
 /// profile resolution, and a spawn plus a supervised wait per launch. Measured
 /// the same way B28 was: 2048 exhausted with the session still parked.
-const MAX_GRAPH_ITERATIONS: usize = 32768;
+///
+/// Raised again for `sel4-io-tcp-buffers`: two holders each stream 1310720
+/// bytes through the virtio link, and every frame costs root arrivals for its
+/// DMA pin, release and interrupt besides the service's clock reads. That plane
+/// needs about 50000 arrivals; 32768 exhausted it with the second holder's
+/// throughput stream half sent.
+const MAX_GRAPH_ITERATIONS: usize = 131072;
+
+/// The arrival count at which a resident product graph reports a checkpoint.
+/// Product has no request limit; this only marks that the dispatcher is still
+/// serving, and `check-duo-slisp.py` pins the number.
+const RESIDENT_CHECKPOINT_ITERATIONS: usize = 32768;
 
 mod services;
 pub(super) use services::policy::private_memory_cause;

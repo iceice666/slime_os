@@ -238,7 +238,7 @@ pub(super) fn serve_instance_graph(
             continue;
         }
         iterations = iterations.saturating_add(1);
-        if iteration_limit.is_none() && iterations == MAX_GRAPH_ITERATIONS {
+        if iteration_limit.is_none() && iterations == RESIDENT_CHECKPOINT_ITERATIONS {
             slime_root::diagnostic_println!(
                 "SLIME_GRAPH resident checkpoint live={live} iterations={iterations}"
             );

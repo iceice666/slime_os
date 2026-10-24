@@ -17,10 +17,10 @@ Owners:
   transport-independent), `components/lib/src/link_frames.rs`;
 - contracts: `contracts/network-service/v1/` (operations, bounds, waiting,
   retry, timeout, cleanup — see its [README](../../contracts/network-service/README.md)),
-  `contracts/network-application/v3/`, `contracts/network-destination/v1/`,
+  `contracts/network-application/v4/`, `contracts/network-destination/v1/`,
   `contracts/network-interface/v1/`, `contracts/link-device/v1/`;
 - compositions: `sel4-io-network`, `sel4-io-tcp`, `sel4-io-tcp-impairment`,
-  `sel4-io-tcp-listener`, `sel4-io-tcp-options`,
+  `sel4-io-tcp-listener`, `sel4-io-tcp-options`, `sel4-io-tcp-buffers`,
   `sel4-io-local`, `sel4-io-lifetime`, `sel4-io-service-fault`,
   `sel4-io-driver-reset`, `sel4-http`, `sel4-http-public` under
   `contracts/system-spec/v1/`;
@@ -46,8 +46,10 @@ reset/release checks.
 
 ## Loss, reordering, retransmission and window bounds
 
-Each external socket owns fixed 2048-byte receive and transmit buffers, and
-smoltcp's out-of-order assembler holds four disjoint ranges
+Each external socket gets the receive and transmit buffers its holder's row
+declares ([Declared socket buffers](#declared-socket-buffers)); the qualified
+impairment composition declares 2048 bytes each. smoltcp's out-of-order
+assembler holds four disjoint ranges
 (`assembler-max-segment-count-4`); a fifth range is dropped and recovered only
 by the peer's retransmission. The service states these bounds and its 10 s
 operation timeout at attach (`tcp bounds …`) and, at shutdown, the deepest
@@ -102,9 +104,42 @@ behind a scripted frame peer (`scripts/lib/tcp_options_peer.py`); the declared
 values are in the
 [plan](../plans/network-data-plane.md#tcp-socket-options-and-congestion-control).
 
+## Declared socket buffers
+
+Every application row also declares the receive and transmit buffer of each
+socket it opens or accepts: a power of two from 2048 to 65536 bytes each, 2048
+for a holder without a row. The transmit buffer bounds a connection's
+unacknowledged bytes, so it bounds the bytes one round trip can carry. A
+receive buffer above 65535 bytes makes the SYN announce window scale shift 1.
+The external link declares no burst size to smoltcp, which would otherwise
+clamp every advertised window to four segments; a burst past the four RX slots
+waits in the device queue, and on a lossy link the peer retransmits it.
+
+Each backend's four-socket pool gives every slot the largest receive and
+transmit buffer of that backend's rows. A pool at 2048 bytes uses the static
+arenas, so a generation whose rows all declare 2048 runs unchanged and holds
+no private memory. A larger pool is allocated once at attach from the
+service's private memory, and a generation that declares one must give the
+`network-service` instance a quota that covers it. smoltcp fixes a socket's
+buffers and window scale when it is built, so the engine rebuilds a free pooled
+socket over the declared prefix of its slot whenever the next connection's row
+declares other sizes. Every connection reserves both of its buffers against its
+destination's or listener's byte budget, and a release, reset or timeout
+returns exactly those bytes.
+
+At activation the service states each row's sizes
+(`tcp buffers holder=… rx_bytes=… tx_bytes=…`) and each backend's pool
+(`tcp pool backend=… sockets=4 rx_bytes=… tx_bytes=…`); `tcp bounds` reports
+the external pool. Every connection it opens or accepts is reported with its
+pool slot (`tcp open holder=… socket=… local_port=… rx_bytes=… tx_bytes=…`).
+The `sel4-io-tcp-buffers` composition qualifies a 65536-byte and a 2048-byte
+holder behind a scripted frame peer (`scripts/lib/tcp_buffers_peer.py`); the
+declared values are in the
+[plan](../plans/network-data-plane.md#declared-tcp-socket-buffer-sizes).
+
 ## Application authority and listeners
 
-`network-application/v3` declares each application's control/provisioning
+`network-application/v4` declares each application's control/provisioning
 bindings, backend, optional readiness/supervision bindings, and separate exact
 listener authority. A loopback listener row permits only `127.0.0.1`, a nonzero
 port and one declared local client holder; local-peer admission precedes SYN
@@ -243,6 +278,10 @@ peer's reset behavior is not ordinary-server interoperability across reset.
 - `just io_tcp_impairment_check` — scripted reordering, loss, a silent peer and
   zero windows in both directions against the declared bounds, judged from the
   wire, after the peer's own host controls;
+- `just io_tcp_buffers_check` — a 65536-byte and a 2048-byte holder: the
+  transmit in-flight limit, SYN window scale, zero-window point and socket
+  reuse judged from the wire, throughput recorded, after the impairment and
+  options exams;
 - `just io_tcp_listener_check` — one exact external listener: silent and reset
   refusals, half-close both ways, simultaneous close and close with unread or
   unsent bytes, judged from the wire, after the peer's own host controls;

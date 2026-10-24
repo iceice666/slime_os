@@ -1,0 +1,67 @@
+{
+  formatVersion = 1;
+  name = "io-tcp-buffers-probe";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "Opens TCP connections under the buffer sizes its generation row declares and reports each scripted transmit, receive and throughput scenario.";
+  implementation =  {
+    provider = "workspace";
+    binary = "io-tcp-buffers-probe";
+    contentHash = "";
+  };
+  provides = [
+  ];
+  requires = [
+    "endpoint";
+  ];
+  interfaces = [
+  ];
+  dependencies = [
+    "network-service";
+  ];
+  communication =  {
+    semantic = "none";
+    qos = [
+    ];
+  };
+  configuration = [
+  ];
+  lifecycle = [
+    "Initialize";
+    "Start";
+    "Running";
+    "Error";
+  ];
+  runtime =  {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 32768;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [
+    ];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility =  {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test =  {
+    testCondition = "io_tcp_buffers_check boots sel4-io-tcp-buffers behind the scripted buffers peer";
+    expectedResult = "each scenario stream sent or received byte for byte and every connection closed gracefully";
+    passFailCriteria = "scenarios=3 shutdown=1";
+    requiredTestEnvironment = "io_tcp_buffers_check";
+  };
+}

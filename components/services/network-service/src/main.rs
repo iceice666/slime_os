@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 use boot_contracts::network_application::{self, Backend, NetworkApplications};
 use boot_contracts::network_destination::{
     Address, Destination, ENTRY_BYTES, FORMAT_VERSION, HEADER_BYTES, MAGIC, MAX_DESTINATIONS,
@@ -35,6 +37,8 @@ slime_rt::entry!(main);
 const MAX_ROWS: usize = MAX_DESTINATIONS;
 // These bounded arenas are borrowed once by the sole service thread. Keeping
 // their backing storage out of the call frame preserves the runtime stack bound.
+// A backend whose rows declare only the minimum buffer size runs on its two
+// static pools; a larger declaration takes its pool from private memory.
 static mut DESTINATION_STORAGE: [u8; HEADER_BYTES + MAX_ROWS * ENTRY_BYTES] =
     [0; HEADER_BYTES + MAX_ROWS * ENTRY_BYTES];
 static mut EXTERNAL_RX: [[u8; tcp::BUFFER_BYTES]; tcp::SOCKETS] =
@@ -248,13 +252,21 @@ fn main(_: u32) {
     let epoch = 1u64;
     let mut observed = Observed::default();
 
-    let mut stack = attach_stack();
+    let external_capacity = pool_capacity(application_table.as_ref(), Backend::External);
+    let local_capacity = pool_capacity(application_table.as_ref(), Backend::Loopback);
+    let mut stack = attach_stack(external_capacity);
     let external_listeners = admit_external_listeners(application_table.as_ref(), stack.as_mut());
     let mut socket_storage: [SocketStorage; tcp::SOCKETS + 1] =
         [SocketStorage::EMPTY; tcp::SOCKETS + 1];
     // SAFETY: each engine exclusively borrows its own arena for this service lifetime.
-    let rx_storage = unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_RX) };
-    let tx_storage = unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_TX) };
+    let rx_storage = pool(
+        unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_RX) },
+        external_capacity.0,
+    );
+    let tx_storage = pool(
+        unsafe { &mut *core::ptr::addr_of_mut!(EXTERNAL_TX) },
+        external_capacity.1,
+    );
     let incarnation = if application_table.is_some() {
         allocate_incarnation()
     } else {
@@ -289,10 +301,20 @@ fn main(_: u32) {
     }
     let mut local_storage: [SocketStorage; tcp::SOCKETS] = [SocketStorage::EMPTY; tcp::SOCKETS];
     // SAFETY: disjoint from the external engine and borrowed only by this main.
-    let local_rx = unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_RX) };
-    let local_tx = unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_TX) };
+    let local_rx = pool(
+        unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_RX) },
+        local_capacity.0,
+    );
+    let local_tx = pool(
+        unsafe { &mut *core::ptr::addr_of_mut!(LOCAL_TX) },
+        local_capacity.1,
+    );
     let mut local_engine = tcp::Engine::new(&mut local_storage, local_rx, local_tx, incarnation, 1)
         .unwrap_or_else(|_| fail(b"local engine incarnation"));
+    if application_table.is_some() {
+        report_pool(b"external", engine.capacity());
+        report_pool(b"loopback", local_engine.capacity());
+    }
     let mut local = application_table
         .as_ref()
         .filter(|table| {
@@ -366,7 +388,7 @@ fn main(_: u32) {
                             &mut stack.iface,
                             now,
                         );
-                        report_events(&mut engine);
+                        report_events(&mut engine, application_table.as_ref());
                         progress
                     }
                     Backend::Loopback => {
@@ -382,7 +404,7 @@ fn main(_: u32) {
                             &mut stack.iface,
                             now,
                         );
-                        report_events(&mut local_engine);
+                        report_events(&mut local_engine, application_table.as_ref());
                         progress
                     }
                 };
@@ -580,7 +602,7 @@ fn main(_: u32) {
             progress |= stack.link.flush(&mut engine);
             progress |= stack.link.replenish();
             engine.observe_peaks();
-            report_events(&mut engine);
+            report_events(&mut engine, application_table.as_ref());
             while let Some(reclaimed) = engine.take_timeout_reclamation() {
                 write_number(
                     b"[network-service] tcp timeout handles=",
@@ -799,22 +821,76 @@ fn admit_external_listeners(
     count
 }
 
-/// State the TCP options each application row declares, which the service
-/// applies to every socket that row opens or accepts. A row is named by its
-/// control binding up to the last hyphen only when that prefix hashes to the
-/// row's holder identity; the table itself carries no holder names.
+/// A row's holder name: its control binding up to the last hyphen, only when
+/// that prefix hashes to the row's holder identity. The table itself carries
+/// no holder names.
+fn row_name<'a>(entry: &network_application::Application<'a>) -> &'a [u8] {
+    entry
+        .control_binding
+        .iter()
+        .rposition(|byte| *byte == b'-')
+        .and_then(|end| core::str::from_utf8(&entry.control_binding[..end]).ok())
+        .filter(|stem| {
+            boot_contracts::network_destination::holder_identity(stem) == entry.holder_identity
+        })
+        .map_or(b"unnamed".as_slice(), str::as_bytes)
+}
+
+/// The largest receive and transmit buffer any row of `backend` declares, and
+/// at least the size a holder without a row gets.
+fn pool_capacity(table: Option<&NetworkApplications<'_>>, backend: Backend) -> (usize, usize) {
+    let mut capacity = (tcp::BUFFER_BYTES, tcp::BUFFER_BYTES);
+    for entry in table
+        .into_iter()
+        .flat_map(|table| {
+            (0..table.application_count()).filter_map(|index| table.application(index))
+        })
+        .filter(|entry| entry.backend == backend)
+    {
+        capacity.0 = capacity.0.max(entry.options.rx_buffer_bytes as usize);
+        capacity.1 = capacity.1.max(entry.options.tx_buffer_bytes as usize);
+    }
+    capacity
+}
+
+/// One direction's pool of [`tcp::SOCKETS`] buffers of `capacity` bytes each:
+/// the static arena at the minimum size, private memory above it.
+fn pool(
+    arena: &'static mut [[u8; tcp::BUFFER_BYTES]; tcp::SOCKETS],
+    capacity: usize,
+) -> &'static mut [u8] {
+    if capacity == tcp::BUFFER_BYTES {
+        return arena.as_flattened_mut();
+    }
+    let bytes = tcp::SOCKETS * capacity;
+    let mut storage = alloc::vec::Vec::new();
+    if storage.try_reserve_exact(bytes).is_err() {
+        fail(b"tcp pool private memory");
+    }
+    storage.resize(bytes, 0);
+    storage.leak()
+}
+
+fn report_pool(backend: &[u8], (rx, tx): (usize, usize)) {
+    Line::<128>::new()
+        .bytes(b"[network-service] tcp pool backend=")
+        .bytes(backend)
+        .bytes(b" sockets=")
+        .decimal(tcp::SOCKETS as u64)
+        .bytes(b" rx_bytes=")
+        .decimal(rx as u64)
+        .bytes(b" tx_bytes=")
+        .decimal(tx as u64)
+        .bytes(b"\n")
+        .emit();
+}
+
+/// State the TCP options and buffer sizes each application row declares,
+/// which the service applies to every socket that row opens or accepts.
 fn report_socket_options(table: &NetworkApplications<'_>) {
     for index in 0..table.application_count() {
         let entry = table.application(index).unwrap();
-        let holder = entry
-            .control_binding
-            .iter()
-            .rposition(|byte| *byte == b'-')
-            .and_then(|end| core::str::from_utf8(&entry.control_binding[..end]).ok())
-            .filter(|stem| {
-                boot_contracts::network_destination::holder_identity(stem) == entry.holder_identity
-            })
-            .map_or(b"unnamed".as_slice(), str::as_bytes);
+        let holder = row_name(&entry);
         let options = entry.options;
         Line::<256>::new()
             .bytes(b"[network-service] tcp options holder=")
@@ -829,10 +905,19 @@ fn report_socket_options(table: &NetworkApplications<'_>) {
             .decimal(u64::from(options.idle_timeout_ms))
             .bytes(b"\n")
             .emit();
+        Line::<256>::new()
+            .bytes(b"[network-service] tcp buffers holder=")
+            .bytes(holder)
+            .bytes(b" rx_bytes=")
+            .decimal(u64::from(options.rx_buffer_bytes))
+            .bytes(b" tx_bytes=")
+            .decimal(u64::from(options.tx_buffer_bytes))
+            .bytes(b"\n")
+            .emit();
     }
 }
 
-fn report_events(engine: &mut tcp::Engine<'_>) {
+fn report_events(engine: &mut tcp::Engine<'_>, table: Option<&NetworkApplications<'_>>) {
     while let Some(event) = engine.take_event() {
         match event {
             tcp::Event::AcceptedClose {
@@ -866,6 +951,30 @@ fn report_events(engine: &mut tcp::Engine<'_>) {
                     .bytes(b"\n")
                     .emit();
             }
+            tcp::Event::Opened {
+                holder,
+                socket,
+                local_port,
+                rx_bytes,
+                tx_bytes,
+            } => {
+                let name = table
+                    .and_then(|table| table.by_holder(&holder))
+                    .map_or(b"unnamed".as_slice(), |entry| row_name(&entry));
+                Line::<256>::new()
+                    .bytes(b"[network-service] tcp open holder=")
+                    .bytes(name)
+                    .bytes(b" socket=")
+                    .decimal(socket as u64)
+                    .bytes(b" local_port=")
+                    .decimal(u64::from(local_port))
+                    .bytes(b" rx_bytes=")
+                    .decimal(u64::from(rx_bytes))
+                    .bytes(b" tx_bytes=")
+                    .decimal(u64::from(tx_bytes))
+                    .bytes(b"\n")
+                    .emit();
+            }
         }
     }
 }
@@ -873,7 +982,7 @@ fn report_events(engine: &mut tcp::Engine<'_>) {
 /// Bind to the link and configure the stack when the generation declares an
 /// interface for this service; a generation that declares none runs the
 /// authority service alone, and binds no link.
-fn attach_stack() -> Option<Stack> {
+fn attach_stack(capacity: (usize, usize)) -> Option<Stack> {
     let declared = read_interface()?;
     let rate = monotonic_frequency().unwrap_or_else(|_| fail(b"clock rate"));
     let base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
@@ -881,7 +990,7 @@ fn attach_stack() -> Option<Stack> {
     write_number(b"[network-service] clock rate=", rate);
     debug_write(b"\n");
     report_interface(&declared);
-    report_tcp_bounds();
+    report_tcp_bounds(capacity);
 
     let mut link = Link::attach(FACTORY_SLOT, LINK_PEER_SLOT);
     if !link.link_up() {
@@ -1160,14 +1269,11 @@ fn read_interface() -> Option<DeclaredInterface> {
     interfaces.for_holder(&network_interface::holder_identity("network-service"))
 }
 
-/// The per-socket bounds this build enforces, read from the constants and
-/// the smoltcp configuration that actually size them.
-fn report_tcp_bounds() {
-    write_number(
-        b"[network-service] tcp bounds rx_bytes=",
-        tcp::BUFFER_BYTES as u64,
-    );
-    write_number(b" tx_bytes=", tcp::BUFFER_BYTES as u64);
+/// The per-socket bounds this build enforces: the external pool's largest
+/// buffers, read from the rows that size it, and the smoltcp configuration.
+fn report_tcp_bounds((rx, tx): (usize, usize)) {
+    write_number(b"[network-service] tcp bounds rx_bytes=", rx as u64);
+    write_number(b" tx_bytes=", tx as u64);
     write_number(
         b" assembler_segments=",
         smoltcp::config::ASSEMBLER_MAX_SEGMENT_COUNT as u64,

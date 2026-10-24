@@ -540,8 +540,10 @@
       retryLimit = 0;
       rights = [];
       role = "client";
+      rxBufferBytes = 2048;
       supervisionBinding = "publisher-session-supervision";
       timerBudget = 0;
+      txBufferBytes = 2048;
     };
     {
       acceptedSocketLimit = 1;
@@ -570,8 +572,10 @@
         "recv";
       ];
       role = "listener";
+      rxBufferBytes = 2048;
       supervisionBinding = "subscriber-session-supervision";
       timerBudget = 2;
+      txBufferBytes = 2048;
     };
   ];
   waitSet = [

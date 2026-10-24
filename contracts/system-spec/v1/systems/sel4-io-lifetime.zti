@@ -305,7 +305,7 @@
       keepaliveMs = 0;
       localAddress = "0.0.0.0";
       localPort = 0;
-      nagle = true;
+      nagle = true; rxBufferBytes = 2048; txBufferBytes = 2048;
       provisionBinding = "lifetime-victim-provision";
       queueDepth = 0;
       reconnectLimit = 0;
@@ -331,7 +331,7 @@
       keepaliveMs = 0;
       localAddress = "127.0.0.1";
       localPort = 7447;
-      nagle = true;
+      nagle = true; rxBufferBytes = 2048; txBufferBytes = 2048;
       provisionBinding = "lifetime-survivor-provision";
       queueDepth = 4;
       reconnectLimit = 0;
