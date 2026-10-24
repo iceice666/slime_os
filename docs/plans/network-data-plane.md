@@ -441,6 +441,69 @@ The gate observes external connections only; the loopback backend applies the
 same rows through the shared engine, and its host tests are implementation
 evidence, not this gate. No physical NIC is qualified.
 
+### Declared TCP socket buffer sizes
+
+Work item `01a1638d-23a4-7f36-ae0e-7bf1f522f40f` lets each application row
+declare its socket buffers. `just io_tcp_buffers_check` holds the wire to the
+declarations below; [the architecture
+page](../architecture/network-service.md#declared-socket-buffers) owns how the
+service applies them.
+
+**Why.** The transmit buffer bounds the bytes a connection may have
+unacknowledged, so one connection moves at most 2048 bytes per round trip.
+A 4.95 MB/s stream needs a round trip below 0.41 ms at that size.
+
+**Declaration.** `network-application/v4` keeps every v3 field and carves two
+fields from the reserved tail, so `entryBytes` stays 320. The builder and the
+decoder refuse any other value.
+
+| Field | Wire | Bound |
+| --- | --- | --- |
+| `rxBufferBytes` | `rx_buffer_bytes : u32` | a power of two from 2048 to 65536 |
+| `txBufferBytes` | `tx_buffer_bytes : u32` | a power of two from 2048 to 65536 |
+
+Every existing row declares 2048 for both. The service sizes each connection
+from the row that opens or accepts it. It allocates four sockets per backend
+at the largest declared receive and transmit sizes of that backend's rows.
+At activation it states each row and each backend's pool, and it reports every
+connection it opens:
+
+```text
+[network-service] tcp buffers holder=<holder> rx_bytes=<n> tx_bytes=<n>
+[network-service] tcp pool backend=external sockets=4 rx_bytes=<n> tx_bytes=<n>
+[network-service] tcp open holder=<holder> socket=<index> local_port=<port> rx_bytes=<n> tx_bytes=<n>
+```
+
+| Declared value | Qualified composition |
+| --- | --- |
+| `buffers-large` | receive 65536, transmit 65536, Nagle on |
+| `buffers-baseline` | receive 2048, transmit 2048, Nagle on |
+| Peer | `10.0.0.2`, MSS 1024, window 131072 (field 32768, scale shift 2) |
+
+**Wire policy and qualification.** Composition `sel4-io-tcp-buffers`
+(generation 170) runs `io-tcp-buffers-probe` as the two holders above. Each
+holder holds one exact `10.0.0.2` destination per scenario port. The large
+holder runs first, and the baseline holder starts after its last connection
+closes. The frame peer (`scripts/lib/tcp_buffers_peer.py`) answers each port on
+a script. The 1024-byte MSS divides both buffers, so Nagle cannot hold a short
+tail below either limit.
+
+| Ports (large, baseline) | Peer script | Required wire effect |
+| --- | --- | --- |
+| 4300, 4310 | acknowledges every segment until it holds 131072 bytes, then withholds acknowledgments for 600 ms | the guest has exactly its transmit buffer unacknowledged at the end of the hold, never more; the 262144-byte stream completes |
+| 4301, 4311 | streams twice the receive buffer while the probe does not read for 2000 ms, probes a zero window every 500 ms | the SYN carries window 65535 and scale shift 1 (large) or 2048 and shift 0 (baseline); the first zero window acknowledges exactly the receive buffer |
+| 4302, 4312 | acknowledges every segment at once | the 1048576-byte stream completes; the arm prints the elapsed time and judges no rate |
+
+The ramp grows Reno's congestion window, which starts at 2048 bytes and gains
+every acknowledged byte in slow start, past the large buffer before the hold.
+The hold ends inside smoltcp's one-second retransmission floor. The arm pairs
+every `tcp open` line with one wire connection by its local port. It requires
+at least one baseline connection on a socket a large connection used. Before
+it boots, the arm passes the derived rows with each admitted and refused value
+to the builder. `check-link-peer.py` runs the script against a model guest
+under both sizes and refuses the corrupted-evidence and composition variants
+first.
+
 ## smoltcp support matrix
 
 Pinned release: smoltcp `0.13.0`, crate checksum `ac729b0a77bd092a3f06ddaddc59fe0d67f48ba0de45a9abe707c2842c7f8767`.
@@ -466,11 +529,11 @@ owning slices, chiefly the media and backend classification.
 | IEEE 802.15.4 medium | medium | `src/iface/interface/ieee802154.rs` | planned | Unassessed | 01a0e239-e2a7-7844-abbc-833a5820dfe0 | Outside the admitted Ethernet backend | Declared by the owning slice | Owning slice's recipe |
 | IPv4 static interface | protocol | `src/iface/interface/ipv4.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Address, prefix and gateway come from generation data | 1 address, 1 route | `just io_network_qualification_check` |
 | ICMPv4 echo reply | protocol | `src/iface/interface/ipv4.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Automatic reply to the service's own address only | Same frame budget | `just io_network_qualification_check` |
-| TCP external connect | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service-held; clients reach it only through exact destination grants | 4 sockets, 2048-byte buffers, 10 s timeout | `just io_network_qualification_check` |
-| TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, 2048-byte buffers | `just io_tcp_check` |
+| TCP external connect | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service-held; clients reach it only through exact destination grants | 4 sockets, buffers declared per `network-application/v4` row (2048–65536 bytes each, 2048 without a row), 10 s timeout | `just io_network_qualification_check`, `just io_tcp_buffers_check` |
+| TCP loopback connect, listen and accept | socket | `src/socket/tcp.rs` | supported | Loopback inside the service | 01a0ddaa-825f-7309-8508-ed49ffe33a8d | Exact local listener grants; no external egress | 4 sockets, buffers declared per row (2048–65536 bytes each) | `just io_tcp_check` |
 | TCP external listener, half-close and simultaneous close | socket | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-ad77-7754-874f-b8703be81c04 | `network-application/v2` listener row: one interface address and port, one exact admitted IPv4; other sources dropped before smoltcp | Backlog 1, 1–4 accepted connections at 4096 bytes each, shared 4-socket pool | `just io_tcp_listener_check` |
 | TCP loss, reordering, retransmission and window | resource | `src/socket/tcp.rs`, `src/storage/assembler.rs` | supported | QEMU `LinkDevice` | 01a0e239-b16f-735e-9d04-417a547a42e3 | Service-held; clients reach it only through exact destination grants | 4 out-of-order ranges, 2048-byte RX and TX per socket, retransmissions within the destination `retryLimit`, 10 s socket timeout | `just io_tcp_impairment_check` |
-| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v3` row and applied to every socket it opens or accepts, never client-chosen; ack delay stays fixed service policy and Reno the only controller | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` |
+| TCP options: keepalive, Nagle, hop limit, ack delay, congestion control | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` | 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Declared per `network-application/v4` row and applied to every socket it opens or accepts, never client-chosen; ack delay stays fixed service policy and Reno the only controller | Keep-alive 0 or 100–60000 ms, hop limit 1–255, idle timeout 1000–60000 ms, Nagle on or off; see [the options plan](#tcp-socket-options-and-congestion-control) | `just io_tcp_options_check` |
 | TCP operation timeout and disabled delayed ACK | configuration | `src/socket/tcp.rs` | supported | QEMU `LinkDevice` and loopback | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9, 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 | Fixed service policy; the socket idle timeout is each row's declared `idleTimeoutMs` | 10 s connect and close deadlines, no ack delay | `just io_network_qualification_check` |
 | UDP resolver socket | socket | `src/socket/udp.rs` | supported | QEMU `LinkDevice` | 01a08ff0-0b99-7315-99b0-7e7f340fa6f9 | Service resolver only; answers never authorize destinations | 1 socket, 512-byte packets | `just io_network_qualification_check` |
 | UDP application endpoints | socket | `src/socket/udp.rs` | planned | QEMU `LinkDevice` | 01a0e239-b54c-7782-8dd6-b403038fa3dd | Exact local bind and per-peer datagram grants | Declared by the owning slice | Owning slice's recipe |

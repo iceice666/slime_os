@@ -1,0 +1,618 @@
+{
+  bootAction = "wait-set";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "network-service";
+      object = "sha256:network-service";
+      role = "service";
+      spawnBudget = 0;
+      stackBytes = 131072;
+    };
+    {
+      commandProfile = [];
+      name = "ros2-demo-publisher-external";
+      object = "sha256:ros2-demo-publisher-external";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "ros2-demo-subscriber-external";
+      object = "sha256:ros2-demo-subscriber-external";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "virtio-net-driver";
+      object = "sha256:virtio-net-driver";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 169;
+  grants = [
+    {
+      name = "network-service-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      name = "network-service-link-peer";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "virtio-net-driver";
+      transferable = true;
+    };
+    {
+      name = "virtio-net-device";
+      capabilityKind = "device";
+      rights = [
+        "mapMmio";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      name = "virtio-net-dma";
+      capabilityKind = "dmaAccount";
+      rights = [
+        "dmaPin";
+        "dmaRelease";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      name = "virtio-net-interrupt";
+      capabilityKind = "interruptSource";
+      rights = [
+        "irqAck";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      name = "virtio-net-mmio";
+      capabilityKind = "mmioRegion";
+      rights = [
+        "mapMmio";
+      ];
+      source = "virtio-net-driver";
+      target = "virtio-net-driver";
+      transferable = false;
+    };
+    {
+      name = "zenoh-publisher-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "ros2-demo-publisher";
+      target = "network-service";
+      transferable = false;
+    };
+    {
+      name = "zenoh-publisher-provision";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "network-service";
+      target = "ros2-demo-publisher";
+      transferable = true;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "network-service";
+      "ros2-demo-publisher";
+      "ros2-demo-subscriber";
+      "virtio-net-driver";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      lifetime = "bounded";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "network-service-buffer-factory";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "network-service-link-peer";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "zenoh-publisher-control";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "zenoh-publisher-provision";
+          slot = 29;
+          slotReason = "encodedLayout";
+        };
+      ];
+      dependencies = [
+        "virtio-net-driver";
+      ];
+      executable = "network-service";
+      health = "required";
+      lifetime = "bounded";
+      name = "network-service";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "zenoh-publisher-control";
+        };
+        {
+          grant = "zenoh-publisher-provision";
+        };
+      ];
+      dependencies = [];
+      executable = "ros2-demo-publisher-external";
+      health = "required";
+      lifetime = "bounded";
+      name = "ros2-demo-publisher";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "ros2-demo-subscriber-external";
+      health = "required";
+      lifetime = "bounded";
+      name = "ros2-demo-subscriber";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "network-service-link-peer";
+          slot = 0;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "virtio-net-device";
+          slot = 1;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "virtio-net-dma";
+          slot = 4;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "virtio-net-interrupt";
+          slot = 3;
+          slotReason = "componentAbi";
+        };
+        {
+          grant = "virtio-net-mmio";
+          slot = 2;
+          slotReason = "componentAbi";
+        };
+      ];
+      dependencies = [];
+      executable = "virtio-net-driver";
+      health = "required";
+      lifetime = "bounded";
+      name = "virtio-net-driver";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "clock-authority";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "io-resource-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "lifecycle-policy";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "network-application";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "network-destinations";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "network-interface";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:network-service";
+      kind = "component";
+      size = 262144;
+    };
+    {
+      id = "sha256:ros2-demo-publisher-external";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:ros2-demo-subscriber-external";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:virtio-net-driver";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "wait-set";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  privateMemoryBudget = [];
+  sharedBufferBudget = [
+    {
+      bufferCount = 12;
+      bytePages = 12;
+      holder = "network-service";
+      loanCount = 12;
+      mappingCount = 12;
+    };
+    {
+      bufferCount = 0;
+      bytePages = 0;
+      holder = "ros2-demo-publisher";
+      loanCount = 2;
+      mappingCount = 2;
+    };
+    {
+      bufferCount = 0;
+      bytePages = 0;
+      holder = "virtio-net-driver";
+      loanCount = 10;
+      mappingCount = 10;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+  notificationGrants = [
+    {
+      name = "io-link-tx-request-ready";
+      source = "network-service";
+      target = "virtio-net-driver";
+    };
+    {
+      name = "io-link-rx-request-ready";
+      source = "network-service";
+      target = "virtio-net-driver";
+    };
+    {
+      name = "io-link-tx-completion-ready";
+      source = "virtio-net-driver";
+      target = "network-service";
+    };
+    {
+      name = "io-link-rx-completion-ready";
+      source = "virtio-net-driver";
+      target = "network-service";
+    };
+    {
+      name = "io-link-state-changed";
+      source = "virtio-net-driver";
+      target = "network-service";
+    };
+    {
+      name = "zenoh-network-request";
+      source = "ros2-demo-publisher";
+      target = "network-service";
+    };
+    {
+      name = "zenoh-publisher-done";
+      source = "network-service";
+      target = "ros2-demo-publisher";
+    };
+  ];
+  notificationBindings = [
+    {
+      grant = "io-link-tx-request-ready";
+      holder = "network-service";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "io-link-tx-request-ready";
+      holder = "virtio-net-driver";
+      role = "wait";
+      slot = 0;
+    };
+    {
+      grant = "io-link-rx-request-ready";
+      holder = "network-service";
+      role = "signal";
+      slot = 1;
+    };
+    {
+      grant = "io-link-rx-request-ready";
+      holder = "virtio-net-driver";
+      role = "wait";
+      slot = 1;
+    };
+    {
+      grant = "io-link-tx-completion-ready";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 2;
+    };
+    {
+      grant = "io-link-tx-completion-ready";
+      holder = "network-service";
+      role = "wait";
+      slot = 2;
+    };
+    {
+      grant = "io-link-rx-completion-ready";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 3;
+    };
+    {
+      grant = "io-link-rx-completion-ready";
+      holder = "network-service";
+      role = "wait";
+      slot = 3;
+    };
+    {
+      grant = "io-link-state-changed";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 4;
+    };
+    {
+      grant = "io-link-state-changed";
+      holder = "network-service";
+      role = "wait";
+      slot = 4;
+    };
+    {
+      grant = "zenoh-network-request";
+      holder = "ros2-demo-publisher";
+      role = "signal";
+      slot = 0;
+    };
+    {
+      grant = "zenoh-network-request";
+      holder = "network-service";
+      role = "wait";
+      slot = 5;
+    };
+    {
+      grant = "zenoh-publisher-done";
+      holder = "network-service";
+      role = "signal";
+      slot = 6;
+    };
+    {
+      grant = "zenoh-publisher-done";
+      holder = "ros2-demo-publisher";
+      role = "wait";
+      slot = 1;
+    };
+  ];
+  clockAuthority = [
+    {
+      holder = "network-service";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 1;
+      timerNotification = "zenoh-network-request";
+      timerQuota = 1;
+      timerUse = true;
+    };
+    {
+      holder = "ros2-demo-publisher";
+      monotonicRead = true;
+      simulatedAdvance = false;
+      simulatedRead = false;
+      timerBadgeBit = 3;
+      timerNotification = "zenoh-publisher-done";
+      timerQuota = 1;
+      timerUse = true;
+    };
+  ];
+  ioResourceBudget = [
+    {
+      bufferLoans = 16;
+      dmaMappings = 18;
+      dmaPages = 20;
+      holder = "virtio-net-driver";
+      irqSources = 1;
+      mmioBytes = 4096;
+      mmioMappings = 1;
+      outstandingRequests = 16;
+    };
+  ];
+  networkDestinations = [
+    {
+      address = "10.0.2.2";
+      addressKind = "ipv4";
+      byteBudget = 4096;
+      dnsRecordLimit = 0;
+      holder = "ros2-demo-publisher";
+      listenerLimit = 0;
+      port = 17447;
+      queueDepth = 4;
+      reconnectLimit = 0;
+      retryLimit = 2;
+      rights = [
+        "connect";
+        "send";
+        "recv";
+      ];
+      socketLimit = 1;
+      timerBudget = 1;
+      transport = "tcp";
+    };
+  ];
+  networkInterfaces = [
+    {
+      address = "10.0.2.15";
+      gateway = "10.0.2.2";
+      holder = "network-service";
+      mac = "52:54:00:53:4c:01";
+      prefixLen = 24;
+    };
+  ];
+  networkApplications = [
+    {
+      acceptedSocketLimit = 0;
+      admittedPeer = "";
+      admittedPeerAddress = "";
+      backend = "external";
+      backlog = 0;
+      byteBudget = 0;
+      completionNotification = "zenoh-publisher-done";
+      controlBinding = "zenoh-publisher-control";
+      holder = "ros2-demo-publisher";
+      hopLimit = 64;
+      idleTimeoutMs = 10000;
+      keepaliveMs = 0;
+      localAddress = "0.0.0.0";
+      localPort = 0;
+      nagle = true;
+      provisionBinding = "zenoh-publisher-provision";
+      queueDepth = 0;
+      reconnectLimit = 0;
+      requestNotification = "zenoh-network-request";
+      retryLimit = 0;
+      rights = [];
+      role = "client";
+      rxBufferBytes = 2048;
+      supervisionBinding = "";
+      timerBudget = 0;
+      txBufferBytes = 2048;
+    };
+  ];
+  waitSet = [
+    {
+      badgeBit = 0;
+      drainSlot = 2;
+      kind = "stream";
+      notification = "zenoh-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 1;
+      kind = "timer";
+      notification = "zenoh-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 6;
+      drainSlot = 0;
+      kind = "stream";
+      notification = "zenoh-publisher-done";
+      waiter = "ros2-demo-publisher";
+    };
+    {
+      badgeBit = 3;
+      kind = "timer";
+      notification = "zenoh-publisher-done";
+      waiter = "ros2-demo-publisher";
+    };
+  ];
+  lifecyclePolicy = {
+    dependencies = [];
+    initialState = "Initialize";
+    parameters = [
+      {
+        holder = "network-service";
+        read = true;
+        subject = "network-service";
+        write = true;
+      };
+    ];
+    restarts = [];
+    terminalState = "Error";
+    transitions = [
+      {
+        from = "Initialize";
+        to = "Running";
+      };
+      {
+        from = "Running";
+        to = "Error";
+      };
+    ];
+  };
+}

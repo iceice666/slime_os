@@ -321,6 +321,9 @@ NetworkApplicationEntry :: type {
   idleTimeoutMs : Int;
   hopLimit : Int;
   nagle : Bool;
+  -- network-application/v4 buffer sizes for every socket the row opens or accepts.
+  rxBufferBytes : Int;
+  txBufferBytes : Int;
 };
 
 -- One instance's C9.1 root-brokered clock service authority. The four

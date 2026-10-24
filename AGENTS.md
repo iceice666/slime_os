@@ -95,6 +95,17 @@ The commit and PR record the change, claim, risk, exact verification, and known 
 
 A comment should state what must remain true, not argue that the author was right: invariants, ordering, ABI, capability boundaries, and why the simpler local form would break a current invariant — never investigation history, reviewer findings, or verification results. [`.agents/skills/change-records/SKILL.md`](.agents/skills/change-records/SKILL.md) holds the record ownership table, the decision-record template, and the comment rules in full.
 
+## Writing style
+
+Every PR body, reply to a human, `docs/` page, work-item body, and multi-line comment follows [`.agents/skills/writing-style/SKILL.md`](.agents/skills/writing-style/SKILL.md). Read it before writing any of these. The short form:
+
+- Conclusion first.
+- One statement per sentence, at most 25 words. Active voice with a named actor.
+- One glossary term per concept. No synonym rotation. No evaluative adjectives about the work.
+- Analogies only in `docs/concepts/`, `docs/getting-started/`, and replies. Never in a PR body.
+- A table or Mermaid block when the information has that shape. No raw HTML diagrams in the repository.
+- Repository text is English. A reply uses the human's language, with identifiers and glossary terms untranslated.
+
 ## Development rules
 
 - **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, and boot records — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-bindings.py` and the remaining `generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt, as are readers and writers of externally specified formats (ELF, GPT, Ethernet/IP, MAVLink, SSH signatures) that Slime OS does not own; those may use `struct` with the standard's offsets.

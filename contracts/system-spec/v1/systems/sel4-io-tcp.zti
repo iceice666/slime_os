@@ -470,7 +470,7 @@
       keepaliveMs = 0;
       idleTimeoutMs = 10000;
       hopLimit = 64;
-      nagle = true;
+      nagle = true; rxBufferBytes = 2048; txBufferBytes = 2048;
     };
   ];
   networkApplicationsObject = true;

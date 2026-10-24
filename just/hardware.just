@@ -64,6 +64,43 @@ zenoh_stock_check:
 zenoh_links_check:
     python3 scripts/check/check-zenoh-profile0.py --slice links
 
+# A stock Zenoh peer ending its subscription: an UndeclareSubscriber that names the subscriber by id
+# alone, inside a DECLARE carrying the network QoS extension. The eight batches the peer sent are
+# replayed into a connector session and the host reference reproduces the undeclaration byte for
+# byte (scripts/lib/zenoh_undeclare_exam.py, contracts/zenoh-stock-undeclare/v1). Nothing here needs
+# a registry. Fails until the session takes the bare undeclaration.
+[group('hardware')]
+zenoh_undeclare_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice undeclare
+
+# Judges a Zenoh Profile 0 session that holds several subscriptions of its own. The session refused
+# a second one as subscriber-limit, whatever its parameters said. Params.local now says how many it
+# holds. The links exam and the stock-peer exam run beside it, because both pin the subscriber limit.
+# The expectation is scripts/lib/zenoh_subscribers_exam.py. Nothing here needs a registry. The recipe
+# fails until the session takes the parameter.
+[group('hardware')]
+zenoh_subscribers_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice subscribers
+
+# Judges what the Zenoh service may do for each holder. The decoder of
+# contracts/zenoh-service-grants/v1 takes the declarations it must take and refuses the ones it must
+# refuse. Each limit is held on both sides of its bound. Each check is removed in turn, and the
+# weakened contract must then take the record that the check refuses. The expectation is
+# scripts/lib/zenoh_grants_exam.py. The exam renders the schema's constants as Rust and requires
+# components/proto/src/zenoh_service_grants.rs to equal that text. Nothing here needs a registry.
+# The recipe fails until that file lands.
+[group('hardware')]
+zenoh_grants_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice grants
+
+# Judges the Zenoh service core, which serves one session to local holders by their grants. The
+# judge reads what the Rust tests print. The expectation is scripts/lib/zenoh_service_exam.py. The
+# subscribers, links and stock-peer exams run beside it. Nothing here needs a registry. The recipe
+# fails until the core lands.
+[group('hardware')]
+zenoh_service_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice service
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.

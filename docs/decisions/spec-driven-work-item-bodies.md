@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Related work item:** `01a0a546-55e5-734d-ac6b-6a8659cf3363`
+**Amended by:** [Work items are not projected into GitHub Issues](no-github-issue-projection.md):
+the repository no longer uses myque-gh for projection.
 
 ## Context
 

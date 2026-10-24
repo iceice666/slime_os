@@ -111,10 +111,9 @@ git show "$c^:$path"
 
 **Product or process.** An item closes on `main` through a
 `chore(repo/tasks)` closeout PR, which is a process PR. Judge an item by its
-implementing PR, not by the closeout PR. The implementing PR carries the
-`myque:implements=<UUID>` trailer when `myque-gh pr link` was run; otherwise,
-search merged PR bodies for the UUID (`gh pr list --state merged --search
-<UUID>`). Planning PRs that mention the UUID also match; the implementing PR
+implementing PR, not by the closeout PR. Search merged PR bodies for the UUID (`gh pr list --state merged --search
+<UUID>`). PRs merged before the projection was retired may also carry a
+`myque:implements=<UUID>` trailer. Planning PRs that mention the UUID also match; the implementing PR
 is the match whose diff touches product paths.
 
 Product paths are the shipped OS tree: `slime-root/`, `components/`,
@@ -122,8 +121,8 @@ Product paths are the shipped OS tree: `slime-root/`, `components/`,
 reads or writes. `codePaths` in `.devloop/policy.json` is broader: it also
 covers CI workflows, devloop contracts, and `verification/`, which is right
 for staling evidence but not for this. A product PR is a window PR whose
-diff touches product paths, whatever its title scope. The trailer is an HTML
-comment in the PR body (`<!-- myque:implements=<UUID> -->`), not a commit
+diff touches product paths, whatever its title scope. An older trailer is an
+HTML comment in the PR body (`<!-- myque:implements=<UUID> -->`), not a commit
 trailer, so read it with `gh pr view <n> --json body`, not `git log`.
 
 **Thread budget.** Read the inline threads and conversation of every product

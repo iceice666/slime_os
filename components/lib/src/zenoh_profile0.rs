@@ -182,6 +182,8 @@ pub enum Network<'a> {
         mapping: Mapping,
         key: &'a str,
     },
+    /// A stock peer's undeclaration, which names the subscriber by id and restates no key.
+    UndeclareSubscriberById { id: u32 },
     PushPut {
         mapping: Mapping,
         key: &'a str,
@@ -605,9 +607,17 @@ fn declare<'a>(
             }
         }
         ID_U_SUBSCRIBER => {
-            // The extension the QoS was seen on is a declaration of a key or a subscriber, not this.
+            // Behind the QoS extension only the form a stock peer sends is taken: no extension, so no
+            // wire expression and no key, and the subscriber is named by its id alone.
             if qos {
-                return Err(Refusal::UnsupportedExtension);
+                if sub & FLAG_Z != 0 {
+                    return Err(Refusal::UnsupportedExtension);
+                }
+                if sub != ID_U_SUBSCRIBER {
+                    return Err(Refusal::MalformedMessage);
+                }
+                let id = reader.leb(p::LEB128_MAX_BITS)?;
+                return Ok(Network::UndeclareSubscriberById { id });
             }
             if sub != U_SUBSCRIBER_HEADER {
                 return Err(Refusal::MalformedMessage);

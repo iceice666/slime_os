@@ -63,7 +63,14 @@ fn hostname_without_seed_fails_closed_and_creates_no_handle() {
     let mut storage = [SocketStorage::EMPTY; SOCKETS];
     let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
     let mut tx = rx;
-    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+    let mut engine = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        1,
+        0,
+    )
+    .unwrap();
     let mut link = Link::default();
     let mut iface = interface(&mut link, 1);
     let bytes = policy(false);
@@ -115,7 +122,14 @@ fn exchange(controlled: bool, ttl: u32, spoof: bool, fallback: bool) {
     let mut storage = [SocketStorage::EMPTY; SOCKETS + 1];
     let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
     let mut tx = rx;
-    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+    let mut engine = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        1,
+        0,
+    )
+    .unwrap();
     let bytes = policy(controlled);
     let destinations = NetworkDestinations::decode(&bytes).unwrap();
     let mut udp_rx = [0; resolver::BUFFER_BYTES];
@@ -352,7 +366,14 @@ fn name_port_holder_authority_expiry_and_death_are_fail_closed() {
     let mut storage = [SocketStorage::EMPTY; SOCKETS + 1];
     let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
     let mut tx = rx;
-    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 1, 0).unwrap();
+    let mut engine = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        1,
+        0,
+    )
+    .unwrap();
     let bytes = policy(true);
     let destinations = NetworkDestinations::decode(&bytes).unwrap();
     let mut udp_rx = [0; resolver::BUFFER_BYTES];
@@ -468,7 +489,8 @@ fn resolver_requires_spare_socket_and_complete_service_authority() {
         };
         let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
         let mut tx = rx;
-        let mut engine = Engine::new(storage, &mut rx, &mut tx, 1, 0).unwrap();
+        let mut engine =
+            Engine::new(storage, rx.as_flattened_mut(), tx.as_flattened_mut(), 1, 0).unwrap();
         let mut bytes = policy(true);
         let table = NetworkDestinations::decode(&bytes).unwrap();
         let row = (0..table.destination_count())

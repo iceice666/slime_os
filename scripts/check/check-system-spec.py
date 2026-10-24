@@ -237,6 +237,7 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-io-service-fault",
     "sel4-io-driver-reset",
     "sel4-io-tcp-impairment",
+    "sel4-io-tcp-buffers",
     "sel4-io-tcp-listener",
     "sel4-io-tcp-options",
     "sel4-large-image",
@@ -244,6 +245,7 @@ SPEC_NATIVE_SYSTEMS = frozenset({
     "sel4-lifetime-exit",
     "sel4-net",
     "sel4-zenoh",
+    "sel4-zenoh-external",
     "sel4-private-memory-stress",
     "sel4-private-memory-stress-rv64",
     "sel4-private-memory-heap-stress",
@@ -715,6 +717,7 @@ def network_application_controls(source: dict) -> int:
         "admittedPeer": "", "admittedPeerAddress": "", "rights": [], "backlog": 0, "acceptedSocketLimit": 0,
         "byteBudget": 0, "timerBudget": 0, "queueDepth": 0, "retryLimit": 0,
         "reconnectLimit": 0, "keepaliveMs": 0, "idleTimeoutMs": 10000, "hopLimit": 64, "nagle": True,
+        "rxBufferBytes": 2048, "txBufferBytes": 2048,
     }
     listener = dict(client, holder="io-network-intruder", controlBinding="local-control",
                     provisionBinding="local-provision", role="listener", localAddress="127.0.0.1",
@@ -752,6 +755,22 @@ def network_application_controls(source: dict) -> int:
         wire.NETWORK_APPLICATION_ROLE_LISTENER: (100, 60000, 255, 1),
     }:
         fail(f"network application encoder misplaced declared socket options: {options}")
+    # Each row's declared buffer sizes land in its own entry, bounds inclusive.
+    sized = copy.deepcopy(manifest)
+    sized["networkApplications"][0].update(rxBufferBytes=65536, txBufferBytes=2048)
+    sized["networkApplications"][1].update(rxBufferBytes=2048, txBufferBytes=65536, byteBudget=67584)
+    buffers = {
+        row[10]: row[26:28]
+        for row in (wire.NETWORK_APPLICATION_ENTRY.unpack_from(
+            BUILDER.build_network_applications(sized),
+            wire.NETWORK_APPLICATION_HEADER_BYTES + index * wire.NETWORK_APPLICATION_ENTRY_BYTES)
+            for index in range(2))
+    }
+    if buffers != {
+        wire.NETWORK_APPLICATION_ROLE_CLIENT: (65536, 2048),
+        wire.NETWORK_APPLICATION_ROLE_LISTENER: (2048, 65536),
+    }:
+        fail(f"network application encoder misplaced declared buffer sizes: {buffers}")
     reverse = copy.deepcopy(manifest)
     reverse["networkApplications"].reverse()
     if BUILDER.build_network_applications(reverse) != encoded:
@@ -796,6 +815,16 @@ def network_application_controls(source: dict) -> int:
         ("hopLimit", True, "invalid socket option"),
         ("nagle", 1, "invalid socket option"),
         ("keepaliveMs", "500", "invalid socket option"),
+        ("rxBufferBytes", 0, "buffer sizes exceed contract"),
+        ("rxBufferBytes", 1024, "buffer sizes exceed contract"),
+        ("rxBufferBytes", 3072, "buffer sizes exceed contract"),
+        ("rxBufferBytes", 131072, "buffer sizes exceed contract"),
+        ("txBufferBytes", 0, "buffer sizes exceed contract"),
+        ("txBufferBytes", 1024, "buffer sizes exceed contract"),
+        ("txBufferBytes", 3072, "buffer sizes exceed contract"),
+        ("txBufferBytes", 131072, "buffer sizes exceed contract"),
+        ("rxBufferBytes", True, "invalid buffer size"),
+        ("txBufferBytes", "2048", "invalid buffer size"),
     ):
         reject(f"client {field}={value!r}",
                lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][0].update({field: value}), reason)
@@ -831,7 +860,7 @@ def network_application_controls(source: dict) -> int:
         ("acceptedSocketLimit", 0, "listener bounds exceed contract"),
         ("acceptedSocketLimit", 5, "listener bounds exceed contract"),
         ("byteBudget", 4095, "listener bounds exceed contract"),
-        ("byteBudget", 16385, "listener bounds exceed contract"),
+        ("byteBudget", wire.NETWORK_APPLICATION_MAX_BYTE_BUDGET + 1, "listener bounds exceed contract"),
         ("timerBudget", 0, "listener bounds exceed contract"),
         ("timerBudget", 5, "listener bounds exceed contract"),
         ("queueDepth", 1, "listener bounds exceed contract"),
@@ -843,6 +872,12 @@ def network_application_controls(source: dict) -> int:
     ):
         reject(f"listener {field}={value!r}",
                lambda value_manifest, field=field, value=value: value_manifest["networkApplications"][1].update({field: value}), reason)
+    # A listener's budget covers both buffers of every socket it may accept.
+    reject("listener budget below its buffers", lambda value: value["networkApplications"][1].update(
+        rxBufferBytes=65536, txBufferBytes=65536, byteBudget=131071), "listener bounds exceed contract")
+    wide_listener = copy.deepcopy(manifest)
+    wide_listener["networkApplications"][1].update(rxBufferBytes=65536, txBufferBytes=65536, byteBudget=131072)
+    BUILDER.build_network_applications(wide_listener)
     reject("unsupported pending backlog", lambda value: value["networkApplications"][1].update(
         backlog=2, acceptedSocketLimit=2, byteBudget=8192), "listener bounds exceed contract")
     retained_sockets = copy.deepcopy(manifest)

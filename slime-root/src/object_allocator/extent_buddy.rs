@@ -26,11 +26,16 @@ pub(super) const NO_EXTENT: u32 = u32::MAX;
 const INFRASTRUCTURE_OWNER: u16 = u16::MAX - 1;
 
 impl ObjectAllocator {
-    /// A free common extent of exactly `size_bits`, if one exists.
-    pub(super) fn reusable_extent(&self, size_bits: usize) -> Option<usize> {
-        self.extents.iter().position(|entry| {
-            entry.is_some_and(|extent| extent.is_common_free() && extent.size_bits == size_bits)
-        })
+    /// The lowest free common extent of exactly `size_bits`, if one exists.
+    pub(super) fn reusable_extent(&mut self, size_bits: usize) -> Option<usize> {
+        let found = self.extents.reusable(size_bits);
+        #[cfg(test)]
+        assert_eq!(
+            found,
+            self.extents.walk_reusable(size_bits),
+            "recount: lowest returned extent of {size_bits} bits"
+        );
+        found
     }
 
     /// Serve `size_bits` from returned capacity by splitting a larger extent.
@@ -152,14 +157,13 @@ impl ObjectAllocator {
                 watermark: 0,
             })?;
         self.consume_root_funding(1usize << extent.size_bits)?;
-        self.extents[index]
-            .as_mut()
-            .expect("owned extent record")
-            .assign(
+        self.extents.update(index, |record| {
+            record.assign(
                 usize::from(INFRASTRUCTURE_OWNER),
                 0,
                 super::ExtentKind::Infrastructure,
             );
+        });
         #[cfg(not(test))]
         crate::diagnostic_println!(
             "SLIME_BACKING infrastructure_extent parent={} paddr={} bytes={}",
@@ -225,7 +229,7 @@ impl ObjectAllocator {
                 bits,
             );
             child.paddr = parent.paddr + (side << bits);
-            self.extents[position] = Some(child);
+            self.extents.set(position, Some(child));
             #[cfg(not(test))]
             crate::diagnostic_println!(
                 "SLIME_BACKING extent_split parent={} child={} paddr={} bytes={}",
@@ -235,9 +239,10 @@ impl ObjectAllocator {
                 1usize << bits,
             );
         }
-        let record = self.extents[index].as_mut().expect("owned extent record");
-        record.split = true;
-        record.children = positions.map(|position| position as u32);
+        self.extents.update(index, |record| {
+            record.split = true;
+            record.children = positions.map(|position| position as u32);
+        });
         Ok(Some(positions[0]))
     }
 
@@ -255,12 +260,13 @@ impl ObjectAllocator {
                 let child = child as usize;
                 self.slots
                     .release(self.extent(child).parent.bits() as usize);
-                self.extents[child] = None;
+                self.extents.set(child, None);
             }
             self.live_objects -= 2;
-            let record = self.extents[index].as_mut().expect("owned extent record");
-            record.split = false;
-            record.children = [NO_EXTENT; 2];
+            self.extents.update(index, |record| {
+                record.split = false;
+                record.children = [NO_EXTENT; 2];
+            });
             #[cfg(not(test))]
             crate::diagnostic_println!(
                 "SLIME_BACKING extent_merge parent={} paddr={} bytes={}",
@@ -320,7 +326,9 @@ mod tests {
     fn a_returned_extent_splits_for_a_smaller_request_and_merges_back_whole() {
         with_allocator(|allocator| {
             let root = allocator.take_slot().unwrap();
-            allocator.extents[0] = Some(free_extent(root, 0x200000, 21));
+            allocator
+                .extents
+                .set(0, Some(free_extent(root, 0x200000, 21)));
             allocator.live_objects = 1;
             let free = allocator.free_slots();
 
@@ -344,11 +352,15 @@ mod tests {
             assert_eq!(allocator.live_objects, 3);
 
             // A live child blocks the merge; a free pair merges once.
-            allocator.extents[child].as_mut().unwrap().active = true;
+            allocator
+                .extents
+                .update(child, |extent| extent.active = true);
             allocator
                 .coalesce_extents_with(|_| panic!("merged a live child"))
                 .unwrap();
-            allocator.extents[child].as_mut().unwrap().active = false;
+            allocator
+                .extents
+                .update(child, |extent| extent.active = false);
             allocator
                 .coalesce_extents_with(|parent| {
                     assert_eq!(parent.bits() as usize, root);
@@ -372,13 +384,17 @@ mod tests {
     fn an_adopted_extent_is_counted_once_and_does_not_strand_its_buddy() {
         with_allocator(|allocator| {
             let root = allocator.take_slot().unwrap();
-            allocator.extents[0] = Some(free_extent(root, 0x200000, 21));
+            allocator
+                .extents
+                .set(0, Some(free_extent(root, 0x200000, 21)));
             // The children land in lower records than the whole extent, so a
             // size-only choice would take a child.
             allocator.split_extent_with(0, |_, _, _| Ok(())).unwrap();
             let whole_index = allocator.extents.iter().position(Option::is_none).unwrap();
             let whole = allocator.take_slot().unwrap();
-            allocator.extents[whole_index] = Some(free_extent(whole, 0x800000, 20));
+            allocator
+                .extents
+                .set(whole_index, Some(free_extent(whole, 0x800000, 20)));
             let pinned = allocator.take_slot().unwrap();
             allocator
                 .infrastructure
@@ -425,7 +441,9 @@ mod tests {
         with_allocator(|allocator| {
             for (index, bits) in [(0, 21), (1, 14)] {
                 let slot = allocator.take_slot().unwrap();
-                allocator.extents[index] = Some(free_extent(slot, 0x800000 * (index + 1), bits));
+                allocator
+                    .extents
+                    .set(index, Some(free_extent(slot, 0x800000 * (index + 1), bits)));
             }
             let mut splits = std::vec::Vec::new();
             let child = allocator
@@ -451,9 +469,11 @@ mod tests {
     fn a_candidate_taken_while_its_split_was_funded_is_left_alone() {
         with_allocator(|allocator| {
             let root = allocator.take_slot().unwrap();
-            allocator.extents[0] = Some(free_extent(root, 0x200000, 21));
+            allocator
+                .extents
+                .set(0, Some(free_extent(root, 0x200000, 21)));
             // Funding infrastructure adopted it between selection and split.
-            allocator.extents[0].as_mut().unwrap().active = true;
+            allocator.extents.update(0, |extent| extent.active = true);
             let free = allocator.free_slots();
             assert_eq!(
                 allocator.split_extent_with(0, |_, _, _| panic!("split a taken extent")),
@@ -468,7 +488,9 @@ mod tests {
     fn a_failed_split_or_merge_leaves_every_capability_owned() {
         with_allocator(|allocator| {
             let root = allocator.take_slot().unwrap();
-            allocator.extents[0] = Some(free_extent(root, 0x400000, 21));
+            allocator
+                .extents
+                .set(0, Some(free_extent(root, 0x400000, 21)));
             let free = allocator.free_slots();
             assert!(
                 allocator

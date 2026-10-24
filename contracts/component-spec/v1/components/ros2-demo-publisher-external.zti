@@ -1,0 +1,50 @@
+{
+  formatVersion = 1;
+  name = "ros2-demo-publisher-external";
+  componentType = "application";
+  version = "1.0.0";
+  owner = "root";
+  purpose = "The sel4-zenoh-external publisher: connects to the stock peer at 10.0.2.2:17447 and publishes the four declared Counter samples.";
+  implementation = {
+    provider = "workspace";
+    binary = "ros2-demo-publisher-external";
+    contentHash = "";
+  };
+  provides = [];
+  requires = [ "endpoint"; ];
+  interfaces = [];
+  dependencies = [ "network-service"; ];
+  communication = { semantic = "none"; qos = []; };
+  configuration = [];
+  lifecycle = [ "Initialize"; "Start"; "Running"; "Error"; ];
+  runtime = {
+    executionEnvironment = "aarch64-sel4-qemu-virt";
+    resource = {
+      stackBytes = 16384;
+      spawnBudget = 0;
+      extraThreads = 0;
+      bufferBytePages = 0;
+      bufferCount = 0;
+      mappingCount = 0;
+      loanCount = 0;
+      privatePageQuota = 0;
+    };
+    devices = [];
+  };
+  health = "required";
+  lifetime = "bounded";
+  compatibility = {
+    platform = "aarch64-sel4-qemu-virt";
+    interface = "contracts/interface-schema/v1";
+    dependency = "exact";
+    resource = "atMost";
+    runtime = "exact";
+    qos = "none";
+  };
+  test = {
+    testCondition = "the zenoh_external_check gate boots the sel4-zenoh-external composition";
+    expectedResult = "four Counter samples reach the stock peer's subscriber over one Zenoh Profile 0 session; named denials observed";
+    passFailCriteria = "[ros2-demo-publisher] session closed samples=4";
+    requiredTestEnvironment = "zenoh_external_check";
+  };
+}

@@ -48,6 +48,10 @@ fn applications() -> Vec<u8> {
             .copy_from_slice(&10_000u32.to_le_bytes());
         row[app::OFF_ENTRY_HOP_LIMIT] = 64;
         row[app::OFF_ENTRY_NAGLE] = 1;
+        row[app::OFF_ENTRY_RX_BUFFER_BYTES..app::OFF_ENTRY_RX_BUFFER_BYTES_END]
+            .copy_from_slice(&app::MIN_BUFFER_BYTES.to_le_bytes());
+        row[app::OFF_ENTRY_TX_BUFFER_BYTES..app::OFF_ENTRY_TX_BUFFER_BYTES_END]
+            .copy_from_slice(&app::MIN_BUFFER_BYTES.to_le_bytes());
         row[app::OFF_ENTRY_ROLE] = app::ROLE_CLIENT;
         if *holder == LISTENER {
             row[app::OFF_ENTRY_ROLE] = app::ROLE_LISTENER;
@@ -234,12 +238,43 @@ fn ingress_drops_every_unadmitted_segment_to_a_listener_and_counts_bare_syns() {
     );
 }
 
+/// The next engine event that is not a connection opening. Every opening this
+/// listener reports names its holder and the declared 2048-byte buffers.
+fn settlement(engine: &mut Engine<'_>) -> Option<Event> {
+    loop {
+        match engine.take_event()? {
+            Event::Opened {
+                holder,
+                rx_bytes,
+                tx_bytes,
+                socket,
+                ..
+            } => {
+                assert_eq!(holder, LISTENER);
+                assert_eq!(
+                    (rx_bytes, tx_bytes),
+                    (BUFFER_BYTES as u32, BUFFER_BYTES as u32)
+                );
+                assert!(socket < SOCKETS);
+            }
+            event => return Some(event),
+        }
+    }
+}
+
 #[test]
 fn external_listener_accepts_its_peer_refuses_excess_and_settles_every_close() {
     let mut storage = [SocketStorage::EMPTY; SOCKETS];
     let mut rx = [[0; BUFFER_BYTES]; SOCKETS];
     let mut tx = [[0; BUFFER_BYTES]; SOCKETS];
-    let mut engine = Engine::new(&mut storage, &mut rx, &mut tx, 12, 0).unwrap();
+    let mut engine = Engine::new(
+        &mut storage,
+        rx.as_flattened_mut(),
+        tx.as_flattened_mut(),
+        12,
+        0,
+    )
+    .unwrap();
     let mut net = Net::new();
     let mut context_link = Link::default();
     let mut context = interface(&mut context_link, 1);
@@ -392,7 +427,7 @@ fn external_listener_accepts_its_peer_refuses_excess_and_settles_every_close() {
         Status::Success
     );
     assert_eq!(
-        engine.take_event(),
+        settlement(&mut engine),
         Some(Event::AcceptedClose {
             unread: 0,
             unsent: 0,
@@ -416,7 +451,7 @@ fn external_listener_accepts_its_peer_refuses_excess_and_settles_every_close() {
         Status::Success
     );
     assert_eq!(
-        engine.take_event(),
+        settlement(&mut engine),
         Some(Event::AcceptedClose {
             unread: 6,
             unsent: 0,
@@ -457,9 +492,9 @@ fn external_listener_accepts_its_peer_refuses_excess_and_settles_every_close() {
         Status::Success
     );
     assert_eq!(
-        engine.take_event(),
+        settlement(&mut engine),
         Some(Event::ListenerClosed { children: 0 })
     );
-    assert_eq!(engine.take_event(), None);
+    assert_eq!(settlement(&mut engine), None);
     assert_eq!(engine.allocated(), 0);
 }

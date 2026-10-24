@@ -1,0 +1,24 @@
+{
+  formatVersion = 1;
+  name = "sel4-io-driver-reset-in-flight";
+  imageClosureIdentity = "cf7480ccc51c2d8dd293bf8793d7304a7ad1651d80f31bc145e3129cbc2aa8ff";
+  executionKind = "emulator";
+  executionProfile = "qemu-arm-virt";
+  disks = [];
+  networks = [];
+  devices = [
+    {
+      name = "virtio-net-device";
+      path = "";
+      identity = "";
+      writable = false;
+    };
+  ];
+  faultControls = [];
+  timeoutSeconds = 240;
+  markerContractIdentity = "f03ce9b40628dcb82e3ec97154b2f5ec549a41bfbb9cfcf13a632e40113fd42e";
+  forbiddenOutcomes = [
+    "SLIME_GRAPH FAIL";
+    "SLIME_ROOT FATAL";
+  ];
+}

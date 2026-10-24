@@ -1178,6 +1178,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-io-tcp-buffers-probe"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-io-tcp-impairment-probe"
 version = "0.1.0"
 dependencies = [
@@ -1577,12 +1587,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "slime-component-ros2-demo-publisher-external"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
+ "slime-components",
+ "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
 name = "slime-component-ros2-demo-subscriber"
 version = "0.1.0"
 dependencies = [
  "slime-build-support",
  "slime-components",
  "slime-proto",
+ "slime-rt",
+]
+
+[[package]]
+name = "slime-component-ros2-demo-subscriber-external"
+version = "0.1.0"
+dependencies = [
+ "slime-build-support",
  "slime-rt",
 ]
 

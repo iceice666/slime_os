@@ -29,6 +29,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 import argparse
 import ast
 import re
+from collections.abc import Iterable
 
 import work_items
 
@@ -117,12 +118,130 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
             "qemu-arm-virt",
         ),
     ),
+    # The network checker boots one image per arm. Its default arm is `sel4-io-network`, and the other
+    # fourteen are named here, each by the closure it builds. The socket-buffer arm is planned until its composition lands.
+    "sel4-io-network": tuple(
+        (name, name, "qemu-arm-virt")
+        for name in (
+            "sel4-io-tcp",
+            "sel4-io-tcp-impairment",
+            "sel4-io-tcp-listener",
+            "sel4-io-tcp-options",
+            "sel4-io-tcp-buffers",
+            "sel4-io-driver-reset-in-flight",
+            "sel4-io-service-fault-in-flight",
+            "sel4-io-lifetime",
+            "sel4-io-local",
+            "sel4-net",
+            "sel4-zenoh",
+            "sel4-zenoh-external",
+            "sel4-http",
+            "sel4-http-public",
+        )
+    ),
+}
+
+# A checker that boots several images passes QEMU arguments in a few functions, and its arms share the checker's
+# timeout and failure markers. Three tables describe such a checker, and a person edits them:
+#
+#   ARM_ENTRY_FUNCTIONS  the functions that boot each arm. An arm that runs inline in `main()` has none.
+#   QEMU_SITES           the functions that pass QEMU arguments, and the devices each one attaches.
+#   ARM_DEVICES          the devices each arm attaches. A record states exactly this.
+#
+# Extraction does not infer a device from the code. It checks that the code agrees with the tables, and a
+# disagreement in either direction is a refusal. A QEMU token may sit only in a site. Each site passes exactly
+# the devices it declares. The sites that an arm can reach must attach exactly the devices the arm declares. The
+# reach counts every name that the arm's functions read, in nested definitions and in both branches of a
+# conditional, so it can over-state a device and cannot hide one that a name reaches.
+ARM_ENTRY_FUNCTIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-network": ("run_authority_arm",),
+        "sel4-io-tcp": ("run_tcp_arm",),
+        "sel4-io-tcp-impairment": ("run_impairment_arm",),
+        "sel4-io-tcp-listener": ("run_listener_arm",),
+        "sel4-io-tcp-options": ("run_options_arm",),
+        "sel4-io-tcp-buffers": ("run_buffers_arm",),
+        "sel4-io-driver-reset-in-flight": ("run_tcp_arm",),
+        "sel4-io-service-fault-in-flight": (),
+        "sel4-io-lifetime": (),
+        "sel4-io-local": (),
+        "sel4-net": ("run_net_arm",),
+        "sel4-zenoh": ("run_zenoh_arm",),
+        "sel4-zenoh-external": ("run_zenoh_external_arm",),
+        "sel4-http": ("run_http_arm",),
+        "sel4-http-public": ("run_http_public_arm",),
+    },
+}
+
+QEMU_SITES: dict[str, dict[str, tuple[str, ...]]] = {
+    "check-sel4-io-network-plane.py": {
+        "run_with_peer": ("virtio-net-device",),
+        "run_net_arm": ("virtio-net-device",),
+        "run_zenoh_external_arm": ("virtio-net-device",),
+        "run_http_request": ("virtio-net-device",),
+    },
+}
+
+# The `--arm` choice of `main()` that runs each arm. The generator reads the branches of `main()` that test
+# each choice, to find what the arm runs there and the closure it builds. A missing entry is a refusal.
+ARM_CHOICES: dict[str, dict[str, str]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-network": "authority",
+        "sel4-io-tcp": "tcp",
+        "sel4-io-tcp-impairment": "tcp-impairment",
+        "sel4-io-tcp-listener": "tcp-listener",
+        "sel4-io-tcp-options": "tcp-options",
+        "sel4-io-tcp-buffers": "tcp-buffers",
+        "sel4-io-driver-reset-in-flight": "driver-reset",
+        "sel4-io-service-fault-in-flight": "service-fault",
+        "sel4-io-lifetime": "lifetime",
+        "sel4-io-local": "local",
+        "sel4-net": "net",
+        "sel4-zenoh": "zenoh",
+        "sel4-zenoh-external": "zenoh-external",
+        "sel4-http": "http",
+        "sel4-http-public": "http-public",
+    },
+}
+
+# The name of the parsed-arguments variable and the attribute that selects an arm, as in `arguments.arm`.
+ARM_SELECTOR = ("arguments", "arm")
+
+ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
+    "check-sel4-io-network-plane.py": {
+        "sel4-io-network": (),
+        "sel4-io-tcp": ("virtio-net-device",),
+        "sel4-io-tcp-impairment": ("virtio-net-device",),
+        "sel4-io-tcp-listener": ("virtio-net-device",),
+        "sel4-io-tcp-options": ("virtio-net-device",),
+        "sel4-io-tcp-buffers": ("virtio-net-device",),
+        "sel4-io-driver-reset-in-flight": ("virtio-net-device",),
+        "sel4-io-service-fault-in-flight": (),
+        "sel4-io-lifetime": (),
+        "sel4-io-local": (),
+        "sel4-net": ("virtio-net-device",),
+        "sel4-zenoh": (),
+        "sel4-zenoh-external": ("virtio-net-device",),
+        "sel4-http": ("virtio-net-device",),
+        "sel4-http-public": ("virtio-net-device",),
+    },
 }
 
 # A planning exclusion belongs to one invocation, never to its whole checker.
 # Any implementation artifact appearing requires removing the exclusion first.
 # Rows are (canonical item UUID, checker filename, closure name, artifact paths).
 PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    "sel4-io-tcp-buffers": (
+        "01a1638d-23a4-7f36-ae0e-7bf1f522f40f",
+        "check-sel4-io-network-plane.py",
+        "sel4-io-tcp-buffers",
+        (
+            "contracts/generation-manifest/v1/compositions/sel4-io-tcp-buffers.zti",
+            "contracts/system-image-closure/v2/closures/sel4-io-tcp-buffers.zti",
+            "contracts/system-spec/v1/systems/sel4-io-tcp-buffers.zti",
+            "contracts/system-test-run/v1/runs/sel4-io-tcp-buffers.zti",
+        ),
+    ),
     "sel4-serial": (
         "01a10778-adf1-7d64-a4e8-851e425c03e9",
         "check-sel4-component-graph.py",
@@ -322,6 +441,603 @@ def closure_identity_for(name: str) -> str:
     return compile_closure(candidate).identity.hex()
 
 
+DEVICE_NAME = re.compile(r"virtio-[a-z]+-device")
+
+# The flags a site may pass. A site is a function that builds the QEMU arguments after the base command, and
+# the real checker passes only these three. Any other flag is refused, so a disk or a serial port cannot be
+# added without a person extending this list.
+SITE_FLAGS = ("-netdev", "-device", "-object")
+# The first element of a tuple that holds QEMU arguments. A function that passes a tuple starting like this
+# but is not a site is refused.
+QEMU_FLAGS = ("-netdev", "-device", "-drive", "-object", "-usb", "-serial", "-display", "-chardev", "-global")
+
+
+def literal_text(node: ast.AST) -> str | None:
+    """The text of a string literal, or of an f-string whose pieces are all literal text, else None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def leading_text(node: ast.AST) -> str | None:
+    """The literal text a string value starts with: a literal, or the first piece of an f-string."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr) and node.values:
+        first = node.values[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+    return None
+
+
+def qemu_tokens(node: ast.AST) -> set[str]:
+    """Every QEMU token written anywhere under `node`, as the strings they hold.
+
+    A token is a string that equals a QEMU flag, a string that starts with a `virtio-<kind>-device` name, the
+    string `usb-kbd`, or the name `additional_arguments` as a variable or a keyword. The strings come from the
+    syntax tree, so the quote style does not matter. The whole tree is read, including nested definitions.
+    """
+    found: set[str] = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            value = inner.value
+            if value in QEMU_FLAGS or value == "usb-kbd" or DEVICE_NAME.match(value):
+                found.add(value[:40])
+        elif isinstance(inner, ast.JoinedStr):
+            first = leading_text(inner)
+            if first and DEVICE_NAME.match(first):
+                found.add(first[:40])
+        elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
+            found.add("additional_arguments")
+        elif isinstance(inner, ast.keyword) and inner.arg == "additional_arguments":
+            found.add("additional_arguments")
+    return found
+
+
+# The module that defines the launcher. It is imported only for `run_plane`, by name and without an alias.
+LAUNCHER_MODULE = "sel4_plane"
+
+
+def check_launcher_uses(path: _Path, body: list[ast.stmt]) -> None:
+    """`run_plane` is the only launcher, and every use of its name is a direct call that hides no keyword.
+
+    `run_plane` appends `additional_arguments` to the QEMU command. A direct call that names its keywords shows
+    what it passes. A call that spreads a mapping or a sequence, a use of the name that is not a call, an
+    attribute named `run_plane`, and a string equal to the launcher or to the keyword could pass arguments that
+    the reading of a site does not see, so each is refused anywhere in the checker.
+    """
+    tree = ast.Module(body=body, type_ignores=[])
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "run_plane" and alias.asname not in (None, "run_plane"):
+                    fail(f"{path.name}: run_plane is imported as {alias.asname!r} at line {node.lineno}, so a call through that name could not be read")
+                if alias.name == "run_plane" and (node.module != LAUNCHER_MODULE or node.level != 0):
+                    fail(f"{path.name}: run_plane is imported at line {node.lineno} from {'.' * node.level}{node.module or ''}, not from {LAUNCHER_MODULE}")
+                if alias.name == "*":
+                    fail(f"{path.name}: a star import at line {node.lineno} could bind the launcher under a name that was not read")
+            if node.module == LAUNCHER_MODULE and any(alias.name != "run_plane" for alias in node.names):
+                fail(f"{path.name}: line {node.lineno} imports something other than run_plane from {LAUNCHER_MODULE}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == LAUNCHER_MODULE:
+                    fail(f"{path.name}: {LAUNCHER_MODULE} is imported as a module at line {node.lineno}, which would reach run_plane as an attribute")
+        if isinstance(node, ast.Name) and node.id == "run_plane":
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Call) and parent.func is node):
+                fail(f"{path.name}: run_plane is used at line {node.lineno} other than as a direct call, so what it passes cannot be read")
+        elif isinstance(node, ast.Attribute) and node.attr == "run_plane":
+            fail(f"{path.name}: run_plane is reached as an attribute at line {node.lineno}, so what it passes cannot be read")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "run_plane":
+            if any(keyword.arg is None for keyword in node.keywords) or any(isinstance(argument, ast.Starred) for argument in node.args):
+                fail(f"{path.name}: the run_plane call at line {node.lineno} spreads a mapping or a sequence, so what it passes cannot be read")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in ("run_plane", "additional_arguments"):
+            fail(f"{path.name}: the string {node.value!r} at line {node.lineno} could name the launcher or its keyword at run time")
+
+
+def site_arguments(path: _Path, name: str, function: ast.FunctionDef) -> list[str]:
+    """The devices a site passes, in order, with one entry for each `-device` argument.
+
+    The arguments of a site are the elements of the tuple or list literals that the keyword `additional_arguments`
+    receives from a call to `run_plane`. Another call that carries the keyword is refused, because only
+    `run_plane` adds the arguments to QEMU. A literal must hold flag and value pairs. Each flag is a string
+    literal from `SITE_FLAGS`, so a computed flag, a variable flag, an odd count and a starred element are refused.
+    A `-device` value must be a string literal or an f-string that starts with a `virtio-<kind>-device` name, and
+    that name is the device. A `-netdev` or `-object` value must be a name, a string literal or an f-string. A
+    definition nested in the function may hold no QEMU token, and no QEMU token may sit outside those literals.
+    """
+    where = f"{path.name}: {name}"
+    for inner in ast.walk(function):
+        if inner is not function and isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            held = qemu_tokens(inner)
+            if held:
+                fail(f"{where} holds QEMU token(s) {sorted(held)} in a nested {type(inner).__name__.lower()}, so its arguments cannot be read where they are written")
+    carriers: list[ast.expr] = []
+    for call in ast.walk(function):
+        if not isinstance(call, ast.Call):
+            continue
+        launches = isinstance(call.func, ast.Name) and call.func.id == "run_plane"
+        given = [keyword.value for keyword in call.keywords if keyword.arg == "additional_arguments"]
+        if given and not launches:
+            fail(f"{where} passes additional_arguments to a call that is not run_plane, which is the only call that adds them to QEMU")
+        if launches:
+            if len(given) != 1:
+                fail(f"{where} calls run_plane at line {call.lineno} without additional_arguments, so that launch path attaches no declared device")
+            carriers.append(given[0])
+    if not carriers:
+        fail(f"{where} is declared as a site but passes no additional_arguments to run_plane")
+    devices: list[str] = []
+    inside: set[int] = set()
+    per_launch: list[list[str]] = []
+    for carrier in carriers:
+        if not isinstance(carrier, (ast.Tuple, ast.List)):
+            fail(f"{where} passes additional_arguments that is not a tuple or list literal, so its arguments cannot be read")
+        inside.update(id(node) for node in ast.walk(carrier))
+        launch_devices: list[str] = []
+        per_launch.append(launch_devices)
+        elements = carrier.elts
+        if len(elements) % 2:
+            fail(f"{where} passes an odd number of additional_arguments elements, so they are not flag and value pairs")
+        for flag_node, value_node in zip(elements[0::2], elements[1::2], strict=True):
+            if isinstance(flag_node, ast.Starred) or isinstance(value_node, ast.Starred):
+                fail(f"{where} passes a starred element in additional_arguments, so its arguments cannot be read")
+            flag = literal_text(flag_node)
+            if flag is None:
+                fail(f"{where} passes a flag in additional_arguments that is not a string literal, so what it names cannot be read")
+            if flag not in SITE_FLAGS:
+                fail(f"{where} passes the flag {flag!r}, which this generator does not record")
+            if flag == "-device":
+                value = leading_text(value_node)
+                found = DEVICE_NAME.match(value) if value else None
+                if found is None:
+                    fail(f"{where} passes a -device whose value is not a literal that starts with a virtio-<kind>-device name")
+                launch_devices.append(found.group(0))
+            else:
+                if not isinstance(value_node, (ast.Name, ast.Constant, ast.JoinedStr)) or (
+                    isinstance(value_node, ast.Constant) and not isinstance(value_node.value, str)
+                ):
+                    fail(f"{where} passes a {flag} value that is not a name, a string literal or an f-string")
+                text = leading_text(value_node)
+                if text is not None and text.startswith("-"):
+                    fail(f"{where} passes a {flag} value that looks like a flag")
+    # Every launch path must attach the same devices. A site is declared once, so a path that attaches fewer
+    # devices than another would make the record claim a device that the path does not attach.
+    if any(sorted(launch) != sorted(per_launch[0]) for launch in per_launch):
+        fail(f"{where} has launch paths that attach different devices, {[sorted(launch) for launch in per_launch]}")
+    devices = per_launch[0]
+    # Every QEMU token in the function must sit inside one of those literals. A token anywhere else is a
+    # second route to QEMU that the reading did not cover.
+    for inner in ast.walk(function):
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            value = inner.value
+            if (value in QEMU_FLAGS or value == "usb-kbd" or DEVICE_NAME.match(value)) and id(inner) not in inside:
+                fail(f"{where} holds the QEMU token {value[:40]!r} outside additional_arguments")
+        elif isinstance(inner, ast.Name) and inner.id == "additional_arguments":
+            fail(f"{where} uses additional_arguments as a name, so its arguments cannot be read")
+    return devices
+
+
+def device_facts(nodes: Iterable[ast.AST]) -> tuple[int, list[str]]:
+    """The number of `-drive` strings and the sorted device names among `nodes`, for a checker with no tables."""
+    drives = 0
+    devices: set[str] = set()
+    for inner in nodes:
+        if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+            if inner.value == "-drive":
+                drives += 1
+            elif inner.value == "usb-kbd":
+                devices.add("usb-kbd")
+            else:
+                found = DEVICE_NAME.match(inner.value)
+                if found:
+                    devices.add(found.group(0))
+    return drives, sorted(devices)
+
+
+def top_level_units(body: list[ast.stmt]) -> dict[str, list[ast.stmt]]:
+    """Each name that a top-level statement binds, with the statements that bind it.
+
+    A unit is a function, a class or an assignment. Reaching a name reaches every statement that binds it.
+    """
+    units: dict[str, list[ast.stmt]] = {}
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            units.setdefault(node.name, []).append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for inner in ast.walk(target):
+                    if isinstance(inner, ast.Name):
+                        units.setdefault(inner.id, []).append(node)
+    return units
+
+
+def reachable_units(units: dict[str, list[ast.stmt]], entries: tuple[str, ...]) -> set[str]:
+    """`entries` and every top-level name that they read, directly or through another, in any scope.
+
+    Every name counts, whether it is called, passed, aliased or read in a nested definition or in one branch
+    of a conditional. The reach can therefore name more units than the arm runs. It cannot miss one that a
+    name reaches.
+    """
+    seen: set[str] = set()
+    pending = list(entries)
+    while pending:
+        name = pending.pop()
+        if name in seen or name not in units:
+            continue
+        seen.add(name)
+        for node in units[name]:
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load) and inner.id in units:
+                    pending.append(inner.id)
+    return seen
+
+
+def arm_branches(path: _Path, main: ast.FunctionDef) -> list[tuple[ast.If, frozenset[str], bool]]:
+    """Each `if` in `main` whose test compares the `--arm` choice, with the choices it names and whether it is exact.
+
+    The choice is read as `arguments.arm`. Every use of it must be one comparison against string literals, with
+    `==`, `!=`, `in` or `not in`, and that comparison must sit in the test of an `if`, alone or in an `and` chain.
+    A comparison anywhere else, such as an assignment, a loop test, a conditional expression, a `match`, a call or
+    an alias of `arguments`, is refused, because the branch it guards could not be found.
+
+    A branch is exact when its test is such a comparison, or an `and` of them, and all of them are positive. Then
+    the branch runs only for the choices it names. A branch with a `!=`, a `not in`, an `or` or a `not` can run for
+    other choices, so it is not exact, and the checks treat it as running for every arm.
+    """
+    holder, attribute = ARM_SELECTOR
+    parents = {child: parent for parent in ast.walk(main) for child in ast.iter_child_nodes(parent)}
+    for node in ast.walk(main):
+        if isinstance(node, ast.Name) and node.id == holder and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                fail(f"{path.name}: main() uses {holder} other than by attribute at line {node.lineno}, so the --arm branches cannot be found")
+    entries: dict[int, tuple[ast.If, set[str], bool]] = {}
+    for node in ast.walk(main):
+        if not (isinstance(node, ast.Attribute) and node.attr == attribute and isinstance(node.value, ast.Name) and node.value.id == holder):
+            continue
+        where = f"{path.name}: {holder}.{attribute} at line {node.lineno}"
+        compare = parents.get(node)
+        if not isinstance(compare, ast.Compare) or len(compare.ops) != 1:
+            fail(f"{where} is not one comparison, so the branch it guards cannot be found")
+        operator = compare.ops[0]
+        if not isinstance(operator, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)):
+            fail(f"{where} is compared with an operator other than ==, !=, in or not in")
+        if compare.left is node:
+            other = compare.comparators[0]
+        elif compare.comparators[0] is node and isinstance(operator, (ast.Eq, ast.NotEq)):
+            other = compare.left
+        else:
+            fail(f"{where} is on the wrong side of its comparison")
+        if isinstance(other, ast.Constant) and isinstance(other.value, str):
+            names = {other.value}
+        elif (
+            isinstance(other, (ast.Tuple, ast.Set, ast.List))
+            and other.elts
+            and all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in other.elts)
+        ):
+            names = {item.value for item in other.elts}
+        else:
+            fail(f"{where} is compared with something other than string literals, so the choices it names cannot be read")
+        exact = not isinstance(operator, (ast.NotEq, ast.NotIn))
+        child, ancestor = compare, parents.get(compare)
+        while not (isinstance(ancestor, ast.If) and ancestor.test is child):
+            if isinstance(ancestor, ast.BoolOp):
+                exact = exact and isinstance(ancestor.op, ast.And)
+            elif isinstance(ancestor, ast.UnaryOp) and isinstance(ancestor.op, ast.Not):
+                exact = False
+            else:
+                fail(f"{where} is not in the test of an if, so the branch it guards cannot be found")
+            child, ancestor = ancestor, parents.get(ancestor)
+        known = entries.setdefault(id(ancestor), (ancestor, set(), True))
+        if exact:
+            known[1].update(names)
+        entries[id(ancestor)] = (ancestor, known[1], known[2] and exact)
+    return [(branch, frozenset(names), exact) for branch, names, exact in entries.values()]
+
+
+# Names whose use lets code reach a binding without writing its name, or rebind one. The checker uses none of
+# them, so each is refused anywhere in it, and no lookup can send a call to a function that the reading missed.
+BANNED_NAMES = frozenset(
+    {"globals", "locals", "vars", "exec", "eval", "compile", "setattr", "getattr", "delattr", "__import__", "__builtins__", "importlib", "breakpoint"}
+)
+
+
+def imported_modules(tree: ast.Module) -> set[str]:
+    """The names that `import` statements bind anywhere in the tree."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {alias.asname or alias.name.split(".")[0] for alias in node.names}
+    return names
+
+
+def build_image_calls(path: _Path, tree: ast.Module) -> tuple[dict[int, str], set[str]]:
+    """Each direct call to `build_image`, by the id of its node, with the closure it names, and the value names.
+
+    The value names are the module-level constants and the imported modules that supply a closure. A caller must
+    keep each of them bound once, because a local of the same name would change what the call builds.
+
+    `build_image` must be called by name with the closure as its one positional argument. A call with a keyword, a
+    starred argument or no argument, and any other use of the name, such as an alias, a default argument or a
+    value passed on, is refused, so a closure cannot be built without being counted. The closure is a string
+    literal, a module-level string constant, or `module.CLOSURE` of an imported module.
+    """
+    imports = imported_modules(tree)
+
+    def library_closure(module: str) -> str:
+        source = ROOT / "scripts" / "lib" / f"{module}.py"
+        found = re.search(r'^CLOSURE = "([a-z0-9-]+)"', source.read_text(encoding="utf-8"), re.MULTILINE) if source.is_file() else None
+        if found is None:
+            fail(f"{path.name}: {module}.py declares no CLOSURE constant")
+        return found.group(1)
+
+    constants: dict[str, str] = {}
+    used: set[str] = set()
+
+    def resolve(node: ast.AST) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in constants:
+            used.add(node.id)
+            used.update(via_module.get(node.id, ()))
+            return constants[node.id]
+        if isinstance(node, ast.Attribute) and node.attr == "CLOSURE" and isinstance(node.value, ast.Name) and node.value.id in imports:
+            used.add(node.value.id)
+            return library_closure(node.value.id)
+        fail(f"{path.name}: cannot resolve the closure named by {ast.dump(node)[:80]}")
+
+    via_module: dict[str, set[str]] = {}
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                constants[node.targets[0].id] = value.value
+            elif isinstance(value, ast.Attribute) and value.attr == "CLOSURE" and isinstance(value.value, ast.Name) and value.value.id in imports:
+                constants[node.targets[0].id] = library_closure(value.value.id)
+                via_module[node.targets[0].id] = {value.value.id}
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    calls: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Name) and node.id == "build_image" and isinstance(node.ctx, ast.Load)):
+            continue
+        call = parents.get(node)
+        if not (isinstance(call, ast.Call) and call.func is node):
+            fail(f"{path.name}: build_image is used at line {node.lineno} other than as a direct call")
+        if len(call.args) != 1 or call.keywords or isinstance(call.args[0], ast.Starred):
+            fail(f"{path.name}: build_image at line {node.lineno} is not called with exactly one positional closure")
+        calls[id(call)] = resolve(call.args[0])
+    return calls, used
+
+
+def built_closures(path: _Path) -> set[str]:
+    """Every closure that the checker builds, for the gate that compares them with the declared runs."""
+    return set(build_image_calls(path, ast.parse(path.read_text(encoding="utf-8")))[0].values())
+
+
+def check_name_bindings(path: _Path, tree: ast.Module, protected: set[str], values: set[str]) -> None:
+    """No name that an arm reaches is rebound, and no builtin that looks a name up is used.
+
+    The reach follows names, so a function that is rebound locally, passed in as a parameter, declared global,
+    defined again or imported under the same name would send a call somewhere the reach did not look. Each
+    protected function is therefore defined once, at the top level and without a decorator. `run_plane` is
+    imported once, at the top level. Any other binding of a protected name, in any scope, is refused. So is a
+    string equal to one, and a name or attribute that looks a binding up by text or replaces it.
+
+    `values` are the module-level constants and the imported modules that supply a closure to `build_image`.
+    Each is bound exactly once at the top level, by a plain assignment or a plain `import`, and nowhere else, so a
+    local of the same name cannot change the closure a call builds. No attribute of an imported module is stored.
+    An attribute named like a protected function and a call whose callee is neither a name nor an attribute are
+    refused, so `build_image` cannot be reached through a module, a table or a subscript.
+    """
+    direct = {id(node) for node in tree.body}
+    allowed_stores: set[int] = set()
+    top_bindings: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in values:
+            allowed_stores.add(id(node.targets[0]))
+            top_bindings[node.targets[0].id] = top_bindings.get(node.targets[0].id, 0) + 1
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                if bound in values:
+                    top_bindings[bound] = top_bindings.get(bound, 0) + 1
+    for name in sorted(values):
+        if top_bindings.get(name) != 1:
+            fail(f"{path.name}: {name} supplies a closure to build_image, so it must be bound exactly once at the top level, and it is bound {top_bindings.get(name, 0)} times")
+    imported = imported_modules(tree)
+    guarded = protected | values
+    defined: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in protected:
+            defined[node.name] = defined.get(node.name, 0) + 1
+            if node.decorator_list:
+                fail(f"{path.name}: {node.name} has a decorator at line {node.lineno}, so what it names cannot be read")
+    for name in sorted(protected - {"run_plane"}):
+        if defined.get(name) != 1:
+            fail(f"{path.name}: {name} must be defined exactly once at the top level, and it is defined {defined.get(name, 0)} times")
+    allowed_import = [
+        node for node in tree.body if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) == "run_plane" for alias in node.names)
+    ]
+    if len(allowed_import) != 1:
+        fail(f"{path.name}: run_plane must be imported exactly once at the top level")
+    strings = protected - {"main"}
+    for node in ast.walk(tree):
+        where = f"{path.name}: line {getattr(node, 'lineno', 0)}"
+        if isinstance(node, ast.Name):
+            if node.id in BANNED_NAMES:
+                fail(f"{where} uses {node.id}, which looks a binding up by text or replaces it")
+            if isinstance(node.ctx, (ast.Store, ast.Del)) and node.id in guarded and id(node) not in allowed_stores:
+                fail(f"{where} rebinds {node.id}, which an arm reaches")
+        elif isinstance(node, ast.arg) and node.arg in guarded:
+            fail(f"{where} names a parameter {node.arg}, which hides the {node.arg} that an arm reaches")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and set(node.names) & guarded:
+            fail(f"{where} declares {sorted(set(node.names) & guarded)} global or nonlocal")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in protected and id(node) not in direct:
+            fail(f"{where} defines {node.name} again inside another scope")
+        elif isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef)) and node.name in protected:
+            fail(f"{where} defines {node.name} as something other than a function")
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound = {(alias.asname or alias.name.split(".")[0]) if isinstance(node, ast.Import) else (alias.asname or alias.name) for alias in node.names}
+            if bound & protected and node not in allowed_import:
+                fail(f"{where} imports {sorted(bound & protected)}, which an arm reaches")
+            if bound & values and id(node) not in direct:
+                fail(f"{where} imports {sorted(bound & values)} again below the top level")
+        elif isinstance(node, ast.Call) and not isinstance(node.func, (ast.Name, ast.Attribute)):
+            fail(f"{where} calls something that is neither a name nor an attribute, so what it calls cannot be read")
+        elif isinstance(node, ast.ExceptHandler) and node.name in protected:
+            fail(f"{where} binds {node.name} in an except clause")
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name in protected:
+            fail(f"{where} binds {node.name} in a match pattern")
+        elif isinstance(node, ast.MatchMapping) and node.rest in protected:
+            fail(f"{where} binds {node.rest} in a match pattern")
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("__") and node.attr.endswith("__"):
+            fail(f"{where} uses the attribute {node.attr}, which reaches a binding without writing its name")
+        elif isinstance(node, ast.Attribute) and node.attr in protected:
+            fail(f"{where} reaches {node.attr} as an attribute, which hides the call from the reading of the reach")
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)) and isinstance(node.value, ast.Name) and node.value.id in imported:
+            fail(f"{where} stores an attribute of the imported module {node.value.id}, which could change a closure")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in strings:
+            fail(f"{where} holds the string {node.value!r}, which could look up a function that an arm reaches")
+
+
+def names_read(statements: Iterable[ast.AST], singles: Iterable[ast.AST] = ()) -> set[str]:
+    """The names read in `statements`, each walked in full, and in `singles`, each taken as it is."""
+    names = {inner.id for statement in statements for inner in ast.walk(statement) if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load)}
+    return names | {node.id for node in singles if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+
+
+def main_statements(path: _Path, main: ast.FunctionDef) -> tuple[dict[str, list[ast.stmt]], list[ast.stmt], list[ast.AST], set[str]]:
+    """What `main` runs for each `--arm` choice, for every arm, and the choices that have an exact branch.
+
+    The first value maps a choice to the statements of the exact branches that name it. The second holds the
+    statements that run for every arm: the body of a branch that is not exact, and the `else` of any branch. The
+    third holds the nodes of `main` outside every branch, which run for every arm. These are single nodes and
+    are not walked into, because a branch node among them would pull in its body. The fourth is the set of
+    choices that an exact branch names.
+    """
+    by_choice: dict[str, list[ast.stmt]] = {}
+    every: list[ast.stmt] = []
+    exact_choices: set[str] = set()
+    covered: set[int] = set()
+    for branch, names, exact in arm_branches(path, main):
+        for statement in (*branch.body, *branch.orelse):
+            covered.update(id(inner) for inner in ast.walk(statement))
+        if exact:
+            exact_choices |= names
+            for name in names:
+                by_choice.setdefault(name, []).extend(branch.body)
+        else:
+            every.extend(branch.body)
+        every.extend(branch.orelse)
+    outside = [node for node in ast.walk(main) if node is not main and id(node) not in covered]
+    return by_choice, every, outside, exact_choices
+
+
+def check_qemu_sites(path: _Path, body: list[ast.stmt], sites: dict[str, tuple[str, ...]]) -> None:
+    """Every QEMU token sits in a declared site, and each site passes exactly the devices it declares."""
+    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
+    check_launcher_uses(path, body)
+    for name, declared in sites.items():
+        if name not in functions:
+            fail(f"{path.name}: QEMU_SITES names {name}, which the checker does not define")
+        read = site_arguments(path, name, functions[name])
+        if sorted(read) != sorted(declared):
+            fail(f"{path.name}: {name} declares devices {sorted(declared)}, but its additional_arguments pass {sorted(read)}")
+    for node in body:
+        if isinstance(node, ast.FunctionDef) and node.name in sites:
+            continue
+        tokens = qemu_tokens(node)
+        if tokens:
+            where = f"function {node.name}" if isinstance(node, ast.FunctionDef) else f"the statement at line {node.lineno}"
+            fail(f"{path.name}: {where} is not in QEMU_SITES and holds QEMU token(s) {sorted(tokens)}")
+
+
+def arm_source(path: _Path, run: str, text: str) -> tuple[str, int, list[str]]:
+    """The source an arm's faults are read from, and the drives and devices the arm attaches.
+
+    A checker with no tables is read whole. For a checker with them, the devices are the arm's entry in
+    `ARM_DEVICES`, after the code is checked against the tables.
+
+    An arm reaches the units that its entry functions read, the units that the exact branches of `main` naming
+    its `--arm` choice read, and the units that every arm reads: the branches that are not exact, every `else`,
+    and the statements of `main` outside the branches. The devices of the sites it reaches must equal its
+    declaration, counted with repeats. The closures built in what it reaches must be exactly its own closure, so
+    two call sites that swap their closures are refused. No unit an arm reaches may be rebound.
+    """
+    arms = ARM_ENTRY_FUNCTIONS.get(path.name)
+    if arms is None:
+        return (text, *device_facts(ast.walk(ast.parse(text))))
+    if run not in arms:
+        fail(f"{path.name}: {run} has no entry in ARM_ENTRY_FUNCTIONS")
+    declared_by_arm = ARM_DEVICES.get(path.name, {})
+    if set(declared_by_arm) != set(arms):
+        fail(f"{path.name}: ARM_DEVICES and ARM_ENTRY_FUNCTIONS disagree on the arms {sorted(set(declared_by_arm) ^ set(arms))}")
+    sites = QEMU_SITES.get(path.name, {})
+    tree = ast.parse(text)
+    body = tree.body
+    functions = {node.name: node for node in body if isinstance(node, ast.FunctionDef)}
+    missing = [name for name in arms[run] if name not in functions]
+    if missing:
+        fail(f"{path.name}: {run} names entry function(s) {missing} that the checker does not define")
+    check_qemu_sites(path, body, sites)
+    main = functions.get("main")
+    if main is None:
+        fail(f"{path.name}: the checker defines no main(), so its --arm branches cannot be read")
+    choices = ARM_CHOICES.get(path.name, {})
+    absent = sorted(name for name in arms if name not in choices)
+    if absent:
+        fail(f"{path.name}: the arm(s) {absent} have no entry in ARM_CHOICES, so their branch of main() cannot be found")
+    by_choice, every, outside, exact_choices = main_statements(path, main)
+    unbranched = sorted(name for name in arms if choices[name] not in exact_choices)
+    if unbranched:
+        fail(f"{path.name}: main() has no branch for the arm(s) {unbranched}")
+    units = top_level_units(body)
+    build_calls, value_names = build_image_calls(path, tree)
+
+    def reach(name: str) -> tuple[set[str], list[ast.AST]]:
+        statements = [*by_choice.get(choices[name], []), *every]
+        read_by_main = names_read(statements, outside)
+        unread = [entry for entry in arms[name] if entry not in read_by_main]
+        if unread:
+            fail(f"{path.name}: {name} declares the entry function(s) {unread}, but the branch of main() for {choices[name]!r} never reads them")
+        reached = reachable_units(units, (*arms[name], *sorted(read_by_main)))
+        nodes: list[ast.AST] = [inner for unit in reached for statement in units[unit] for inner in ast.walk(statement)]
+        nodes += [inner for statement in statements for inner in ast.walk(statement)]
+        return reached, [*nodes, *outside]
+
+    reaches = {name: reach(name) for name in arms}
+    protected = {"main", "build_image", "run_plane", *sites, *(entry for entries in arms.values() for entry in entries)}
+    protected |= {unit for reached, _nodes in reaches.values() for unit in reached if unit in functions}
+    check_name_bindings(path, tree, protected, value_names)
+    reached, nodes = reaches[run]
+    attached = sorted(device for name in reached if name in sites for device in sites[name])
+    declared = sorted(declared_by_arm[run])
+    if attached != declared:
+        fail(f"{path.name}: {run} declares devices {declared}, but the sites it can reach, {sorted(reached & set(sites))}, attach {attached}")
+    own = next((closure for name, closure, _profile, _image in declared_variants(path) if name == run), "")
+    built = {build_calls[id(node)] for node in nodes if id(node) in build_calls}
+    if built != {own}:
+        fail(f"{path.name}: {run} is declared to boot {own!r}, but the code it reaches builds {sorted(built)}")
+    lines = text.splitlines()
+    pieces = ["\n".join(lines[node.lineno - 1 : node.end_lineno]) for name in sorted(reached) for node in units[name]]
+    # The statements of main() that run for this arm are part of what it runs, so the fault patterns read them
+    # too: the exact branches for its choice, every branch that is not exact, every else, and the statements
+    # outside the branches.
+    selected = [*by_choice.get(choices[run], []), *every]
+    pieces += ["\n".join(lines[node.lineno - 1 : node.end_lineno]) for node in selected]
+    inside_branches = {
+        number
+        for branch, _names, _exact in arm_branches(path, main)
+        for statement in (*branch.body, *branch.orelse)
+        for number in range(statement.lineno, statement.end_lineno + 1)
+    }
+    pieces += [lines[number - 1] for number in range(main.lineno, main.end_lineno + 1) if number not in inside_branches]
+    return "\n".join(pieces), 0, declared
+
+
 def extract(path: _Path, run: str | None = None) -> dict:
     """Read one invocation's execution-only inputs from its checker constants."""
     run = run_name(path) if run is None else run
@@ -389,12 +1105,7 @@ def extract(path: _Path, run: str | None = None) -> dict:
     # rather than parsing QEMU argv keeps this honest about what the checker
     # actually attaches; a checker that attaches two disks in two code paths
     # declares two.
-    drive_sites = len(re.findall(r'"-drive"', text))
-
-    devices = sorted(
-        set(re.findall(r'"(virtio-[a-z]+-device)[^"]*"', text))
-        | set(re.findall(r'"(usb-kbd)"', text))
-    )
+    scoped, drive_sites, devices = arm_source(path, run, text)
 
     # A forbidden outcome is written either as a bare literal or as a regex with
     # a trailing matcher (`r"SLIME_ROOT FATAL .*"`). Matching only the literal
@@ -423,7 +1134,7 @@ def extract(path: _Path, run: str | None = None) -> dict:
         # being attached.
         ("device", r"device[_ -]fault|DEVICE_FAULT|fault[_ -]inject"),
     ):
-        if re.search(pattern, text):
+        if re.search(pattern, scoped):
             faults.append(kind)
 
     return {

@@ -28,6 +28,10 @@ readable and link to the decision that replaced them.
 - [Spec-driven work-item bodies](spec-driven-work-item-bodies.md) — accepted;
   what Slime OS owns once MyQue, devloop, and myque-gh publish the envelope,
   requirements, evidence, and projection contracts it pins.
+  Its projection part is amended by the record below.
+- [Work items are not projected into GitHub Issues](no-github-issue-projection.md)
+  — accepted; `.tasks/` is the only work-item surface, and the Issue projection
+  workflow is retired after it duplicated 468 Issues during a GitHub outage.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.
@@ -74,3 +78,10 @@ readable and link to the decision that replaced them.
   proposed; the guest opens one TCP connection over a NIC to a stock eclipse-zenoh 1.0.0
   listener on the host, judged from the listener's own record, a packet capture and the host
   wire reference, with the composition and guest left to the implementation.
+- [A shared Zenoh service component](zenoh-service.md) — proposed; one component owns the Zenoh
+  link and session and serves local holders through per-holder key grants. It does not depend on
+  the fabric. The session's limit of one subscription of its own is the first obstacle.
+- [Zenoh Profile 0 taking a stock peer's undeclaration](zenoh-stock-undeclare.md) — proposed;
+  the one batch the stock-peer exam did not capture, an `UndeclareSubscriber` that names the
+  subscriber by id alone behind the network QoS extension, taken by the session by id and
+  nothing wider, with ten variants it keeps refusing by name and class.

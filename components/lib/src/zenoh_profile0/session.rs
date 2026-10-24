@@ -686,7 +686,8 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                         }
                         Network::DeclareSubscriber { .. }
                         | Network::DeclareSubscriberAlias { .. }
-                        | Network::UndeclareSubscriber { .. } => events += 1,
+                        | Network::UndeclareSubscriber { .. }
+                        | Network::UndeclareSubscriberById { .. } => events += 1,
                         _ => {}
                     }
                 }
@@ -951,6 +952,17 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
                                 .get(at)
                                 .is_some_and(|(_, held)| held == key.as_bytes())
                         })
+                        .ok_or(SessionError::UnknownSubscriber)?;
+                    self.subs.defer_remove(at);
+                    self.remote_n -= 1;
+                    note(journal, used, Change::Unsubscribed(at));
+                    events.push(Event::SubscriberUndeclared { id })?;
+                }
+                Network::UndeclareSubscriberById { id } => {
+                    room(used)?;
+                    let at = self
+                        .subs
+                        .find(u64::from(id))
                         .ok_or(SessionError::UnknownSubscriber)?;
                     self.subs.defer_remove(at);
                     self.remote_n -= 1;

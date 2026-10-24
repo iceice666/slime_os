@@ -123,6 +123,16 @@ pr_scope_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# Work items are not projected into GitHub Issues: refuses while the projection
+# workflow exists, policy names it, a workflow or script runs `myque-gh apply`,
+# or contributor guidance still asks for `myque-gh pr link`.
+[group('quality')]
+issue_projection_retired_check:
+    @if test -e .github/workflows/myque-project.yml; then echo '.github/workflows/myque-project.yml still exists' >&2; exit 1; fi
+    @if grep -q 'myque-project.yml' .devloop/policy.json; then echo '.devloop/policy.json still names myque-project.yml' >&2; exit 1; fi
+    @if grep -rlq 'myque-gh apply' .github scripts; then echo 'a workflow or script still runs myque-gh apply' >&2; exit 1; fi
+    @if grep -rlq 'myque-gh pr link\|myque-gh/[0-9a-f]*#myque-gh -- pr link' CONTRIBUTING.md .github docs/getting-started .agents; then echo 'contributor guidance still asks for myque-gh pr link' >&2; exit 1; fi
+
 # End-to-end diagnostics from a failing gate through the pinned CLI, including
 # retained output, cached failure, bounds and refusals. Explicit qualification.
 [group('quality')]
@@ -420,7 +430,7 @@ test_sel4_root:
     # modules that exist there: P6's `framebuffer` and `boot_record` are gated
     # to x86-64 because the boot framebuffer is reached through an x86 extra-
     # BootInfo record, and their tests are covered by the x86-64 planes instead.
-    expected=354
+    expected=363
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

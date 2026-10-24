@@ -480,18 +480,15 @@ impl ObjectAllocator {
         size_bits: usize,
     ) -> Result<usize, AllocError> {
         let extent = self.acquire_extent_record(size_bits)?;
-        self.extents[extent]
-            .as_mut()
-            .expect("acquired extent record")
-            .reserve(reservation, kind);
+        self.extents
+            .update(extent, |record| record.reserve(reservation, kind));
         Ok(extent)
     }
 
     /// Publish one reservation-owned extent record back as common capacity.
     fn return_reserved_extent(&mut self, extent: usize) {
-        if let Some(record) = self.extents.get_mut(extent).and_then(Option::as_mut) {
-            record.unreserve();
-        }
+        self.extents
+            .update_present(extent, |record| record.unreserve());
     }
 
     /// Release every extent a reservation owns and retire its identity.
@@ -585,10 +582,9 @@ impl ObjectAllocator {
                 })
             })
             .ok_or(ReservationError::Unavailable { size_bits })?;
-        self.extents[index]
-            .as_mut()
-            .expect("selected reserved extent")
-            .assign(arena.index(), serial, extent_kind);
+        self.extents.update(index, |record| {
+            record.assign(arena.index(), serial, extent_kind)
+        });
         Ok(index)
     }
 
