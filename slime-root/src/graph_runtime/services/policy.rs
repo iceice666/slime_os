@@ -112,19 +112,23 @@ pub(super) fn serve_clock_request(
     };
     match outcome {
         Ok((result, aux)) => {
-            slime_root::diagnostic_println!(
-                "SLIME_CLOCK served task={} label={label} result={result} live={}",
-                task.0,
-                service.live_timers(),
-            );
+            if super::diagnostic_once::clock_served(task.0, label) {
+                slime_root::diagnostic_println!(
+                    "SLIME_CLOCK served task={} label={label} result={result} live={}",
+                    task.0,
+                    service.live_timers(),
+                );
+            }
             Response::success(result, aux)
         }
         Err(error) => {
-            slime_root::diagnostic_println!(
-                "SLIME_CLOCK refused task={} label={label} class={} detail={error:?}",
-                task.0,
-                clock_error_class(error),
-            );
+            if super::diagnostic_once::clock_refused(task.0, label, clock_error_index(error)) {
+                slime_root::diagnostic_println!(
+                    "SLIME_CLOCK refused task={} label={label} class={} detail={error:?}",
+                    task.0,
+                    clock_error_class(error),
+                );
+            }
             Response::error(clock_error_status(error))
         }
     }
@@ -246,6 +250,20 @@ pub(super) const fn clock_error_status(error: clock::ClockError) -> IpcError {
         clock::ClockError::Malformed
         | clock::ClockError::TimeOverflow
         | clock::ClockError::SimulatedTimeOverflow => IpcError::InvalidOperation,
+    }
+}
+
+/// The refusal's position in [`clock_error_class`]'s vocabulary, the key the
+/// once-per-key diagnostic gate remembers.
+const fn clock_error_index(error: clock::ClockError) -> u8 {
+    match error {
+        clock::ClockError::Undeclared => 0,
+        clock::ClockError::Malformed => 1,
+        clock::ClockError::InvalidNotification => 2,
+        clock::ClockError::TimerLimit => 3,
+        clock::ClockError::TimerNotFound => 4,
+        clock::ClockError::TimeOverflow => 5,
+        clock::ClockError::SimulatedTimeOverflow => 6,
     }
 }
 
