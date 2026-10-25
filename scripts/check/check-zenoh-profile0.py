@@ -417,14 +417,36 @@ RUN_WORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def known_names(word: str, verdict: str) -> set[str]:
+    """The names an honest run may print for a word and verdict. A `cdr ok` row is judged by its own judge."""
+    if word == "encode":
+        return {name for name, _hexed, _ in reference()} if verdict == "ok" else set(ENCODE_REFUSALS)
+    if word == "session":
+        return set(SESSION_SCENARIOS) if verdict == "ok" else set(SESSION_REFUSALS)
+    if word == "link":
+        return set(LINK_SCENARIOS) if verdict == "ok" else set(LINK_REFUSALS)
+    return set(CDR_REFUSALS) if verdict == "refused" else set()
+
+
 def require_consumed(slice_name: str, lines: list[str]) -> None:
-    """Refuse any exam line that no judge of this run reads, so an invented or malformed line cannot pass."""
+    """Refuse any exam line that no judge of this run reads, so an invented or malformed line cannot pass.
+
+    The encoder and session slices share one cargo filter, so each run prints the lines of both words and only one
+    judge reads each word. A line of the other word is checked here against the names that word may print. A
+    repeated line is refused for every word.
+    """
     allowed = RUN_WORDS[slice_name]
+    repeated = sorted({line for line in lines if lines.count(line) > 1})
+    if repeated:
+        fail(f"{slice_name}: exam line repeated: {repeated[0]!r}")
     for line in lines:
         fields = line.split()
         shape = LINE_SHAPES[fields[0]] if fields and fields[0] in allowed else {}
         if len(fields) < 2 or shape.get(fields[1]) != len(fields):
             fail(f"{slice_name}: unrecognised exam line {line!r}")
+        if fields[0] != "cdr" or fields[1] == "refused":
+            if fields[2] not in known_names(fields[0], fields[1]):
+                fail(f"{slice_name}: exam line {line!r} names something no honest run prints")
 
 
 def exactly(label: str, wanted: tuple[str, ...], seen: list[str]) -> None:
@@ -483,7 +505,9 @@ def judge_cdr(lines: list[str]) -> tuple[int, int]:
     produced: dict[int, tuple[int, str]] = {}
     for line in lines:
         fields = line.split()
-        if len(fields) == 5 and fields[:2] == ["cdr", "ok"] and fields[2].isdigit() and fields[3].isdigit():
+        if len(fields) == 5 and fields[:2] == ["cdr", "ok"]:
+            if not (fields[2].isdigit() and fields[3].isdigit()):
+                fail(f"CDR sample row {line!r} does not carry a numeric sequence and value")
             seq = int(fields[2])
             if seq in produced:
                 fail(f"CDR reported sample {seq} twice")
@@ -536,7 +560,17 @@ def controls(slice_name: str) -> int:
         ("a known word and verdict with an unknown field count", good + [f"{word} refused invented extra"]),
         ("an ok line with too few fields", good + [f"{word} ok"]),
         ("an ok line with too many fields", good + [f"{word} ok invented a b c d"]),
+        ("a refused line that names no honest control", good + [f"{word} refused invented"]),
     ]
+    if slice_name in ("encoder", "session"):
+        # The two slices share one cargo filter, so a real run prints the other word's lines too.
+        other, honest = ("session", f"session ok {SESSION_SCENARIOS[0]}") if word == "encode" else ("encode", f"encode refused {ENCODE_REFUSALS[0]}")
+        mutations.append(("a line of the shared word that names nothing honest", good + [f"{other} refused invented"]))
+        mutations.append(("a repeated line of the shared word", good + [honest, honest]))
+    if slice_name == "cdr":
+        mutations.append(("a sample with a non-numeric sequence and value", good + ["cdr ok bogus bogus 00"]))
+        mutations.append(("a sample with a non-numeric value", good + ["cdr ok 1 bogus 00"]))
+        mutations.append(("a sample with a non-numeric sequence", good + ["cdr ok bogus 5 00"]))
     if slice_name in ("encoder", "cdr"):
         at = next(i for i, line in enumerate(good) if " ok " in line)
         fields = good[at].split()
