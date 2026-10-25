@@ -476,7 +476,14 @@ def names(lines: list[str], word: str, verdict: str) -> list[str]:
 
 
 def judge_encoder(lines: list[str]) -> tuple[int, int]:
+    """The encoder's cases and refusals. The shared cargo filter also prints the session rows, which are judged too."""
     require_consumed("encoder", lines)
+    result = encode_rows(lines)
+    named_rows("session")(lines)
+    return result
+
+
+def encode_rows(lines: list[str]) -> tuple[int, int]:
     golden = {name: hexed for name, hexed, _ in reference()}
     produced: dict[str, str] = {}
     for line in lines:
@@ -494,16 +501,29 @@ def judge_encoder(lines: list[str]) -> tuple[int, int]:
     return len(produced), len(refused)
 
 
-def judge_named(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
+def named_rows(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
     _, scenarios, refusals, word = RUST[slice_name]
 
-    def judge(lines: list[str]) -> tuple[int, int]:
-        require_consumed(slice_name, lines)
+    def rows(lines: list[str]) -> tuple[int, int]:
         done = names(lines, word, "ok")
         refused = names(lines, word, "refused")
         exactly(f"{slice_name} scenarios", scenarios, done)
         exactly(f"{slice_name} refusals", refusals, refused)
         return len(done), len(refused)
+
+    return rows
+
+
+def judge_named(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
+    rows = named_rows(slice_name)
+
+    def judge(lines: list[str]) -> tuple[int, int]:
+        require_consumed(slice_name, lines)
+        result = rows(lines)
+        if slice_name == "session":
+            # The shared cargo filter also prints the encoder rows, so their bytes are judged in this run too.
+            encode_rows(lines)
+        return result
 
     return judge
 
@@ -542,8 +562,11 @@ JUDGES: dict[str, Callable[[list[str]], tuple[int, int]]] = {
 def good_lines(slice_name: str) -> list[str]:
     _, scenarios, refusals, word = RUST[slice_name]
     refused = [f"{word} refused {c}" for c in refusals]
-    if slice_name == "encoder":
-        return [f"encode ok {n} {h}" for n, h, _ in reference()] + refused
+    if slice_name in ("encoder", "session"):
+        # One cargo filter serves both slices, so a real run of either prints the rows of both words.
+        encode = [f"encode ok {n} {h}" for n, h, _ in reference()] + [f"encode refused {c}" for c in ENCODE_REFUSALS]
+        session = [f"session ok {s}" for s in SESSION_SCENARIOS] + [f"session refused {c}" for c in SESSION_REFUSALS]
+        return encode + session
     if slice_name == "cdr":
         return [f"cdr ok {seq} {value} {hexed}" for seq, (value, hexed) in demo_samples().items()] + refused
     return [f"{word} ok {s}" for s in scenarios] + refused
@@ -584,11 +607,23 @@ def controls(slice_name: str) -> int:
         other, honest = ("session", f"session ok {SESSION_SCENARIOS[0]}") if word == "encode" else ("encode", f"encode refused {ENCODE_REFUSALS[0]}")
         mutations.append(("a line of the shared word that names nothing honest", good + [f"{other} refused invented"]))
         mutations.append(("a repeated line of the shared word", good + [honest, honest]))
+        # Both runs judge the bytes of the encode rows and the names of the session rows, whichever slice was asked for.
+        encode_at = [i for i, line in enumerate(good) if line.startswith("encode ok ")]
+        first, second = (good[i].split() for i in encode_at[:2])
+        swapped = list(good)
+        swapped[encode_at[0]] = " ".join([*first[:3], second[3]])
+        swapped[encode_at[1]] = " ".join([*second[:3], first[3]])
+        mutations.append(("two encode batches with their bytes swapped", swapped))
+        mutations.append(("an encode batch reported again with wrong bytes", good + [f"encode ok {first[2]} 00"]))
+        mutations.append(("an encode batch no honest run prints", good + ["encode ok invented-batch 00"]))
+        mutations.append(("a session scenario reported again", good + [f"session ok {SESSION_SCENARIOS[1]}"]))
+        mutations.append(("every encode row removed", [line for line in good if not line.startswith("encode ")]))
+        mutations.append(("every session row removed", [line for line in good if not line.startswith("session ")]))
     if slice_name == "cdr":
         mutations.append(("a sample with a non-numeric sequence and value", good + ["cdr ok bogus bogus 00"]))
         mutations.append(("a sample with a non-numeric value", good + ["cdr ok 1 bogus 00"]))
         mutations.append(("a sample with a non-numeric sequence", good + ["cdr ok bogus 5 00"]))
-    if slice_name in ("encoder", "cdr"):
+    if slice_name in ("encoder", "session", "cdr"):
         at = next(i for i, line in enumerate(good) if " ok " in line)
         fields = good[at].split()
         flipped = fields[-1][:-1] + ("0" if fields[-1][-1] != "0" else "1")
