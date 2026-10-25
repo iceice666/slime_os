@@ -400,6 +400,15 @@ def exam_lines(output: str) -> list[str]:
     return [match.group(1).strip() for line in output.splitlines() if (match := EXAM_LINE.search(line))]
 
 
+# The four slices judged by `run_tests` keep every marker, so a bare `[zenoh-exam]`, or one with text glued to it,
+# reaches the judge as a line it does not recognise. `exam_lines` drops those, and the other slices still use it.
+EXAM_MARKER = re.compile(r"\[zenoh-exam\](.*)$")
+
+
+def exam_lines_strict(output: str) -> list[str]:
+    return [match.group(1).strip() for line in output.splitlines() if (match := EXAM_MARKER.search(line))]
+
+
 # The shape of every line a Rust slice may print, by its word: the verdict and the number of fields that
 # verdict carries, the word included. The encoder and the session slice share one cargo filter, so a run
 # of either prints the lines of both words.
@@ -554,7 +563,6 @@ def controls(slice_name: str) -> int:
         ("an unknown refusal", good + [f"{word} refused invented"]),
         ("every refusal removed", [line for line in good if " refused " not in line]),
         ("an unrecognised line", good + ["invented line"]),
-        ("an empty exam line", good + [""]),
         ("a line of an unknown word", good + ["bogus ok invented"]),
         ("a known word with an unknown verdict", good + [f"{word} bogus invented"]),
         ("a known word and verdict with an unknown field count", good + [f"{word} refused invented extra"]),
@@ -562,6 +570,15 @@ def controls(slice_name: str) -> int:
         ("an ok line with too many fields", good + [f"{word} ok invented a b c d"]),
         ("a refused line that names no honest control", good + [f"{word} refused invented"]),
     ]
+    # These go through the serialized stdout and `exam_lines_strict`, the path a real run takes, so a marker that
+    # carries no text, or text glued to it, reaches the judge instead of being dropped on the way.
+    stdout = "".join(f"[zenoh-exam] {line}\n" for line in good)
+    for label, tail in (
+        ("a bare exam marker", "[zenoh-exam]\n"),
+        ("an exam marker followed only by spaces", "[zenoh-exam]   \n"),
+        ("an exam marker with text glued to it", "[zenoh-exam]invented\n"),
+    ):
+        mutations.append((label, exam_lines_strict(stdout + tail)))
     if slice_name in ("encoder", "session"):
         # The two slices share one cargo filter, so a real run prints the other word's lines too.
         other, honest = ("session", f"session ok {SESSION_SCENARIOS[0]}") if word == "encode" else ("encode", f"encode refused {ENCODE_REFUSALS[0]}")
@@ -604,7 +621,7 @@ def run_tests(slice_name: str) -> list[str]:
         status != "ok" or int(failed) for status, _, failed in results
     ):
         fail(f"no passing test result for filter {filter_!r}")
-    return exam_lines(result.stdout)
+    return exam_lines_strict(result.stdout)
 
 
 def keyed(lines: list[str], word: str) -> dict[str, str]:
