@@ -197,6 +197,7 @@
     "scripts/lib/console_record_exam.py",
     "scripts/lib/console_record_controls.py",
     "scripts/lib/console_producer_exam.py",
+    "scripts/lib/root_diagnostics.py",
     "scripts/lib/smoltcp_matrix.py",
     "scripts/lib/system_image_closure.py",
     "scripts/lib/system_image_closure_contract.py",
