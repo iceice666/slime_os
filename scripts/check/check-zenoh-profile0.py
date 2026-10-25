@@ -400,6 +400,33 @@ def exam_lines(output: str) -> list[str]:
     return [match.group(1).strip() for line in output.splitlines() if (match := EXAM_LINE.search(line))]
 
 
+# The shape of every line a Rust slice may print, by its word: the verdict and the number of fields that
+# verdict carries, the word included. The encoder and the session slice share one cargo filter, so a run
+# of either prints the lines of both words.
+LINE_SHAPES: dict[str, dict[str, int]] = {
+    "encode": {"ok": 4, "refused": 3},
+    "session": {"ok": 3, "refused": 3},
+    "cdr": {"ok": 5, "refused": 3},
+    "link": {"ok": 3, "refused": 3},
+}
+RUN_WORDS: dict[str, tuple[str, ...]] = {
+    "encoder": ("encode", "session"),
+    "session": ("encode", "session"),
+    "cdr": ("cdr",),
+    "transport": ("link",),
+}
+
+
+def require_consumed(slice_name: str, lines: list[str]) -> None:
+    """Refuse any exam line that no judge of this run reads, so an invented or malformed line cannot pass."""
+    allowed = RUN_WORDS[slice_name]
+    for line in lines:
+        fields = line.split()
+        shape = LINE_SHAPES[fields[0]] if fields and fields[0] in allowed else {}
+        if len(fields) < 2 or shape.get(fields[1]) != len(fields):
+            fail(f"{slice_name}: unrecognised exam line {line!r}")
+
+
 def exactly(label: str, wanted: tuple[str, ...], seen: list[str]) -> None:
     duplicated = sorted({name for name in seen if seen.count(name) > 1})
     if duplicated:
@@ -418,6 +445,7 @@ def names(lines: list[str], word: str, verdict: str) -> list[str]:
 
 
 def judge_encoder(lines: list[str]) -> tuple[int, int]:
+    require_consumed("encoder", lines)
     golden = {name: hexed for name, hexed, _ in reference()}
     produced: dict[str, str] = {}
     for line in lines:
@@ -439,6 +467,7 @@ def judge_named(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
     _, scenarios, refusals, word = RUST[slice_name]
 
     def judge(lines: list[str]) -> tuple[int, int]:
+        require_consumed(slice_name, lines)
         done = names(lines, word, "ok")
         refused = names(lines, word, "refused")
         exactly(f"{slice_name} scenarios", scenarios, done)
@@ -449,6 +478,7 @@ def judge_named(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
 
 
 def judge_cdr(lines: list[str]) -> tuple[int, int]:
+    require_consumed("cdr", lines)
     wanted = demo_samples()
     produced: dict[int, tuple[int, str]] = {}
     for line in lines:
@@ -499,6 +529,13 @@ def controls(slice_name: str) -> int:
         ("a duplicated line", good + [good[0]]),
         ("an unknown refusal", good + [f"{word} refused invented"]),
         ("every refusal removed", [line for line in good if " refused " not in line]),
+        ("an unrecognised line", good + ["invented line"]),
+        ("an empty exam line", good + [""]),
+        ("a line of an unknown word", good + ["bogus ok invented"]),
+        ("a known word with an unknown verdict", good + [f"{word} bogus invented"]),
+        ("a known word and verdict with an unknown field count", good + [f"{word} refused invented extra"]),
+        ("an ok line with too few fields", good + [f"{word} ok"]),
+        ("an ok line with too many fields", good + [f"{word} ok invented a b c d"]),
     ]
     if slice_name in ("encoder", "cdr"):
         at = next(i for i, line in enumerate(good) if " ok " in line)
