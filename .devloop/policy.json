@@ -182,6 +182,7 @@
     "scripts/lib/interface_schema_contract.py",
     "scripts/lib/just_metadata.py",
     "scripts/lib/link_peer.py",
+    "scripts/lib/link_wake.py",
     "scripts/lib/markdown_anchors.py",
     "scripts/lib/mavlink.py",
     "scripts/lib/mavlink_heartbeat_contract.py",

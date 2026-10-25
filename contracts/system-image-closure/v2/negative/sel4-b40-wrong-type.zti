@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-b40-wrong-type";
-  baseClosureIdentity = "3be793a25aa0e6fb48a53d259927dca1c34a628c1d9cc4f5ee3daf680cfe645b";
+  baseClosureIdentity = "a8baa0f25b08bdf9cd31a12bf829aba426d410fd997bf6689b6061f43eb0ecb2";
   mutation = "wrong_type";
   expectedRefusal = "CSpaceMismatch";
 }
