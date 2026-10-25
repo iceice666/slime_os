@@ -28,6 +28,10 @@ into a stalled receiver and acknowledges a long stream at once, so each
 holder's declared socket buffers show on the wire; before it boots, it holds
 the generation builder to the buffer sizes network-application/v4 admits and
 refuses. It is also explicit.
+The root-diagnostics arm boots the same composition and, besides everything the
+tcp-buffers arm judges, holds the root's per-operation diagnostic lines to once
+per key and its repeat counters to the frames the peer saw
+(`scripts/lib/root_diagnostics.py`); it is also explicit.
 The net arm boots `sel4-net`, the product shell beside the network stack, and
 types seven Slisp lines into the resident shell one at a time: a spawned
 numeric fetch judged against the controlled HTTP peer, and refusals that must
@@ -61,6 +65,7 @@ import tcp_impairment_peer  # noqa: E402
 import tcp_listener_peer  # noqa: E402
 import tcp_options_peer  # noqa: E402
 import tcp_buffers_peer  # noqa: E402
+import root_diagnostics  # noqa: E402
 import http_peer  # noqa: E402
 import http_capture  # noqa: E402
 import network_launch as launch  # noqa: E402
@@ -1013,7 +1018,7 @@ def check_buffers_builder() -> tuple[int, int]:
         fail(f"the builder refused the declared buffers composition: {error}")
 
 
-def run_buffers_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
+def run_buffers_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> tuple[str, tcp_buffers_peer.BuffersPeer]:
     peer = tcp_buffers_peer.BuffersPeer()
     transcript = run_with_peer(image, mac, tcp_buffers_peer.serve, peer, BUFFERS_CHAINS)
     write_wire_transcript(transcript_path, transcript, peer.ledger.summary(), (("received", peer.ledger.received), ("sent", peer.ledger.sent)))
@@ -1031,6 +1036,17 @@ def run_buffers_arm(image: Path, mac: str, retry_limits: dict[int, int], transcr
         print(f"[buffers] {summary}")
     for rate in rates:
         print(rate.line())
+    return transcript, peer
+
+
+def run_root_diagnostics_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
+    """The tcp-buffers run, with the root's diagnostic lines and counters judged against the wire."""
+    transcript, peer = run_buffers_arm(image, mac, retry_limits, transcript_path)
+    try:
+        verdict = root_diagnostics.judge(transcript, len(peer.ledger.received), len(peer.ledger.sent))
+    except ValueError as error:
+        fail(f"root diagnostics: {error}")
+    print(verdict.line())
 
 
 def run_listener_arm(image: Path, mac: str, transcript_path: Path | None) -> None:
@@ -1496,7 +1512,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "tcp-buffers", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "tcp-buffers", "root-diagnostics", "net", "zenoh", "zenoh-external", "http", "http-public", "all"), default="all")
     parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their mutated evidence, without QEMU or a listener")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
@@ -1565,6 +1581,19 @@ def main() -> None:
             "bounded by the builder, applied per connection and observed on the wire as the transmit in-flight "
             "limit, the SYN window scale and the zero-window point, with socket reuse across holders and the "
             "throughput stream recorded proved"
+        )
+    if arguments.arm == "root-diagnostics":
+        try:
+            controls = root_diagnostics.controls()
+        except ValueError as error:
+            fail(f"root diagnostics controls: {error}")
+        print(f"[root-diagnostics] controls refused={controls}")
+        mac, limits = check_buffers_fixture()
+        run_root_diagnostics_arm(build_image(BUFFERS_CLOSURE), mac, limits, arguments.transcript)
+        print(
+            "seL4 root diagnostics check: the root printed each per-operation clock and payload DMA "
+            "diagnostic once per key, its repeat counters matched the frames on the wire, and the "
+            "tcp-buffers plane passed with its throughput recorded"
         )
     if arguments.arm == "net":
         mac = check_net_fixture()
