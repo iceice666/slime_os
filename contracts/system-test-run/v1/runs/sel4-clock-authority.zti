@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-clock-authority";
-  imageClosureIdentity = "58dad2d6774f4e71359a416b49cc01de9c58042df7e6b02f99c4a0cb99823cea";
+  imageClosureIdentity = "f09851db036fa2de29bb55e36b68ff2fe385543b91817bede0d36a01bee444f3";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
