@@ -452,7 +452,6 @@
   clockAuthority = [
     {
       holder = "io-tcp-impairment-probe";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -462,7 +461,6 @@
     };
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;

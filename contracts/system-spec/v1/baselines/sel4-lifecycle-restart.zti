@@ -4,7 +4,6 @@
   clockAuthority = [
     {
       holder = "lifecycle-supervisor";
-      monotonicRead = true;
       timerUse = true;
       simulatedRead = false;
       simulatedAdvance = false;

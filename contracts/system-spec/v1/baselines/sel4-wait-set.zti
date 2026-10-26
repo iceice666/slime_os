@@ -4,7 +4,6 @@
   clockAuthority = [
     {
       holder = "wait-set-waiter";
-      monotonicRead = false;
       timerUse = true;
       simulatedRead = false;
       simulatedAdvance = false;

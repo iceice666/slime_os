@@ -4,7 +4,6 @@
   clockAuthority = [
     {
       holder = "replay-recorder";
-      monotonicRead = true;
       timerUse = true;
       simulatedRead = true;
       simulatedAdvance = true;

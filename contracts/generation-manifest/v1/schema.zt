@@ -326,16 +326,15 @@ NetworkApplicationEntry :: type {
   txBufferBytes : Int;
 };
 
--- One instance's C9.1 root-brokered clock service authority. The four
--- booleans are independent: a timer-only holder need not read either clock,
--- and simulated time has separate read and advance authority so a consumer
--- cannot change the test clock it observes. `timerQuota` must be nonzero only
+-- One instance's C9.1 root-brokered clock service authority. The three
+-- booleans are independent, and simulated time has separate read and advance
+-- authority so a consumer cannot change the test clock it observes. Reading
+-- the monotonic clock is ambient (`clock-authority/v2`) and is not declared. `timerQuota` must be nonzero only
 -- with `timerUse`; `timerNotification` then names the generation-owned
 -- NotificationGrant whose target is this holder, and `timerBadgeBit` is the
 -- single badge bit expiry signals accumulate on that notification.
 ClockAuthorityEntry :: type {
   holder : Text;
-  monotonicRead : Bool;
   timerUse : Bool;
   simulatedRead : Bool;
   simulatedAdvance : Bool;

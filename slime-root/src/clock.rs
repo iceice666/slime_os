@@ -6,8 +6,7 @@
 
 use boot_contracts::clock_authority::{ClockAuthority, holder_identity};
 use boot_contracts::generation::{
-    Generation, RIGHT_CLOCK_MONOTONIC_READ, RIGHT_CLOCK_SIMULATED_ADVANCE,
-    RIGHT_CLOCK_SIMULATED_READ, RIGHT_CLOCK_TIMER_USE,
+    Generation, RIGHT_CLOCK_SIMULATED_ADVANCE, RIGHT_CLOCK_SIMULATED_READ, RIGHT_CLOCK_TIMER_USE,
 };
 
 use crate::event::{MonotonicInstant, SchedulingEventKind, TaskEpoch, TimerId};
@@ -203,26 +202,16 @@ impl ClockService {
         }
     }
 
-    pub fn read_monotonic(
-        authority: TaskClockAuthority,
-        now: MonotonicInstant,
-    ) -> Result<u64, ClockError> {
-        if authority.allows(RIGHT_CLOCK_MONOTONIC_READ) {
-            Ok(now.0)
-        } else {
-            Err(ClockError::Undeclared)
-        }
+    /// A monotonic read needs no authority (`clock-authority/v2`): it answers
+    /// the raw counter to every task, as the counter register itself would.
+    pub fn read_monotonic(now: MonotonicInstant) -> u64 {
+        now.0
     }
 
-    /// The counter's rate, behind the same bit as the counter itself: knowing
-    /// what a tick means is part of being allowed to read ticks, and nothing
-    /// more.
-    pub fn read_rate(authority: TaskClockAuthority, frequency_hz: u64) -> Result<u64, ClockError> {
-        if authority.allows(RIGHT_CLOCK_MONOTONIC_READ) {
-            Ok(frequency_hz)
-        } else {
-            Err(ClockError::Undeclared)
-        }
+    /// The counter's rate, ambient for the counter's reason: knowing what a
+    /// tick means grants nothing.
+    pub fn read_rate(frequency_hz: u64) -> u64 {
+        frequency_hz
     }
 
     pub fn arm(
@@ -454,8 +443,8 @@ pub fn authority_object<'a>(
 mod tests {
     use super::*;
 
-    const MONO: TaskClockAuthority = TaskClockAuthority {
-        flags: RIGHT_CLOCK_MONOTONIC_READ,
+    const NONE: TaskClockAuthority = TaskClockAuthority {
+        flags: 0,
         timer_quota: 0,
         timer_signal: None,
         timer_badge: 0,
@@ -514,26 +503,25 @@ mod tests {
     }
 
     #[test]
-    fn rate_follows_the_monotonic_bit() {
-        assert_eq!(ClockService::read_rate(MONO, 62_500_000), Ok(62_500_000));
-        for denied in [TIMER, SIM_READ, SIM_ADVANCE] {
+    fn reads_are_ambient_and_timers_stay_declared() {
+        assert_eq!(ClockService::read_monotonic(MonotonicInstant(7)), 7);
+        assert_eq!(ClockService::read_rate(62_500_000), 62_500_000);
+        let mut service = ClockService::new();
+        for undeclared in [NONE, SIM_READ, SIM_ADVANCE] {
             assert_eq!(
-                ClockService::read_rate(denied, 62_500_000),
+                service.arm(undeclared, TaskId(1), MonotonicInstant(0), 20),
                 Err(ClockError::Undeclared)
             );
         }
+        assert_eq!(service.read_simulated(NONE), Err(ClockError::Undeclared));
+        assert_eq!(
+            service.advance_simulated(NONE, 1),
+            Err(ClockError::Undeclared)
+        );
     }
 
     #[test]
     fn authorities_are_independent() {
-        assert_eq!(
-            ClockService::read_monotonic(MONO, MonotonicInstant(7)),
-            Ok(7)
-        );
-        assert_eq!(
-            ClockService::read_monotonic(SIM_READ, MonotonicInstant(7)),
-            Err(ClockError::Undeclared)
-        );
         let mut service = ClockService::new();
         assert_eq!(service.read_simulated(SIM_READ), Ok(0));
         assert_eq!(
@@ -587,7 +575,7 @@ mod tests {
         for offset in 0..crate::task::MAX_TASKS {
             service.authorities[offset] = Some(AuthorityEntry {
                 task: TaskId(100 + offset as u32),
-                authority: MONO,
+                authority: SIM_READ,
             });
         }
         service.clear_task(TaskId(117));

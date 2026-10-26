@@ -427,21 +427,12 @@
   clockAuthority = [
     {
       holder = "mavlink-heartbeat";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;
       timerNotification = "mavlink-heartbeat-tick";
       timerQuota = 2;
       timerUse = true;
-    };
-    {
-      holder = "uart16550-driver";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
     };
   ];
   clockAuthorityObject = true;

@@ -477,7 +477,6 @@
   clockAuthority = [
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 1;
@@ -487,7 +486,6 @@
     };
     {
       holder = "ros2-demo-publisher";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 3;

@@ -97,8 +97,8 @@ Bits 10 and 11 were `BLOCK_READ`/`BLOCK_WRITE` until B90 retired them.
 | SharedBufferFactory | BUFFER_CREATE (24) | `SHARED BUFFER CREATE` mints a root-identified `SharedBuffer` under fixed global byte/object bounds; `SHARED BUFFER RELEASE` reclaims it | generation manifest | gated (C7.2) |
 | SharedBuffer | BUFFER_LOAN (25) | `SHARED BUFFER LOAN` mints an exact loan for a named receiver; `SHARED BUFFER REVOKE` settles it as lender | same | gated (C7.5) |
 | Loan | BUFFER_MAP (9) / BUFFER_WRITE (8) | receiver-bound `SHARED BUFFER LOAN MAP` within the loaned subrange at the loan's own protection; `SHARED BUFFER RETURN` settles it once | root-created by `SHARED BUFFER LOAN`; delivered to the named receiver only | gated (C7.5) |
-| Clock service | CLOCK_MONOTONIC_READ (26) | `CLOCK MONOTONIC READ` and `CLOCK RATE READ` for the authenticated caller | generation `clock-authority/v1`; root-brokered state, no new seL4 object kind | gated (C9.1) |
-| Clock service | CLOCK_TIMER_USE (27) | `CLOCK TIMER ARM` / `CLOCK TIMER CANCEL`, bounded by the holder's declared live-timer quota and delivered on its declared Notification; gates the root service, but cannot prevent hostile native code from writing globally enabled `CNTP_*` control registers on current AArch64 profiles | same | gated (C9.1; register-integrity wall documented by `clock-authority/v1`) |
+| Clock service | none (bit 26 retired) | `CLOCK MONOTONIC READ` and `CLOCK RATE READ` for every task on RISC-V and x86_64; AArch64 components read the counter directly | gated on `lifecycle` only | ambient (`clock-authority/v2`) |
+| Clock service | CLOCK_TIMER_USE (27) | `CLOCK TIMER ARM` / `CLOCK TIMER CANCEL`, bounded by the holder's declared live-timer quota and delivered on its declared Notification; gates the root service, but cannot prevent hostile native code from writing globally enabled `CNTP_*` control registers on current AArch64 profiles | same | gated (C9.1; register-integrity wall documented by `clock-authority/v2`) |
 | Clock service | CLOCK_SIMULATED_READ (28) | `CLOCK SIMULATED READ` | same | gated (C9.1) |
 | Clock service | CLOCK_SIMULATED_ADVANCE (29) | `CLOCK SIMULATED ADVANCE`; independently grantable from simulated read | same | gated (C9.1) |
 | Scheduling service | SCHEDULING_PROMOTE (30) | `SCHEDULING CLASS PROMOTE` for a subject the caller holds a supervision capability over, bounded by the promotion edge's declared ceiling and refused when the caller names itself. `SCHEDULING CLASS READ` appears in no row: it is self-scoped and grants nothing, so it is gated by nothing | generation `scheduling-class/v1`; root-brokered state keyed by task, no new seL4 object kind | gated (C9.3) |
@@ -162,9 +162,9 @@ were absent — and `NOT_MANIFEST_DECLARABLE` therefore meant "rejected for thos
 nine" rather than "declarable by no manifest": bits 4–7 sat in that list while
 real manifest grants declared them, on kinds the test did not enumerate. They are
 now in `MANIFEST_DECLARABLE`, where the grants that spell them always implied they
-belonged. Bits 26–33 remain in the rejected class for the opposite reason: no
+belonged. Bits 27–33 remain in the rejected class for the opposite reason: no
 grant names them because their source is a declared resource
-(`clock-authority/v1`, `lifecycle-policy/v1`, `scheduling-class/v1`) that the root
+(`clock-authority/v2`, `lifecycle-policy/v1`, `scheduling-class/v1`) that the root
 reads to mint the bit onto a service or supervision handle. Wiring one of bits
 12–15 to any declared kind fails the test, and a *new* kind must still be added to
 `BASELINES` in the same change — that is what keeps the partition total.
@@ -321,7 +321,7 @@ Semantics not visible in the table:
 | Live children per spawner | manifest `spawnBudget <= 32` | `MAX_SPAWN_BUDGET`; `SpawnError::BudgetExhausted` |
 | Declared native Endpoints per task | `CHILD_NATIVE_REGION_SLOTS = 31` | child CSpace regions in `slime-root/src/task.rs` |
 | Peer endpoints / notifications | `MAX_PEER_ENDPOINTS = 48`, `MAX_NOTIFICATIONS = 31` | `slime-root/src/{peer_endpoint,notification}.rs` |
-| Clock-authority holders / live timers | `MAX_HOLDERS = 48`, `MAX_LIVE_TIMERS_PER_HOLDER = 4`, `MAX_LIVE_TIMERS = 64` | `clock-authority/v1` decode plus `ClockService::arm`; omission denies every clock operation |
+| Clock-authority holders / live timers | `MAX_HOLDERS = 48`, `MAX_LIVE_TIMERS_PER_HOLDER = 4`, `MAX_LIVE_TIMERS = 64` | `clock-authority/v2` decode plus `ClockService::arm`; omission denies every timer and simulated-clock operation |
 | Threads per component | `MAX_CHILD_THREADS = 2` | `slime-root/src/child_vspace.rs` (B47) |
 | Task arenas / root CSlots | `MAX_TASK_ARENAS = 48`; root CSpace has no fixed width. The kernel's initial CNode is installed under a four-bit root, further ten-bit leaves are installed from admitted ordinary memory, and a generation's plan is funded before admission judges it. A refusal names the resource that ran out (`SLIME_MEM qualification … limit=`); kernels narrower than 2^19 initial slots keep the small descriptor envelope | `slime-root/src/{root_cspace,object_allocator}.rs` |
 | Private-memory pages per holder / aggregate | `private-memory-budget/v1`: 65,536 / 262,144 pages (256 MiB / 1 GiB) only on `aarch64-sel4-qemu-virt` and `riscv64-sel4-qemu-virt`; all other targets retain 512 / 2,048 pages (2 MiB / 8 MiB). Declared holder quotas must individually and collectively fit the target envelope; omission denies growth. These QEMU results qualify no physical machine | `contracts/private-memory-budget/v1/schema.zt`; target-bound admission in `boot-contracts/src/private_memory_budget.rs` and `slime-root/src/generation.rs`; growth accounting in `slime-root/src/private_memory.rs` |

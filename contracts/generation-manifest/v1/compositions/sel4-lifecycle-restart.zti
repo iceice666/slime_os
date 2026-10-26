@@ -173,7 +173,6 @@
   clockAuthority = [
     {
       holder = "lifecycle-supervisor";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;

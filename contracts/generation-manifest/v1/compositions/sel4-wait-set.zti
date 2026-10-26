@@ -192,7 +192,6 @@
   clockAuthority = [
     {
       holder = "wait-set-waiter";
-      monotonicRead = false;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;

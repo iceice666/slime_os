@@ -411,7 +411,6 @@
   clockAuthority = [
     {
       holder = "replay-recorder";
-      monotonicRead = true;
       simulatedAdvance = true;
       simulatedRead = true;
       timerBadgeBit = 9;

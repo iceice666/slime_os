@@ -4,7 +4,6 @@
   clockAuthority = [
     {
       holder = "sched-foreground";
-      monotonicRead = false;
       timerUse = true;
       simulatedRead = false;
       simulatedAdvance = false;

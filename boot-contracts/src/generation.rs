@@ -2798,12 +2798,13 @@ mod tests {
     }
 
     /// B57/B90: `RIGHT_ALL` is the union of the *named* rights, not a bit-width
-    /// mask. Bits 10, 11, and 17 are gaps in the numbering — nothing names them
+    /// mask. Bits 10, 11, 17 and 26 are gaps in the numbering — nothing names them
     /// and nothing uses them — so `(1 << 34) - 1` would admit a grant carrying
     /// authority no contract defines. Every validator that masks with
     /// `!RIGHT_ALL` inherits this, so pinning the mask is what keeps the holes
     /// closed. Bits 10 and 11 became gaps when B90 retired
-    /// `BLOCK_READ`/`BLOCK_WRITE`; their positions are reserved, never reused.
+    /// `BLOCK_READ`/`BLOCK_WRITE`, and bit 26 when `clock-authority/v2` retired
+    /// `CLOCK_MONOTONIC_READ`; their positions are reserved, never reused.
     #[test]
     fn right_all_is_a_union_of_named_bits_and_excludes_the_reserved_gaps() {
         let named = [
@@ -2830,7 +2831,6 @@ mod tests {
             RIGHT_INPUT_READ,
             RIGHT_BUFFER_CREATE,
             RIGHT_BUFFER_LOAN,
-            RIGHT_CLOCK_MONOTONIC_READ,
             RIGHT_CLOCK_TIMER_USE,
             RIGHT_CLOCK_SIMULATED_READ,
             RIGHT_CLOCK_SIMULATED_ADVANCE,
@@ -2843,13 +2843,13 @@ mod tests {
             .iter()
             .fold(0, |accumulator, right| accumulator | right);
         assert_eq!(union, RIGHT_ALL);
-        for gap in [10, 11, 17] {
+        for gap in [10, 11, 17, 26] {
             assert_eq!(RIGHT_ALL & (1u64 << gap), 0, "bit {gap} is reserved");
         }
         assert_ne!(RIGHT_ALL, (1 << 34) - 1);
         // The mask is what every grant, mapping, and minted-binding check
         // applies, so an undefined bit must survive none of them.
-        for gap in [10, 11, 17] {
+        for gap in [10, 11, 17, 26] {
             assert_ne!(
                 (RIGHT_SEND | RIGHT_RECV | 1u64 << gap) & !RIGHT_ALL,
                 0,
@@ -2872,7 +2872,7 @@ mod tests {
             CapabilityKind::InterruptSource,
             CapabilityKind::DmaAccount,
         ] {
-            for gap in [10, 11, 17] {
+            for gap in [10, 11, 17, 26] {
                 assert!(!capability_rights_valid(kind, 1u64 << gap));
             }
         }
@@ -2934,12 +2934,11 @@ mod tests {
             RIGHT_DMA_RELEASE,
             RIGHT_IRQ_ACK,
         ];
-        const NOT_MANIFEST_DECLARABLE: [Rights; 12] = [
+        const NOT_MANIFEST_DECLARABLE: [Rights; 11] = [
             RIGHT_SCHEDULING_PROMOTE,
             RIGHT_LIFECYCLE_RESTART,
             RIGHT_PARAMETER_READ,
             RIGHT_PARAMETER_WRITE,
-            RIGHT_CLOCK_MONOTONIC_READ,
             RIGHT_CLOCK_TIMER_USE,
             RIGHT_CLOCK_SIMULATED_READ,
             RIGHT_CLOCK_SIMULATED_ADVANCE,
@@ -2997,12 +2996,13 @@ mod tests {
         let neutral = RIGHT_ALL & !(RIGHT_RECORDED | RIGHT_UNRECORDED);
         assert_ne!(neutral, 0);
         assert_eq!(RIGHT_RECORDED | RIGHT_UNRECORDED | neutral, RIGHT_ALL);
-        // The three clock reads are the only recorded sources, because they are
-        // the only ones the C9.5 recorder has a family for. A right joining this
-        // mask without a matching record would be certified against nothing.
+        // The two clock authorities with a C9.5 record family are the only
+        // recorded sources. A right joining this mask without a matching record
+        // would be certified against nothing. A monotonic read is ambient and is
+        // recorded by the component that made it.
         assert_eq!(
             RIGHT_RECORDED,
-            RIGHT_CLOCK_MONOTONIC_READ | RIGHT_CLOCK_TIMER_USE | RIGHT_CLOCK_SIMULATED_READ
+            RIGHT_CLOCK_TIMER_USE | RIGHT_CLOCK_SIMULATED_READ
         );
         // And every byte-carrying authority is unrecorded, `send` included: it
         // gates `seL4_Call`, whose reply is state the peer chose.

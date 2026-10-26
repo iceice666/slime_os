@@ -421,7 +421,6 @@
   clockAuthority = [
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 2;
@@ -431,7 +430,6 @@
     };
     {
       holder = "publisher-session";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 3;
@@ -441,7 +439,6 @@
     };
     {
       holder = "subscriber-session";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 3;
@@ -451,7 +448,6 @@
     };
     {
       holder = "network-supervisor";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 3;

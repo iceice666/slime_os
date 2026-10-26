@@ -81,9 +81,9 @@ pub(super) fn serve_clock_request(
             .map_err(|_| clock::ClockError::TimeOverflow)
     };
     let outcome = match label {
-        clock_labels::MONOTONIC_READ => now()
-            .and_then(|instant| clock::ClockService::read_monotonic(authority, instant))
-            .map(|value| (value as i64, 0)),
+        clock_labels::MONOTONIC_READ => {
+            now().map(|instant| (clock::ClockService::read_monotonic(instant) as i64, 0))
+        }
         clock_labels::TIMER_ARM => now()
             .and_then(|instant| service.arm(authority, task, instant, operand))
             .and_then(|(timer_id, programming)| {
@@ -104,10 +104,10 @@ pub(super) fn serve_clock_request(
         clock_labels::SIMULATED_ADVANCE => service
             .advance_simulated(authority, operand)
             .map(|previous| (previous as i64, 0)),
-        clock_labels::RATE_READ => {
-            clock::ClockService::read_rate(authority, timer_adapter.frequency_hz())
-                .map(|rate| (rate as i64, 0))
-        }
+        clock_labels::RATE_READ => Ok((
+            clock::ClockService::read_rate(timer_adapter.frequency_hz()) as i64,
+            0,
+        )),
         _ => return Response::error(IpcError::UnsupportedOperation),
     };
     match outcome {

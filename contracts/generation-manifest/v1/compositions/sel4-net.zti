@@ -845,7 +845,6 @@
   clockAuthority = [
     {
       holder = "http-get";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 1;
@@ -855,7 +854,6 @@
     };
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 1;

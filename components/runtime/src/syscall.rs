@@ -877,29 +877,72 @@ pub fn private_memory_grow(delta: usize) -> Result<PrivateMemory, i64> {
     })
 }
 
-/// Read the generation-authorized hardware monotonic counter (C9.1).
+/// Read the hardware monotonic counter that the root's timers count.
+///
+/// Reading needs no authority (`clock-authority/v2`). On AArch64 the kernel
+/// exports `CNTPCT_EL0` to every EL0 thread and the root's clock is that same
+/// counter, so the read stays in this thread. On RISC-V and x86_64 the root's
+/// clock is a device register, and the root answers every task.
 pub fn monotonic_read() -> Result<u64, i64> {
-    let result = transport::monotonic_read();
-    if result < 0 {
-        Err(result)
-    } else {
-        Ok(result as u64)
+    #[cfg(target_arch = "aarch64")]
+    {
+        Ok(read_cntpct())
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let result = transport::monotonic_read();
+        if result < 0 {
+            Err(result)
+        } else {
+            Ok(result as u64)
+        }
     }
 }
 
 /// Read the hardware monotonic counter's rate in ticks per second.
 ///
-/// The same `monotonicRead` authority as [`monotonic_read`] admits it, and the
-/// value is the root's own boot-time reading of the platform counter, constant
-/// for the life of the boot. It is what turns a tick count into a duration and
-/// a duration into a [`timer_arm`] delay.
+/// Ambient, like [`monotonic_read`], and the same register the root reads:
+/// `CNTFRQ_EL0` on AArch64, the root's boot-time value elsewhere. It is
+/// constant for the life of the boot and is what turns a tick count into a
+/// duration and a duration into a [`timer_arm`] delay.
 pub fn monotonic_frequency() -> Result<u64, i64> {
-    let result = transport::monotonic_frequency();
-    if result < 0 {
-        Err(result)
-    } else {
-        Ok(result as u64)
+    #[cfg(target_arch = "aarch64")]
+    {
+        Ok(read_cntfrq())
     }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let result = transport::monotonic_frequency();
+        if result < 0 {
+            Err(result)
+        } else {
+            Ok(result as u64)
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn read_cntpct() -> u64 {
+    let value: u64;
+    // SAFETY: a pure register read with no memory or control-flow effect.
+    // `KernelArmExportPCNTUser` grants EL0 access on every AArch64 profile,
+    // because the root itself reads this counter from EL0.
+    unsafe {
+        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn read_cntfrq() -> u64 {
+    let value: u64;
+    // SAFETY: as `read_cntpct`; the same `EL0PCTEN` bit grants this register.
+    unsafe {
+        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
 }
 
 /// Arm one relative hardware timer and receive its opaque identifier.

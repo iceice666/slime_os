@@ -4,7 +4,6 @@
   clockAuthority = [
     {
       holder = "robot-sensor";
-      monotonicRead = true;
       timerUse = true;
       simulatedRead = false;
       simulatedAdvance = false;
@@ -14,7 +13,6 @@
     };
     {
       holder = "robot-supervisor";
-      monotonicRead = true;
       timerUse = true;
       simulatedRead = false;
       simulatedAdvance = false;

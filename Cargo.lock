@@ -723,6 +723,7 @@ dependencies = [
  "boot-contracts",
  "sel4",
  "slime-build-support",
+ "slime-components",
  "slime-proto",
  "slime-rt",
 ]

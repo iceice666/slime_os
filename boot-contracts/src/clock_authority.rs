@@ -6,8 +6,7 @@
 //! itself uses that path, and the kernel exposes no per-TCB narrowing.
 
 use crate::generation::{
-    RIGHT_CLOCK_MONOTONIC_READ, RIGHT_CLOCK_SIMULATED_ADVANCE, RIGHT_CLOCK_SIMULATED_READ,
-    RIGHT_CLOCK_TIMER_USE,
+    RIGHT_CLOCK_SIMULATED_ADVANCE, RIGHT_CLOCK_SIMULATED_READ, RIGHT_CLOCK_TIMER_USE,
 };
 use crate::sha256::Sha256;
 
@@ -15,10 +14,12 @@ include!("generated/clock_authority.rs");
 
 pub const MAGIC: [u8; 8] = *b"SLIMECA\0";
 pub const MAX_BYTES: usize = HEADER_BYTES + MAX_HOLDERS * ENTRY_BYTES;
-pub const AUTHORITY_ALL: u64 = RIGHT_CLOCK_MONOTONIC_READ
-    | RIGHT_CLOCK_TIMER_USE
-    | RIGHT_CLOCK_SIMULATED_READ
-    | RIGHT_CLOCK_SIMULATED_ADVANCE;
+pub const AUTHORITY_ALL: u64 =
+    RIGHT_CLOCK_TIMER_USE | RIGHT_CLOCK_SIMULATED_READ | RIGHT_CLOCK_SIMULATED_ADVANCE;
+
+/// Generation right bit 26, retired with version 2: a monotonic read is
+/// ambient, so an entry that still claims it was encoded for version 1.
+pub const RETIRED_MONOTONIC_READ: u64 = 1 << 26;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
@@ -245,7 +246,6 @@ mod tests {
         let mut entries = [
             entry("timer", RIGHT_CLOCK_TIMER_USE, 2, 7, 1 << 9),
             entry("sim", RIGHT_CLOCK_SIMULATED_READ, 0, 0, 0),
-            entry("mono", RIGHT_CLOCK_MONOTONIC_READ, 0, 0, 0),
         ];
         entries.sort_by_key(|entry| entry[..32].to_vec());
         let bytes = encoded(&entries);
@@ -260,7 +260,7 @@ mod tests {
             !decoded
                 .authority_for(&holder_identity("timer"))
                 .unwrap()
-                .allows(RIGHT_CLOCK_MONOTONIC_READ)
+                .allows(RIGHT_CLOCK_SIMULATED_READ)
         );
         assert!(decoded.authority_for(&holder_identity("absent")).is_none());
     }
@@ -272,13 +272,39 @@ mod tests {
             entry("x", RIGHT_CLOCK_TIMER_USE, 1, 0, 1),
             entry("x", RIGHT_CLOCK_TIMER_USE, 1, 7, 0),
             entry("x", RIGHT_CLOCK_TIMER_USE, 1, 7, 3),
-            entry("x", RIGHT_CLOCK_MONOTONIC_READ, 1, 7, 1),
+            entry("x", RIGHT_CLOCK_SIMULATED_READ, 1, 7, 1),
         ] {
             assert!(matches!(
                 ClockAuthority::decode(&encoded(&[invalid])),
                 Err(DecodeError::BadTimerDeclaration)
             ));
         }
+    }
+
+    #[test]
+    fn the_retired_read_bit_and_version_one_are_refused() {
+        for retired in [
+            entry("x", RETIRED_MONOTONIC_READ, 0, 0, 0),
+            entry(
+                "x",
+                RETIRED_MONOTONIC_READ | RIGHT_CLOCK_SIMULATED_READ,
+                0,
+                0,
+                0,
+            ),
+            entry("x", 0, 0, 0, 0),
+        ] {
+            assert!(matches!(
+                ClockAuthority::decode(&encoded(&[retired])),
+                Err(DecodeError::UnknownAuthority)
+            ));
+        }
+        let mut version_one = encoded(&[entry("x", RIGHT_CLOCK_SIMULATED_READ, 0, 0, 0)]);
+        version_one[8..12].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            ClockAuthority::decode(&version_one),
+            Err(DecodeError::UnsupportedVersion)
+        ));
     }
 
     #[test]

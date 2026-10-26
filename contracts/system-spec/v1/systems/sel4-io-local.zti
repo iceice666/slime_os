@@ -57,9 +57,9 @@
   ];
   bootProfiles = [];
   clockAuthority = [
-    { holder = "network-service"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "local-network-request"; timerBadgeBit = 2; };
-    { holder = "publisher-session"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "local-publisher-done"; timerBadgeBit = 3; };
-    { holder = "subscriber-session"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "local-subscriber-done"; timerBadgeBit = 3; };
+    { holder = "network-service"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "local-network-request"; timerBadgeBit = 2; };
+    { holder = "publisher-session"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "local-publisher-done"; timerBadgeBit = 3; };
+    { holder = "subscriber-session"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "local-subscriber-done"; timerBadgeBit = 3; };
   ];
   clockAuthorityObject = true;
   ioResourceBudget = [];

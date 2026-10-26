@@ -6,16 +6,25 @@ system should do.
 
 ## Clock and timers
 
-`contracts/clock-authority/v1/` independently declares monotonic-read,
-timer-use, simulated-read, and simulated-advance authority per holder. Omission
-is denial. Timer authority includes a live-timer quota and the Notification badge
-used for expiry, so timer delivery joins the existing userspace wait path.
+`contracts/clock-authority/v2/` independently declares timer-use,
+simulated-read, and simulated-advance authority per holder. Omission is denial.
+Timer authority includes a live-timer quota and the Notification badge used for
+expiry, so timer delivery joins the existing userspace wait path.
+
+Reading the monotonic counter and its rate needs no authority
+([decision](../decisions/ambient-clock-reads.md)). On AArch64,
+`slime_rt::monotonic_read` and `monotonic_frequency` read `CNTPCT_EL0` and
+`CNTFRQ_EL0` in the calling thread, and that counter is the one the root's
+timers count. On RISC-V and x86_64 the root's clock is a device register, and
+the root answers `CLOCK MONOTONIC READ` and `CLOCK RATE READ` for every task
+through the `lifecycle` service. Generation right bit 26 is retired, and the
+decoder refuses a v1 table.
 
 `slime-root/src/clock.rs` serves the logical clock operations and
 `slime-root/src/platform_timer.rs` owns the platform timer mechanism. The service
 grants semantics, not exclusive register access. On current AArch64 profiles the
 kernel enables EL0 physical counter and timer registers globally because the root
-programs that timer from EL0; hostile native code could read or disrupt those
+programs that timer from EL0; hostile native code could disrupt the timer
 registers. Closing that wall requires a kernel/platform change, not a contract
 claim.
 

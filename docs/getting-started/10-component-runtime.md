@@ -160,11 +160,13 @@ The composition must declare the holder in its `waitSet` list (with
 
 ## Time
 
-`monotonic_read()`, `monotonic_frequency()`, `timer_arm(delay) ->
-Result<u64, i64>`, `timer_cancel()`. All require a `clock-authority`
-declaration for the holder; omission denies every clock operation. Bounded:
-four live timers per holder. `simulated_time_*` exist for the replay plane
-and are refused elsewhere.
+`monotonic_read()` and `monotonic_frequency()` need no declaration. On
+AArch64 they read the counter register in your thread; elsewhere the root
+answers them. `timer_arm(delay) -> Result<u64, i64>` and `timer_cancel()`
+require a `clock-authority` declaration for the holder; omission denies them.
+Bounded: four live timers per holder. `simulated_time_*` exist for the replay
+plane and are refused elsewhere. A component the recording policy declares
+deterministic records its own monotonic reads through its recorder.
 
 ## Spawning and supervising
 

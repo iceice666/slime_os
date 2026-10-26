@@ -731,9 +731,13 @@ def validated_clock_authorities(
         names.add(holder)
         if holder not in instances:
             fail(f"clock authority: unknown holder {holder}")
+        if "monotonicRead" in declaration:
+            fail(
+                f"clock authority: holder {holder} declares monotonicRead, which "
+                "clock-authority/v2 retired; a monotonic read needs no authority"
+            )
         flags = 0
         for field, right in (
-            ("monotonicRead", RIGHT["clockMonotonicRead"]),
             ("timerUse", RIGHT["clockTimerUse"]),
             ("simulatedRead", RIGHT["clockSimulatedRead"]),
             ("simulatedAdvance", RIGHT["clockSimulatedAdvance"]),

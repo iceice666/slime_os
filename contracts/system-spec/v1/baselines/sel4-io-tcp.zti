@@ -249,11 +249,6 @@
       size = 4096;
     };
     {
-      id = "clock-authority";
-      kind = "resource";
-      size = 4096;
-    };
-    {
       id = "io-resource-budget";
       kind = "resource";
       size = 4096;
@@ -412,24 +407,7 @@
       slot = 4;
     };
   ];
-  clockAuthority = [
-    {
-      holder = "io-tcp-probe";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
-    };
-    {
-      holder = "network-service";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
-    };
-  ];
+  clockAuthority = [];
   ioResourceBudget = [
     {
       bufferLoans = 16;

@@ -128,12 +128,16 @@ pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | shared_buffer_labels::REVOKE
         | shared_buffer_labels::OCCUPANCY => Some(SERVICE_SHARED_BUFFER),
         directory_labels::DERIVE => Some(SERVICE_DIRECTORY),
-        clock_labels::MONOTONIC_READ
-        | clock_labels::TIMER_ARM
+        // `clock-authority/v2` makes a monotonic or rate read ambient: it is a
+        // property of being a task, so it is gated on `lifecycle`, which every
+        // launched instance holds. AArch64 components read the counter
+        // themselves; RISC-V and x86_64 components, whose root clock is a
+        // device register, ask here.
+        clock_labels::MONOTONIC_READ | clock_labels::RATE_READ => Some(SERVICE_LIFECYCLE),
+        clock_labels::TIMER_ARM
         | clock_labels::TIMER_CANCEL
         | clock_labels::SIMULATED_READ
-        | clock_labels::SIMULATED_ADVANCE
-        | clock_labels::RATE_READ => Some(SERVICE_CLOCK),
+        | clock_labels::SIMULATED_ADVANCE => Some(SERVICE_CLOCK),
         io_resource_labels::BIND
         | io_resource_labels::MAP_MMIO
         | io_resource_labels::DMA_MAP
@@ -1888,12 +1892,12 @@ mod tests {
             (shared_buffer_labels::REVOKE, SERVICE_SHARED_BUFFER),
             (shared_buffer_labels::OCCUPANCY, SERVICE_SHARED_BUFFER),
             (directory_labels::DERIVE, SERVICE_DIRECTORY),
-            (clock_labels::MONOTONIC_READ, SERVICE_CLOCK),
+            (clock_labels::MONOTONIC_READ, SERVICE_LIFECYCLE),
             (clock_labels::TIMER_ARM, SERVICE_CLOCK),
             (clock_labels::TIMER_CANCEL, SERVICE_CLOCK),
             (clock_labels::SIMULATED_READ, SERVICE_CLOCK),
             (clock_labels::SIMULATED_ADVANCE, SERVICE_CLOCK),
-            (clock_labels::RATE_READ, SERVICE_CLOCK),
+            (clock_labels::RATE_READ, SERVICE_LIFECYCLE),
             // C9.5's recording participation, gated on lifecycle for
             // `WAIT_SOURCES`' reason: whether the generation claims this instance
             // deterministic is a property of being that instance, not of a grant.
