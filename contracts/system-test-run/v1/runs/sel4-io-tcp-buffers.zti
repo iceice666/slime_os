@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-tcp-buffers";
-  imageClosureIdentity = "c9262e6e9114093830e53148ab0aacc4b866847a8105a25a1eef5c83c2ab78be";
+  imageClosureIdentity = "99f07d06daa8a62448da74cab79222e4f3cb8528b5a3ab344b608ac8a54faf00";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
