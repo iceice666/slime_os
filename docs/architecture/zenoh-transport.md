@@ -101,6 +101,16 @@ declaration before it may publish, and a subscriber never accepts a `Put` for a
 key it did not declare. Frames the session sends use the sender key mapping,
 as the upstream encoder writes them.
 
+`Params::local` is the number of subscriptions this side may declare, and the table
+holds `per_side + local` slots. `Params::DEMO` and `Params::from_limits` set it to 1, so
+the first release and every link built from `contracts/zenoh-link-limits/v1` keep one.
+A side that declares a subscription beyond `local`, or one under an id it already
+holds, is refused as `subscriber-limit`. A `local` below 1, or a table of any other
+size, is refused at construction as `InvalidConfig`. Two subscriptions on one key
+deliver a `Put` once, and the `Put` is refused as `undeclared-key` once the last
+subscription on that key is undeclared. A link configuration cannot yet declare more
+than one; that needs a new version of the limits contract.
+
 An open session sends a one-byte `KEEP_ALIVE` (message id 4) every quarter of the
 lease this side announced when it has sent nothing else, floored at one millisecond,
 and takes the peer's as traffic that renews the lease. Before `OPEN` a `KEEP_ALIVE`
