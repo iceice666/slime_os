@@ -139,9 +139,11 @@ of base and head `codePaths`.
   complete work. Work items are not projected into GitHub Issues
   (`docs/decisions/no-github-issue-projection.md`); name the implemented
   item's UUID in the PR description.
-- A PR that touches `just/` or `Justfile` regenerates the closures and
+- A PR that changes a closure release input regenerates the closures and
   refreshes the test-run records in its own derived commit within the same
-  PR (see the generated-code rule in `AGENTS.md`).
+  PR (see the generated-code rule in `AGENTS.md`). A recipe change under
+  `just/` or `Justfile` leaves the closures current, and devloop still pins
+  the recipes through `.devloop/policy.json` `codePaths`.
 
 ## Evidence and closeout
 

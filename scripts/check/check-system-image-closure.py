@@ -9,17 +9,21 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import copy
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 
 import system_spec
 from harness import ROOT
 from system_image_closure import (
     SystemImageClosureError,
+    artifact_identity,
     compile_closure,
     compile_test_run,
     resolve_closure,
@@ -29,6 +33,62 @@ from system_image_closure import (
 CLOSURE = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / "sel4-channel.zti"
 TEST_RUN = ROOT / "contracts" / "system-test-run" / "v1" / "runs" / "sel4-channel.zti"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
+CLOSURE_GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
+RUN_GENERATOR = ROOT / "scripts" / "generate" / "generate-system-test-runs.py"
+JUSTFILE = ROOT / "Justfile"
+RECIPE_TREE = ROOT / "just"
+# The outputs two builds of one closure must agree on, byte for byte.
+BUILD_OUTPUTS = (
+    "generation/generation.bin",
+    "root.elf",
+    "loader.elf",
+    "image.elf",
+    "image.identity.json",
+    "build-result.normalized.json",
+    "build-result.identity",
+)
+# The recipe control's in-place change. Both are recognisable, so a run that
+# finds them left by a killed run removes them before it starts.
+RECIPE_CONTROL_LINE = (
+    b"# system_image_closure_check recipe control: removed when the control ends\n"
+)
+RECIPE_CONTROL_FILE = RECIPE_TREE / "closure-recipe-control.marker"
+RECIPE_CONTROL_RECIPE = "closure_recipe_control_marker"
+# The `just` the recipe control puts first on the build's `PATH`. It serves the
+# JSON recipe dump with one extra recipe and refuses every other invocation, so
+# a builder that ran a recipe fails the build, and one that read the dump sees a
+# changed recipe table.
+RECIPE_CONTROL_SHIM = """
+import json
+import subprocess
+import sys
+
+arguments = sys.argv[1:]
+dump = "--dump" in arguments and any(
+    argument == "--dump-format=json"
+    or (argument == "--dump-format" and arguments[index + 1 : index + 2] == ["json"])
+    for index, argument in enumerate(arguments)
+)
+with open(LOG, "a", encoding="utf-8") as log:
+    log.write(json.dumps({"dump": dump, "arguments": arguments}) + "\\n")
+if not dump:
+    sys.exit(f"recipe control: refused just {arguments}; an image build runs no recipe")
+process = subprocess.run([JUST, *arguments], capture_output=True, text=True, check=False)
+if process.returncode != 0:
+    sys.stderr.write(process.stderr)
+    sys.exit(process.returncode)
+metadata = json.loads(process.stdout)
+recipes = metadata["recipes"]
+recipes[RECIPE] = {
+    **recipes[min(recipes)],
+    "name": RECIPE,
+    "namepath": RECIPE,
+    "body": [["false"]],
+    "dependencies": [],
+    "doc": "recipe control",
+}
+sys.stdout.write(json.dumps(metadata))
+"""
 
 
 def fail(message: str) -> None:
@@ -73,6 +133,40 @@ def render_zti(value: object, indent: int = 0) -> str:
 
 def write_closure(path: Path, value: dict) -> None:
     path.write_text(render_zti(value) + "\n", encoding="utf-8")
+
+
+def load_script(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load {path.relative_to(ROOT)}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def with_release_input(value: dict, name: str, relative: str, kind: str) -> None:
+    """Make `value` name exactly one `name` release input: `relative` at its real identity."""
+    entries = [entry for entry in value["releaseInputs"] if entry["name"] != name]
+    entries.append(
+        {
+            "name": name,
+            "artifact": {
+                "path": relative,
+                "kind": kind,
+                "identity": artifact_identity(ROOT / relative, kind),
+            },
+        }
+    )
+    value["releaseInputs"] = sorted(entries, key=lambda entry: entry["name"])
+
+
+def reads_recipes(relative: str) -> bool:
+    """Whether a closure input at `relative` is, lies under, or contains `just/` or `Justfile`."""
+    path = (ROOT / relative).resolve()
+    return any(
+        path.is_relative_to(recipes) or recipes.is_relative_to(path)
+        for recipes in (RECIPE_TREE.resolve(), JUSTFILE.resolve())
+    )
 
 
 def check_refusals(temporary: Path) -> None:
@@ -143,6 +237,18 @@ def check_refusals(temporary: Path) -> None:
             "ambient-parameter",
             lambda value: value["buildParameters"].append({"name": "ambient", "value": "1"}),
             "does not admit",
+        ),
+        # The recipes are no release input: a closure naming either, even at
+        # its true identity, carries an input the resolver does not admit.
+        (
+            "recipe-tree-input",
+            lambda value: with_release_input(value, "just-recipes", "just", "tree"),
+            "extra=['just-recipes']",
+        ),
+        (
+            "justfile-input",
+            lambda value: with_release_input(value, "justfile", "Justfile", "file"),
+            "extra=['justfile']",
         ),
     )
     for name, mutate, refusal in cases:
@@ -311,16 +417,7 @@ def check_builds(temporary: Path) -> None:
     outputs = [temporary / "build-a", temporary / "build-b"]
     for output in outputs:
         subprocess.run(["python3", str(BUILDER), str(CLOSURE), str(output)], cwd=ROOT, check=True)
-    relative_outputs = (
-        "generation/generation.bin",
-        "root.elf",
-        "loader.elf",
-        "image.elf",
-        "image.identity.json",
-        "build-result.normalized.json",
-        "build-result.identity",
-    )
-    for relative in relative_outputs:
+    for relative in BUILD_OUTPUTS:
         if (outputs[0] / relative).read_bytes() != (outputs[1] / relative).read_bytes():
             fail(f"isolated builds differ at {relative}")
 
@@ -337,9 +434,165 @@ def check_builds(temporary: Path) -> None:
             "SLIME_TARGET_PROFILE": "wrong",
         },
     )
-    for relative in relative_outputs:
+    for relative in BUILD_OUTPUTS:
         if (outputs[0] / relative).read_bytes() != (baseline / relative).read_bytes():
             fail(f"undeclared environment changed {relative}")
+
+
+def check_recipe_inputs_absent() -> None:
+    """No release input reads the recipes; devloop's `codePaths` pins them instead."""
+    generator = load_script("closure_recipe_generator", CLOSURE_GENERATOR)
+    named = sorted(
+        name for name, relative, _kind in generator.RELEASE_INPUTS if reads_recipes(relative)
+    )
+    if named:
+        fail(f"release inputs {named} read the recipes, so a recipe change moves every closure")
+
+
+def check_recipe_independence(temporary: Path) -> None:
+    """A recipe-only change leaves every committed closure and test-run record current.
+
+    The generator renders the corpus with every identity it takes of `just/` or
+    `Justfile` read from changed copies, and every emitted file must equal the
+    committed one, in both directions as `--check` compares them. The test-run
+    records are then rendered against those closures. The identities are
+    substituted rather than the files edited, so no repository byte changes.
+    """
+    changed_tree = temporary / "recipe-exam" / "just"
+    shutil.copytree(RECIPE_TREE, changed_tree)
+    for path in changed_tree.rglob("*"):
+        if path.is_file():
+            path.write_bytes(path.read_bytes() + b"\n# recipe exam\n")
+    (changed_tree / "recipe-exam.just").write_text("# recipe exam\n", encoding="utf-8")
+    changed_justfile = temporary / "recipe-exam" / "Justfile"
+    changed_justfile.write_bytes(JUSTFILE.read_bytes() + b"\n# recipe exam\n")
+
+    generator = load_script("closure_recipe_generator", CLOSURE_GENERATOR)
+    original = generator.identity_of
+
+    def changed_identity(relative: str, kind: str) -> str:
+        path = (ROOT / relative).resolve()
+        if path == JUSTFILE.resolve():
+            return artifact_identity(changed_justfile, kind)
+        if path.is_relative_to(RECIPE_TREE.resolve()):
+            return artifact_identity(changed_tree / path.relative_to(RECIPE_TREE.resolve()), kind)
+        if reads_recipes(relative):
+            fail(f"closure input {relative} contains the recipes, so this arm cannot change them")
+        return original(relative, kind)
+
+    generator.identity_of = changed_identity
+    try:
+        emitted = generator.outputs()
+    finally:
+        generator.identity_of = original
+    moved = sorted(
+        path.name
+        for path, contents in emitted.items()
+        if not path.is_file() or path.read_text(encoding="utf-8") != contents
+    ) + sorted(
+        path.name
+        for directory in (generator.CLOSURE_ROOT, generator.NEGATIVE_ROOT)
+        for path in directory.glob("*.zti")
+        if path not in emitted
+    )
+
+    closures = temporary / "recipe-exam" / "closures"
+    closures.mkdir()
+    identities: dict[str, str] = {}
+
+    def emitted_identity(name: str) -> str:
+        path = generator.CLOSURE_ROOT / f"{name}.zti"
+        if path not in emitted:
+            return ""
+        if name not in identities:
+            copied = closures / path.name
+            copied.write_text(emitted[path], encoding="utf-8")
+            identities[name] = compile_closure(copied).identity.hex()
+        return identities[name]
+
+    runs = load_script("closure_recipe_runs", RUN_GENERATOR)
+    runs.closure_identity_for = emitted_identity
+    moved_runs = sorted(
+        path.name
+        for path, contents in runs.outputs().items()
+        if not path.is_file() or path.read_text(encoding="utf-8") != contents
+    )
+    if moved or moved_runs:
+        fail(
+            f"a recipe-only change moves {len(moved)} closure file(s) "
+            f"(first {moved[0] if moved else 'none'}) and {len(moved_runs)} test-run "
+            f"record(s) (first {moved_runs[0] if moved_runs else 'none'})"
+        )
+
+
+def remove_recipe_control() -> None:
+    """Undo the recipe control's in-place change, including one a killed run left."""
+    text = JUSTFILE.read_bytes()
+    if RECIPE_CONTROL_LINE in text:
+        JUSTFILE.write_bytes(text.replace(RECIPE_CONTROL_LINE, b""))
+    RECIPE_CONTROL_FILE.unlink(missing_ok=True)
+
+
+def build_with_changed_recipes(temporary: Path, output: Path) -> int:
+    """Build `CLOSURE` into `output` with the recipes changed, and return the dumps served.
+
+    `Justfile` gains a comment line and `just/` an unimported file, at the root
+    the builder reads from, and the build's `PATH` starts with the
+    `RECIPE_CONTROL_SHIM` `just`. Both files are restored before this returns.
+    """
+    just = shutil.which("just")
+    if just is None:
+        fail("recipe control: no just on PATH to serve the recipe dump")
+    shim_directory = temporary / "recipe-control-bin"
+    shim_directory.mkdir()
+    log = temporary / "recipe-control-just.log"
+    shim = shim_directory / "just"
+    shim.write_text(
+        f"#!{sys.executable}\n"
+        f"JUST = {just!r}\nLOG = {str(log)!r}\nRECIPE = {RECIPE_CONTROL_RECIPE!r}\n"
+        + RECIPE_CONTROL_SHIM,
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": os.pathsep.join([str(shim_directory), os.environ.get("PATH", "")]),
+    }
+    remove_recipe_control()
+    original = JUSTFILE.read_bytes()
+    try:
+        JUSTFILE.write_bytes(original + RECIPE_CONTROL_LINE)
+        RECIPE_CONTROL_FILE.write_bytes(RECIPE_CONTROL_LINE)
+        build = subprocess.run(
+            ["python3", str(BUILDER), str(CLOSURE), str(output)],
+            cwd=ROOT,
+            check=False,
+            env=environment,
+        )
+    finally:
+        JUSTFILE.write_bytes(original)
+        RECIPE_CONTROL_FILE.unlink(missing_ok=True)
+    calls = (
+        [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        if log.is_file()
+        else []
+    )
+    refused = [call["arguments"] for call in calls if not call["dump"]]
+    if refused:
+        fail(f"recipe control: the build ran just {refused[0]}")
+    if build.returncode != 0:
+        fail(f"recipe control: the build failed with the recipes changed (exit {build.returncode})")
+    return len(calls)
+
+
+def check_recipe_control(temporary: Path) -> int:
+    """The recipes reach no image byte: a build with them changed equals the clean build."""
+    output = temporary / "build-recipes"
+    dumps = build_with_changed_recipes(temporary, output)
+    for relative in BUILD_OUTPUTS:
+        if (temporary / "build-a" / relative).read_bytes() != (output / relative).read_bytes():
+            fail(f"changed recipes changed {relative}")
+    return dumps
 
 
 def main() -> None:
@@ -363,9 +616,13 @@ def main() -> None:
         check_identity_boundaries(temporary)
         check_repository_metadata(temporary)
         check_bounds(temporary)
+        check_recipe_inputs_absent()
+        check_recipe_independence(temporary)
         check_builds(temporary)
+        dumps = check_recipe_control(temporary)
     print(
-        "system image closure check: contracts, resolution, identity, isolation, and bytes verified"
+        "system image closure check: contracts, resolution, identity, isolation, and bytes "
+        f"verified; recipes reach no closure and no image byte ({dumps} recipe dump(s) served)"
     )
 
 

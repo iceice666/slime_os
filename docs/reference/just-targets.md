@@ -146,8 +146,8 @@ For how the planes work and how to add one, read
 | `just system_composition_closure_check` | Render `contracts/composition-inventory/v1`'s host constants. |
 | `just system_image_builder_check` | Resolution checks each closure's committed prefix against `sel4/pins.toml`; no installed platform build or published SDK record is needed for that check. |
 | `just system_image_closure_aggregate_check` | Every shipped or tested image traces to exactly one closure, and every closure is exercised by an owning gate. |
-| `just system_image_closure_gates_check` | Every gate that consumes the committed closure corpus, on one tree: freshness, resolution and its controls, the frozen test-run records and their inventory controls, the scenario and root-role arms, and image/closure ownership. Editing this recipe changes the `just-recipes` closure input. |
-| `just system_image_closure_check` | Render `contracts/system-image-closure/v2` host constants. |
+| `just system_image_closure_gates_check` | Every gate that consumes the committed closure corpus, on one tree: freshness, resolution and its controls, the frozen test-run records and their inventory controls, the scenario and root-role arms, and image/closure ownership. Editing this recipe leaves the closures current. Devloop still pins it through `.devloop/policy.json` `codePaths`, so the edit stales recorded evidence. |
+| `just system_image_closure_check` | The `system-image-closure` and `system-test-run` bindings are current, and the pinned `sel4-channel` closure resolves, refuses each malformed variant, and builds the same bytes twice. A recipe change moves no closure and no test-run record, and a build with changed recipes and no runnable recipe produces the clean build's bytes. |
 | `just system_image_scenario_check` | CP14 scenario-identity gate. |
 | `just system_spec_check` | Validate every system spec and refuse a derived composition manifest that drifted from it. |
 | `just system_test_run_baseline_check` | One execution identity covers the declaration/closure boundary and its quality gates. |

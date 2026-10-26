@@ -90,10 +90,14 @@ rebuild is seconds, the cost of a forged cache is a false pass.
 
 ## Closures and recipes
 
-Adding or editing any recipe under `just/` or `Justfile` changes every
-closure's identity — through the `just-recipes` input for the `just/` tree
-and the separate `justfile` input for `Justfile`: regenerate the closures
-(`python3 scripts/generate/generate-system-image-closures.py`) and refresh
+Recipes under `just/` and `Justfile` are not closure inputs, so adding or
+editing a recipe leaves every closure and test-run record current.
+`system_image_closure_check` holds this: it renders the corpus with the
+recipes' identities changed, and it builds `sel4-channel` with the recipes
+changed and no recipe runnable. Devloop still pins the recipes through
+`.devloop/policy.json` `codePaths`, so a recipe change stales the evidence
+recorded against them. A change to a release input regenerates the closures
+(`python3 scripts/generate/generate-system-image-closures.py`) and refreshes
 the test-run records
 (`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`,
 or `just system_test_run_bless` when an execution declaration changed) in

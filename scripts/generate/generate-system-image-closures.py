@@ -56,6 +56,9 @@ PREFIXES = {
 # The shared workspace inputs `resolve_closure` requires of every closure, as
 # `(name, repository-relative path, kind)`. The target specification is added
 # from `component_sdk.PROFILE_PLATFORMS` below because it varies by profile.
+# The recipes (`just/`, `Justfile`) are not inputs: no builder reads or runs
+# them, which `check-system-image-closure.py` holds, and devloop's `codePaths`
+# pins them instead.
 RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("boot-contracts", "boot-contracts", "tree"),
     ("cargo-lock", "Cargo.lock", "file"),
@@ -69,8 +72,6 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("image-builder", "scripts/build/build-sel4.py", "file"),
     ("elf-delivery", "scripts/lib/elf_delivery.py", "file"),
     ("interface-schema-contract", "contracts/interface-schema/v1", "tree"),
-    ("just-recipes", "just", "tree"),
-    ("justfile", "Justfile", "file"),
     ("root-child", "slime-root/child", "tree"),
     ("workspace-manifest", "Cargo.toml", "file"),
 )

@@ -596,8 +596,6 @@ def resolve_closure(
         "component-runtime",
         "component-spec-contract",
         "interface-schema-contract",
-        "just-recipes",
-        "justfile",
         "root-child",
         "root-target",
         "target-spec",
