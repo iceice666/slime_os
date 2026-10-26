@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-traffic";
-  imageClosureIdentity = "5a524e390df276c3126945ebfd1cd0a3b894ce23101ab802d838b8b20b139448";
+  imageClosureIdentity = "9956027167efd18875813af45eb8196edc8bb6d5736a95dec8dfd50494ee7b85";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
