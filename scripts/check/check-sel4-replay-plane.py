@@ -120,8 +120,10 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 EXPECTED_UNORDERED: tuple[str, ...] = (
     # The recorder is the one instance the generation grants clock authority, and
     # it is the timer badge C9.1 declares. Without this the recorded expiry could
-    # be any wake at all.
-    r"SLIME_CLOCK authority task=(\d+) instance=replay-recorder flags=0x3c000000 timers=2 badge=0x200",
+    # be any wake at all. Its timer, simulated-read and simulated-advance bits are
+    # exact; bit 26, the monotonic read right `clock-authority/v2` retires, is
+    # not judged here, so this gate holds across that retirement.
+    r"SLIME_CLOCK authority task=(\d+) instance=replay-recorder flags=0x(?:38|3c)000000 timers=2 badge=0x200",
     # The replayer holds none, which is what makes its answers the recording's
     # rather than the hardware's.
     r"SLIME_CLOCK authority task=(\d+) instance=replay-replayer flags=0x0 timers=0 badge=0x0",
