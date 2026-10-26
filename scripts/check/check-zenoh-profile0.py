@@ -406,7 +406,19 @@ EXAM_MARKER = re.compile(r"\[zenoh-exam\](.*)$")
 
 
 def exam_lines_strict(output: str) -> list[str]:
-    return [match.group(1).strip() for line in output.splitlines() if (match := EXAM_MARKER.search(line))]
+    """Every marker line, with the marker kept in front of any text that is not set off by a space.
+
+    A marker followed by a space gives its text. A bare marker, or text glued to it or set off by another
+    character, gives a line that starts with the marker, which no judge recognises, so the delimiter is enforced
+    and a payload glued to the marker cannot pass as a valid line.
+    """
+    lines = []
+    for line in output.splitlines():
+        if (match := EXAM_MARKER.search(line)) is None:
+            continue
+        text = match.group(1)
+        lines.append(text.strip() if text.startswith(" ") else "[zenoh-exam]" + text)
+    return lines
 
 
 # The shape of every line a Rust slice may print, by its word: the verdict and the number of fields that
@@ -602,6 +614,10 @@ def controls(slice_name: str) -> int:
         ("an exam marker with text glued to it", "[zenoh-exam]invented\n"),
     ):
         mutations.append((label, exam_lines_strict(stdout + tail)))
+    # A valid payload with the delimiter removed or replaced must fail too, not only an unknown word glued on.
+    mutations.append(("every marker glued to its payload", exam_lines_strict("".join(f"[zenoh-exam]{line}\n" for line in good))))
+    mutations.append(("one marker glued to its payload", exam_lines_strict(f"[zenoh-exam]{good[0]}\n" + "".join(f"[zenoh-exam] {line}\n" for line in good[1:]))))
+    mutations.append(("a tab after the marker", exam_lines_strict("".join(f"[zenoh-exam]\t{line}\n" for line in good))))
     if slice_name in ("encoder", "session"):
         # The two slices share one cargo filter, so a real run prints the other word's lines too.
         other, honest = ("session", f"session ok {SESSION_SCENARIOS[0]}") if word == "encode" else ("encode", f"encode refused {ENCODE_REFUSALS[0]}")
