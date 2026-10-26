@@ -1514,13 +1514,10 @@ pub fn private_memory_grow(delta: usize) -> (i64, u64) {
     pair_of(lifecycle_labels::PRIVATE_MEMORY_GROW, &[delta as Word])
 }
 
-// AArch64 reads the counter in the calling thread; see `syscall::monotonic_read`.
-#[cfg(not(target_arch = "aarch64"))]
 pub fn monotonic_read() -> i64 {
     result_of(clock_labels::MONOTONIC_READ, &[])
 }
 
-#[cfg(not(target_arch = "aarch64"))]
 pub fn monotonic_frequency() -> i64 {
     result_of(clock_labels::RATE_READ, &[])
 }
