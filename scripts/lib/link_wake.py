@@ -36,9 +36,11 @@ import tcp_buffers_peer as tbp
 COMPOSITIONS: tuple[str, ...] = ("sel4-io-tcp-buffers", "sel4-io-tcp-listener", "sel4-io-tcp-options", "sel4-zenoh-external")
 DRIVER = "virtio-net-driver"
 SERVICE = "network-service"
-# Half the service's 10 ms idle timer: a timer-paced acknowledgment cannot have
-# a median below it, a completion-woken one has no reason to approach it.
-LATENCY_BOUND_MS = 4.0
+# Between the two regimes observed under QEMU TCG: a timer-paced
+# acknowledgment's median is near or above the service's 10 ms idle timer
+# (12 to 14 ms), and a completion-woken one sits near the wake path's own floor
+# (3 to 4 ms), where every hop is mediated by the root.
+LATENCY_BOUND_MS = 7.0
 # The holder whose rx-window latency is bounded: its window holds two segments.
 BOUNDED_HOLDER = "baseline"
 DEVICE_WAKES = re.compile(r"^\[network-service\] wait device wakes=(\d+)$", re.M)
@@ -245,8 +247,8 @@ def controls() -> int:
     refuse("shares the device badge bit", lambda: judge_composition("m", honest.replace("badgeBit = 0;\n      drainSlot = 2;", "badgeBit = 5;\n      drainSlot = 2;")))
     refuse("waits on more than one Notification", lambda: judge_composition("m", honest.replace("badgeBit = 5;\n      kind = \"device\";\n      notification = \"x-network-request\"", "badgeBit = 5;\n      kind = \"device\";\n      notification = \"io-link-rx-completion-ready\"")))
     refuse("timer wait-set rows, expected one", lambda: judge_composition("m", honest.replace("kind = \"timer\"", "kind = \"stream\"")))
-    refuse("not below 4.0 ms", lambda: judge_latencies({"large": fast, "baseline": slow}))
-    refuse("not below 4.0 ms", lambda: judge_latencies({"large": fast, "baseline": [4.0, 4.0, 4.0]}))
+    refuse("not below 7.0 ms", lambda: judge_latencies({"large": fast, "baseline": slow}))
+    refuse("not below 7.0 ms", lambda: judge_latencies({"large": fast, "baseline": [7.0, 7.0, 7.0]}))
     refuse("too few to judge", lambda: judge_latencies({"large": fast[:2], "baseline": fast}))
     refuse("expected ['baseline', 'large']", lambda: judge_latencies({"large": fast}))
     refuse("device wake lines, expected one", lambda: judge_wakes("[network-service] wait wakes=40 coalesced=2\n"))
