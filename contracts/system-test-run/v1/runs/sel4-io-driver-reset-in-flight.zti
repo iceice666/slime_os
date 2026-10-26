@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-driver-reset-in-flight";
-  imageClosureIdentity = "c651aa62a4e48e8c2058ca54ebf6baf8bb51cf5854ebe3f3542b14b683194d71";
+  imageClosureIdentity = "1d407377215b1d23c2e5dc03e878127a45ad8b54c2746a589aff0a6c238400aa";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
