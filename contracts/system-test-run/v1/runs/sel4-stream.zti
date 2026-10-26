@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-stream";
-  imageClosureIdentity = "b29e01890c32643039f096d490dbb259cb534f998a45fa82e19466b73d059943";
+  imageClosureIdentity = "38648ce8a79374d79f6a736804331190f3d628060e51753a1d858628226d6101";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
