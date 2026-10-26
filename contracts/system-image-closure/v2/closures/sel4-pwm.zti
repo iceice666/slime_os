@@ -102,7 +102,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "1691167321b8d23c2757e73df338fd32df6834b24a18f0fadc03586f445dc3e0";
+      identity = "bc135b7726896798a2b3263a71b8bc33cb911b399c3e40518c510fede8467259";
     };
     parameters = [
       "qemuKeyboard";

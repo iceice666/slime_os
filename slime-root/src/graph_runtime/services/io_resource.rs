@@ -182,12 +182,16 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         direction: DmaDirection,
     ) -> Result<(u64, u64), AdapterError> {
         let frames = self.loan_frames.ok_or(AdapterError::DmaFailed)?;
-        slime_root::diagnostic_println!(
-            "SLIME_IO payload dma pages={} frames={} writable={} direction={direction:?}",
-            pages,
-            frames.len(),
-            frames.writable()
-        );
+        let print =
+            super::diagnostic_once::payload_dma(matches!(direction, DmaDirection::DeviceRead));
+        if print {
+            slime_root::diagnostic_println!(
+                "SLIME_IO payload dma pages={} frames={} writable={} direction={direction:?}",
+                pages,
+                frames.len(),
+                frames.writable()
+            );
+        }
         if frames.len() != pages as usize
             || matches!(direction, DmaDirection::DeviceWrite) && !frames.writable()
         {
@@ -197,10 +201,12 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
         for index in 0..frames.len() {
             let frame = frames.get(index).ok_or(AdapterError::DmaFailed)?;
             let paddr = self.allocator.physical_address_of(frame.0);
-            slime_root::diagnostic_println!(
-                "SLIME_IO payload frame index={index} slot={} paddr={paddr:?}",
-                frame.0
-            );
+            if print {
+                slime_root::diagnostic_println!(
+                    "SLIME_IO payload frame index={index} slot={} paddr={paddr:?}",
+                    frame.0
+                );
+            }
             let paddr = paddr.ok_or(AdapterError::DmaFailed)?;
             if let Some(base) = first {
                 if paddr != base + index * shared_buffer::PAGE_SIZE {
