@@ -99,6 +99,14 @@ private_memory_cycles_check: sel4_pin_check
 clock_authority_check: sel4_pin_check
     python3 scripts/check/check-sel4-clock-authority-plane.py
 
+# Monotonic and rate reads are ambient: no read right in any source, binding or
+# builder table, and no root-served read in the clock plane. Runs the planes
+# that read the clock the most, and the recorded monotonic read, first.
+# Explicit, never part of `all`.
+[group('planes / runtime')]
+clock_direct_read_check: sel4_pin_check clock_authority_check replay_check robot_runtime_check io_tcp_buffers_check
+    python3 scripts/check/check-sel4-clock-authority-plane.py --arm direct-static
+
 [group('planes / runtime')]
 scheduling_class_check: sel4_pin_check
     python3 scripts/check/check-sel4-scheduling-class-plane.py
