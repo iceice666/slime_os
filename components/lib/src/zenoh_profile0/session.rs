@@ -49,9 +49,11 @@ pub struct Params {
     pub timeout_ms: u64,
     /// The largest message one reassembly may join.
     pub message_limit: usize,
-    /// Subscribers the peer may declare. The session also holds one of its own, so its subscriber
-    /// table has one more slot than this.
+    /// Subscribers the peer may declare.
     pub per_side: usize,
+    /// Subscriptions this side may declare, at least 1. The subscriber table holds `per_side + local`
+    /// slots.
+    pub local: usize,
     /// The most events one received batch can yield; the session's event storage must hold them.
     pub events: usize,
     /// The key aliases the peer may declare.
@@ -69,6 +71,7 @@ impl Params {
         timeout_ms: 0,
         message_limit: 0,
         per_side: 1,
+        local: 1,
         events: MAX_EVENTS,
         aliases: 1,
         samples: MAX_EVENTS,
@@ -88,6 +91,7 @@ impl Params {
             timeout_ms: limits.reassembly_timeout_ms,
             message_limit: usize::try_from(limits.message_bytes()).unwrap_or(usize::MAX),
             per_side: limits.max_subscribers,
+            local: 1,
             events: limits.events_per_batch(),
             aliases: limits.max_keys,
             samples: limits.outstanding_samples,
@@ -419,13 +423,15 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
         config: &Config<'_>,
         params: Params,
     ) -> Result<Self, SessionError> {
-        // The storage is exactly what the configuration declares: the peer's aliases, our own subscriber
+        // The storage is exactly what the configuration declares: the peer's aliases, our own subscriptions
         // and the peer's, the key length and the events a batch yields. Smaller refuses what the limits
-        // promise and larger leaves a bound that only the array enforces.
+        // promise and larger leaves a bound that only the array enforces. A side that may declare none
+        // cannot be a subscriber, so `local` is at least 1.
         if params.bounds.key != B
             || params.events != E
             || params.aliases != K
-            || params.per_side + 1 != S
+            || params.local < 1
+            || params.per_side + params.local != S
         {
             return Err(SessionError::InvalidConfig);
         }
@@ -1166,7 +1172,7 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
         key: &str,
         out: &mut [u8],
     ) -> Result<Outcome<'a, E>, SessionError> {
-        if self.local_n >= 1 || self.subs.find(LOCAL | u64::from(id)).is_some() {
+        if self.local_n >= self.params.local || self.subs.find(LOCAL | u64::from(id)).is_some() {
             return Err(SessionError::SubscriberLimit);
         }
         let outcome = self.send_frame(out, |frame| {

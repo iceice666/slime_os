@@ -40,4 +40,6 @@ pub mod zenoh_profile0;
 #[cfg(test)]
 mod zenoh_stock;
 #[cfg(test)]
+mod zenoh_subscribers;
+#[cfg(test)]
 mod zenoh_undeclare;
