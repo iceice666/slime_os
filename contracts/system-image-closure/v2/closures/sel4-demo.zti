@@ -227,7 +227,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "35b96178ed790e4720fa369bfb7d5c3bb6f30a62e1ddd43aaf200a8a408336fb";
+        identity = "422f71bbfed7bd1796e74de866c9994e9c4da3316ecaaf8b2a93cd738669684f";
       };
     };
     {
