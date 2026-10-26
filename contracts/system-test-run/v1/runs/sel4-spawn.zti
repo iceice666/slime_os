@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-spawn";
-  imageClosureIdentity = "3536a6ca7b87f5f07ace512395b5e00b7b46c47994279681db1ace2ef274ba20";
+  imageClosureIdentity = "04a95066808062dc2e7bcecc424b08c9d97614579074470e7f94ff69dae3beb2";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

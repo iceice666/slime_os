@@ -94,9 +94,12 @@ EXTRA_CLOSURE_RUNS: dict[str, tuple[tuple[str, str, str], ...]] = {
     # IO8 and IO9: the product-graph checker's other arms boot the product
     # graph plus the pwm driver (`just sel4_pwm_graph_check`) and plus the
     # serial driver and heartbeat producer (`just sel4_mavlink_graph_check`).
+    # The serial arm (`just sel4_serial_graph_check`) boots it plus a driver on
+    # QEMU virt's second serial port and a testkit probe.
     "sel4-component-graph": (
         ("sel4-pwm", "sel4-pwm", "qemu-arm-virt"),
         ("sel4-mavlink", "sel4-mavlink", "qemu-arm-virt"),
+        ("sel4-serial", "sel4-serial", "qemu-arm-virt"),
     ),
     "sel4-private-memory": (
         (
@@ -227,7 +230,21 @@ ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
 # A planning exclusion belongs to one invocation, never to its whole checker.
 # Any implementation artifact appearing requires removing the exclusion first.
 # Rows are (canonical item UUID, checker filename, closure name, artifact paths).
-PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {}
+PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    "sel4-serial": (
+        "01a10778-adf1-7d64-a4e8-851e425c03e9",
+        "check-sel4-component-graph.py",
+        "sel4-serial",
+        (
+            "contracts/system-spec/v1/systems/sel4-serial.zti",
+            "contracts/generation-manifest/v1/compositions/sel4-serial.zti",
+            "contracts/system-image-closure/v2/closures/sel4-serial.zti",
+            "contracts/system-test-run/v1/runs/sel4-serial.zti",
+            "components/services/pl011-driver",
+            "components/testkit/serial-probe",
+        ),
+    ),
+}
 
 # Checkers that boot no seL4 QEMU plane of their own, so they own no test run:
 # board gates, host-only contract gates, aggregate composers that delegate to
