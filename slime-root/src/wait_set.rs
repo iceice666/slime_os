@@ -7,8 +7,9 @@
 //!
 //! # Why only supervision sources are here
 //!
-//! Of the six declared source kinds, five are signalled by a peer: a publisher
-//! signals its subscriber's ring, a client signals a broker's control edge, and
+//! Of the seven declared source kinds, five are signalled by a peer: a publisher
+//! signals its subscriber's ring, a client signals a broker's control edge, a
+//! driver signals the service it completes work for, and
 //! `slime-root/src/notification.rs` already mints those caps from the
 //! generation's own `notificationBindings`. A timer is signalled by
 //! `crate::clock`, from C9.1's contract data. That leaves peer death, which no

@@ -166,6 +166,11 @@ impl Declared {
     pub fn timer(&self) -> Option<Source> {
         self.iter().find(|source| source.kind == SourceKind::Timer)
     }
+
+    /// The declared device completion source, if this component has one.
+    pub fn device(&self) -> Option<Source> {
+        self.iter().find(|source| source.kind == SourceKind::Device)
+    }
 }
 
 /// The registered sources and their ready queue.
@@ -264,6 +269,15 @@ impl Registry {
         let source = self
             .declared
             .timer()
+            .ok_or(RegistryError::UndeclaredSource)?;
+        self.register(source.badge)
+    }
+
+    /// Register this component's declared device completion source.
+    pub fn register_device(&mut self) -> Result<Source, RegistryError> {
+        let source = self
+            .declared
+            .device()
             .ok_or(RegistryError::UndeclaredSource)?;
         self.register(source.badge)
     }

@@ -484,6 +484,12 @@
     };
     {
       grant = "listener-network-request";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 5;
+    };
+    {
+      grant = "listener-network-request";
       holder = "listener-session";
       role = "signal";
       slot = 0;
@@ -680,6 +686,12 @@
     {
       badgeBit = 7;
       kind = "timer";
+      notification = "listener-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 5;
+      kind = "device";
       notification = "listener-network-request";
       waiter = "network-service";
     };

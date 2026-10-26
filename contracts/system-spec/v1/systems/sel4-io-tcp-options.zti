@@ -75,6 +75,7 @@
     { grant = "io-link-rx-completion-ready"; holder = "network-service"; role = "wait"; slot = 3; };
     { grant = "io-link-state-changed"; holder = "virtio-net-driver"; role = "signal"; slot = 4; };
     { grant = "io-link-state-changed"; holder = "network-service"; role = "wait"; slot = 4; };
+    { grant = "options-network-request"; holder = "virtio-net-driver"; role = "signal"; slot = 5; };
     { grant = "options-network-request"; holder = "options-baseline"; role = "signal"; slot = 0; };
     { grant = "options-network-request"; holder = "options-tuned"; role = "signal"; slot = 1; };
     { grant = "options-network-request"; holder = "network-service"; role = "wait"; slot = 5; };
@@ -118,6 +119,7 @@
     { waiter = "network-service"; notification = "options-network-request"; badgeBit = 0; kind = "stream"; drainSlot = 2; };
     { waiter = "network-service"; notification = "options-network-request"; badgeBit = 1; kind = "stream"; drainSlot = 3; };
     { waiter = "network-service"; notification = "options-network-request"; badgeBit = 7; kind = "timer"; };
+    { waiter = "network-service"; notification = "options-network-request"; badgeBit = 5; kind = "device"; };
     { waiter = "options-baseline"; notification = "options-baseline-done"; badgeBit = 6; kind = "stream"; drainSlot = 0; };
     { waiter = "options-baseline"; notification = "options-baseline-done"; badgeBit = 7; kind = "timer"; };
     { waiter = "options-tuned"; notification = "options-tuned-done"; badgeBit = 7; kind = "stream"; drainSlot = 0; };

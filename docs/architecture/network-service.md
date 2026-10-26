@@ -111,6 +111,15 @@ socket it opens or accepts: a power of two from 2048 to 65536 bytes each, 2048
 for a holder without a row. The transmit buffer bounds a connection's
 unacknowledged bytes, so it bounds the bytes one round trip can carry. A
 receive buffer above 65535 bytes makes the SYN announce window scale shift 1.
+Where the generation declares it, the virtio-net driver also signals the
+service's own wait Notification on every TX and RX completion, declared as one
+`device` wait-set source (`wait-set/v2`). The driver resolves that binding as
+its fourth signal binding by slot (`notification:@3+signal`), and the service
+registers the source when its wait set declares one. A frame that arrives with no
+client request pending is then handled on that wake rather than at the 10 ms idle
+timer, and at shutdown the service reports `wait device wakes=N` beside
+`wait wakes=`. `sel4-io-tcp-buffers`, `sel4-io-tcp-listener`,
+`sel4-io-tcp-options` and `sel4-zenoh-external` declare it.
 The external link declares no burst size to smoltcp, which would otherwise
 clamp every advertised window to four segments; a burst past the four RX slots
 waits in the device queue, and on a lossy link the peer retransmits it.
