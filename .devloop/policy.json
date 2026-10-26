@@ -147,6 +147,7 @@
     "scripts/lib/arm64_image.py",
     "scripts/lib/boot_contracts.py",
     "scripts/lib/boot_media_contract.py",
+    "scripts/lib/clock_direct.py",
     "scripts/lib/closure_image.py",
     "scripts/lib/component_paths.py",
     "scripts/lib/component_sdk.py",

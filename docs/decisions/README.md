@@ -53,6 +53,9 @@ readable and link to the decision that replaced them.
   boot-store v1 is the only product BootState layout, and the userspace
   planes' LBA 1024/1025 object-store layout is test scaffolding until the
   manager stages into a boot store.
+- [Monotonic clock reads are ambient](ambient-clock-reads.md) — accepted;
+  `clock-authority/v2` retires the monotonic read right, and AArch64
+  components read the counter without a root round trip.
 - [Entropy authority](entropy-authority.md) — accepted; a userspace
   entropy-service over a virtio-rng driver, with generation-declared holders,
   per-holder HMAC-DRBG output and reproducible seeded fixtures.

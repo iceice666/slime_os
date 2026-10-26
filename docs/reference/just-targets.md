@@ -236,7 +236,8 @@ For how the planes work and how to add one, read
 
 | Recipe | Does |
 | --- | --- |
-| `just clock_authority_check` | C9.1 gate: declared clock authority is independent, bounded, and deny-by-default. |
+| `just clock_authority_check` | C9.1 gate: timer and simulated-time authority is independent, bounded, and deny-by-default; monotonic reads are ambient and never reach the root. |
+| `just clock_direct_read_check` | No source, binding or builder table declares a monotonic read right, after the clock, replay, robot-runtime and TCP-buffer planes pass; fails until the implementation lands. |
 | `just lifecycle_restart_check` | C9.4 gate: a userspace supervisor restarts under declared policy, and the bound is terminal. |
 | `just sel4_lifetime_check` | Declared instance lifetime enforced by the root on `sel4-lifetime` and `sel4-lifetime-exit`: a resident instance stays live under certification, a bounded one completes, a resident optional exit is recorded unhealthy and a resident required exit fails the graph, with the host, root, lifecycle and product-graph regressions; fails until those compositions land. |
 | `just private_memory_adaptive_check` | MEM-ADAPTIVE's declared-policy plane. |
