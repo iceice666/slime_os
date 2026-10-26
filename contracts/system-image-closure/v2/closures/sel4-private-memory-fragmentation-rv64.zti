@@ -202,22 +202,6 @@
       };
     };
     {
-      name = "just-recipes";
-      artifact = {
-        path = "just";
-        kind = "tree";
-        identity = "f7d32da959820c4aa564b606feb61c65bdf8ca6f856ef11867d923d575104c58";
-      };
-    };
-    {
-      name = "justfile";
-      artifact = {
-        path = "Justfile";
-        kind = "file";
-        identity = "901c66d9e205a1a61eeb2fccdd36ef3fa50f0c9e2ebc9b6e3f7d10e6049f20e2";
-      };
-    };
-    {
       name = "root-child";
       artifact = {
         path = "slime-root/child";
