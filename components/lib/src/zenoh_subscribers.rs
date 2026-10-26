@@ -419,16 +419,32 @@ fn the_subscribers_exam() {
     );
     line("ok", "slot-freed-by-undeclare-is-reusable");
 
-    // The limit: a fourth own subscription, or a held id again, is at the limit.
+    // The limit: a fourth own subscription is at the limit.
     refuse(
         &mut seen,
         "fourth-own-subscriber",
         declare_frame(&mut listener, 5, 1),
     );
+    // A held id again is refused while a slot is still free, so only the duplicate check can refuse it. With
+    // every own slot taken, the quota check would refuse it first and this scenario would show nothing.
+    let (mut spare_connector, mut spare_listener) = open(params(3, 1), params(1, 3));
+    declare(&mut spare_connector, &mut spare_listener, 1, 0, tick());
+    declare(&mut spare_connector, &mut spare_listener, 3, 2, tick());
+    assert_eq!(
+        spare_listener.subscribers(),
+        2,
+        "one own slot is still free"
+    );
+    let next_sn = spare_listener.next_tx_sn();
     refuse(
         &mut seen,
         "own-subscriber-repeated-id",
-        declare_frame(&mut listener, 1, 0),
+        declare_frame(&mut spare_listener, 1, 1),
+    );
+    assert_eq!(
+        spare_listener.next_tx_sn(),
+        next_sn,
+        "a refused declaration spends no sequence number"
     );
 
     // Five: two subscriptions on one key deliver once, and one is still left after the other goes.
@@ -476,7 +492,9 @@ fn the_subscribers_exam() {
     refused(
         &mut seen,
         "no-own-subscriber-configured",
-        Own::with_params(Role::Listener, &listener_config(), params(0, 3)).map(|_| ()),
+        // Three slots for a peer that may declare three and a side that may declare none, so the size adds
+        // up and only the minimum of one own subscription can refuse it.
+        Sized::<3>::with_params(Role::Listener, &listener_config(), params(0, 3)).map(|_| ()),
     );
     refused(
         &mut seen,
