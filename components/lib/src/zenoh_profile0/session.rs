@@ -9,9 +9,10 @@
 //! gone after a refusal must say so with [`Session::close`]. The only
 //! transitions into [`State::Closed`] are a received CLOSE, a local close and
 //! lease expiry. A KEEP_ALIVE is traffic on an open session and is sent every quarter of the
-//! lease this side announced when nothing else was. The machine tracks two subscriber slots: the subscription this
-//! side declared, which a received PUSH must match to be delivered, and the one
-//! the peer declared, which a Put this side sends must match.
+//! lease this side announced when nothing else was. The machine tracks the subscriptions of both sides in one
+//! table: the ones this side declared, up to [`Params::local`], which a received PUSH must match to be
+//! delivered, and the ones the peer declared, up to [`Params::per_side`], which a Put this side sends must
+//! match.
 
 use super::encode::{self, EncodeError, FrameEncoder};
 use super::fragment::{
@@ -431,7 +432,7 @@ impl<const K: usize, const S: usize, const B: usize, const E: usize> SessionOf<K
             || params.events != E
             || params.aliases != K
             || params.local < 1
-            || params.per_side + params.local != S
+            || params.per_side.checked_add(params.local) != Some(S)
         {
             return Err(SessionError::InvalidConfig);
         }

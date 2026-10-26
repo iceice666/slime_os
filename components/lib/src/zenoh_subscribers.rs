@@ -545,3 +545,27 @@ fn the_subscribers_exam() {
     line("ok", "demo-params-keep-one");
     print_refusals(&seen);
 }
+
+/// A count that overflows when added to the other side's is refused, and a size that wraps to the table's
+/// is not taken for it. The addition is checked, so a build that wraps on overflow agrees with one that
+/// panics.
+#[test]
+fn a_count_that_overflows_the_table_size_is_invalid() {
+    for (local, per_side) in [
+        (usize::MAX, 1),
+        (1, usize::MAX),
+        (usize::MAX, usize::MAX),
+        (usize::MAX - 3, 4),
+    ] {
+        let result = SessionOf::<1, 0, MAX_KEY_BYTES, 4>::with_params(
+            Role::Listener,
+            &listener_config(),
+            params(local, per_side),
+        );
+        assert_eq!(
+            result.err(),
+            Some(SessionError::InvalidConfig),
+            "local {local}, per_side {per_side}"
+        );
+    }
+}
