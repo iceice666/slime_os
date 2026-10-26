@@ -14,7 +14,10 @@ Three independent checks:
   exactly one `device` row on that badge, with no drain slot;
 * the wire: in the rx-window scenario the probe reads nothing, so no client
   request wakes the service, and the median time from a peer data segment to
-  the guest frame that acknowledges it is below the bound for each holder;
+  the guest frame that acknowledges it is below the bound for the 2048-byte
+  holder. Its window holds two segments, so that latency is the wake latency.
+  The 65536-byte holder's median is reported and not bounded: each of its
+  64-segment bursts queues behind the frames ahead of it, which no wake removes;
 * the transcript: the service reports `[network-service] wait device wakes=D`
   once, with 1 <= D <= its `wait wakes=` count.
 
@@ -36,6 +39,8 @@ SERVICE = "network-service"
 # Half the service's 10 ms idle timer: a timer-paced acknowledgment cannot have
 # a median below it, a completion-woken one has no reason to approach it.
 LATENCY_BOUND_MS = 4.0
+# The holder whose rx-window latency is bounded: its window holds two segments.
+BOUNDED_HOLDER = "baseline"
 DEVICE_WAKES = re.compile(r"^\[network-service\] wait device wakes=(\d+)$", re.M)
 WAKES = re.compile(r"^\[network-service\] wait wakes=(\d+) coalesced=\d+$", re.M)
 
@@ -100,13 +105,15 @@ def median(values: Sequence[float]) -> float:
 
 
 def judge_latencies(latencies: Mapping[str, Sequence[float]]) -> dict[str, float]:
-    """Raise ValueError unless every holder's median acknowledgment latency is below the bound."""
+    """Return every holder's median acknowledgment latency; raise ValueError
+    unless the bounded holder's is below the bound."""
     require(set(latencies) == set(tbp.HOLDERS), f"latencies name holders {sorted(latencies)}, expected {sorted(tbp.HOLDERS)}")
     medians: dict[str, float] = {}
     for holder, values in latencies.items():
         require(len(values) >= 3, f"the {holder} rx-window scenario acknowledged {len(values)} peer segments, too few to judge")
         medians[holder] = median(values)
-        require(medians[holder] < LATENCY_BOUND_MS, f"the {holder} rx-window median acknowledgment latency is {medians[holder]:.2f} ms, not below {LATENCY_BOUND_MS} ms")
+    bounded = medians[BOUNDED_HOLDER]
+    require(bounded < LATENCY_BOUND_MS, f"the {BOUNDED_HOLDER} rx-window median acknowledgment latency is {bounded:.2f} ms, not below {LATENCY_BOUND_MS} ms")
     return medians
 
 
@@ -198,6 +205,9 @@ def controls() -> int:
     fast = ack_latencies(_flow([0.5, 1.0, 0.8, 30.0, 0.6]))
     require([round(value, 3) for value in fast] == [0.5, 1.0, 0.8, 30.0, 0.6], f"ack_latencies mismeasured a synthetic flow: {fast}")
     judge_latencies({"large": fast, "baseline": fast})
+    slow = ack_latencies(_flow([12.0, 11.0, 0.5, 13.0, 9.0]))
+    # The large holder is reported, never bounded.
+    require(judge_latencies({"large": slow, "baseline": fast})["large"] == 11.0, "the large holder's median was not reported")
     judge_wakes("[network-service] wait wakes=40 coalesced=2\n[network-service] wait device wakes=40\n")
     refused = 0
 
@@ -235,9 +245,8 @@ def controls() -> int:
     refuse("shares the device badge bit", lambda: judge_composition("m", honest.replace("badgeBit = 0;\n      drainSlot = 2;", "badgeBit = 5;\n      drainSlot = 2;")))
     refuse("waits on more than one Notification", lambda: judge_composition("m", honest.replace("badgeBit = 5;\n      kind = \"device\";\n      notification = \"x-network-request\"", "badgeBit = 5;\n      kind = \"device\";\n      notification = \"io-link-rx-completion-ready\"")))
     refuse("timer wait-set rows, expected one", lambda: judge_composition("m", honest.replace("kind = \"timer\"", "kind = \"stream\"")))
-    slow = ack_latencies(_flow([12.0, 11.0, 0.5, 13.0, 9.0]))
     refuse("not below 4.0 ms", lambda: judge_latencies({"large": fast, "baseline": slow}))
-    refuse("not below 4.0 ms", lambda: judge_latencies({"large": [4.0, 4.0, 4.0], "baseline": fast}))
+    refuse("not below 4.0 ms", lambda: judge_latencies({"large": fast, "baseline": [4.0, 4.0, 4.0]}))
     refuse("too few to judge", lambda: judge_latencies({"large": fast[:2], "baseline": fast}))
     refuse("expected ['baseline', 'large']", lambda: judge_latencies({"large": fast}))
     refuse("device wake lines, expected one", lambda: judge_wakes("[network-service] wait wakes=40 coalesced=2\n"))
