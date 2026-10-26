@@ -25,13 +25,25 @@ and termination reclaims live timers. Timer wakes do not consume the bounded
 component-request iteration count, and absent authority remains distinguishable
 from malformed requests.
 
+The root prints `SLIME_CLOCK served` once per task and label and `SLIME_CLOCK
+refused` once per task, label and class; it prints a payload DMA line and its
+frame lines once per direction. Each later occurrence is counted, and one
+`SLIME_ROOT diagnostic repeats clock_served=N clock_refused=N io_device_read=N
+io_device_write=N` line precedes `SLIME_GRAPH served`. Under QEMU TCG every UART
+byte is a trapped write on the one CPU, so a line per operation stalled the whole
+graph. The key tables hold 256 entries each; a full table prints the line, so a
+key is never hidden (`slime-root/src/graph_runtime/services/diagnostic_once.rs`).
+
 ## Wait sets
 
 Wait sets are userspace, implemented by `components/runtime/src/wait_set.rs`
 over one seL4 Notification plus explicit endpoint drains. The generation's
-`contracts/wait-set/v1/` resource maps badge bits to source kind and the waiter's
+`contracts/wait-set/v2/` resource maps badge bits to source kind and the waiter's
 own drain slot. The root exposes only a self-scoped read of those declared
-entries and signals declared timer or supervision badges.
+entries and signals declared timer or supervision badges. Version 2 adds the
+`device` kind: a driver's completion signal, sent through a declared peer binding
+on the waiter's Notification and, like a timer, naming no drain slot, because the
+waiter reads device state it already owns.
 The waiter cannot derive this mapping itself: peer badges come from the
 signaller's slot, while timer badges are independent contract data. Each badge
 belongs to exactly one source; a supervision wake requires the waiter's declared

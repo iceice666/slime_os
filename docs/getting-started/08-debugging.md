@@ -60,6 +60,12 @@ class=undeclared` is the stricter cousin: the composition did not declare
 that service class for this task at all. `SLIME_GRAPH binding unresolved
 task=N …` means a name the component resolved was never bound in its spec.
 
+**Per-operation lines appear once.** The root prints `SLIME_CLOCK served`,
+`SLIME_CLOCK refused` and `SLIME_IO payload dma` only the first time each key
+occurs. To see how often an operation repeated, read the
+`SLIME_ROOT diagnostic repeats …` line just before `SLIME_GRAPH served`; a
+missing second line is not a missing operation.
+
 **A component died.**
 
 - `SLIME_GRAPH component exit task=N status=S` — a clean `exit(S)`.

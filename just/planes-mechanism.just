@@ -43,6 +43,21 @@ io_tcp_options_check: sel4_pin_check link_peer_check
 io_tcp_buffers_check: sel4_pin_check link_peer_check io_tcp_impairment_check io_tcp_options_check
     python3 scripts/check/check-sel4-io-network-plane.py --arm tcp-buffers
 
+# The root prints each per-operation clock and payload DMA diagnostic once per
+# key and counts the repeats, judged against the frames on the wire, with every
+# gate that reads those lines run first. Explicit, never part of `all`.
+[group('planes / mechanism')]
+root_diagnostic_volume_check: sel4_pin_check io_tcp_buffers_check clock_authority_check sel4_storage_check sel4_store_check sel4_rollback_check sel4_recovery_plane_check sel4_generation_check sel4_transfer_check sel4_filesystem_check replay_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm root-diagnostics
+
+# network-service wakes on the virtio-net driver's completions: one declared
+# device wait-set source in every composition that has both, judged from the
+# derived manifests and from rx-window acknowledgment latency on the wire, with
+# each changed composition's own gate run first. Explicit, never part of `all`.
+[group('planes / mechanism')]
+link_wake_check: sel4_pin_check io_tcp_buffers_check io_tcp_listener_check zenoh_external_check
+    python3 scripts/check/check-sel4-io-network-plane.py --arm link-wake
+
 # The product shell beside the network stack: seven Slisp lines typed one at a
 # time into the resident shell, a spawned numeric fetch judged against the
 # controlled peer, and refusals that leave no forbidden packet on the wire, with

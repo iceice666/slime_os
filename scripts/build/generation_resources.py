@@ -127,6 +127,7 @@ from boot_contracts import (
     WAIT_SET_HEADER,
     WAIT_SET_HEADER_BYTES,
     WAIT_SET_KIND_CALL,
+    WAIT_SET_KIND_DEVICE,
     WAIT_SET_KIND_OPERATION,
     WAIT_SET_KIND_QOS_EVENT,
     WAIT_SET_KIND_STREAM,
@@ -847,6 +848,7 @@ WAIT_SET_KIND = {
     "timer": WAIT_SET_KIND_TIMER,
     "supervision": WAIT_SET_KIND_SUPERVISION,
     "qosEvent": WAIT_SET_KIND_QOS_EVENT,
+    "device": WAIT_SET_KIND_DEVICE,
 }
 
 
@@ -948,9 +950,10 @@ def validated_wait_set(manifest: dict) -> list[tuple[bytes, int, int, int, int, 
         elif timer_badge:
             fail(f"wait set: {waiter}'s timer badge is declared as a {declaration['kind']} source")
         drain_slot = declaration.get("drainSlot")
-        if kind == WAIT_SET_KIND_TIMER:
+        # A timer and a device completion carry no payload, so neither drains.
+        if kind in (WAIT_SET_KIND_TIMER, WAIT_SET_KIND_DEVICE):
             if drain_slot is not None:
-                fail(f"wait set: {waiter}'s timer source declares a drain slot")
+                fail(f"wait set: {waiter}'s {declaration['kind']} source declares a drain slot")
             drain_slot = WAIT_SET_DRAIN_SLOT_ABSENT
         else:
             if (

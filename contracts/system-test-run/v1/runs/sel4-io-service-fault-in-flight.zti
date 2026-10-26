@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-service-fault-in-flight";
-  imageClosureIdentity = "aeb541127f4d2e8074c08e0948dd2f6929532dbc8613d5581e1a194647ee32da";
+  imageClosureIdentity = "1cdb4e95568eb293ca2134a04f5e36f4713d85fbcce409369ad77d294902835a";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

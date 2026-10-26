@@ -329,6 +329,7 @@ fn main(_: u32) {
         .as_ref()
         .map(|_| monotonic_frequency().unwrap_or_else(|_| fail(b"wait clock rate")));
     let mut coalesced = 0u64;
+    let mut device_wakes = 0u64;
 
     while resident || clients.iter().flatten().any(|client| !client.closed) {
         let mut progress = false;
@@ -700,7 +701,14 @@ fn main(_: u32) {
                 let timer = slime_rt::timer_arm(ticks).unwrap_or_else(|_| fail(b"network timer"));
                 let ready = wait.wait().unwrap_or_else(|_| fail(b"network wait"));
                 coalesced += u64::from(ready > 1);
-                while wait.next_ready().is_some() {}
+                // Every ready source is answered by the next pass over clients
+                // and the link, so the queue is only drained; a device source
+                // is counted because it is the driver's completion.
+                let mut device = false;
+                while let Some(source) = wait.next_ready() {
+                    device |= source.kind == slime_rt::wait_set::Kind::Device;
+                }
+                device_wakes += u64::from(device);
                 let cancelled = slime_rt::timer_cancel(timer);
                 if cancelled != ERR_SUCCESS
                     && !(cancelled == slime_rt::ERR_BAD_CAP
@@ -728,6 +736,13 @@ fn main(_: u32) {
             .decimal(coalesced)
             .bytes(b"\n")
             .emit();
+        if wait.declarations().device().is_some() {
+            Line::<128>::new()
+                .bytes(b"[network-service] wait device wakes=")
+                .decimal(device_wakes)
+                .bytes(b"\n")
+                .emit();
+        }
     }
     let external_frames = stack
         .as_ref()
@@ -1091,6 +1106,13 @@ fn service_wait_set(
     }
     wait.register_timer()
         .unwrap_or_else(|_| fail(b"network wait timer"));
+    // The link driver's completions, when the generation declares them as a
+    // device source on this same Notification. A generation that does not
+    // leaves link work to the idle timer.
+    if wait.declarations().device().is_some() {
+        wait.register_device()
+            .unwrap_or_else(|_| fail(b"network wait device"));
+    }
     Some(wait)
 }
 

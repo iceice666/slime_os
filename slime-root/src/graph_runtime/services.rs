@@ -1830,6 +1830,7 @@ pub(super) fn serve_instance_graph(
             "SLIME_GRAPH exhausted live={live} iterations={iterations} certified=1"
         );
     }
+    diagnostic_once::report();
     slime_root::diagnostic_println!(
         "SLIME_GRAPH served live={live} unsupported={unsupported} buffers={buffers_served} windows={} tasks={}",
         windows.len(),
@@ -1924,6 +1925,7 @@ pub(super) fn serve_instance_graph(
 use slime_proto::syscall_abi::{
     GRANT_RECORD_BYTES as SPAWN_GRANT_RECORD_BYTES, GRANT_RIGHTS_OFFSET, GRANT_SLOT_OFFSET,
 };
+mod diagnostic_once;
 pub(super) mod io_resource;
 pub(super) use io_resource::{IoResourceService, install_driver};
 use io_resource::{revoke_buffer_lease, serve_io_resource};

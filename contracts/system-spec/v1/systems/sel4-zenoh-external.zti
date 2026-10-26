@@ -71,6 +71,7 @@
     { grant = "io-link-rx-completion-ready"; holder = "network-service"; role = "wait"; slot = 3; };
     { grant = "io-link-state-changed"; holder = "virtio-net-driver"; role = "signal"; slot = 4; };
     { grant = "io-link-state-changed"; holder = "network-service"; role = "wait"; slot = 4; };
+    { grant = "zenoh-network-request"; holder = "virtio-net-driver"; role = "signal"; slot = 5; };
     { grant = "zenoh-network-request"; holder = "ros2-demo-publisher"; role = "signal"; slot = 0; };
     { grant = "zenoh-network-request"; holder = "network-service"; role = "wait"; slot = 5; };
     { grant = "zenoh-publisher-done"; holder = "network-service"; role = "signal"; slot = 6; };
@@ -103,6 +104,7 @@
   waitSet = [
     { waiter = "network-service"; notification = "zenoh-network-request"; badgeBit = 0; kind = "stream"; drainSlot = 2; };
     { waiter = "network-service"; notification = "zenoh-network-request"; badgeBit = 1; kind = "timer"; };
+    { waiter = "network-service"; notification = "zenoh-network-request"; badgeBit = 5; kind = "device"; };
     { waiter = "ros2-demo-publisher"; notification = "zenoh-publisher-done"; badgeBit = 6; kind = "stream"; drainSlot = 0; };
     { waiter = "ros2-demo-publisher"; notification = "zenoh-publisher-done"; badgeBit = 3; kind = "timer"; };
   ];

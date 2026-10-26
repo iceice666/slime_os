@@ -152,6 +152,11 @@ impl WaitSet {
         Ok(self.registry.register_timer()?)
     }
 
+    /// Register this component's declared device completion source.
+    pub fn register_device(&mut self) -> Result<Source, WaitError> {
+        Ok(self.registry.register_device()?)
+    }
+
     /// Remove a registered source, dropping its queued readiness.
     pub fn unregister(&mut self, badge: u64) -> bool {
         self.registry.unregister(badge)

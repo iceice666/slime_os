@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-private-memory-cycles";
-  imageClosureIdentity = "1a089d26e66a10e7a8c2cdde5a0754537ee3e5f34bdabdf2a35d5e366ab71512";
+  imageClosureIdentity = "ec684bb57474a9ece615603e0ad70e116ca29ed96fd5eef4f1483400289f826c";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

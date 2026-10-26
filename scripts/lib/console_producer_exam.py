@@ -56,6 +56,7 @@ _EXCLUDED_MAIN_OUTPUTS = (
     'b"[network-service] tcp listener refusals unadmitted="',
     'b"[network-service] tcp peaks rx_bytes="',
     'b"[network-service] application connection handles live="',
+    'b"[network-service] wait device wakes="',
 )
 
 

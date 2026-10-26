@@ -231,17 +231,6 @@ ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
 # Any implementation artifact appearing requires removing the exclusion first.
 # Rows are (canonical item UUID, checker filename, closure name, artifact paths).
 PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
-    "sel4-io-tcp-buffers": (
-        "01a1638d-23a4-7f36-ae0e-7bf1f522f40f",
-        "check-sel4-io-network-plane.py",
-        "sel4-io-tcp-buffers",
-        (
-            "contracts/generation-manifest/v1/compositions/sel4-io-tcp-buffers.zti",
-            "contracts/system-image-closure/v2/closures/sel4-io-tcp-buffers.zti",
-            "contracts/system-spec/v1/systems/sel4-io-tcp-buffers.zti",
-            "contracts/system-test-run/v1/runs/sel4-io-tcp-buffers.zti",
-        ),
-    ),
     "sel4-serial": (
         "01a10778-adf1-7d64-a4e8-851e425c03e9",
         "check-sel4-component-graph.py",

@@ -400,6 +400,76 @@ def exam_lines(output: str) -> list[str]:
     return [match.group(1).strip() for line in output.splitlines() if (match := EXAM_LINE.search(line))]
 
 
+# The four slices judged by `run_tests` keep every marker, so a bare `[zenoh-exam]`, or one with text glued to it,
+# reaches the judge as a line it does not recognise. `exam_lines` drops those, and the other slices still use it.
+EXAM_MARKER = re.compile(r"\[zenoh-exam\](.*)$")
+
+
+def exam_lines_strict(output: str) -> list[str]:
+    """Every marker line, with the marker kept in front of any text that is not set off by a space.
+
+    A marker followed by a space gives its text. A bare marker, or text glued to it or set off by another
+    character, gives a line that starts with the marker, which no judge recognises, so the delimiter is enforced
+    and a payload glued to the marker cannot pass as a valid line.
+    """
+    lines = []
+    for line in output.splitlines():
+        if (match := EXAM_MARKER.search(line)) is None:
+            continue
+        text = match.group(1)
+        lines.append(text.strip() if text.startswith(" ") else "[zenoh-exam]" + text)
+    return lines
+
+
+# The shape of every line a Rust slice may print, by its word: the verdict and the number of fields that
+# verdict carries, the word included. The encoder and the session slice share one cargo filter, so a run
+# of either prints the lines of both words.
+LINE_SHAPES: dict[str, dict[str, int]] = {
+    "encode": {"ok": 4, "refused": 3},
+    "session": {"ok": 3, "refused": 3},
+    "cdr": {"ok": 5, "refused": 3},
+    "link": {"ok": 3, "refused": 3},
+}
+RUN_WORDS: dict[str, tuple[str, ...]] = {
+    "encoder": ("encode", "session"),
+    "session": ("encode", "session"),
+    "cdr": ("cdr",),
+    "transport": ("link",),
+}
+
+
+def known_names(word: str, verdict: str) -> set[str]:
+    """The names an honest run may print for a word and verdict. A `cdr ok` row is judged by its own judge."""
+    if word == "encode":
+        return {name for name, _hexed, _ in reference()} if verdict == "ok" else set(ENCODE_REFUSALS)
+    if word == "session":
+        return set(SESSION_SCENARIOS) if verdict == "ok" else set(SESSION_REFUSALS)
+    if word == "link":
+        return set(LINK_SCENARIOS) if verdict == "ok" else set(LINK_REFUSALS)
+    return set(CDR_REFUSALS) if verdict == "refused" else set()
+
+
+def require_consumed(slice_name: str, lines: list[str]) -> None:
+    """Refuse any exam line that no judge of this run reads, so an invented or malformed line cannot pass.
+
+    The encoder and session slices share one cargo filter, so each run prints the lines of both words and only one
+    judge reads each word. A line of the other word is checked here against the names that word may print. A
+    repeated line is refused for every word.
+    """
+    allowed = RUN_WORDS[slice_name]
+    repeated = sorted({line for line in lines if lines.count(line) > 1})
+    if repeated:
+        fail(f"{slice_name}: exam line repeated: {repeated[0]!r}")
+    for line in lines:
+        fields = line.split()
+        shape = LINE_SHAPES[fields[0]] if fields and fields[0] in allowed else {}
+        if len(fields) < 2 or shape.get(fields[1]) != len(fields):
+            fail(f"{slice_name}: unrecognised exam line {line!r}")
+        if fields[0] != "cdr" or fields[1] == "refused":
+            if fields[2] not in known_names(fields[0], fields[1]):
+                fail(f"{slice_name}: exam line {line!r} names something no honest run prints")
+
+
 def exactly(label: str, wanted: tuple[str, ...], seen: list[str]) -> None:
     duplicated = sorted({name for name in seen if seen.count(name) > 1})
     if duplicated:
@@ -418,6 +488,14 @@ def names(lines: list[str], word: str, verdict: str) -> list[str]:
 
 
 def judge_encoder(lines: list[str]) -> tuple[int, int]:
+    """The encoder's cases and refusals. The shared cargo filter also prints the session rows, which are judged too."""
+    require_consumed("encoder", lines)
+    result = encode_rows(lines)
+    named_rows("session")(lines)
+    return result
+
+
+def encode_rows(lines: list[str]) -> tuple[int, int]:
     golden = {name: hexed for name, hexed, _ in reference()}
     produced: dict[str, str] = {}
     for line in lines:
@@ -435,25 +513,42 @@ def judge_encoder(lines: list[str]) -> tuple[int, int]:
     return len(produced), len(refused)
 
 
-def judge_named(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
+def named_rows(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
     _, scenarios, refusals, word = RUST[slice_name]
 
-    def judge(lines: list[str]) -> tuple[int, int]:
+    def rows(lines: list[str]) -> tuple[int, int]:
         done = names(lines, word, "ok")
         refused = names(lines, word, "refused")
         exactly(f"{slice_name} scenarios", scenarios, done)
         exactly(f"{slice_name} refusals", refusals, refused)
         return len(done), len(refused)
 
+    return rows
+
+
+def judge_named(slice_name: str) -> Callable[[list[str]], tuple[int, int]]:
+    rows = named_rows(slice_name)
+
+    def judge(lines: list[str]) -> tuple[int, int]:
+        require_consumed(slice_name, lines)
+        result = rows(lines)
+        if slice_name == "session":
+            # The shared cargo filter also prints the encoder rows, so their bytes are judged in this run too.
+            encode_rows(lines)
+        return result
+
     return judge
 
 
 def judge_cdr(lines: list[str]) -> tuple[int, int]:
+    require_consumed("cdr", lines)
     wanted = demo_samples()
     produced: dict[int, tuple[int, str]] = {}
     for line in lines:
         fields = line.split()
-        if len(fields) == 5 and fields[:2] == ["cdr", "ok"] and fields[2].isdigit() and fields[3].isdigit():
+        if len(fields) == 5 and fields[:2] == ["cdr", "ok"]:
+            if not (fields[2].isdigit() and fields[3].isdigit()):
+                fail(f"CDR sample row {line!r} does not carry a numeric sequence and value")
             seq = int(fields[2])
             if seq in produced:
                 fail(f"CDR reported sample {seq} twice")
@@ -479,8 +574,11 @@ JUDGES: dict[str, Callable[[list[str]], tuple[int, int]]] = {
 def good_lines(slice_name: str) -> list[str]:
     _, scenarios, refusals, word = RUST[slice_name]
     refused = [f"{word} refused {c}" for c in refusals]
-    if slice_name == "encoder":
-        return [f"encode ok {n} {h}" for n, h, _ in reference()] + refused
+    if slice_name in ("encoder", "session"):
+        # One cargo filter serves both slices, so a real run of either prints the rows of both words.
+        encode = [f"encode ok {n} {h}" for n, h, _ in reference()] + [f"encode refused {c}" for c in ENCODE_REFUSALS]
+        session = [f"session ok {s}" for s in SESSION_SCENARIOS] + [f"session refused {c}" for c in SESSION_REFUSALS]
+        return encode + session
     if slice_name == "cdr":
         return [f"cdr ok {seq} {value} {hexed}" for seq, (value, hexed) in demo_samples().items()] + refused
     return [f"{word} ok {s}" for s in scenarios] + refused
@@ -499,8 +597,49 @@ def controls(slice_name: str) -> int:
         ("a duplicated line", good + [good[0]]),
         ("an unknown refusal", good + [f"{word} refused invented"]),
         ("every refusal removed", [line for line in good if " refused " not in line]),
+        ("an unrecognised line", good + ["invented line"]),
+        ("a line of an unknown word", good + ["bogus ok invented"]),
+        ("a known word with an unknown verdict", good + [f"{word} bogus invented"]),
+        ("a known word and verdict with an unknown field count", good + [f"{word} refused invented extra"]),
+        ("an ok line with too few fields", good + [f"{word} ok"]),
+        ("an ok line with too many fields", good + [f"{word} ok invented a b c d"]),
+        ("a refused line that names no honest control", good + [f"{word} refused invented"]),
     ]
-    if slice_name in ("encoder", "cdr"):
+    # These go through the serialized stdout and `exam_lines_strict`, the path a real run takes, so a marker that
+    # carries no text, or text glued to it, reaches the judge instead of being dropped on the way.
+    stdout = "".join(f"[zenoh-exam] {line}\n" for line in good)
+    for label, tail in (
+        ("a bare exam marker", "[zenoh-exam]\n"),
+        ("an exam marker followed only by spaces", "[zenoh-exam]   \n"),
+        ("an exam marker with text glued to it", "[zenoh-exam]invented\n"),
+    ):
+        mutations.append((label, exam_lines_strict(stdout + tail)))
+    # A valid payload with the delimiter removed or replaced must fail too, not only an unknown word glued on.
+    mutations.append(("every marker glued to its payload", exam_lines_strict("".join(f"[zenoh-exam]{line}\n" for line in good))))
+    mutations.append(("one marker glued to its payload", exam_lines_strict(f"[zenoh-exam]{good[0]}\n" + "".join(f"[zenoh-exam] {line}\n" for line in good[1:]))))
+    mutations.append(("a tab after the marker", exam_lines_strict("".join(f"[zenoh-exam]\t{line}\n" for line in good))))
+    if slice_name in ("encoder", "session"):
+        # The two slices share one cargo filter, so a real run prints the other word's lines too.
+        other, honest = ("session", f"session ok {SESSION_SCENARIOS[0]}") if word == "encode" else ("encode", f"encode refused {ENCODE_REFUSALS[0]}")
+        mutations.append(("a line of the shared word that names nothing honest", good + [f"{other} refused invented"]))
+        mutations.append(("a repeated line of the shared word", good + [honest, honest]))
+        # Both runs judge the bytes of the encode rows and the names of the session rows, whichever slice was asked for.
+        encode_at = [i for i, line in enumerate(good) if line.startswith("encode ok ")]
+        first, second = (good[i].split() for i in encode_at[:2])
+        swapped = list(good)
+        swapped[encode_at[0]] = " ".join([*first[:3], second[3]])
+        swapped[encode_at[1]] = " ".join([*second[:3], first[3]])
+        mutations.append(("two encode batches with their bytes swapped", swapped))
+        mutations.append(("an encode batch reported again with wrong bytes", good + [f"encode ok {first[2]} 00"]))
+        mutations.append(("an encode batch no honest run prints", good + ["encode ok invented-batch 00"]))
+        mutations.append(("a session scenario reported again", good + [f"session ok {SESSION_SCENARIOS[1]}"]))
+        mutations.append(("every encode row removed", [line for line in good if not line.startswith("encode ")]))
+        mutations.append(("every session row removed", [line for line in good if not line.startswith("session ")]))
+    if slice_name == "cdr":
+        mutations.append(("a sample with a non-numeric sequence and value", good + ["cdr ok bogus bogus 00"]))
+        mutations.append(("a sample with a non-numeric value", good + ["cdr ok 1 bogus 00"]))
+        mutations.append(("a sample with a non-numeric sequence", good + ["cdr ok bogus 5 00"]))
+    if slice_name in ("encoder", "session", "cdr"):
         at = next(i for i, line in enumerate(good) if " ok " in line)
         fields = good[at].split()
         flipped = fields[-1][:-1] + ("0" if fields[-1][-1] != "0" else "1")
@@ -533,7 +672,7 @@ def run_tests(slice_name: str) -> list[str]:
         status != "ok" or int(failed) for status, _, failed in results
     ):
         fail(f"no passing test result for filter {filter_!r}")
-    return exam_lines(result.stdout)
+    return exam_lines_strict(result.stdout)
 
 
 def keyed(lines: list[str], word: str) -> dict[str, str]:
