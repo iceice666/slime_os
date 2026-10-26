@@ -62,7 +62,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # that every other arm vetoes, so a synthetic transcript carrying both would
     # contradict itself. It is controlled by `check_private_adaptive_controls`.
     ("sel4_private_memory_plane", "check/check-sel4-private-memory-plane.py", 161),
-    ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 19),
+    ("sel4_clock_authority_plane", "check/check-sel4-clock-authority-plane.py", 20),
     # The device-present boot only; the device-less boot's chains contradict its
     # hardware draws and are controlled by the gate's own mutations.
     ("sel4_entropy_plane", "check/check-sel4-entropy-plane.py", 17),

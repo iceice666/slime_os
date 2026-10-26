@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-component-graph";
-  imageClosureIdentity = "0c9a566990c5d6a58fc420c809d4ea25d1956314924111544ecaf2f9bebc7789";
+  imageClosureIdentity = "71617780898e42c4fb8dccde6181b2873552861483e3089fd2326b0c60a136e4";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

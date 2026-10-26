@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""C9.1 gate: declared clock authority is independent, bounded, and deny-by-default."""
+"""C9.1 gate: timer and simulated-time authority is independent, bounded and deny-by-default.
+
+Reading the monotonic counter and its rate is ambient: no instance declares it,
+every probe reads the counter itself, and the root serves no read. The judge
+for that, and for the retired read right in sources, bindings and the builder,
+is `scripts/lib/clock_direct.py`; `--arm direct-static` runs its static and
+builder judges without booting.
+"""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -14,6 +22,7 @@ from pathlib import Path
 from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import clock_direct  # noqa: E402
 from closure_image import ClosureImageError, build as build_closure_image  # noqa: E402
 
 from harness import GENERATION_COMPOSITIONS, sha256_file  # noqa: E402
@@ -23,6 +32,7 @@ from zutai_cli import STDLIB, binary  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "sel4" / "pins.toml"
 FIXTURE = GENERATION_COMPOSITIONS / "sel4-clock-authority.zti"
+SYSTEM = ROOT / "contracts" / "system-spec" / "v1" / "systems" / "sel4-clock-authority.zti"
 # The closure identity names the build's inputs and is re-resolved from repository
 # state before the build, so stale input is refused instead of silently changing the image.
 CLOSURE = "sel4-clock-authority"
@@ -45,7 +55,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "deny by default",
         (
             r"SLIME_CLOCK malformed task=\d+ label=44 words=1 expected=Some\(0\)",
-            r"\[clock-probe:denied\] monotonic=-1 timer=-1 sim-read=-1 sim-advance=-1 malformed=-4",
+            r"\[clock-probe:denied\] read=1 rate=1 timer=-1 sim-read=-1 sim-advance=-1 malformed=-4",
             r"SLIME_GRAPH component exit task=\d+ status=0",
         ),
     ),
@@ -59,14 +69,15 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 EXPECTED_UNORDERED: tuple[str, ...] = (
-    r"SLIME_CLOCK authority task=(\d+) instance=clock-monotonic flags=0x4000000 timers=0 badge=0x0",
+    r"SLIME_CLOCK authority task=(\d+) instance=clock-monotonic flags=0x0 timers=0 badge=0x0",
     r"SLIME_CLOCK authority task=(\d+) instance=clock-simulated-advancer flags=0x20000000 timers=0 badge=0x0",
     r"SLIME_CLOCK authority task=(\d+) instance=clock-simulated-reader flags=0x10000000 timers=0 badge=0x0",
     r"SLIME_CLOCK authority task=(\d+) instance=clock-timer flags=0x8000000 timers=2 badge=0x200",
     r"SLIME_CLOCK authority task=(\d+) instance=clock-denied flags=0x0 timers=0 badge=0x0",
-    r"\[clock-probe:monotonic\] first=(\d+) second=(\d+)",
+    r"\[clock-probe:monotonic\] first=(\d+) second=(\d+) rate=(\d+)",
     r"\[clock-probe:sim-read\] first=(\d+) second=(\d+)",
     r"\[clock-probe:sim-advance\] before=(\d+) after=(\d+)",
+    r"\[clock-probe:timer\] domain armed=(\d+) delay=(\d+) woke=(\d+)",
 )
 
 
@@ -178,7 +189,6 @@ def check_fixture_shape() -> None:
         fail("fixture clockAuthority is not a list")
     holders = {entry["holder"] for entry in authorities}
     expected_holders = {
-        "clock-monotonic",
         "clock-timer",
         "clock-simulated-reader",
         "clock-simulated-advancer",
@@ -198,14 +208,17 @@ def check_fixture_shape() -> None:
             "fixture does not declare the timer quota, badge, and notification exercised"
         )
     instances = {entry["name"] for entry in manifest["instances"]}
-    if "clock-denied" not in instances or "clock-denied" in holders:
-        fail("fixture has no clock instance omitted from the authority declaration")
+    for reader in ("clock-monotonic", "clock-denied"):
+        if reader not in instances or reader in holders:
+            fail(f"fixture has no instance {reader} omitted from the authority declaration")
+    if any(clock_direct.RETIRED_FIELD in entry for entry in authorities):
+        fail(f"fixture clockAuthority still declares {clock_direct.RETIRED_FIELD}")
 
 
 def check_semantics(transcript: str) -> None:
     tasks: dict[str, str] = {}
     for instance, expected_flags, expected_timers, expected_badge in (
-        ("clock-monotonic", "4000000", "0", "0"),
+        ("clock-monotonic", "0", "0", "0"),
         ("clock-simulated-advancer", "20000000", "0", "0"),
         ("clock-simulated-reader", "10000000", "0", "0"),
         ("clock-timer", "8000000", "2", "200"),
@@ -221,7 +234,6 @@ def check_semantics(transcript: str) -> None:
         tasks[instance] = installed.group(1)
 
     for instance, label, result_class in (
-        ("clock-monotonic", 44, "served"),
         ("clock-timer", 45, "served"),
         ("clock-simulated-reader", 47, "served"),
         ("clock-simulated-advancer", 48, "served"),
@@ -232,7 +244,7 @@ def check_semantics(transcript: str) -> None:
             fail(f"root did not serve {instance}'s declared operation")
 
     denied_task = tasks["clock-denied"]
-    for label in (44, 45, 47, 48):
+    for label in (45, 47, 48):
         if re.search(
             rf"SLIME_GRAPH service refused task={denied_task} label={label} class=undeclared",
             transcript,
@@ -255,16 +267,72 @@ def check_semantics(transcript: str) -> None:
 
     monotonic = re.search(EXPECTED_UNORDERED[5], transcript)
     if monotonic is None or int(monotonic.group(2)) <= int(monotonic.group(1)):
-        fail("monotonic holder did not observe a strictly advancing clock")
+        fail("monotonic reader did not observe a strictly advancing clock")
+    if int(monotonic.group(3)) == 0:
+        fail("monotonic reader read a zero counter rate")
     simulated = re.search(EXPECTED_UNORDERED[6], transcript)
     if simulated is None or simulated.group(1) != simulated.group(2):
         fail("simulated clock advanced without its advancer")
     advance = re.search(EXPECTED_UNORDERED[7], transcript)
     if advance is None or int(advance.group(2)) - int(advance.group(1)) != 7:
         fail("simulated advancer did not advance by exactly seven")
+    try:
+        clock_direct.judge_transcript(transcript)
+    except clock_direct.JudgeError as error:
+        fail(f"ambient clock reads: {error}")
+
+
+def run_controls() -> int:
+    try:
+        return clock_direct.controls()
+    except clock_direct.JudgeError as error:
+        fail(f"ambient clock read controls: {error}")
+
+
+def tracked_texts() -> dict[str, str]:
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", *clock_direct.FIELD_FREE_PATHS, clock_direct.RIGHTS_VOCABULARY],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode()
+    return {path: (ROOT / path).read_text(encoding="utf-8") for path in listed.split("\0") if path}
+
+
+def check_direct_static() -> None:
+    from harness import load_script
+    from system_spec import SystemSpecError, compile_system, derive_manifest
+
+    import boot_contracts
+
+    try:
+        examined = clock_direct.judge_static(tracked_texts(), vars(boot_contracts))
+    except clock_direct.JudgeError as error:
+        fail(f"retired read right: {error}")
+    try:
+        manifest = derive_manifest(compile_system(SYSTEM))
+    except SystemSpecError as error:
+        fail(f"{SYSTEM.relative_to(ROOT)}: {error}")
+    builder = load_script("clock_direct_builder", "build/build-generation.py")
+    try:
+        accepted, refused = clock_direct.judge_builder(builder.build_clock_authority, manifest)
+    except clock_direct.JudgeError as error:
+        fail(f"clock-authority builder: {error}")
+    print(
+        f"seL4 clock-authority direct-read check: {examined} sources name no read right; "
+        f"the builder accepted {accepted} table and refused {refused} retired-field or empty rows"
+    )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--arm", choices=("plane", "direct-static"), default="plane")
+    arm = parser.parse_args().arm
+    refused = run_controls()
+    print(f"seL4 clock-authority plane check: {refused} ambient-read controls refused")
+    if arm == "direct-static":
+        check_direct_static()
+        return
     check_fixture_shape()
     build_image()
     pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
@@ -278,7 +346,8 @@ def main() -> None:
             fail(f"missing order-independent marker: {pattern}")
     check_semantics(transcript)
     print(
-        "seL4 clock-authority plane check: independent clocks, bounded timers, "
+        "seL4 clock-authority plane check: ambient counter reads in the root timer's "
+        "domain, independent timer and simulated authority, bounded timers, "
         "cancellation, expiry, and denial observed"
     )
 
