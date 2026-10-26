@@ -445,6 +445,12 @@
     };
     {
       grant = "zenoh-network-request";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 5;
+    };
+    {
+      grant = "zenoh-network-request";
       holder = "ros2-demo-publisher";
       role = "signal";
       slot = 0;
@@ -574,6 +580,12 @@
     {
       badgeBit = 1;
       kind = "timer";
+      notification = "zenoh-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 5;
+      kind = "device";
       notification = "zenoh-network-request";
       waiter = "network-service";
     };

@@ -500,6 +500,12 @@
     };
     {
       grant = "buffers-network-request";
+      holder = "virtio-net-driver";
+      role = "signal";
+      slot = 5;
+    };
+    {
+      grant = "buffers-network-request";
       holder = "buffers-large";
       role = "signal";
       slot = 0;
@@ -804,6 +810,12 @@
     {
       badgeBit = 7;
       kind = "timer";
+      notification = "buffers-network-request";
+      waiter = "network-service";
+    };
+    {
+      badgeBit = 5;
+      kind = "device";
       notification = "buffers-network-request";
       waiter = "network-service";
     };

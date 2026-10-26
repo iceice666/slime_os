@@ -10,6 +10,7 @@
 //! virtio-mmio transport, two bounded queues, and the lease/charge discipline
 //! that makes a device-owned buffer safe.
 
+use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use slime_components::virtio_mmio::{
     DESC_F_WRITE, MediatedMmio, observe_used, publish_available, read_u32, received_payload_len,
     used_descriptor_slot, used_ring_progress, write_descriptor, write_u16,
@@ -199,7 +200,16 @@ struct Driver<'a> {
     first_tx_reported: bool,
 }
 
+/// The service's own wait Notification, when the generation binds this driver
+/// to it as a `device` wait-set source: the fourth signal binding by slot, after
+/// the TX completion, RX completion and state-change edges. `u32::MAX` when the
+/// generation declares none, as in compositions whose service polls.
+static SERVICE_WAKE: AtomicU32 = AtomicU32::new(u32::MAX);
+
 fn main(_startup_arg: u32) {
+    if let Ok(slot) = resolve_binding(b"notification:@3+signal") {
+        SERVICE_WAKE.store(slot, Relaxed);
+    }
     let tx_request_ready = binding(b"notification:io-link-tx-request-ready+wait");
     let rx_request_ready = binding(b"notification:io-link-rx-request-ready+wait");
     let tx_completion_ready = binding(b"notification:io-link-tx-completion-ready+signal");
@@ -1006,9 +1016,16 @@ fn send_ready() {
 fn binding(name: &[u8]) -> u32 {
     resolve_binding(name).unwrap_or_else(|_| fail(b"binding"))
 }
+/// Signal one completion or state edge, and wake the service's wait set when
+/// it declares this driver as a device source: every edge this driver signals
+/// is work the service must look at.
 fn signal(slot: u32) {
     if notification_signal(slot) != ERR_SUCCESS {
         fail(b"signal");
+    }
+    let wake = SERVICE_WAKE.load(Relaxed);
+    if wake != u32::MAX && notification_signal(wake) != ERR_SUCCESS {
+        fail(b"service wake signal");
     }
 }
 fn write_number(prefix: &[u8], mut value: u64) {

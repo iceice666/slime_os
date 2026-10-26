@@ -62,6 +62,10 @@ pub enum SourceKind {
     Supervision,
     /// A QoS event edge — deadline, liveliness, or lifespan.
     QosEvent,
+    /// A driver's completion on a device the waiter serves. Signalled by a
+    /// declared peer binding, and like a timer it names no slot: the waiter
+    /// reads the device state it already owns.
+    Device,
 }
 
 impl SourceKind {
@@ -74,6 +78,7 @@ impl SourceKind {
             Self::Timer => KIND_TIMER,
             Self::Supervision => KIND_SUPERVISION,
             Self::QosEvent => KIND_QOS_EVENT,
+            Self::Device => KIND_DEVICE,
         }
     }
 
@@ -87,17 +92,19 @@ impl SourceKind {
             KIND_TIMER => Self::Timer,
             KIND_SUPERVISION => Self::Supervision,
             KIND_QOS_EVENT => Self::QosEvent,
+            KIND_DEVICE => Self::Device,
             _ => return None,
         })
     }
 
     /// Whether a source of this kind has an endpoint or handle to drain.
     ///
-    /// Only a timer does not. Stated as a predicate rather than left to each
-    /// reader's `match`, because the resource's own validity depends on it: a
-    /// timer entry carrying a slot, or any other kind missing one, is refused.
+    /// A timer and a device completion do not. Stated as a predicate rather
+    /// than left to each reader's `match`, because the resource's own validity
+    /// depends on it: a timer or device entry carrying a slot, or any other kind
+    /// missing one, is refused.
     pub const fn drains(self) -> bool {
-        !matches!(self, Self::Timer)
+        !matches!(self, Self::Timer | Self::Device)
     }
 }
 
@@ -402,11 +409,31 @@ mod tests {
         assert_eq!(decoded.entry(0).unwrap().kind, SourceKind::Timer);
     }
 
+    /// A device completion names no drain slot, like a timer, and is refused
+    /// with one. A version 1 resource is refused whole.
+    #[test]
+    fn a_device_source_names_no_slot_and_version_one_is_refused() {
+        let device = encoded(&[entry("w", 1 << 5, KIND_DEVICE, DRAIN_SLOT_ABSENT)]);
+        let decoded = WaitSet::decode(&device).unwrap();
+        assert_eq!(decoded.entry(0).unwrap().kind, SourceKind::Device);
+        assert_eq!(decoded.entry(0).unwrap().drain_slot, None);
+        assert!(matches!(
+            WaitSet::decode(&encoded(&[entry("w", 1 << 5, KIND_DEVICE, 3)])),
+            Err(DecodeError::BadDrainSlot)
+        ));
+        let mut version_one = encoded(&[entry("w", 1, KIND_STREAM, 1)]);
+        version_one[8..12].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            WaitSet::decode(&version_one),
+            Err(DecodeError::UnsupportedVersion)
+        ));
+    }
+
     /// The vocabulary is closed: an id this build does not declare is a
     /// generation it cannot honour, not a source to skip.
     #[test]
     fn an_undeclared_kind_is_refused() {
-        let bytes = encoded(&[entry("w", 1, KIND_QOS_EVENT + 1, 1)]);
+        let bytes = encoded(&[entry("w", 1, KIND_DEVICE + 1, 1)]);
         assert!(matches!(
             WaitSet::decode(&bytes),
             Err(DecodeError::UnknownKind)
