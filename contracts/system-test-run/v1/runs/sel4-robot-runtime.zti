@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-robot-runtime";
-  imageClosureIdentity = "db7104b371370ba39d07564b39af6d3532d68bd85ad7f8d562c2c7a135260191";
+  imageClosureIdentity = "93c366da85705bd5721391704f5e3d0d543cabc9b749d59db43603081b347675";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
