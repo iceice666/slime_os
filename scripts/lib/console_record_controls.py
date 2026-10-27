@@ -47,9 +47,30 @@ _ADDITIONAL_LOCAL = (
 )
 
 
+# Frozen sel4-io-local buffer declarations: each of the two loopback
+# applications declares 2048-byte receive and transmit buffers, both backends
+# hold four sockets of that size, and one session's two ends each open one
+# socket. The accepting end's local port is the declared 7447; the connecting
+# end's is the stack's ephemeral choice and is only required to be nonzero.
+# Kept apart from `_ADDITIONAL_LOCAL`, whose positions the order checks name.
+_BUFFER_LOCAL = (
+    (r"\[network-service\] tcp buffers holder=unnamed rx_bytes=2048 tx_bytes=2048", 2),
+    (r"\[network-service\] tcp pool backend=external sockets=4 rx_bytes=2048 tx_bytes=2048", 1),
+    (r"\[network-service\] tcp pool backend=loopback sockets=4 rx_bytes=2048 tx_bytes=2048", 1),
+    (
+        r"\[network-service\] tcp open holder=unnamed socket=0 local_port=7447 rx_bytes=2048 tx_bytes=2048",
+        1,
+    ),
+    (
+        r"\[network-service\] tcp open holder=unnamed socket=1 local_port=[1-9]\d* rx_bytes=2048 tx_bytes=2048",
+        1,
+    ),
+)
+
+
 def additional_local_patterns() -> tuple[tuple[str, int], ...]:
     """Independent normal-path families and exact composition multiplicities."""
-    return _ADDITIONAL_LOCAL
+    return _ADDITIONAL_LOCAL + _BUFFER_LOCAL
 
 
 def local_control_transcript(gate: object, literal_for: Callable[[str], str]) -> str:
@@ -58,13 +79,15 @@ def local_control_transcript(gate: object, literal_for: Callable[[str], str]) ->
     startup = [
         literal_for(pattern) for pattern, count in _ADDITIONAL_LOCAL[:5] for _ in range(count)
     ]
+    startup += [literal_for(pattern) for pattern, count in _BUFFER_LOCAL[:3] for _ in range(count)]
     lines[1:1] = startup
     wait = next(
         index for index, line in enumerate(lines) if line.startswith("[network-service] wait ")
     )
     # Accepted-close/listener-close are service events before session teardown;
     # each byte report immediately precedes its own buffer-release report.
-    tail = [literal_for(_ADDITIONAL_LOCAL[index][0]) for index in (5, 6, 7, 9, 8, 9)]
+    tail = [literal_for(pattern) for pattern, _ in _BUFFER_LOCAL[3:]]
+    tail += [literal_for(_ADDITIONAL_LOCAL[index][0]) for index in (5, 6, 7, 9, 8, 9)]
     lines[wait:wait] = tail
     frames = next(
         index
@@ -122,7 +145,7 @@ def validate_local(transcript: str, gate: object) -> None:
     original = tuple(
         pattern for label, chain in chains if label != "local admission" for pattern in chain
     )
-    requirements = tuple((pattern, 1) for pattern in original) + _ADDITIONAL_LOCAL
+    requirements = tuple((pattern, 1) for pattern in original) + _ADDITIONAL_LOCAL + _BUFFER_LOCAL
     patterns = tuple(pattern for pattern, _ in requirements)
     counts = [0] * len(patterns)
     for line in transcript.split("\n"):
@@ -172,6 +195,13 @@ def validate_local(transcript: str, gate: object) -> None:
     for pattern, _ in _ADDITIONAL_LOCAL[5:10]:
         if not all(after_startup < position < before_cleanup for position in positions[pattern]):
             _reject("local session records must be between interface and cleanup")
+    incarnation = positions[_ADDITIONAL_LOCAL[2][0]][0]
+    for pattern, _ in _BUFFER_LOCAL[:3]:
+        if not all(incarnation < position < after_startup for position in positions[pattern]):
+            _reject("local buffer and pool records must be between incarnation and interface")
+    for pattern, _ in _BUFFER_LOCAL[3:]:
+        if not all(after_startup < position < before_cleanup for position in positions[pattern]):
+            _reject("local socket open records must be between interface and cleanup")
     if positions[_ADDITIONAL_LOCAL[5][0]][0] >= positions[_ADDITIONAL_LOCAL[6][0]][0]:
         _reject("local accepted close must precede its listener close")
     if positions[_ADDITIONAL_LOCAL[6][0]][0] >= positions[_ADDITIONAL_LOCAL[8][0]][0]:
@@ -888,6 +918,27 @@ def check_controls(root: Path, gate: object, literal_for: Callable[[str], str]) 
         first, second = (reordered.index(literal_for(pattern)) for pattern in (before, after))
         reordered[first], reordered[second] = reordered[second], reordered[first]
         refuse("reordered additional service startup", "\n".join(reordered) + "\n")
+    # Each buffer, pool and socket-open record moved across each boundary its
+    # order check names, keeping every payload and multiplicity.
+    interface = literal_for(gate.LOCAL_CHAINS[1][1][0])
+    cleanup = literal_for(gate.LOCAL_CHAINS[1][1][1])
+    incarnation = literal_for(_ADDITIONAL_LOCAL[2][0])
+
+    def moved(record: str, anchor: str, after: bool) -> str:
+        reordered = lines.copy()
+        reordered.remove(record)
+        position = reordered.index(anchor) + (1 if after else 0)
+        reordered.insert(position, record)
+        return "\n".join(reordered) + "\n"
+
+    for pattern, _ in _BUFFER_LOCAL[:3]:
+        record = literal_for(pattern)
+        refuse(f"startup record before incarnation: {pattern}", moved(record, incarnation, False))
+        refuse(f"startup record after interface: {pattern}", moved(record, interface, True))
+    for pattern, _ in _BUFFER_LOCAL[3:]:
+        record = literal_for(pattern)
+        refuse(f"socket open before interface: {pattern}", moved(record, interface, False))
+        refuse(f"socket open after cleanup: {pattern}", moved(record, cleanup, True))
     audit_count = _audit_controls(root)
     print(
         f"seL4 gate control check: console records rejected {evaluated} mutations; source route audit rejected {audit_count} independent fixtures (no product qualification)"
