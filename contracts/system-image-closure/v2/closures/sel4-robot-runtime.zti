@@ -47,7 +47,7 @@
       artifact = {
         path = "components/applications/robot-actuator";
         kind = "tree";
-        identity = "8bfb1beb1af1a17e9e17b6e4011efe92dc0ff2473e13cae3277f2fbbd034b629";
+        identity = "ac40c562a447be26183b87cef45050ac5910494caf061462b0ecb8e12027719a";
       };
       identity = "848ff8380f22f5feef1b96b3fb9afb15f0a2b7ca34d005364520e00f4dd2cb2a";
       buildProfile = "default";
@@ -80,7 +80,7 @@
       artifact = {
         path = "components/applications/robot-controller";
         kind = "tree";
-        identity = "1e943c54afe6248e02d09c4f6e289679d4a644768b0363096b8a09f4cc0b759d";
+        identity = "a36cdfa953e64a76fb117f5bb46ba07843da1cf53682ebc4c89156e830e10d99";
       };
       identity = "dfd6701a394def51243568b7ee925f8222957dc7d35e64e08f68a17459135068";
       buildProfile = "default";
@@ -175,7 +175,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "45b9c60f9bb37307800100080a6ac03b4bdd71a86868c524dcc3b1527db8adec";
+        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
       };
     };
     {
@@ -183,7 +183,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "422f71bbfed7bd1796e74de866c9994e9c4da3316ecaaf8b2a93cd738669684f";
+        identity = "61a97c9a157785dfe58434d50d96087d4179f05b313fda4c98c01b6782070816";
       };
     };
     {
