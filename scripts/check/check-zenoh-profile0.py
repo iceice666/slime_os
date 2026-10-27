@@ -116,6 +116,7 @@ import zenoh_exchange
 import zenoh_links_exam
 import zenoh_grants_exam
 import zenoh_service_exam
+import zenoh_service_link_exam
 import zenoh_stock_peer
 import zenoh_subscribers_exam
 import zenoh_undeclare_exam
@@ -1935,6 +1936,56 @@ def service_main(controls_only: bool) -> int:
     return 0
 
 
+SERVICE_LINK_FILTER = "zenoh_service_link::"
+SERVICE_LINK_TESTS = ("zenoh_service_link::the_service_link_exam",)
+
+
+def run_service_link() -> list[str]:
+    # The core over a link stands on the link, so the session exam, the links exam and the stock-peer exam
+    # run and are judged here as the service slice runs them.
+    try:
+        zenoh_subscribers_exam.judge(run_subscribers())
+    except zenoh_subscribers_exam.SubscribersError as error:
+        fail(str(error))
+    stdout, output = cargo_tests((SERVICE_LINK_FILTER,), {**_os.environ})
+    passed = tests_passed(output)
+    missing = [name for name in SERVICE_LINK_TESTS if name not in passed]
+    if missing:
+        fail(f"service-link: the exam's tests did not run and pass ({len(missing)} of {len(SERVICE_LINK_TESTS)}): {', '.join(missing[:4])}")
+    return exam_lines(stdout)
+
+
+def service_link_main(controls_only: bool) -> int:
+    neighbour_controls(subscribers=True)
+    if all(name in tests_passed("") for name in SERVICE_LINK_TESTS):
+        fail("control: a run with the service-link exam test missing was read as complete")
+    try:
+        refused_controls = zenoh_service_link_exam.all_controls()
+        item_cases, item_controls = zenoh_service_link_exam.item_pins()
+        positive, refusals = zenoh_service_link_exam.judge(zenoh_service_link_exam.good_lines())
+    except (zenoh_service_link_exam.ServiceLinkError, zenoh_grants_exam.GrantsError) as error:
+        fail(str(error))
+    if positive + refusals != zenoh_service_link_exam.PINNED_CASES:
+        fail(f"service-link: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_service_link_exam.PINNED_CASES}")
+    if refused_controls != zenoh_service_link_exam.PINNED_CONTROLS:
+        fail(f"service-link: {refused_controls} controls, the checker pins {zenoh_service_link_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_service_link_exam.PINNED_CASES:
+        fail(f"service-link: the admitted item fixes {item_cases} cases, the checker pins {zenoh_service_link_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_service_link_exam.PINNED_CONTROLS:
+        fail(f"service-link: the admitted item requires {item_controls} controls, the checker pins {zenoh_service_link_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 service-link judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        positive, refusals = zenoh_service_link_exam.judge(run_service_link())
+    except zenoh_service_link_exam.ServiceLinkError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=service-link cases={positive + refusals} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=positive + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 service-link check: the core queues through the link, delivers to its rings after the flush, and reports a frame the stream took and then lost")
+    return 0
+
+
 def composition_main(controls_only: bool) -> int:
     contract = zenoh_exchange.demo()
     try:
@@ -1958,7 +2009,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "service"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -1977,6 +2028,8 @@ def main() -> int:
         return grants_main(arguments.controls_only)
     if arguments.slice == "service":
         return service_main(arguments.controls_only)
+    if arguments.slice == "service-link":
+        return service_link_main(arguments.controls_only)
     refused_controls = controls(arguments.slice)
     if arguments.controls_only:
         print(f"zenoh profile 0 {arguments.slice} judge: refused {refused_controls} corrupted transcripts")

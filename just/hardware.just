@@ -101,6 +101,15 @@ zenoh_grants_check:
 zenoh_service_check:
     python3 scripts/check/check-zenoh-profile0.py --slice service
 
+# Judges the Zenoh service core over a link. The core queues a declaration or a publication through the
+# link's single send slot and delivers to its rings after the slot flushed. The judge reads what the Rust
+# test prints. The expectation is scripts/lib/zenoh_service_link_exam.py. The subscribers, links and
+# stock-peer exams run beside it. Nothing here needs a registry. The recipe fails until the link-facing
+# core lands.
+[group('hardware')]
+zenoh_service_link_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice service-link
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.

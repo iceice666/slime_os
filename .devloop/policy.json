@@ -226,6 +226,7 @@
     "scripts/lib/zenoh_links_exam.py",
     "scripts/lib/zenoh_listener_peer.py",
     "scripts/lib/zenoh_service_exam.py",
+    "scripts/lib/zenoh_service_link_exam.py",
     "scripts/lib/zenoh_stock_peer.py",
     "scripts/lib/zenoh_subscribers_exam.py",
     "scripts/lib/zenoh_undeclare_exam.py",
