@@ -343,42 +343,9 @@ def check_robot_trace_controls() -> int:
 
 
 def check_robot_withdrawn_controls() -> int:
-    """Accept one race-free withdrawal and refuse every broken ordering or count."""
+    """The robot plane's own withdrawal controls, run with every gate's."""
     gate = load_script("robot_withdrawn", "check/check-sel4-robot-runtime-plane.py")
-    held = "[robot-actuator] command held id=4"
-    forwarded = "[fabric] call cancellation forwarded"
-    cancelled = "[robot-actuator] command cancelled id=4"
-    observed = "[robot-controller] command cancellation observed"
-    total = "[robot-actuator] cancelled total=1"
-    honest = [held, forwarded, cancelled, observed, total]
-
-    def refused(lines: list[str]) -> bool:
-        try:
-            gate.check_withdrawn("\n".join(lines) + "\n")
-        except SystemExit:
-            return True
-        return False
-
-    if refused(honest):
-        fail("robot withdrawn controls: the honest withdrawal was refused")
-    cases = (
-        ("no hold", [forwarded, cancelled, observed, total]),
-        ("two holds", [held, held, forwarded, cancelled, observed, total]),
-        ("another id cancelled", [held, forwarded, cancelled.replace("id=4", "id=5"), observed, total]),
-        ("no settlement", [held, forwarded, observed, total]),
-        ("two settlements", [held, forwarded, cancelled, cancelled, observed, total]),
-        ("no forwarded withdrawal", [held, cancelled, observed, total]),
-        ("withdrawal forwarded before the hold", [forwarded, held, cancelled, observed, total]),
-        ("settled before the hold", [cancelled, held, forwarded, observed, total]),
-        ("observed before the settlement", [held, forwarded, observed, cancelled, total]),
-        ("observed twice", [held, forwarded, cancelled, observed, observed, total]),
-        ("no total", [held, forwarded, cancelled, observed]),
-        ("zero total", [held, forwarded, cancelled, observed, total.replace("=1", "=0")]),
-    )
-    for description, lines in cases:
-        if not refused(lines):
-            fail(f"robot withdrawn controls: accepted {description}")
-    return len(cases)
+    return gate.withdrawn_controls()
 
 
 def check_gate(name: str, relative_path: str, expected_required: int) -> int:

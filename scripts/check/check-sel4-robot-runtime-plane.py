@@ -723,10 +723,56 @@ def check_withdrawn(transcript: str) -> None:
         fail(f"withdrawn: the actuator's cancelled totals were {totals}, expected ['1']")
 
 
+def withdrawn_controls() -> int:
+    """Accept one race-free withdrawal and refuse every broken ordering or count.
+
+    Run by `--arm withdrawn-controls` before the withdrawn recipe boots, and by
+    the gate-control run with every other gate's controls.
+    """
+    held = "[robot-actuator] command held id=4"
+    forwarded = "[fabric] call cancellation forwarded"
+    cancelled = "[robot-actuator] command cancelled id=4"
+    observed = "[robot-controller] command cancellation observed"
+    total = "[robot-actuator] cancelled total=1"
+
+    def refused(lines: list[str]) -> bool:
+        try:
+            check_withdrawn("\n".join(lines) + "\n")
+        except SystemExit:
+            return True
+        return False
+
+    if refused([held, forwarded, cancelled, observed, total]):
+        fail("withdrawn controls: the honest withdrawal was refused")
+    cases = (
+        ("no hold", [forwarded, cancelled, observed, total]),
+        ("two holds", [held, held, forwarded, cancelled, observed, total]),
+        ("another id cancelled", [held, forwarded, cancelled.replace("id=4", "id=5"), observed, total]),
+        ("no settlement", [held, forwarded, observed, total]),
+        ("two settlements", [held, forwarded, cancelled, cancelled, observed, total]),
+        ("no forwarded withdrawal", [held, cancelled, observed, total]),
+        ("withdrawal forwarded before the hold", [forwarded, held, cancelled, observed, total]),
+        ("settled before the hold", [cancelled, held, forwarded, observed, total]),
+        ("observed before the settlement", [held, forwarded, observed, cancelled, total]),
+        ("observed twice", [held, forwarded, cancelled, observed, observed, total]),
+        ("no total", [held, forwarded, cancelled, observed]),
+        ("zero total", [held, forwarded, cancelled, observed, total.replace("=1", "=0")]),
+    )
+    for description, lines in cases:
+        if not refused(lines):
+            fail(f"withdrawn controls: accepted {description}")
+    return len(cases)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", choices=("plane", "withdrawn"), default="plane")
-    if parser.parse_args().arm == "withdrawn":
+    parser.add_argument("--arm", choices=("plane", "withdrawn", "withdrawn-controls"), default="plane")
+    arm = parser.parse_args().arm
+    if arm == "withdrawn-controls":
+        refused = withdrawn_controls()
+        print(f"seL4 robot runtime withdrawn controls: honest withdrawal accepted, {refused} mutations refused")
+        return
+    if arm == "withdrawn":
         run_withdrawn()
         return
     check_fixture_shape()
