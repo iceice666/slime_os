@@ -37,9 +37,26 @@ LAYOUTS = {
 }
 # The values the contract states, held here so a change to either shows. They are constants of this
 # protocol and not of another contract.
-# The exact size of each record. A size and its layout can be edited together and still add up, so each size is
-# held here and compared after the layout has been summed.
-SIZES = {"requestBytes": 32, "completionBytes": 24, "sampleHeaderBytes": 16, "loanBytes": 64}
+# Every field of every record: name, width in bytes, signed, byte array. The schema's layouts are compared with
+# these and not with the schema's own record types, so a field cannot be removed or moved by editing the two
+# together. The widths add up to the size each record has: 32, 24, 16 and 64 bytes. A reserved field is the
+# padding that brings a record to its size.
+LAYOUT_PINS = {
+    "ServiceRequest": [
+        ("magic", 4, False, False), ("version", 2, False, False), ("op", 1, False, False), ("flags", 1, False, False),
+        ("row", 2, False, False), ("reserved", 2, False, True), ("sequence", 8, True, False), ("reserved2", 12, False, True),
+    ],
+    "ServiceCompletion": [
+        ("magic", 4, False, False), ("version", 2, False, False), ("op", 1, False, False), ("item", 1, False, False),
+        ("status", 4, True, False), ("row", 2, False, False), ("reserved", 2, False, True), ("length", 4, False, False),
+        ("flags", 4, False, False),
+    ],
+    "SampleHeader": [("sequence", 8, True, False), ("timestamp", 8, True, False)],
+    "ServiceLoan": [
+        ("magic", 4, False, False), ("version", 2, False, False), ("role", 1, False, False), ("reserved0", 1, False, True),
+        ("buffer", 8, False, False), ("lease", 8, False, False), ("length", 8, False, False), ("reserved", 32, False, True),
+    ],
+}
 PINNED = {
     "formatVersion": 1,
     "serviceMagic": int.from_bytes(b"ZSVC", "big"),
@@ -100,9 +117,9 @@ def record_fields(text: str, name: str) -> list[str]:
     integer has a width in a layout, and so is anything in the body that is not a field or a comment."""
     block = re.search(rf"^{name} :: type \{{\n(.*?)^\}};", text, re.M | re.S)
     _need(block is not None, f"client: the schema does not state the type {name}")
-    body = block.group(1)
+    body = "\n".join(line.split("--", 1)[0] for line in block.group(1).splitlines())
     fields = FIELD.findall(body)
-    leftover = "".join(line for line in FIELD.sub("", body).splitlines() if not line.strip().startswith("--"))
+    leftover = FIELD.sub("", body)
     _need(leftover.strip() == "", f"client: the type {name} has text that is not a field: {leftover.strip()[:40]!r}")
     for field, kind in fields:
         _need(kind.strip() == "Int", f"client: {field} in {name} has the type {kind.strip()!r}, which has no width in a layout")
@@ -160,14 +177,12 @@ def facts(text: str | None = None) -> list[str]:
                 _need(array and not signed, f"client: {field} in {layout_name} is not an unsigned byte array")
             else:
                 _need(not array, f"client: {field} in {layout_name} is a byte array but is not reserved")
+        _need(fields == LAYOUT_PINS[record], f"client: {layout_name} differs from the pinned layout of {record} at {next((i for i, (a, b) in enumerate(zip(fields, LAYOUT_PINS[record], strict=False)) if a != b), min(len(fields), len(LAYOUT_PINS[record])))}")
         sizes[size_name] = declared
         out.append(f"layout {record} {declared}")
     _need(sizes["requestBytes"] <= request_limit, f"client: a request of {sizes['requestBytes']} bytes exceeds the IO0 payload of {request_limit}")
     _need(sizes["completionBytes"] <= completion_limit, f"client: a completion of {sizes['completionBytes']} bytes exceeds the IO0 payload of {completion_limit}")
     out.append(f"fits-io0 {sizes['requestBytes']} {sizes['completionBytes']}")
-    for size_name, wanted in SIZES.items():
-        _need(sizes[size_name] == wanted, f"client: {size_name} is {sizes[size_name]}, this version requires {wanted}")
-    out.append("sizes " + " ".join(str(SIZES[name]) for name in SIZES))
     request = {name: (width, signed) for name, width, signed, _ in layout(text, "requestLayout")}
     completion = {name: (width, signed) for name, width, signed, _ in layout(text, "completionLayout")}
     header = {name: (width, signed) for name, width, signed, _ in layout(text, "sampleHeaderLayout")}
@@ -256,6 +271,12 @@ def mutations() -> list[tuple[str, object]]:
         ("a completion of 23 bytes with its layout cut to match", lambda t: _edit("completionBytes :: Int = 24;", "completionBytes :: Int = 23;")(_edit('{ name = "flags"; width = 4; signed = false; byteArray = false; };\n};\n\nsampleHeaderLayout', '{ name = "flags"; width = 3; signed = false; byteArray = false; };\n};\n\nsampleHeaderLayout')(t))),
         ("a sample header of 15 bytes with its layout cut to match", lambda t: _edit("sampleHeaderBytes :: Int = 16;", "sampleHeaderBytes :: Int = 15;")(_edit('{ name = "timestamp"; width = 8; signed = true; byteArray = false; };\n};\n\nloanLayout', '{ name = "timestamp"; width = 7; signed = true; byteArray = false; };\n};\n\nloanLayout')(t))),
         ("a loan of 63 bytes with its layout cut to match", lambda t: _edit("loanBytes :: Int = 64;", "loanBytes :: Int = 63;")(_edit('{ name = "reserved"; width = 32; signed = false; byteArray = true; };', '{ name = "reserved"; width = 31; signed = false; byteArray = true; };')(t))),
+        ("op removed from the request type and layout and reserved2 widened", lambda t: _edit('{ name = "reserved2"; width = 12;', '{ name = "reserved2"; width = 13;')(_edit('  { name = "op"; width = 1; signed = false; byteArray = false; };\n  { name = "flags"; width = 1;', '  { name = "flags"; width = 1;')(_edit("  op : Int;\n  flags : Int;\n  row : Int;", "  flags : Int;\n  row : Int;")(t)))),
+        ("the row commented out of the request type", _edit("  row : Int;\n  reserved : Int;\n  sequence : Int;", "  -- row : Int;\n  reserved : Int;\n  sequence : Int;")),
+        ("the row commented out without a space", _edit("  row : Int;\n  reserved : Int;\n  sequence : Int;", "  --row : Int;\n  reserved : Int;\n  sequence : Int;")),
+        ("a width moved from one field to another with the sum kept", lambda t: _edit('{ name = "flags"; width = 1; signed = false; byteArray = false; };\n  { name = "row"; width = 2;', '{ name = "flags"; width = 2; signed = false; byteArray = false; };\n  { name = "row"; width = 2;')(_edit('{ name = "reserved2"; width = 12;', '{ name = "reserved2"; width = 11;')(t))),
+        ("the completion length narrowed and its padding widened", lambda t: _edit('{ name = "length"; width = 4; signed = false; byteArray = false; };\n  { name = "flags"; width = 4;', '{ name = "length"; width = 2; signed = false; byteArray = false; };\n  { name = "flags"; width = 6;')(t)),
+        ("a record field added to a type and a layout with the sizes kept", lambda t: _edit("  reserved2 : Int;\n};", "  reserved2 : Int;\n  extra : Int;\n};")(_edit('{ name = "reserved2"; width = 12; signed = false; byteArray = true; };', '{ name = "reserved2"; width = 11; signed = false; byteArray = true; };\n  { name = "extra"; width = 1; signed = false; byteArray = false; };')(t))),
         ("a field named twice", lambda t: _edit('  { name = "reserved2"; width = 12; signed = false; byteArray = true; };', '  { name = "reserved"; width = 12; signed = false; byteArray = true; };')(_edit("  reserved2 : Int;\n};", "  reserved : Int;\n};")(t))),
     ]
     return out
@@ -382,8 +403,8 @@ def all_controls() -> int:
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. Both counts are exact.
-PINNED_CASES = 24
-PINNED_CONTROLS = 68
+PINNED_CASES = 23
+PINNED_CONTROLS = 74
 ADMISSION = "slime-zenoh-service-client-"
 
 
