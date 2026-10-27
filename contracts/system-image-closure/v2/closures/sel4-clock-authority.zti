@@ -4,9 +4,9 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-clock-authority.zti";
     kind = "file";
-    identity = "9f607db1208337027099572d1e3bca2cc1f70fbb09499a9fd2a3993040a3daab";
+    identity = "c00215743a238462d312892ebc78acdf13458e6d560ac55bc9eb62c167de79ef";
   };
-  systemIdentity = "24e38a943cdd53150b614f25bd8505ba44399ffd5d3094229ff2db7e21d0ae3d";
+  systemIdentity = "4011dc9376ac146e7801ad12e04f9c5a5dcd1780b704d9bf6d739c2f4b65116a";
   implementations = [
     {
       component = "clock-authority-probe";
@@ -14,7 +14,7 @@
       artifact = {
         path = "components/testkit/clock-authority-probe";
         kind = "tree";
-        identity = "c256ed62c5ea3d59a522028d3c81f13cff8a043f3b2f4ad64653fce7283b54f7";
+        identity = "6f3a71b8085869bdba672e61fec2816e567147dd18ede99b0b6fccc2c5490939";
       };
       identity = "ffff16d55a34065900f3a0a351a39a25abee613c635aad492f12db7a2c5d1e6b";
       buildProfile = "default";
@@ -47,7 +47,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "905ef9773c0b6a519fb7150c34e77cb4fc5c2cd797f404064ac9c4ee95c2130a";
+      identity = "b2faa76c699dc4cf66e26abd1c672bf559d1d0c094f395e58da15d26506ebb86";
     };
     parameters = [];
   };
@@ -66,7 +66,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "aa59e6778335674d2f16ec2a0e328deaaab16ca8ee0aeb15a77e3e5e642ad5f3";
+        identity = "74b7ed0d477859d0a4d93db59c4b32b7e515b85c0ae8ce5c6e7d6fdbab6f6b1a";
       };
     };
     {
@@ -74,7 +74,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "d30689e67e8fb1270e59750b7f0e936c117c11407834bfa9e69fc051bcd99438";
+        identity = "29b5bb613f31cd0a151ca0075b07e3ece9895c1da2e4673381153543ca513fa0";
       };
     };
     {
@@ -114,7 +114,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "15cb7364b7ab4a68a933983164e328f3682f813f4d9b7a1fc5be47977460ae01";
+        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
       };
     };
     {
