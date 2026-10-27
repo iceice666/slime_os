@@ -2,6 +2,7 @@
 """C9.6 gate: a robot workload composed of every C9 slice, under contention."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -100,11 +101,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             rf"\[robot-controller\] scale={EXPECTED_SCALE}",
             r"\[robot-controller\] subscribe role received",
-            # The first incarnation's ring never delivers tick 1: the sensor's
-            # cadence starts before the controller's role handshake completes,
-            # and that tick is gone by the time it attaches. Consumption
-            # observably starts at 2, not 1.
-            r"\[robot-controller\] consumed tick=2",
+            # Whether the first incarnation's ring still holds tick 1 when its
+            # role handshake completes is a scheduling fact: the sensor's
+            # cadence starts first, and the tick may or may not be overwritten
+            # by the time the controller attaches. Consumption starts at 1 or 2.
+            r"\[robot-controller\] consumed tick=[12]",
             r"\[robot-actuator\] applied value=(\d+)",
             r"\[robot-controller\] command applied value=(\d+)",
         ),
@@ -475,6 +476,17 @@ def check_semantics(transcript: str) -> None:
     for value in applied:
         if value % EXPECTED_SCALE != 0 or value // EXPECTED_SCALE not in ticks:
             fail(f"the actuator applied {value}, which no consumed tick and the declared scale produce")
+    # The sensor's last declared tick reaches actuation in every boot, through
+    # the replacement: whichever earlier ticks each incarnation saw, the final
+    # command is the declared last tick times the declared scale.
+    final = (EXPECTED_TICKS + 1) * EXPECTED_SCALE
+    if max(applied) != final:
+        fail(f"the last applied command is {max(applied)}, not the declared final {final}")
+    if final not in [
+        int(value)
+        for value in re.findall(r"\[robot-controller\] command resumed value=(\d+)", transcript)
+    ]:
+        fail(f"the replacement did not resume the declared final command {final}")
     observed = [
         int(value)
         for value in re.findall(
@@ -565,6 +577,13 @@ def check_semantics(transcript: str) -> None:
             fail(f"a C9.6 marker carries {what}: {found.group(0)!r}")
 
 
+# Outcome markers whose captured value is a request id rather than declared data.
+REQUEST_ID_PATTERNS = (
+    r"\[robot-actuator\] command cancelled id=(\d+)",
+    r"\[robot-actuator\] command left unanswered id=(\d+)",
+)
+
+
 def semantic_trace(transcript: str) -> tuple[str, ...]:
     """The declared half of one boot: what the composition fixes, not what it observed.
 
@@ -581,11 +600,17 @@ def semantic_trace(transcript: str) -> tuple[str, ...]:
     * the supervisor's backoff instant and the sensor's timer instants are
       hardware counter readings. Two boots reading one counter identically would
       mean the clock had stopped;
-    * how many of the sensor's later samples the *replacement* consumes depends
-      on when its fresh ring is provisioned relative to the sensor's cadence, so
-      the per-tick totals after the restart are observed rather than declared.
-      What is compared instead is the *set* of applied command values, which is
-      a function of the declared scale and the declared tick sequence.
+    * which samples each incarnation consumes depends on when its ring is
+      provisioned relative to the sensor's cadence: the first may or may not
+      still see tick 1, and the replacement resumes wherever the sensor is. So
+      the sets of applied and resumed values are observed, not declared.
+      `check_semantics` already binds every applied value to a consumed tick
+      and the declared scale. What is compared instead is the final command,
+      the declared last tick times the declared scale, which every boot applies
+      and the replacement resumes;
+    * a request id counts the requests before it, so it shifts with how many
+      samples the first incarnation commanded. The cancelled and unanswered
+      outcomes are compared by occurrence, not by id.
 
     Everything else is a declaration and is compared verbatim.
     """
@@ -630,25 +655,24 @@ def semantic_trace(transcript: str) -> tuple[str, ...]:
         matches = re.findall(pattern, transcript)
         if not matches:
             fail(f"missing marker for the cross-boot comparison: {pattern}")
-        declared.append(f"{pattern}={matches!r}")
+        if pattern in REQUEST_ID_PATTERNS:
+            declared.append(f"{pattern} occurrences={len(matches)}")
+        else:
+            declared.append(f"{pattern}={matches!r}")
 
-    # The applied command values as a *set*: which commands the composition can
-    # produce is declared, how many of each a run happens to carry is not.
-    applied = sorted(
-        {int(value) for value in re.findall(r"\[robot-actuator\] applied value=(\d+)", transcript)}
-    )
+    # The final command: the last tick the sensor declares, times the declared
+    # scale. Which earlier ticks each incarnation saw is a scheduling fact.
+    applied = [int(value) for value in re.findall(r"\[robot-actuator\] applied value=(\d+)", transcript)]
     if not applied:
         fail("no command reached actuation")
-    declared.append(f"applied-values={applied!r}")
-    resumed = sorted(
-        {
-            int(value)
-            for value in re.findall(r"\[robot-controller\] command resumed value=(\d+)", transcript)
-        }
-    )
+    declared.append(f"final-applied={max(applied)}")
+    resumed = [
+        int(value)
+        for value in re.findall(r"\[robot-controller\] command resumed value=(\d+)", transcript)
+    ]
     if not resumed:
         fail("the replacement observed no actuation, so the graph did not resume")
-    declared.append(f"resumed-values={resumed!r}")
+    declared.append(f"final-resumed={max(resumed)}")
     return tuple(declared)
 
 
@@ -661,7 +685,50 @@ def check_transcript(transcript: str) -> None:
     check_semantics(transcript)
 
 
+# The withdrawn command's own lines, in the order the withdrawn arm requires:
+# the actuator holds the request without applying or answering it, the broker
+# forwards the withdrawal to the actuator, the actuator settles it on the same
+# id, and only then does the controller observe the cancellation.
+WITHDRAWN_HELD = re.compile(r"^\[robot-actuator\] command held id=(\d+)$", re.M)
+WITHDRAWN_FORWARDED = re.compile(r"^\[fabric\] call cancellation forwarded$", re.M)
+WITHDRAWN_CANCELLED = re.compile(r"^\[robot-actuator\] command cancelled id=(\d+)$", re.M)
+WITHDRAWN_OBSERVED = re.compile(r"^\[robot-controller\] command cancellation observed$", re.M)
+WITHDRAWN_TOTAL = re.compile(r"^\[robot-actuator\] cancelled total=(\d+)$", re.M)
+WITHDRAWN_BOOTS = 4
+
+
+def check_withdrawn(transcript: str) -> None:
+    """Refuse a boot whose withdrawal could have been settled by a race.
+
+    The actuator must announce the withdrawn request as held, and settle it only
+    when the broker forwards the cancellation, so the withdrawal always reaches
+    the actuator instead of racing the actuator's own reply.
+    """
+    held = list(WITHDRAWN_HELD.finditer(transcript))
+    if len(held) != 1:
+        fail(f"withdrawn: the actuator held {len(held)} requests, expected exactly one")
+    cancelled = list(WITHDRAWN_CANCELLED.finditer(transcript))
+    if len(cancelled) != 1:
+        fail(f"withdrawn: the actuator settled {len(cancelled)} cancellations, expected exactly one")
+    if held[0].group(1) != cancelled[0].group(1):
+        fail("withdrawn: the actuator cancelled a request other than the one it held")
+    forwarded = [match.start() for match in WITHDRAWN_FORWARDED.finditer(transcript)]
+    if not any(held[0].end() < position < cancelled[0].start() for position in forwarded):
+        fail("withdrawn: the broker did not forward the withdrawal between the hold and the settlement")
+    observed = [match.start() for match in WITHDRAWN_OBSERVED.finditer(transcript)]
+    if len(observed) != 1 or observed[0] < cancelled[0].end():
+        fail("withdrawn: the controller observed the cancellation before the actuator settled it")
+    totals = WITHDRAWN_TOTAL.findall(transcript)
+    if totals != ["1"]:
+        fail(f"withdrawn: the actuator's cancelled totals were {totals}, expected ['1']")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--arm", choices=("plane", "withdrawn"), default="plane")
+    if parser.parse_args().arm == "withdrawn":
+        run_withdrawn()
+        return
     check_fixture_shape()
     build_image()
     pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
@@ -696,6 +763,26 @@ def main() -> None:
         "controller's fabric authority, and the graph resumed; deadline miss, "
         "cancellation, fault, and the orderly stream end stayed distinct; and both "
         "boots' declared traces were identical"
+    )
+
+
+def run_withdrawn() -> None:
+    """Boot the plane several times and require a race-free withdrawal in each."""
+    check_fixture_shape()
+    build_image()
+    profile = tomllib.loads(PINS.read_text(encoding="utf-8")).get("qemu_arm_virt")
+    if not isinstance(profile, dict):
+        fail("missing qemu profile")
+    for boot_index in range(WITHDRAWN_BOOTS):
+        transcript = boot(profile)
+        try:
+            check_transcript(transcript)
+            check_withdrawn(transcript)
+        except SystemExit as error:
+            fail(f"boot {boot_index}: {error}")
+    print(
+        f"seL4 robot runtime withdrawn check: in {WITHDRAWN_BOOTS} boots the actuator held the "
+        "withdrawn command and settled it only on the forwarded cancellation"
     )
 
 
