@@ -1971,12 +1971,15 @@ SERVICE_LINK_TESTS = ("zenoh_service_link::the_service_link_exam",)
 
 
 def run_service_link() -> list[str]:
-    # The core over a link stands on the link, so the session exam, the links exam and the stock-peer exam
-    # run and are judged here as the service slice runs them.
+    # The core over a link sits beside the session-based core and shares its type, so the session-based core's
+    # exam runs and is judged here with the exams under it (`run_service` runs the subscribers exam, the links
+    # exam and the stock-peer exam). A change that regresses the retained core fails this gate too.
     try:
-        zenoh_subscribers_exam.judge(run_subscribers())
-    except zenoh_subscribers_exam.SubscribersError as error:
+        positive, refusals = zenoh_service_exam.judge(run_service())
+    except zenoh_service_exam.ServiceError as error:
         fail(str(error))
+    if positive + refusals != zenoh_service_exam.PINNED_CASES:
+        fail(f"service-link: the retained service exam is {positive + refusals} cases, the checker pins {zenoh_service_exam.PINNED_CASES}")
     stdout, output = cargo_tests((SERVICE_LINK_FILTER,), {**_os.environ})
     passed = tests_passed(output)
     missing = [name for name in SERVICE_LINK_TESTS if name not in passed]
@@ -1989,6 +1992,17 @@ def service_link_main(controls_only: bool) -> int:
     neighbour_controls(subscribers=True)
     if all(name in tests_passed("") for name in SERVICE_LINK_TESTS):
         fail("control: a run with the service-link exam test missing was read as complete")
+    if all(name in tests_passed("") for name in SERVICE_TESTS):
+        fail("control: a run with the retained service exam test missing was read as complete")
+    # The retained core's judge and its controls are a precondition, as the neighbours' are. Its refusals are
+    # not counted: they belong to the service gate, which pins them.
+    try:
+        retained_controls = zenoh_service_exam.all_controls()
+        retained_positive, retained_refusals = zenoh_service_exam.judge(zenoh_service_exam.good_lines())
+    except (zenoh_service_exam.ServiceError, zenoh_grants_exam.GrantsError) as error:
+        fail(str(error))
+    if retained_positive + retained_refusals != zenoh_service_exam.PINNED_CASES or retained_controls != zenoh_service_exam.PINNED_CONTROLS:
+        fail(f"service-link: the retained service exam is {retained_positive + retained_refusals} cases and {retained_controls} controls, the checker pins {zenoh_service_exam.PINNED_CASES} and {zenoh_service_exam.PINNED_CONTROLS}")
     try:
         refused_controls = zenoh_service_link_exam.all_controls()
         item_cases, item_controls = zenoh_service_link_exam.item_pins()
