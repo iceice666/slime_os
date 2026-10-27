@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-private-memory-fail-second-allocation";
-  imageClosureIdentity = "e63929b8a97a562fc2df747c598ac64183d78a3202ed78609051c390754fab58";
+  imageClosureIdentity = "033a0a6f48b99a288d65b03dec96d6c9454c257c0cba8bfc753804947302981b";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

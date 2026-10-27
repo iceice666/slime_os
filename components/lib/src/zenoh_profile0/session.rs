@@ -190,6 +190,8 @@ pub enum Event<'a> {
     },
     /// A Put delivered to the declared key; `payload` borrows from the input batch.
     SampleDelivered {
+        /// The id of the subscription this side declared on the key, which matched the Put.
+        subscription: u32,
         sequence: i64,
         timestamp: i64,
         payload: &'a [u8],
@@ -348,10 +350,11 @@ fn deliver<'a, const S: usize, const B: usize, const E: usize>(
     payload: &'a [u8],
     events: &mut Events<'a, E>,
 ) -> Result<(), SessionError> {
-    if !subscribed_to(subs, key) {
+    let Some(subscription) = subscription_on(subs, key) else {
         return Err(SessionError::UndeclaredKey);
-    }
+    };
     events.push(Event::SampleDelivered {
+        subscription,
         sequence: attachment.sequence,
         timestamp: attachment.timestamp,
         payload,
@@ -361,10 +364,18 @@ fn deliver<'a, const S: usize, const B: usize, const E: usize>(
 /// The tag on the id of a subscription this side declared; the peer's carry none.
 const LOCAL: u64 = 1 << 32;
 
+/// The id of the first subscription this side declared on `key`, if any.
+fn subscription_on<const S: usize, const B: usize>(
+    subs: &SlotTable<S, B>,
+    key: &[u8],
+) -> Option<u32> {
+    let at = subs.find_by(|id, held| id & LOCAL != 0 && held == key)?;
+    subs.get(at).map(|(id, _)| (id & !LOCAL) as u32)
+}
+
 /// Whether this side subscribed to `key`.
 fn subscribed_to<const S: usize, const B: usize>(subs: &SlotTable<S, B>, key: &[u8]) -> bool {
-    subs.find_by(|id, held| id & LOCAL != 0 && held == key)
-        .is_some()
+    subscription_on(subs, key).is_some()
 }
 
 /// A session over `K` key aliases and `S` subscribers of each side, keys of up to `B` bytes. The
