@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-tcp-impairment";
-  imageClosureIdentity = "af289aa2ce07799a72416d7f107a7f5aeb58c968ff51f64eb0246388f0a67da3";
+  imageClosureIdentity = "bdb472f330f39585ee04b18ee0c2e4b111553bb976109c5e79defcc41725e0de";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

@@ -360,7 +360,7 @@
       artifact = {
         path = "just";
         kind = "tree";
-        identity = "f0971cee3d617c0802d067dbc04c48cb486f60c410b906acec329f886af71270";
+        identity = "74bbf56fdb53c43e4063cc781a16a4344b91ef7b568a27e8bca1e1c10811eb6d";
       };
     };
     {
