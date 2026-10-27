@@ -520,6 +520,7 @@ impl<
                     sequence,
                     timestamp,
                     payload,
+                    ..
                 } if self.session.params().fragments => {
                     let start = self.cell_start(heap.len());
                     let Some(room) = heap.get_mut(start..start + payload.len()) else {
@@ -538,6 +539,7 @@ impl<
                     sequence,
                     timestamp,
                     payload,
+                    ..
                 } => {
                     let mut copy = [0u8; P];
                     let len = payload.len().min(P);

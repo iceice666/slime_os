@@ -121,6 +121,7 @@ fn owned(events: &crate::zenoh_profile0::session::Events<'_>) -> Vec<Ev> {
                 sequence,
                 timestamp,
                 payload,
+                ..
             } => Ev::Sample {
                 sequence,
                 timestamp,
