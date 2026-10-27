@@ -918,6 +918,27 @@ def check_controls(root: Path, gate: object, literal_for: Callable[[str], str]) 
         first, second = (reordered.index(literal_for(pattern)) for pattern in (before, after))
         reordered[first], reordered[second] = reordered[second], reordered[first]
         refuse("reordered additional service startup", "\n".join(reordered) + "\n")
+    # Each buffer, pool and socket-open record moved across each boundary its
+    # order check names, keeping every payload and multiplicity.
+    interface = literal_for(gate.LOCAL_CHAINS[1][1][0])
+    cleanup = literal_for(gate.LOCAL_CHAINS[1][1][1])
+    incarnation = literal_for(_ADDITIONAL_LOCAL[2][0])
+
+    def moved(record: str, anchor: str, after: bool) -> str:
+        reordered = lines.copy()
+        reordered.remove(record)
+        position = reordered.index(anchor) + (1 if after else 0)
+        reordered.insert(position, record)
+        return "\n".join(reordered) + "\n"
+
+    for pattern, _ in _BUFFER_LOCAL[:3]:
+        record = literal_for(pattern)
+        refuse(f"startup record before incarnation: {pattern}", moved(record, incarnation, False))
+        refuse(f"startup record after interface: {pattern}", moved(record, interface, True))
+    for pattern, _ in _BUFFER_LOCAL[3:]:
+        record = literal_for(pattern)
+        refuse(f"socket open before interface: {pattern}", moved(record, interface, False))
+        refuse(f"socket open after cleanup: {pattern}", moved(record, cleanup, True))
     audit_count = _audit_controls(root)
     print(
         f"seL4 gate control check: console records rejected {evaluated} mutations; source route audit rejected {audit_count} independent fixtures (no product qualification)"
