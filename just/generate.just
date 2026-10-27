@@ -27,6 +27,12 @@ zenoh_undeclare_gen:
 zenoh_service_grants_gen:
     python3 scripts/generate/generate-zenoh-service-grants-bindings.py
 
+# Renders the constants of contracts/zenoh-service-client/v1 as components/proto/src/zenoh_service_client.rs.
+# The client exam requires the committed file to equal this output byte for byte.
+[group('generate')]
+zenoh_service_client_gen:
+    python3 scripts/generate/generate-zenoh-service-client-bindings.py
+
 
 [group('generate')]
 block_gen:

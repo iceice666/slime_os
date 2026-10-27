@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-stress";
-  imageClosureIdentity = "3fa794642636c80b9346d3113e11cc1778b8aa6d8c228b7d7870c32a147841d5";
+  imageClosureIdentity = "909e986dd7eeab771e7d42bda52216900c8b6fb421a25fcd16614f50f3988cab";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
