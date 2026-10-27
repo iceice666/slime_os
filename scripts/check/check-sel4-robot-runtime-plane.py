@@ -687,9 +687,12 @@ def check_transcript(transcript: str) -> None:
 
 # The withdrawn command's own lines, in the order the withdrawn arm requires:
 # the actuator holds the request without applying or answering it, the broker
-# forwards the withdrawal to the actuator, the actuator settles it on the same
-# id, and only then does the controller observe the cancellation.
+# takes the actuator's held record, forwards the withdrawal, the actuator
+# settles it on the same id, and only then does the controller observe the
+# cancellation. The held record is what lets the broker forward to a server
+# that is still holding a call without blocking against its reply.
 WITHDRAWN_HELD = re.compile(r"^\[robot-actuator\] command held id=(\d+)$", re.M)
+WITHDRAWN_HELD_RECORD = re.compile(r"^\[fabric\] call held$", re.M)
 WITHDRAWN_FORWARDED = re.compile(r"^\[fabric\] call cancellation forwarded$", re.M)
 WITHDRAWN_CANCELLED = re.compile(r"^\[robot-actuator\] command cancelled id=(\d+)$", re.M)
 WITHDRAWN_OBSERVED = re.compile(r"^\[robot-controller\] command cancellation observed$", re.M)
@@ -712,9 +715,14 @@ def check_withdrawn(transcript: str) -> None:
         fail(f"withdrawn: the actuator settled {len(cancelled)} cancellations, expected exactly one")
     if held[0].group(1) != cancelled[0].group(1):
         fail("withdrawn: the actuator cancelled a request other than the one it held")
+    records = list(WITHDRAWN_HELD_RECORD.finditer(transcript))
+    if len(records) != 1:
+        fail(f"withdrawn: the broker took {len(records)} held records, expected exactly one")
+    if not held[0].end() < records[0].start() < cancelled[0].start():
+        fail("withdrawn: the broker's held record is not between the hold and the settlement")
     forwarded = [match.start() for match in WITHDRAWN_FORWARDED.finditer(transcript)]
-    if not any(held[0].end() < position < cancelled[0].start() for position in forwarded):
-        fail("withdrawn: the broker did not forward the withdrawal between the hold and the settlement")
+    if not any(records[0].end() < position < cancelled[0].start() for position in forwarded):
+        fail("withdrawn: the broker did not forward the withdrawal between its held record and the settlement")
     observed = [match.start() for match in WITHDRAWN_OBSERVED.finditer(transcript)]
     if len(observed) != 1 or observed[0] < cancelled[0].end():
         fail("withdrawn: the controller observed the cancellation before the actuator settled it")
@@ -730,6 +738,7 @@ def withdrawn_controls() -> int:
     the gate-control run with every other gate's controls.
     """
     held = "[robot-actuator] command held id=4"
+    record = "[fabric] call held"
     forwarded = "[fabric] call cancellation forwarded"
     cancelled = "[robot-actuator] command cancelled id=4"
     observed = "[robot-controller] command cancellation observed"
@@ -742,21 +751,31 @@ def withdrawn_controls() -> int:
             return True
         return False
 
-    if refused([held, forwarded, cancelled, observed, total]):
+    honest = [held, record, forwarded, cancelled, observed, total]
+    if refused(honest):
         fail("withdrawn controls: the honest withdrawal was refused")
+
+    def without(line: str) -> list[str]:
+        return [entry for entry in honest if entry != line]
+
     cases = (
-        ("no hold", [forwarded, cancelled, observed, total]),
-        ("two holds", [held, held, forwarded, cancelled, observed, total]),
-        ("another id cancelled", [held, forwarded, cancelled.replace("id=4", "id=5"), observed, total]),
-        ("no settlement", [held, forwarded, observed, total]),
-        ("two settlements", [held, forwarded, cancelled, cancelled, observed, total]),
-        ("no forwarded withdrawal", [held, cancelled, observed, total]),
-        ("withdrawal forwarded before the hold", [forwarded, held, cancelled, observed, total]),
-        ("settled before the hold", [cancelled, held, forwarded, observed, total]),
-        ("observed before the settlement", [held, forwarded, observed, cancelled, total]),
-        ("observed twice", [held, forwarded, cancelled, observed, observed, total]),
-        ("no total", [held, forwarded, cancelled, observed]),
-        ("zero total", [held, forwarded, cancelled, observed, total.replace("=1", "=0")]),
+        ("no hold", without(held)),
+        ("two holds", [held, *honest]),
+        ("another id cancelled", [cancelled.replace("id=4", "id=5") if entry == cancelled else entry for entry in honest]),
+        ("no settlement", without(cancelled)),
+        ("two settlements", [*honest[:4], cancelled, *honest[4:]]),
+        ("no held record", without(record)),
+        ("two held records", [held, record, record, forwarded, cancelled, observed, total]),
+        ("held record before the hold", [record, held, forwarded, cancelled, observed, total]),
+        ("held record after the forward", [held, forwarded, record, cancelled, observed, total]),
+        ("held record after the settlement", [held, forwarded, cancelled, record, observed, total]),
+        ("no forwarded withdrawal", without(forwarded)),
+        ("withdrawal forwarded before the hold", [forwarded, held, record, cancelled, observed, total]),
+        ("settled before the hold", [cancelled, held, record, forwarded, observed, total]),
+        ("observed before the settlement", [held, record, forwarded, observed, cancelled, total]),
+        ("observed twice", [*honest[:5], observed, total]),
+        ("no total", without(total)),
+        ("zero total", [*honest[:5], total.replace("=1", "=0")]),
     )
     for description, lines in cases:
         if not refused(lines):
