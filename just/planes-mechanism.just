@@ -89,6 +89,13 @@ console_record_check: sel4_pin_check io_tcp_host_check
     python3 scripts/check/check-sel4-gate-controls.py --console-record
     python3 scripts/check/check-sel4-io-network-plane.py --arm local --local-runs 20 --raw-directory "build/console-record-$(date -u +%Y%m%dT%H%M%S)-$$"
 
+# Every component console write is one whole line, judged lexically over the
+# tracked sources, after the planes whose markers were observed split pass.
+# Explicit, never part of `all`.
+[group('planes / mechanism')]
+console_lines_check: sel4_pin_check console_record_check io_network_check io_tcp_listener_check io_tcp_options_check io_network_driver_reset_check sel4_net_check robot_runtime_check
+    python3 scripts/check/check-sel4-gate-controls.py --console-lines
+
 # Console exam sensitivity only; not product qualification or work-item evidence.
 [group('planes / mechanism')]
 console_record_controls:

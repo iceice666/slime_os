@@ -28,6 +28,7 @@ from unittest.mock import patch
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import ROOT, load_script  # noqa: E402
+import console_lines  # noqa: E402
 import console_record_controls  # noqa: E402
 import console_record_exam  # noqa: E402
 import console_producer_exam  # noqa: E402
@@ -3013,13 +3014,45 @@ def check_console_repeat_controls(gate) -> int:
     return 5
 
 
+def console_line_controls() -> int:
+    try:
+        return console_lines.controls()
+    except console_lines.AuditError as error:
+        fail(f"console line audit controls: {error}")
+
+
+def check_console_lines() -> None:
+    """Refuse any tracked component source that can write part of a console line."""
+    refused = console_line_controls()
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--", "components/*.rs", "components/*.c", "components/*.h"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode()
+    sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in listed.split("\0") if path}
+    try:
+        counts = console_lines.audit(sources)
+    except console_lines.AuditError as error:
+        fail(f"console line audit: {error}")
+    print(
+        f"console line check: {refused} controls refused; {counts['rust_files']} Rust and "
+        f"{counts['c_files']} C component sources write only whole lines "
+        f"({counts['debug_write_mentions']} debug_write mentions)"
+    )
+
+
 def main() -> None:
     if Path_cwd() != ROOT:
         fail(f"run from repository root: {ROOT}")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--console-record", action="store_true", help="qualify actual root/console record paths under forced contention")
     parser.add_argument("--console-record-controls", action="store_true", help="judge console exam negative controls without qualifying product output")
+    parser.add_argument("--console-lines", action="store_true", help="audit that every component console write is one whole line")
     arguments = parser.parse_args()
+    if arguments.console_lines:
+        check_console_lines()
+        return
     if arguments.console_record and arguments.console_record_controls:
         fail("choose qualification or controls, not both")
     console_gate = load_script("console_record_network", "check/check-sel4-io-network-plane.py")
@@ -3053,6 +3086,7 @@ def main() -> None:
         return
     total = console_record_controls.check_controls(ROOT, console_gate, literal_for)
     total += check_console_repeat_controls(console_gate)
+    total += console_line_controls()
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
     total += check_large_image_controls()
