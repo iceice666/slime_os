@@ -1,7 +1,7 @@
 # A shared Zenoh service component
 
 **Status:** Proposed
-**Related work items:** `01a15d1f-1f52-7d62-806f-90ef3c119b59` (a session that holds several subscriptions of its own) and `01a15d1f-26d2-7653-924b-a3f113a718e6` (the grants contract). `01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8` is the service core, which depends on both. `01a17c5f-a891-7236-9324-a73ac389f1c6` is the core over a link. Zenoh Profile 0 epic: `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
+**Related work items:** `01a15d1f-1f52-7d62-806f-90ef3c119b59` (a session that holds several subscriptions of its own) and `01a15d1f-26d2-7653-924b-a3f113a718e6` (the grants contract). `01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8` is the service core, which depends on both. `01a17c5f-a891-7236-9324-a73ac389f1c6` is the core over a link. `01a17c8b-81ce-720d-873c-9e081a6c1add` is the client protocol. Zenoh Profile 0 epic: `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
 
 ## Context
 
@@ -51,13 +51,15 @@ The planning PR that adds this record also adds items 1 to 3. Each item has an e
 3. **The service core** (`01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8`). It follows items 1 and 2. The slice `--slice service` pins 59 cases and 155 controls. The item adds the matching subscription's id to `SampleDelivered`. The Rust test also prints the `size_of` of a slot, a row, a holder and the core. The judge refuses a size above the matching overhead constant in the grants contract, so the declared stack covers what the core stores. The test also reads the nine constants from `slime_proto::zenoh_service_grants` and prints them, and the judge compares each with the schema. A crate that does not declare that module does not compile the test, so the exam cannot pass without the module line in `components/proto/src/lib.rs`. A text check of that line would have to rule out a comment, a `cfg` attribute and a macro. A compile is the sound check.
 4. **The core over a link** (`01a17c5f-a891-7236-9324-a73ac389f1c6`). A component owns a link, and the link owns the session, one send slot, retries and keep-alives. The core of item 3 borrows a bare session, so a component cannot use it. This item adds a layer beside the core and leaves the core and its exam as merged. The slice `--slice service-link` pins 52 cases and 129 controls. The layer is described under [The core over a link](#the-core-over-a-link).
 
-The following steps are proposed and not admitted. Each cannot be graded until the one before it lands.
+5. **The client protocol** (`01a17c8b-81ce-720d-873c-9e081a6c1add`). `contracts/zenoh-service-client/v1`, judged as text against the IO0 and grants contracts. The slice `--slice client` pins 23 cases and 60 controls. The schema has no `gen_rust.zt`, because that file is product code. This planning PR therefore fixes constants and layouts only. See [The client protocol](#the-client-protocol).
 
-5. **The client protocol.** A Zutai schema for the request and completion messages, following `contracts/network-service`.
-6. **The client library.** A typed synchronous adapter in `components/lib` that owns one outstanding request and poisons the session when a completion is missing.
-7. **The grants path.** A resource kind and a read label in `slime-root` and `boot-contracts`, so the grants reach the service from the system spec.
-8. **The service component.** It wraps the core over a link and serves the control and provisioning endpoints and the loans.
-9. **A booted composition.** Two clients under QEMU.
+A second planning PR is proposed for the steps below. Each cannot be graded until the one before it has a throwaway to measure.
+
+6. **The wire records.** A `gen_rust.zt` for the client protocol, so the request, completion, sample header and loan descriptor have generated encoders and decoders. The binding table in `scripts/lib/zutai_bindings.py` registers it.
+7. **The client library.** A typed synchronous adapter in `components/lib` that owns one outstanding request and poisons the session when a completion is missing. It needs step 6, because it cannot hand-write field offsets.
+8. **The grants path.** A resource kind and a read label in `slime-root` and `boot-contracts`, so the grants reach the service from the system spec.
+9. **The service component.** It wraps the core over a link and serves the control and provisioning endpoints and the loans.
+10. **A booted composition.** Two clients under QEMU.
 
 ## The core over a link
 
@@ -70,6 +72,18 @@ The layer adds four operations to the core. `declare_next_over` and `publish_ove
 - **A burst is bounded.** The exam link holds eight notices. A burst of 20 that the service does not drain left eight notices queued and the rest in the stream. After the service drained everything, the ring held four samples and counted 16 lost.
 
 The guarantee is that the link handed the frame to the byte stream. It is not that the peer received the frame. Profile 0 has no acknowledgement. When the stream takes a frame and then resets, the core drops the waiting local copies and returns `Link(SendAfterClose)`. The exam scripts that case. The peer received the frame. A holder is therefore told that a publication failed which the peer received.
+
+## The client protocol
+
+The protocol follows [`network-service`](../../contracts/network-service/README.md). The holder resolves a nontransferable control endpoint and a provisioning endpoint. At attach, the service delegates one IO0 ring page and one 4096-byte data page as shared-buffer loans. A 64-byte descriptor accompanies each loan. The attach completion reports the number of rows the holder has.
+
+- **A request names a row.** It carries the row index, the operation and the holder's own sequence number. It names no key, holder, session, link or peer. The endpoint tells the service who the holder is.
+- **Publish.** The payload travels in the data page. The service stamps the timestamp from its own clock. The completion reports how many local holders the sample reached. One flag reports that a copy went to the peer.
+- **Take.** A take returns none, a sample or a loss count. A sample returns a 16-byte header and then the payload in the data page.
+- **Sizes.** A request is 32 bytes and a completion is 24 bytes. The IO0 payloads are 56 and 24 bytes. The largest sample payload is 4080 bytes, because the header and the payload fill the data page.
+- **A larger sample is outside this version.** The grants contract allows samples up to 1048576 bytes. A holder declared with a larger sample cannot be served by version 1.
+
+The client library is proposed in step 7 and has no exam yet. Its shape follows the network adapter. It owns one outstanding request. A missing or malformed completion poisons the session and returns the loans.
 
 ## Out of scope
 
@@ -90,4 +104,4 @@ The guarantee is that the link handed the frame to the byte stream. It is not th
 
 The core over a link was measured in a throwaway on a scripted byte stream. The throwaway produced the 52 cases and 129 controls, and a revert removed it. A mutation run changed the link-facing core in six ways and the exam, with the judge, refused all six. The first run accepted one of them, a second publication allowed while one waits. The exam then gained a call after the flush and before `settle`. One unreproduced segmentation fault occurred once in an earlier link probe, and I do not know its cause. No exam runs against an implementation until its PR lands. The recipe `just zenoh_service_link_check` fails until then.
 
-The rest of this record is a plan, and nothing in it is implemented. A throwaway session, a throwaway service core and a throwaway event change produced the pinned counts in a worktree. A revert removed them. The numbers come from those runs and not from reading the code. The first measurement of the row size gave 48 bytes, so the grants contract's row overhead is 48 and not the 24 I had assumed. The sizes are 28 for a slot, 48 for a row, 24 for a holder and 8 for the core beyond its rows and rings. The row holds a reference to its key, and the core keeps a second reference to each distinct key. No exam runs against an implementation until the implementation PRs land. The three new recipes fail until then.
+The client protocol has no Rust throwaway. Its judge reads the schema as text, so its 23 cases and 60 controls come from running that judge. In the first run of the controls, one edit was refused for the wrong reason. It meant to make a named field a byte array and broke the line instead. I rewrote it, and it is now refused as a byte array. The rest of this record is a plan, and nothing in it is implemented. A throwaway session, a throwaway service core and a throwaway event change produced the pinned counts in a worktree. A revert removed them. The numbers come from those runs and not from reading the code. The first measurement of the row size gave 48 bytes, so the grants contract's row overhead is 48 and not the 24 I had assumed. The sizes are 28 for a slot, 48 for a row, 24 for a holder and 8 for the core beyond its rows and rings. The row holds a reference to its key, and the core keeps a second reference to each distinct key. No exam runs against an implementation until the implementation PRs land. The three new recipes fail until then.

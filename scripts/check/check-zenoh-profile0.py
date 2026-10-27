@@ -115,6 +115,7 @@ import devloop_observations
 import zenoh_exchange
 import zenoh_links_exam
 import zenoh_grants_exam
+import zenoh_client_exam
 import zenoh_service_exam
 import zenoh_service_link_exam
 import zenoh_stock_peer
@@ -1885,6 +1886,35 @@ def grants_main(controls_only: bool) -> int:
     return 0
 
 
+def client_main(controls_only: bool) -> int:
+    try:
+        refused_controls = zenoh_client_exam.all_controls()
+        item_cases, item_controls = zenoh_client_exam.item_pins()
+        cases = len(zenoh_client_exam.facts())
+    except zenoh_client_exam.ClientError as error:
+        fail(str(error))
+    if cases != zenoh_client_exam.PINNED_CASES:
+        fail(f"client: the exam judges {cases} facts, the checker pins {zenoh_client_exam.PINNED_CASES}")
+    if refused_controls != zenoh_client_exam.PINNED_CONTROLS:
+        fail(f"client: {refused_controls} controls, the checker pins {zenoh_client_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_client_exam.PINNED_CASES:
+        fail(f"client: the admitted item fixes {item_cases} cases, the checker pins {zenoh_client_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_client_exam.PINNED_CONTROLS:
+        fail(f"client: the admitted item requires {item_controls} controls, the checker pins {zenoh_client_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 client judge: refused {refused_controls} corrupted schemas and generated files")
+        return 0
+    # The generated constants are the implementation's, so the recipe fails until they land.
+    try:
+        zenoh_client_exam.check_generated()
+    except zenoh_client_exam.ClientError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=client cases={cases} controls={refused_controls}")
+    devloop_observations.record(casesObserved=cases, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 client check: the protocol fits IO0, names no key or holder, and its constants are the generated ones")
+    return 0
+
+
 SERVICE_FILTER = "zenoh_service::"
 SERVICE_TESTS = ("zenoh_service::the_service_exam",)
 
@@ -2009,7 +2039,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2026,6 +2056,8 @@ def main() -> int:
         return subscribers_main(arguments.controls_only)
     if arguments.slice == "grants":
         return grants_main(arguments.controls_only)
+    if arguments.slice == "client":
+        return client_main(arguments.controls_only)
     if arguments.slice == "service":
         return service_main(arguments.controls_only)
     if arguments.slice == "service-link":

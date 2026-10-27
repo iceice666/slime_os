@@ -1,0 +1,146 @@
+-- Slime OS Zenoh service client protocol, version 1.
+--
+-- This is the protocol a local holder speaks to the Zenoh service. It names a grant row by its index in
+-- the holder's own list and never a key string, a link, a session or a peer. The service learns who the
+-- holder is from the endpoint the request arrives on, so no field here names a holder. Payload bytes
+-- travel in the data page beside the request, as they do in `network-service/v1`.
+
+formatVersion :: Int = 1;
+serviceMagic :: Int = 1515411011;
+
+-- IO0 limits this protocol must fit in: a request payload of 56 bytes and a completion payload of 24.
+requestBytes :: Int = 32;
+completionBytes :: Int = 24;
+loanBytes :: Int = 64;
+sampleHeaderBytes :: Int = 16;
+
+-- One ring page and one data page per holder, delegated as shared-buffer loans at attach.
+queueSlots :: Int = 4;
+ringPages :: Int = 1;
+dataPages :: Int = 1;
+ringBytes :: Int = 4096;
+dataBytes :: Int = 4096;
+loanRoleRing :: Int = 1;
+loanRoleData :: Int = 2;
+
+-- A take writes the sample header and then the payload into the data page, so a holder's declared sample
+-- size may not exceed what is left of the page. The grants contract allows larger samples. A holder that
+-- needs one is outside this version.
+maxSamplePayloadBytes :: Int = 4080;
+
+-- A row index is 16 bits, as the grants contract's counts are.
+maxRows :: Int = 65535;
+
+-- Control endpoint: attach, teardown and abort. IO0 ring: publish and take.
+opAttach :: Int = 1;
+opPublish :: Int = 2;
+opTake :: Int = 3;
+opDetach :: Int = 4;
+opAbort :: Int = 5;
+
+-- What a take returned. A publish completion carries itemNone.
+itemNone :: Int = 0;
+itemSample :: Int = 1;
+itemLoss :: Int = 2;
+
+-- A publish completion reports whether the service sent a copy to the peer.
+flagPeerSent :: Int = 1;
+knownCompletionFlags :: Int = 1;
+
+statusSuccess :: Int = 0;
+statusDenied :: Int = -1;
+statusMalformed :: Int = -2;
+statusUnsupported :: Int = -3;
+statusTooLarge :: Int = -4;
+statusLinkClosed :: Int = -5;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+-- `sequence` is the holder's own counter for a publish and zero for a take. The service stamps the
+-- timestamp from its own clock, so a holder cannot forge one.
+ServiceRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  flags : Int;
+  row : Int;
+  reserved : Int;
+  sequence : Int;
+  reserved2 : Int;
+};
+
+-- For a take, `length` is the payload length of a sample or the count of samples lost. For a publish,
+-- `length` is the number of local holders the sample reached. For an attach, `length` is the number of
+-- rows the holder has.
+ServiceCompletion :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  item : Int;
+  status : Int;
+  row : Int;
+  reserved : Int;
+  length : Int;
+  flags : Int;
+};
+
+-- The first bytes of the data page after a take that returned a sample. The payload follows.
+SampleHeader :: type {
+  sequence : Int;
+  timestamp : Int;
+};
+
+ServiceLoan :: type {
+  magic : Int;
+  version : Int;
+  role : Int;
+  reserved0 : Int;
+  buffer : Int;
+  lease : Int;
+  length : Int;
+  reserved : Int;
+};
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "flags"; width = 1; signed = false; byteArray = false; };
+  { name = "row"; width = 2; signed = false; byteArray = false; };
+  { name = "reserved"; width = 2; signed = false; byteArray = true; };
+  { name = "sequence"; width = 8; signed = true; byteArray = false; };
+  { name = "reserved2"; width = 12; signed = false; byteArray = true; };
+};
+
+completionLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "item"; width = 1; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "row"; width = 2; signed = false; byteArray = false; };
+  { name = "reserved"; width = 2; signed = false; byteArray = true; };
+  { name = "length"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+};
+
+sampleHeaderLayout :: List WireField = {
+  { name = "sequence"; width = 8; signed = true; byteArray = false; };
+  { name = "timestamp"; width = 8; signed = true; byteArray = false; };
+};
+
+loanLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "role"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 1; signed = false; byteArray = true; };
+  { name = "buffer"; width = 8; signed = false; byteArray = false; };
+  { name = "lease"; width = 8; signed = false; byteArray = false; };
+  { name = "length"; width = 8; signed = false; byteArray = false; };
+  { name = "reserved"; width = 32; signed = false; byteArray = true; };
+};
+
+requestSchema ::= schema ServiceRequest;
+completionSchema ::= schema ServiceCompletion;
+sampleHeaderSchema ::= schema SampleHeader;
+loanSchema ::= schema ServiceLoan;
