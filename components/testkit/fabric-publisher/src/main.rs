@@ -29,6 +29,7 @@ use slime_proto::fabric_stream::{
 use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::ring::{Ring, RingError};
 use slime_proto::valid_capability_transfer;
+use slime_rt::console_line::Line;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -147,9 +148,11 @@ fn prove_graph_self_view() {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric-publisher] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[fabric-publisher] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -353,11 +356,13 @@ fn matrix_main() {
                     // A route dropping out of the view shifts every later one
                     // forward, so the position that mismatches is the position
                     // the missing route vacated.
-                    slime_rt::debug_write(b"[fabric-publisher] matrix graph view expected ");
-                    slime_rt::debug_write(expected);
-                    slime_rt::debug_write(b" but was shown ");
-                    slime_rt::debug_write(&record.route_name[..record.route_name_len as usize]);
-                    slime_rt::debug_write(b"\n");
+                    Line::<256>::new()
+                        .bytes(b"[fabric-publisher] matrix graph view expected ")
+                        .bytes(expected)
+                        .bytes(b" but was shown ")
+                        .bytes(&record.route_name[..record.route_name_len as usize])
+                        .bytes(b"\n")
+                        .emit();
                     fail(b"matrix graph view route order");
                 }
                 if record.contract_kind != CONTRACT_KIND_STREAM as u8 {

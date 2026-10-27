@@ -324,9 +324,11 @@ fn sample_descriptor(loan_id: u64, length: u64) -> [u8; slime_rt::MAX_MSG] {
     .encode()
 }
 fn fail_loan(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] loan plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[init] loan plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 /// Yields given up so a peer can reach its first `recv` and park. Generous

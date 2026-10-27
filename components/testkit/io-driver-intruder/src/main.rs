@@ -1,9 +1,10 @@
 #![no_std]
 #![no_main]
 
+use slime_rt::console_line::Line;
 use slime_rt::{
-    DmaDirection, DmaMapping, ERR_SUCCESS, debug_write, exit, io_device_bind, io_dma_map,
-    io_dma_release, io_irq_ack, io_mmio_map, io_mmio_read32,
+    DmaDirection, DmaMapping, ERR_SUCCESS, exit, io_device_bind, io_dma_map, io_dma_release,
+    io_irq_ack, io_mmio_map, io_mmio_read32,
 };
 
 slime_rt::entry!(main);
@@ -50,32 +51,25 @@ fn main(_: u32) {
     }
     interrupt_denials += 1;
 
-    write_number(b"[io-driver-intruder] denied device=", device_denials);
-    write_number(b" mmio=", mmio_denials);
-    write_number(b" dma=", dma_denials);
-    write_number(b" interrupt=", interrupt_denials);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-driver-intruder] denied device=")
+        .decimal(device_denials)
+        .bytes(b" mmio=")
+        .decimal(mmio_denials)
+        .bytes(b" dma=")
+        .decimal(dma_denials)
+        .bytes(b" interrupt=")
+        .decimal(interrupt_denials)
+        .bytes(b"\n")
+        .emit();
     exit(0)
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-driver-intruder] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-driver-intruder] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

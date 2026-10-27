@@ -59,16 +59,6 @@ static void console_write_chunk(const uint8_t *bytes, size_t len)
     seL4_SendWithMRs(SLIME_CONSOLE_SERVICE_SLOT, info, &mr0, &mr1, &mr2, &mr3);
 }
 
-void slime_debug_write(const uint8_t *bytes, size_t len)
-{
-    while (len != 0) {
-        size_t chunk = len < SLIME_INLINE_BYTES ? len : SLIME_INLINE_BYTES;
-        console_write_chunk(bytes, chunk);
-        bytes += chunk;
-        len -= chunk;
-    }
-}
-
 static void copy_bytes(uint8_t *destination, const uint8_t *source, size_t len)
 {
     size_t index;
@@ -76,6 +66,68 @@ static void copy_bytes(uint8_t *destination, const uint8_t *source, size_t len)
         destination[index] = source[index];
     }
 }
+
+/* The console dispatcher prints each message as one record. A write longer
+ * than the fast registers is staged in this thread's transfer window, the
+ * granule above its IPC buffer that slime-root maps for every component, so
+ * one write up to SLIME_CONSOLE_RECORD_BYTES stays one record. */
+static void console_write_window(const uint8_t *bytes, size_t len)
+{
+    uintptr_t buffer = align_up((uintptr_t)_end, SLIME_GRANULE_BYTES);
+    uint8_t *window = (uint8_t *)(buffer + SLIME_GRANULE_BYTES);
+    seL4_Word mr0 = 0;
+    seL4_Word mr1 = descriptor(len, SLIME_DESCRIPTOR_FORM_WINDOW, 0);
+    seL4_Word mr2 = 0;
+    seL4_Word mr3 = 0;
+    seL4_MessageInfo_t info = seL4_MessageInfo_new(SLIME_CONSOLE_LABEL_WRITE, 0, 0, 2);
+    copy_bytes(window, bytes, len);
+    seL4_SendWithMRs(SLIME_CONSOLE_SERVICE_SLOT, info, &mr0, &mr1, &mr2, &mr3);
+}
+
+void slime_debug_write(const uint8_t *bytes, size_t len)
+{
+    while (len != 0) {
+        size_t chunk = len < SLIME_CONSOLE_RECORD_BYTES ? len : SLIME_CONSOLE_RECORD_BYTES;
+        if (chunk <= SLIME_INLINE_BYTES) {
+            console_write_chunk(bytes, chunk);
+        } else {
+            console_write_window(bytes, chunk);
+        }
+        bytes += chunk;
+        len -= chunk;
+    }
+}
+
+/* One pending console line. Bytes collect here until a newline, then the
+ * whole line goes out in one slime_debug_write, so a root record cannot land
+ * inside it. slime_line_flush sends a partial line, for interactive output
+ * such as a prompt or an echoed key. A line longer than the buffer is sent in
+ * buffer-sized parts. */
+static uint8_t pending_line[SLIME_LINE_BYTES];
+static size_t pending_used;
+
+void slime_line_flush(void)
+{
+    if (pending_used != 0) {
+        slime_debug_write(pending_line, pending_used);
+        pending_used = 0;
+    }
+}
+
+void slime_line_write(const uint8_t *bytes, size_t len)
+{
+    size_t index;
+    for (index = 0; index < len; ++index) {
+        if (pending_used == sizeof(pending_line)) {
+            slime_line_flush();
+        }
+        pending_line[pending_used++] = bytes[index];
+        if (bytes[index] == '\n') {
+            slime_line_flush();
+        }
+    }
+}
+
 
 /* The answer a receive or a call left in the IPC buffer. Its label is the
  * byte length, which must fit both the words the kernel delivered and the

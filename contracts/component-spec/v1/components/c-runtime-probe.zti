@@ -8,7 +8,7 @@
   implementation = {
     provider = "external";
     binary = "c-runtime-probe-external";
-    contentHash = "bc4b0f96fa16800e9bab5b8b10a0d03ad2e59bd6a83baed69acfeaa281a4ecca";
+    contentHash = "d5daa908425953c7cad44934c8ebdea470264e618ec8022ed6c9c603b2b49b89";
   };
   provides = [];
   requires = [];

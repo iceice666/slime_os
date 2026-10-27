@@ -26,6 +26,7 @@
 //! from "the root re-served a page this incarnation had already written".
 
 use slime_rt::PrivateMemory;
+use slime_rt::console_line::Line;
 
 slime_rt::entry!(main);
 
@@ -83,15 +84,23 @@ fn main(_startup_arg: u32) {
 
     touch(cycle, &region);
 
-    slime_rt::debug_write(b"[private-cycle-probe] cycle=");
-    write_decimal(cycle as usize);
-    slime_rt::debug_write(b" pages=");
-    write_decimal(CYCLE_PAGES);
-    slime_rt::debug_write(b" base=");
-    write_hex(region.base);
-    slime_rt::debug_write(b" stamp=");
-    write_hex(stamp(cycle) as usize);
-    slime_rt::debug_write(b" zeroed=1 verified=1 end=");
+    let end: &[u8] = if cycle % 2 == 0 {
+        b"exit\n"
+    } else {
+        b"fault\n"
+    };
+    Line::<192>::new()
+        .bytes(b"[private-cycle-probe] cycle=")
+        .decimal(cycle)
+        .bytes(b" pages=")
+        .decimal(CYCLE_PAGES as u64)
+        .bytes(b" base=0x")
+        .hex(region.base as u64)
+        .bytes(b" stamp=0x")
+        .hex(stamp(cycle))
+        .bytes(b" zeroed=1 verified=1 end=")
+        .bytes(end)
+        .emit();
 
     // Odd cycles die by fault, even ones by exit. Alternating rather than
     // running ten of each in sequence: a reclamation defect that only appears
@@ -99,10 +108,8 @@ fn main(_startup_arg: u32) {
     // reverse) survives two separate runs of one path, and this orders both
     // transitions ten times each.
     if cycle % 2 == 0 {
-        slime_rt::debug_write(b"exit\n");
         slime_rt::exit(0)
     }
-    slime_rt::debug_write(b"fault\n");
     if cycle % 4 == 1 {
         fault_past_window(region.base + CYCLE_PAGES * 4096, stamp(cycle));
     } else {
@@ -236,68 +243,25 @@ fn cycle_token() -> Option<u64> {
 }
 
 fn report_fail(cycle: u64, reason: &[u8], detail: usize) -> ! {
-    slime_rt::debug_write(b"[private-cycle-probe] FAIL cycle=");
-    write_decimal(cycle as usize);
-    slime_rt::debug_write(b" ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b" detail=");
-    write_decimal(detail);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[private-cycle-probe] FAIL cycle=")
+        .decimal(cycle)
+        .bytes(b" ")
+        .bytes(reason)
+        .bytes(b" detail=")
+        .decimal(detail as u64)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
 fn fail(reason: &[u8], error: i64) -> ! {
-    slime_rt::debug_write(b"[private-cycle-probe] FAIL ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b" error=");
-    if error < 0 {
-        slime_rt::debug_write(b"-");
-        write_decimal(error.unsigned_abs() as usize);
-    } else {
-        write_decimal(error as usize);
-    }
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[private-cycle-probe] FAIL ")
+        .bytes(reason)
+        .bytes(b" error=")
+        .signed(error)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
-}
-
-fn write_decimal(value: usize) {
-    let mut digits = [0u8; 20];
-    let mut length = 0;
-    let mut remaining = value;
-    loop {
-        digits[length] = b'0' + (remaining % 10) as u8;
-        length += 1;
-        remaining /= 10;
-        if remaining == 0 {
-            break;
-        }
-    }
-    let mut reversed = [0u8; 20];
-    for index in 0..length {
-        reversed[index] = digits[length - 1 - index];
-    }
-    slime_rt::debug_write(&reversed[..length]);
-}
-
-fn write_hex(value: usize) {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 18];
-    buffer[0] = b'0';
-    buffer[1] = b'x';
-    let mut length = 2;
-    let mut shift = 60;
-    let mut leading = true;
-    loop {
-        let nibble = (value >> shift) & 0xf;
-        if nibble != 0 || !leading || shift == 0 {
-            buffer[length] = DIGITS[nibble];
-            length += 1;
-            leading = false;
-        }
-        if shift == 0 {
-            break;
-        }
-        shift -= 4;
-    }
-    slime_rt::debug_write(&buffer[..length]);
 }

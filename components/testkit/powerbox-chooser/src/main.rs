@@ -6,6 +6,7 @@ use slime_proto::{
     powerbox::{self, WirePowerboxReply, WirePowerboxRequest},
     valid_powerbox_request,
 };
+use slime_rt::console_line::Line;
 use slime_rt::{CapabilityDisposition, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG};
 
 // B59: rights bit numbering is generated from
@@ -96,19 +97,23 @@ fn wait_gesture() -> Gesture {
 }
 
 fn render_prompt(request: &WirePowerboxRequest) {
-    slime_rt::debug_write(b"[powerbox] request kind=file purpose=");
-    slime_rt::debug_write(&request.purpose[..request.purpose_len as usize]);
-    slime_rt::debug_write(b" [Enter=select Escape=cancel]\n");
+    Line::<128>::new()
+        .bytes(b"[powerbox] request kind=file purpose=")
+        .bytes(&request.purpose[..request.purpose_len as usize])
+        .bytes(b" [Enter=select Escape=cancel]\n")
+        .emit();
 }
 
 fn record_provenance(event_id: u64, request: &WirePowerboxRequest) {
-    slime_rt::debug_write(b"[powerbox-provenance] event=");
-    write_u64(event_id);
-    slime_rt::debug_write(b" gesture=select kind=file path=note rights=");
-    write_hex_u32(request.requested_rights);
-    slime_rt::debug_write(b" purpose=");
-    slime_rt::debug_write(&request.purpose[..request.purpose_len as usize]);
-    slime_rt::debug_write(b"\n");
+    Line::<160>::new()
+        .bytes(b"[powerbox-provenance] event=")
+        .decimal(event_id)
+        .bytes(b" gesture=select kind=file path=note rights=0x")
+        .hex_bytes(&request.requested_rights.to_be_bytes())
+        .bytes(b" purpose=")
+        .bytes(&request.purpose[..request.purpose_len as usize])
+        .bytes(b"\n")
+        .emit();
 }
 
 fn selected(event_id: u64, request: &WirePowerboxRequest) -> WirePowerboxReply {
@@ -209,29 +214,4 @@ fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
             slime_rt::exit(1);
         }
     }
-}
-
-fn write_hex_u32(value: u32) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut buffer = [0u8; 10];
-    buffer[..2].copy_from_slice(b"0x");
-    for index in 0..8 {
-        buffer[index + 2] = HEX[((value >> ((7 - index) * 4)) & 0xf) as usize];
-    }
-    slime_rt::debug_write(&buffer);
-}
-
-fn write_u64(mut value: u64) {
-    let mut buffer = [0u8; 20];
-    let mut cursor = buffer.len();
-    if value == 0 {
-        slime_rt::debug_write(b"0");
-        return;
-    }
-    while value != 0 {
-        cursor -= 1;
-        buffer[cursor] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    slime_rt::debug_write(&buffer[cursor..]);
 }

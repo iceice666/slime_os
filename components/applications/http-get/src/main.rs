@@ -8,7 +8,8 @@
 use slime_components::http::{self, Error, ResponseDecoder, Url};
 use slime_components::network_io::{Connection, NetworkIo, NetworkNotifications, NetworkReply};
 use slime_proto::network_service::{self as net, WireNetworkLaunch};
-use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit};
+use slime_rt::console_line::Line as ConsoleLine;
+use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, exit};
 
 #[path = "../../../lib/src/launch_context.rs"]
 #[allow(dead_code)]
@@ -413,7 +414,11 @@ impl Record {
     }
 
     fn write(&self) -> Result<(), Error> {
-        if self.overflow || debug_write(&self.bytes[..self.length]) != self.length as i64 {
+        if self.overflow
+            || !ConsoleLine::<192>::new()
+                .bytes(&self.bytes[..self.length])
+                .emit()
+        {
             Err(Error::Output)
         } else {
             Ok(())

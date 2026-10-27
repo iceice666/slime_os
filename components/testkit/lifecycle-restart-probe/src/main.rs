@@ -52,6 +52,7 @@ use boot_contracts::lifecycle_policy::{
     CAUSE_EXIT, CAUSE_FAULT, CAUSE_UNHEALTHY, STATE_ERROR, STATE_INITIALIZE, STATE_READY,
     STATE_RUNNING, STATE_STOP, UNDECLARED_CAUSE_ID,
 };
+use slime_rt::console_line::Line;
 use slime_rt::{
     LifecycleStateInfo, PARAMETER_SELF_SLOT, debug_write, exit, lifecycle_parameter_read,
     lifecycle_parameter_write, lifecycle_restart_admit, lifecycle_state_advance,
@@ -505,18 +506,17 @@ fn write_value(prefix: &[u8], value: u64) {
 /// Each marker is one console request; separate fragments can interleave
 /// with clock-service output between requests.
 fn write_line(parts: &[&[u8]]) {
-    let mut line = [0u8; 256];
+    let mut line = Line::<256>::new();
     let mut used = 0usize;
     for part in parts {
-        let Some(end) = used.checked_add(part.len()).filter(|end| *end < line.len()) else {
+        let Some(end) = used.checked_add(part.len()).filter(|end| *end < 256) else {
             debug_write(b"[lifecycle] FAIL marker exceeds bound\n");
             exit(1);
         };
-        line[used..end].copy_from_slice(part);
+        line.bytes(part);
         used = end;
     }
-    line[used] = b'\n';
-    debug_write(&line[..used + 1]);
+    line.bytes(b"\n").emit();
 }
 
 fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {

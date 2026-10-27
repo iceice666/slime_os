@@ -22,6 +22,7 @@ use slime_proto::entropy_source::{
     WireEntropySourceRequest,
 };
 use slime_proto::valid_entropy_source_request;
+use slime_rt::console_line::Line;
 use slime_rt::{
     MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, io_device_bind, io_queue_map, recv_blocking,
     yield_now,
@@ -248,8 +249,10 @@ fn answer(status: i32, bytes: &[u8]) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[virtio-rng-driver] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-rng-driver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

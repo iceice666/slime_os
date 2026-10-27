@@ -79,30 +79,6 @@ pub fn reply_identity(reply: WireGenerationReply) -> [u8; 32] {
     }
     identity
 }
-#[allow(dead_code)]
-pub fn write_i32(value: i32) {
-    if value < 0 {
-        slime_rt::debug_write(b"-");
-        write_u32(value.unsigned_abs());
-    } else {
-        write_u32(value as u32);
-    }
-}
-#[allow(dead_code)]
-pub fn write_u32(mut value: u32) {
-    let mut buffer = [0u8; 10];
-    let mut cursor = buffer.len();
-    if value == 0 {
-        slime_rt::debug_write(b"0");
-        return;
-    }
-    while value != 0 {
-        cursor -= 1;
-        buffer[cursor] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    slime_rt::debug_write(&buffer[cursor..]);
-}
 
 fn identity_words(identity: [u8; 32]) -> [u64; 4] {
     core::array::from_fn(|index| {
@@ -110,9 +86,11 @@ fn identity_words(identity: [u8; 32]) -> [u64; 4] {
     })
 }
 fn fail_with(stage: &[u8], error: i64) -> ! {
-    slime_rt::debug_write(b"[generation-command] ");
-    slime_rt::debug_write(stage);
-    slime_rt::debug_write(b" error\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[generation-command] ")
+        .bytes(stage)
+        .bytes(b" error\n")
+        .emit();
     let _ = error;
     slime_rt::exit(1)
 }

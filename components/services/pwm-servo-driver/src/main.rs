@@ -37,6 +37,7 @@ use slime_proto::pwm_servo::{
     WirePwmServoRequest,
 };
 use slime_proto::valid_pwm_servo_request;
+use slime_rt::console_line::Line;
 use slime_rt::{
     ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, io_device_bind, io_mmio_map,
     monotonic_frequency, monotonic_read, recv, reply, yield_now,
@@ -121,8 +122,11 @@ fn main(_: u32) {
         }
         Some(page) => match Model::attach(page) {
             Some(model) => {
-                write_number(b"[pwm-servo-driver] ready clk_hz=", u64::from(CLOCK_HZ));
-                debug_write(b"\n");
+                Line::<96>::new()
+                    .bytes(b"[pwm-servo-driver] ready clk_hz=")
+                    .decimal(u64::from(CLOCK_HZ))
+                    .bytes(b"\n")
+                    .emit();
                 Some(model)
             }
             None => {
@@ -183,11 +187,15 @@ impl Driver {
         else {
             return answer(STATUS_MALFORMED, 0);
         };
-        debug_write(b"[pwm-servo-driver] request ch=");
-        write_number(b"", u64::from(request.channel));
-        write_number(b" period_us=", u64::from(request.period_us));
-        write_number(b" pulse_us=", u64::from(request.pulse_us));
-        debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[pwm-servo-driver] request ch=")
+            .decimal(u64::from(request.channel))
+            .bytes(b" period_us=")
+            .decimal(u64::from(request.period_us))
+            .bytes(b" pulse_us=")
+            .decimal(u64::from(request.pulse_us))
+            .bytes(b"\n")
+            .emit();
         if request.channel > MAX_CHANNEL {
             return answer(STATUS_BAD_CHANNEL, 0);
         }
@@ -234,14 +242,21 @@ impl Driver {
         }
         for &(index, period_us) in &due[..count] {
             let ch = index as u32;
-            write_number(b"[pwm-servo-driver] failsafe ch=", u64::from(ch));
-            write_number(b" pulse_us=", u64::from(IDLE_PULSE_US));
-            debug_write(b"\n");
+            Line::<128>::new()
+                .bytes(b"[pwm-servo-driver] failsafe ch=")
+                .decimal(u64::from(ch))
+                .bytes(b" pulse_us=")
+                .decimal(u64::from(IDLE_PULSE_US))
+                .bytes(b"\n")
+                .emit();
             if model.program(ch, period_us, IDLE_PULSE_US).0 == STATUS_OK {
                 self.failsafe.returned(index);
             } else {
-                write_number(b"[pwm-servo-driver] failsafe deferred ch=", u64::from(ch));
-                debug_write(b"\n");
+                Line::<128>::new()
+                    .bytes(b"[pwm-servo-driver] failsafe deferred ch=")
+                    .decimal(u64::from(ch))
+                    .bytes(b"\n")
+                    .emit();
                 self.failsafe.deferred(index, now_ms);
             }
         }
@@ -257,25 +272,11 @@ fn answer(status: i32, detail: u32) -> WirePwmServoReply {
     }
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    debug_write(prefix);
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    if value == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while value != 0 {
-        index -= 1;
-        digits[index] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    debug_write(&digits[index..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[pwm-servo-driver] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[pwm-servo-driver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

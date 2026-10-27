@@ -42,6 +42,7 @@ use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 use slime_proto::{valid_capability_transfer, valid_stream_event};
+use slime_rt::console_line::Line;
 use slime_rt::{CapabilityDisposition, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -153,9 +154,11 @@ fn ring_slots_checked(identity: &[u8; 32]) -> usize {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric-publisher-b] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[fabric-publisher-b] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

@@ -7,6 +7,7 @@ use slime_proto::io_queue::{
     self, COMPLETION_PAYLOAD_BYTES, DIRECTION_DEVICE_READ, STATUS_OK, STATUS_RESET, WireBufferSlice,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError, format};
+use slime_rt::console_line::Line;
 use slime_rt::{
     CapabilityDisposition, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, WaitSet, capability_delegate,
     debug_write, exit, notification_signal, resolve_binding, shared_buffer_create,
@@ -278,8 +279,10 @@ fn signal(slot: u32) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-queue-client] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-queue-client] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

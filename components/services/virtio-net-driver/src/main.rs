@@ -25,6 +25,7 @@ use slime_proto::link_device::{
     OP_RESET, OP_STATISTICS, OP_TRANSMIT, WireLinkReply, WireLinkRequest,
 };
 use slime_proto::valid_link_request;
+use slime_rt::console_line::Line;
 use slime_rt::{
     DmaDirection, DmaMapping, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit,
     io_device_bind, io_dma_map, io_dma_release, io_queue_map, io_request_begin, io_request_settle,
@@ -326,11 +327,17 @@ fn main(_startup_arg: u32) {
     };
     // Accepted feature set, programmed virtqueue depth, and driver epoch, each
     // read back from what was actually written rather than from a constant.
-    write_number(b"[virtio-net-driver] negotiated legacy features=", 0);
-    write_number(b" queues rx=", VIRT_SLOTS as u64);
-    write_number(b" tx=", VIRT_SLOTS as u64);
-    write_number(b" epoch=", driver.epoch);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] negotiated legacy features=")
+        .decimal(0)
+        .bytes(b" queues rx=")
+        .decimal(VIRT_SLOTS as u64)
+        .bytes(b" tx=")
+        .decimal(VIRT_SLOTS as u64)
+        .bytes(b" epoch=")
+        .decimal(driver.epoch)
+        .bytes(b"\n")
+        .emit();
     // QEMU packs eight 0x200 transports into one 4KiB granule, so this
     // region is not page-exclusive and IO1 admits only the mediated path.
     debug_write(b"[virtio-net-driver] mmio mechanism=mediated-bounded-read32-write32\n");
@@ -429,16 +436,15 @@ fn drain_requests(
                 STATUS_MALFORMED,
                 ready,
             );
-            write_number(
-                b"[virtio-net-driver] bounds refused undersized=",
-                driver.undersized_refused as u64,
-            );
-            write_number(b" oversized=", driver.oversized_refused as u64);
-            write_number(
-                b" device-programmed=",
-                (driver.charges.programmed - programmed_before) as u64,
-            );
-            debug_write(b"\n");
+            Line::<256>::new()
+                .bytes(b"[virtio-net-driver] bounds refused undersized=")
+                .decimal(driver.undersized_refused as u64)
+                .bytes(b" oversized=")
+                .decimal(driver.oversized_refused as u64)
+                .bytes(b" device-programmed=")
+                .decimal((driver.charges.programmed - programmed_before) as u64)
+                .bytes(b"\n")
+                .emit();
             continue;
         }
         if request.op == OP_RESET {
@@ -489,15 +495,13 @@ fn drain_requests(
                 STATUS_BAD_SLICE,
                 ready,
             );
-            write_number(
-                b"[virtio-net-driver] malformed descriptor refused=",
-                driver.overrun_refused as u64,
-            );
-            write_number(
-                b" device-programmed=",
-                (driver.charges.programmed - programmed_before) as u64,
-            );
-            debug_write(b"\n");
+            Line::<256>::new()
+                .bytes(b"[virtio-net-driver] malformed descriptor refused=")
+                .decimal(driver.overrun_refused as u64)
+                .bytes(b" device-programmed=")
+                .decimal((driver.charges.programmed - programmed_before) as u64)
+                .bytes(b"\n")
+                .emit();
             continue;
         }
         let Some(loan_slot) = driver
@@ -695,11 +699,11 @@ fn drain_used(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_chang
         driver.pass_rx_max = pass_rx;
     }
     if !driver.first_tx_reported && driver.tx_frames > 0 {
-        write_number(
-            b"[virtio-net-driver] tx completed frames=",
-            driver.tx_frames as u64,
-        );
-        debug_write(b"\n");
+        Line::<256>::new()
+            .bytes(b"[virtio-net-driver] tx completed frames=")
+            .decimal(driver.tx_frames as u64)
+            .bytes(b"\n")
+            .emit();
         driver.first_tx_reported = true;
     }
 }
@@ -713,10 +717,13 @@ fn outstanding_chains(link: &LinkQueue<'_>) -> u16 {
 }
 
 fn report_device_refusal(driver: &Driver<'_>, reason: &[u8]) {
-    debug_write(b"[virtio-net-driver] device refused=");
-    debug_write(reason);
-    write_number(b" total=", driver.device_refused as u64);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] device refused=")
+        .bytes(reason)
+        .bytes(b" total=")
+        .decimal(driver.device_refused as u64)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn settle(
@@ -792,22 +799,28 @@ fn settle_error(link: &mut LinkQueue<'_>, slot: usize, ready: u32, charges: &mut
 
 fn reset(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_changed: u32) {
     // Progress and continuity totals, measured, before the epoch moves.
-    write_number(b"[virtio-net-driver] rx drained=", driver.rx_frames as u64);
-    write_number(b" replenished=", driver.rx_replenished as u64);
-    write_number(b" stalled=", driver.rx_stalled as u64);
-    write_number(b" tx-stalled=", driver.tx_stalled as u64);
-    write_number(b" device-refused=", driver.device_refused as u64);
-    debug_write(b"\n");
-    write_number(
-        b"[virtio-net-driver] coalesced pass tx=",
-        driver.pass_tx_max as u64,
-    );
-    write_number(b" rx=", driver.pass_rx_max as u64);
-    write_number(
-        b" drained=all remaining-tx=",
-        driver.tx.outstanding.len() as u64,
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] rx drained=")
+        .decimal(driver.rx_frames as u64)
+        .bytes(b" replenished=")
+        .decimal(driver.rx_replenished as u64)
+        .bytes(b" stalled=")
+        .decimal(driver.rx_stalled as u64)
+        .bytes(b" tx-stalled=")
+        .decimal(driver.tx_stalled as u64)
+        .bytes(b" device-refused=")
+        .decimal(driver.device_refused as u64)
+        .bytes(b"\n")
+        .emit();
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] coalesced pass tx=")
+        .decimal(driver.pass_tx_max as u64)
+        .bytes(b" rx=")
+        .decimal(driver.pass_rx_max as u64)
+        .bytes(b" drained=all remaining-tx=")
+        .decimal(driver.tx.outstanding.len() as u64)
+        .bytes(b"\n")
+        .emit();
     driver.tx.queue.begin_reset();
     driver.rx.queue.begin_reset();
     signal(state_changed);
@@ -821,22 +834,33 @@ fn reset(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_changed: u
         .unwrap_or_else(|_| fail(b"queued tx reset"));
     let queued_rx = reset::settle_queued(&mut driver.rx.queue, &rx_ids, PAGE)
         .unwrap_or_else(|_| fail(b"queued rx reset"));
-    write_number(b"[virtio-net-driver] reset queued tx=", queued_tx as u64);
-    write_number(b" rx=", queued_rx as u64);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] reset queued tx=")
+        .decimal(queued_tx as u64)
+        .bytes(b" rx=")
+        .decimal(queued_rx as u64)
+        .bytes(b"\n")
+        .emit();
     signal(tx_ready);
     signal(rx_ready);
-    write_number(b"[virtio-net-driver] reset settled tx=", tx as u64);
-    write_number(b" rx=", rx as u64);
-    write_number(b" leases=", (tx + rx) as u64);
-    debug_write(b"\n");
-    write_number(
-        b"[virtio-net-driver] restart reclaimed dma=",
-        driver.charges.dma_live as u64,
-    );
-    write_number(b" requests=", driver.charges.requests_live as u64);
-    write_number(b" leases=", driver.charges.leases_live as u64);
-    debug_write(b" mmio=1 irq=1\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] reset settled tx=")
+        .decimal(tx as u64)
+        .bytes(b" rx=")
+        .decimal(rx as u64)
+        .bytes(b" leases=")
+        .decimal((tx + rx) as u64)
+        .bytes(b"\n")
+        .emit();
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] restart reclaimed dma=")
+        .decimal(driver.charges.dma_live as u64)
+        .bytes(b" requests=")
+        .decimal(driver.charges.requests_live as u64)
+        .bytes(b" leases=")
+        .decimal(driver.charges.leases_live as u64)
+        .bytes(b" mmio=1 irq=1\n")
+        .emit();
     // `advance_epoch` zeroes both rings, so the client must have consumed its
     // reset completions before the epoch moves. It says so by message: nothing
     // else can tell the driver that a terminal answer was actually read.
@@ -856,9 +880,13 @@ fn reset(driver: &mut Driver<'_>, tx_ready: u32, rx_ready: u32, state_changed: u
     if fresh_tx != fresh_rx {
         fail(b"duplex epoch");
     }
-    write_number(b"[virtio-net-driver] fresh epoch old=", driver.epoch);
-    write_number(b" new=", fresh_tx);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] fresh epoch old=")
+        .decimal(driver.epoch)
+        .bytes(b" new=")
+        .decimal(fresh_tx)
+        .bytes(b"\n")
+        .emit();
     driver
         .tx
         .outstanding
@@ -1028,29 +1056,20 @@ fn signal(slot: u32) {
         fail(b"service wake signal");
     }
 }
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
 fn fail_count(prefix: &[u8], value: u64) -> ! {
-    debug_write(b"[virtio-net-driver] fail: ");
-    write_number(prefix, value);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] fail: ")
+        .bytes(prefix)
+        .decimal(value)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[virtio-net-driver] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-net-driver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

@@ -19,6 +19,7 @@ mod call_broker;
 mod trace_log;
 
 use boot_contracts::generation::BootAction;
+use slime_rt::console_line::Line;
 
 slime_rt::entry!(main);
 
@@ -144,9 +145,11 @@ fn main(_startup_arg: u32) {
 /// not a reason to fall back to the old slot layout.
 fn resolve_required(grant: &'static [u8]) -> u32 {
     slime_rt::resolve_binding(grant).unwrap_or_else(|_| {
-        slime_rt::debug_write(b"[fabric-call-worker] missing binding: ");
-        slime_rt::debug_write(grant);
-        slime_rt::debug_write(b"\n");
+        Line::<256>::new()
+            .bytes(b"[fabric-call-worker] missing binding: ")
+            .bytes(grant)
+            .bytes(b"\n")
+            .emit();
         slime_rt::exit(1)
     })
 }
@@ -190,9 +193,11 @@ fn resolve_supervision(component: &'static [u8]) -> u32 {
     name[PREFIX.len()..PREFIX.len() + component.len()].copy_from_slice(component);
     name[PREFIX.len() + component.len()..end].copy_from_slice(SUFFIX);
     slime_rt::resolve_binding(&name[..end]).unwrap_or_else(|_| {
-        slime_rt::debug_write(b"[fabric-call-worker] missing binding: ");
-        slime_rt::debug_write(&name[..end]);
-        slime_rt::debug_write(b"\n");
+        Line::<256>::new()
+            .bytes(b"[fabric-call-worker] missing binding: ")
+            .bytes(&name[..end])
+            .bytes(b"\n")
+            .emit();
         slime_rt::exit(1)
     })
 }
@@ -200,17 +205,21 @@ fn resolve_supervision(component: &'static [u8]) -> u32 {
 fn resolve_optional_retirement(grant: Option<&'static [u8]>) -> Option<u32> {
     grant.map(|grant| {
         slime_rt::resolve_binding(grant).unwrap_or_else(|_| {
-            slime_rt::debug_write(b"[fabric-call-worker] missing binding: ");
-            slime_rt::debug_write(grant);
-            slime_rt::debug_write(b"\n");
+            Line::<256>::new()
+                .bytes(b"[fabric-call-worker] missing binding: ")
+                .bytes(grant)
+                .bytes(b"\n")
+                .emit();
             slime_rt::exit(1)
         })
     })
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric-call-worker] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[fabric-call-worker] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

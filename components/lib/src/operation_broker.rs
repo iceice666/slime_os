@@ -1662,9 +1662,11 @@ fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[fabric] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

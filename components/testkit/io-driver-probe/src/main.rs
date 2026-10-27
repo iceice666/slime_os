@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use slime_rt::console_line::Line;
 use slime_rt::{
     SpawnGrant, Termination, debug_write, exit, io_device_bind, io_irq_ack, io_mmio_map,
     io_mmio_read32, io_queue_map, lifecycle_restart_admit, resolve_binding, spawn,
@@ -149,26 +150,18 @@ const fn grant(slot: u32, rights: u64) -> SpawnGrant {
 }
 
 fn write_value(prefix: &[u8], value: u64) {
-    debug_write(prefix);
-    let mut digits = [0u8; 20];
-    let mut cursor = digits.len();
-    let mut remaining = value;
-    if remaining == 0 {
-        cursor -= 1;
-        digits[cursor] = b'0';
-    }
-    while remaining != 0 {
-        cursor -= 1;
-        digits[cursor] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-    }
-    debug_write(&digits[cursor..]);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(prefix)
+        .decimal(value)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-driver-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-driver-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

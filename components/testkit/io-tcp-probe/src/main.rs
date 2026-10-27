@@ -4,6 +4,7 @@
 use slime_components::network_io::{NetworkIo, NetworkNotifications, NetworkReply};
 use slime_components::tick_clock::TickClock;
 use slime_proto::network_service;
+use slime_rt::console_line::Line;
 use slime_rt::{debug_write, exit, monotonic_frequency, monotonic_read, yield_now};
 
 slime_rt::entry!(main);
@@ -22,8 +23,11 @@ fn main(_: u32) {
     let rate = monotonic_frequency().unwrap_or_else(|_| fail(b"clock rate"));
     let base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
     let clock = TickClock::new(rate, base).unwrap_or_else(|_| fail(b"clock rate too slow"));
-    write_number(b"[io-tcp-probe] clock rate=", rate);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-probe] clock rate=")
+        .decimal(rate)
+        .bytes(b"\n")
+        .emit();
     let reset_mode = slime_rt::resolve_binding(b"network-reset-mode").is_ok();
     let phase = if reset_mode {
         match slime_rt::lifecycle_parameter_read(slime_rt::PARAMETER_SELF_SLOT, 2) {
@@ -159,12 +163,18 @@ fn main(_: u32) {
     if received != payload || short_writes == 0 {
         fail(b"payload identity or partial write");
     }
-    write_number(b"[io-tcp-probe] stream sent=", sent as u64);
-    write_number(b" received=", read as u64);
-    debug_write(b" identical=1");
-    write_number(b" partial_writes=", short_writes);
-    write_number(b" would_block=", would_block);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-probe] stream sent=")
+        .decimal(sent as u64)
+        .bytes(b" received=")
+        .decimal(read as u64)
+        .bytes(b" identical=1")
+        .bytes(b" partial_writes=")
+        .decimal(short_writes)
+        .bytes(b" would_block=")
+        .decimal(would_block)
+        .bytes(b"\n")
+        .emit();
     if !io
         .close(tcp)
         .unwrap_or_else(|_| fail(b"close request"))
@@ -196,8 +206,11 @@ fn main(_: u32) {
     while now(&clock) < HOLD_MS {
         yield_now();
     }
-    write_number(b"[io-tcp-probe] held ms=", HOLD_MS as u64);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-probe] held ms=")
+        .decimal(HOLD_MS as u64)
+        .bytes(b"\n")
+        .emit();
     io.finish().unwrap_or_else(|_| fail(b"shutdown"));
     debug_write(b"[io-tcp-probe] closed capabilities=1 shutdown=1\n");
     exit(0)
@@ -249,34 +262,22 @@ fn now(clock: &TickClock) -> i64 {
 
 fn check_would_block(reply: &NetworkReply) {
     if reply.status_detail != network_service::STATUS_WOULD_BLOCK || reply.transferred != 0 {
-        write_number(
-            b"[io-tcp-probe] stream error code=",
-            u64::from(reply.status_detail.unsigned_abs()),
-        );
-        write_number(b" queue=", u64::from(reply.queue_status));
-        debug_write(b"\n");
+        Line::<256>::new()
+            .bytes(b"[io-tcp-probe] stream error code=")
+            .decimal(u64::from(reply.status_detail.unsigned_abs()))
+            .bytes(b" queue=")
+            .decimal(u64::from(reply.queue_status))
+            .bytes(b"\n")
+            .emit();
         fail(b"stream error");
     }
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-tcp-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

@@ -2,9 +2,8 @@
 #![no_main]
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_completion;
-use slime_rt::{
-    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, yield_now,
-};
+use slime_rt::console_line::Line;
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, exit, yield_now};
 slime_rt::entry!(main);
 const SERVICE: u32 = 0;
 const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
@@ -21,8 +20,11 @@ fn main(_: u32) {
         fail(b"tcp connect");
     }
     tcp_capabilities += 1;
-    write_number(b"[io-network-probe] tcp capabilities=", tcp_capabilities);
-    debug_write(b" rights=connect,send,recv\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] tcp capabilities=")
+        .decimal(tcp_capabilities)
+        .bytes(b" rights=connect,send,recv\n")
+        .emit();
     for op in [network_service::OP_SEND, network_service::OP_RECV] {
         let reply = call(capability(op, tcp.capability));
         if reply.status_detail != 0 {
@@ -30,11 +32,11 @@ fn main(_: u32) {
         }
         successful_transfers += 1;
     }
-    write_number(
-        b"[io-network-probe] successful capability operations=",
-        successful_transfers,
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] successful capability operations=")
+        .decimal(successful_transfers)
+        .bytes(b"\n")
+        .emit();
 
     let wrong_port = call(destination(
         network_service::OP_CONNECT,
@@ -44,11 +46,11 @@ fn main(_: u32) {
     ));
     require_denied(wrong_port, b"wrong port");
     let exact_refusals = u64::from(wrong_port.status_detail < 0);
-    write_number(
-        b"[io-network-probe] exact destination refusals=",
-        exact_refusals,
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] exact destination refusals=")
+        .decimal(exact_refusals)
+        .bytes(b"\n")
+        .emit();
 
     let dns = call(resolve(b"echo.test"));
     if dns.status_detail != 0 || dns.capability_kind != network_service::CAPABILITY_DNS_RECORD {
@@ -58,9 +60,13 @@ fn main(_: u32) {
     require_denied(dns_exhausted, b"dns budget");
     let dns_records = u64::from(dns.status_detail == 0);
     let dns_budget_refusals = u64::from(dns_exhausted.status_detail < 0);
-    write_number(b"[io-network-probe] dns records=", dns_records);
-    write_number(b" budget_refusals=", dns_budget_refusals);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] dns records=")
+        .decimal(dns_records)
+        .bytes(b" budget_refusals=")
+        .decimal(dns_budget_refusals)
+        .bytes(b"\n")
+        .emit();
 
     let udp = call(destination(
         network_service::OP_CONNECT,
@@ -90,9 +96,13 @@ fn main(_: u32) {
     let socket_charges =
         u64::from(tcp.status_detail == 0) + u64::from(tcp_second.status_detail == 0);
     let socket_budget_refusals = u64::from(socket_exhausted.status_detail < 0);
-    write_number(b"[io-network-probe] socket charges=", socket_charges);
-    write_number(b" budget_refusals=", socket_budget_refusals);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] socket charges=")
+        .decimal(socket_charges)
+        .bytes(b" budget_refusals=")
+        .decimal(socket_budget_refusals)
+        .bytes(b"\n")
+        .emit();
 
     let mut closed_capabilities = 0u64;
     for id in [
@@ -111,12 +121,13 @@ fn main(_: u32) {
     if shutdown.status_detail != 0 {
         fail(b"shutdown");
     }
-    write_number(
-        b"[io-network-probe] closed capabilities=",
-        closed_capabilities,
-    );
-    write_number(b" shutdown=", u64::from(shutdown.status_detail == 0));
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] closed capabilities=")
+        .decimal(closed_capabilities)
+        .bytes(b" shutdown=")
+        .decimal(u64::from(shutdown.status_detail == 0))
+        .bytes(b"\n")
+        .emit();
     exit(0)
 }
 fn require_denied(reply: WireNetworkCompletion, reason: &[u8]) {
@@ -190,23 +201,11 @@ fn call(request: WireNetworkRequest) -> WireNetworkCompletion {
         }
     }
 }
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-network-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

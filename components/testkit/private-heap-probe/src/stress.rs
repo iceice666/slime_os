@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt::{self, Write};
 use slime_proto::private_memory_probe::{self as protocol, WireMessage};
+use slime_rt::console_line::Line;
 
 const BLOCK: usize = 1024 * 1024;
 const COUNT: usize = 120;
@@ -9,24 +10,28 @@ const SMALL_BYTES: usize = 256;
 const PAYLOAD: usize = 2 * COUNT * BLOCK + SMALL_COUNT * SMALL_BYTES;
 const REFUSED_BYTES: usize = 16 * BLOCK;
 
-struct Console;
-impl Write for Console {
+/// One trace record, formatted whole before its single console write.
+struct Record(Line<256>);
+impl Write for Record {
     fn write_str(&mut self, text: &str) -> fmt::Result {
-        slime_rt::debug_write(text.as_bytes());
+        self.0.bytes(text.as_bytes());
         Ok(())
     }
 }
 
 fn trace(args: fmt::Arguments<'_>) {
-    let _ = Console.write_fmt(args);
-    slime_rt::debug_write(b"\n");
+    let mut record = Record(Line::new());
+    let _ = record.write_fmt(args);
+    record.0.bytes(b"\n").emit();
 }
 
 fn require(condition: bool, reason: &[u8]) {
     if !condition {
-        slime_rt::debug_write(b"[private-heap-probe:stress] FAIL ");
-        slime_rt::debug_write(reason);
-        slime_rt::debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[private-heap-probe:stress] FAIL ")
+            .bytes(reason)
+            .bytes(b"\n")
+            .emit();
         slime_rt::exit(1);
     }
 }

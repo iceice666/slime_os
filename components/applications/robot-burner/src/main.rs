@@ -24,6 +24,7 @@
 //! contention claim would be a claim about a composition that no longer exists.
 
 use boot_contracts::scheduling_class::CLASS_BEST_EFFORT;
+use slime_rt::console_line::Line;
 use slime_rt::{debug_write, exit, scheduling_class_read};
 
 /// Iterations spun per chunk.
@@ -78,37 +79,29 @@ fn main(_startup_arg: u32) {
 }
 
 fn write_value(prefix: &[u8], value: u64) {
-    let mut digits = [0u8; 20];
-    debug_write(prefix);
-    debug_write(decimal(value, &mut digits));
-    debug_write(b"\n");
-}
-
-fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
-    let mut index = digits.len();
-    let mut remaining = value;
-    if remaining == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while remaining != 0 {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-    }
-    &digits[index..]
+    Line::<128>::new()
+        .bytes(prefix)
+        .decimal(value)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[robot-burner] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[robot-burner] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }
 
 fn fail_with(reason: &[u8], error: i64) -> ! {
-    debug_write(b"[robot-burner] FAIL ");
-    debug_write(reason);
-    write_value(b" error=", error.unsigned_abs());
+    Line::<128>::new()
+        .bytes(b"[robot-burner] FAIL ")
+        .bytes(reason)
+        .bytes(b" error=")
+        .decimal(error.unsigned_abs())
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

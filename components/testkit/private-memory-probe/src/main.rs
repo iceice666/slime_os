@@ -29,6 +29,7 @@
 //! stopped honouring declarations cannot be masked by a probe that agrees with
 //! it.
 
+use slime_rt::console_line::Line;
 use slime_rt::{ERR_OUT_OF_MEMORY, PrivateMemory};
 
 slime_rt::entry!(main, worker = worker);
@@ -246,15 +247,15 @@ fn granted(initial: PrivateMemory, growth_retries: usize) -> ! {
         slime_rt::exit(1)
     }
 
-    slime_rt::debug_write(b"[private-memory-probe] granted pages=");
-    write_decimal(pages);
-    slime_rt::debug_write(b" base=");
-    write_hex(initial.base);
-    slime_rt::debug_write(
-        b" zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=",
-    );
-    write_decimal(growth_retries);
-    slime_rt::debug_write(b"\n");
+    Record::new()
+        .bytes(b"[private-memory-probe] granted pages=")
+        .decimal(pages as u64)
+        .bytes(b" base=0x")
+        .hex(initial.base as u64)
+        .bytes(b" zeroed=1 survived=1 refused=1 worker_rpc_once=1 worker_grow_refused=1 retries=")
+        .decimal(growth_retries as u64)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(0)
 }
 
@@ -271,9 +272,11 @@ fn denied(initial: PrivateMemory) -> ! {
     while !WORKER_OK.load(core::sync::atomic::Ordering::Acquire) {
         slime_rt::yield_now();
     }
-    slime_rt::debug_write(b"[private-memory-probe] denied pages=0 base=");
-    write_hex(initial.base);
-    slime_rt::debug_write(b" refused=1\n");
+    Record::new()
+        .bytes(b"[private-memory-probe] denied pages=0 base=0x")
+        .hex(initial.base as u64)
+        .bytes(b" refused=1\n")
+        .emit();
     slime_rt::exit(0)
 }
 
@@ -286,62 +289,38 @@ const _: () = assert!(
         <= boot_contracts::private_memory_budget::capacity_for("aarch64-sel4-qemu-virt").0
 );
 
+/// One diagnostic record; the longest is the granted summary.
+type Record = Line<256>;
+
 fn report(reason: &[u8], pages: usize) {
-    slime_rt::debug_write(b"[private-memory-probe] ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b" pages=");
-    write_decimal(pages);
-    slime_rt::debug_write(b"\n");
+    Record::new()
+        .bytes(b"[private-memory-probe] ")
+        .bytes(reason)
+        .bytes(b" pages=")
+        .decimal(pages as u64)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn report_base(step: &[u8], region: &PrivateMemory) {
-    slime_rt::debug_write(b"[private-memory-probe] ");
-    slime_rt::debug_write(step);
-    slime_rt::debug_write(b" pages=");
-    write_decimal(region.pages);
-    slime_rt::debug_write(b" base=");
-    write_hex(region.base);
-    slime_rt::debug_write(b"\n");
+    Record::new()
+        .bytes(b"[private-memory-probe] ")
+        .bytes(step)
+        .bytes(b" pages=")
+        .decimal(region.pages as u64)
+        .bytes(b" base=0x")
+        .hex(region.base as u64)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8], error: i64) -> ! {
-    slime_rt::debug_write(b"[private-memory-probe] FAIL ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b" status=");
-    write_decimal(error.unsigned_abs() as usize);
-    slime_rt::debug_write(b"\n");
+    Record::new()
+        .bytes(b"[private-memory-probe] FAIL ")
+        .bytes(reason)
+        .bytes(b" status=")
+        .decimal(error.unsigned_abs() as usize as u64)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
-}
-
-fn write_decimal(value: usize) {
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    let mut remaining = value;
-    loop {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-        if remaining == 0 {
-            break;
-        }
-    }
-    slime_rt::debug_write(&digits[index..]);
-}
-
-fn write_hex(value: usize) {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = [0u8; 18];
-    out[0] = b'0';
-    out[1] = b'x';
-    let mut written = 2;
-    let mut started = false;
-    for shift in (0..16).rev() {
-        let nibble = (value >> (shift * 4)) & 0xf;
-        if nibble != 0 || started || shift == 0 {
-            started = true;
-            out[written] = DIGITS[nibble];
-            written += 1;
-        }
-    }
-    slime_rt::debug_write(&out[..written]);
 }

@@ -20,7 +20,7 @@ static size_t text_len(const char *text)
 
 static void write_bytes(const uint8_t *bytes, size_t len)
 {
-    slime_debug_write(bytes, len);
+    slime_line_write(bytes, len);
 }
 
 static void write_text(const char *text)
@@ -181,12 +181,14 @@ void slime_component_main(uint32_t startup_arg)
     int resident_wait_observed = 0;
     slisp_session_reset();
     write_text("Slisp\nslisp> ");
+    slime_line_flush();
     for (;;) {
         SlimeInputEvent event;
         int64_t status = slime_input_read(INPUT_SLOT, &event);
         if (status == SLIME_ERR_WOULDBLOCK) {
             if (!resident_wait_observed) {
                 write_text("\n[slisp] resident input wait\nslisp> ");
+                slime_line_flush();
                 resident_wait_observed = 1;
             }
             __asm__ volatile(SLIME_SPIN_HINT);
@@ -207,6 +209,7 @@ void slime_component_main(uint32_t startup_arg)
             if (used != 0) {
                 --used;
                 write_text("\b \b");
+                slime_line_flush();
             }
             continue;
         }
@@ -218,12 +221,14 @@ void slime_component_main(uint32_t startup_arg)
             }
             used = 0;
             write_text("slisp> ");
+            slime_line_flush();
             continue;
         }
         if (event.code == 9U) {
             if (used + 1 < sizeof(line)) {
                 line[used++] = ' ';
                 write_text(" ");
+                slime_line_flush();
             }
             continue;
         }
@@ -231,6 +236,7 @@ void slime_component_main(uint32_t startup_arg)
             char character = (char)(event.code & 0xffU);
             line[used++] = character;
             write_bytes((const uint8_t *)&character, 1U);
+            slime_line_flush();
         }
     }
 }

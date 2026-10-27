@@ -7,6 +7,7 @@
 
 use slime_components::network_io::{Connection, NetworkIo, NetworkNotifications, NetworkReply};
 use slime_proto::network_service;
+use slime_rt::console_line::Line;
 use slime_rt::{debug_write, exit, monotonic_frequency, monotonic_read};
 
 slime_rt::entry!(main);
@@ -219,10 +220,14 @@ impl Probe<'_> {
         let fresh = self.connect(SILENT_PORT);
         self.echo(&fresh, payload, 0);
         self.close(fresh);
-        debug_write(b"[io-tcp-impairment-probe] scenario=silent fresh");
-        write_number(b" sent=", STREAM_BYTES as u64);
-        write_number(b" received=", STREAM_BYTES as u64);
-        debug_write(b" identical=1\n");
+        Line::<128>::new()
+            .bytes(b"[io-tcp-impairment-probe] scenario=silent fresh")
+            .bytes(b" sent=")
+            .decimal(STREAM_BYTES as u64)
+            .bytes(b" received=")
+            .decimal(STREAM_BYTES as u64)
+            .bytes(b" identical=1\n")
+            .emit();
     }
 
     /// Queue bytes behind the peer's zero window until the service reports
@@ -279,14 +284,18 @@ fn stream() -> [u8; STREAM_BYTES] {
 }
 
 fn report(scenario: &[u8], first: Option<(&[u8], u64)>, second: Option<(&[u8], u64)>) {
-    debug_write(b"[io-tcp-impairment-probe] scenario=");
-    debug_write(scenario);
+    let mut line = Line::<256>::new();
+    line.bytes(b"[io-tcp-impairment-probe] scenario=")
+        .bytes(scenario);
     for (label, value) in [first, second].into_iter().flatten() {
-        write_number(label, value);
+        line.bytes(label).decimal(value);
     }
-    write_number(b" sent=", STREAM_BYTES as u64);
-    write_number(b" received=", STREAM_BYTES as u64);
-    debug_write(b" identical=1\n");
+    line.bytes(b" sent=")
+        .decimal(STREAM_BYTES as u64)
+        .bytes(b" received=")
+        .decimal(STREAM_BYTES as u64)
+        .bytes(b" identical=1\n")
+        .emit();
 }
 
 fn now() -> u64 {
@@ -298,33 +307,25 @@ fn binding(name: &[u8]) -> u32 {
 }
 
 fn refused(operation: &[u8], reply: &NetworkReply) -> ! {
-    debug_write(b"[io-tcp-impairment-probe] ");
-    debug_write(operation);
-    write_number(b" status=", u64::from(reply.status_detail.unsigned_abs()));
-    write_number(b" queue=", u64::from(reply.queue_status));
-    write_number(b" transferred=", reply.transferred);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-impairment-probe] ")
+        .bytes(operation)
+        .bytes(b" status=")
+        .decimal(u64::from(reply.status_detail.unsigned_abs()))
+        .bytes(b" queue=")
+        .decimal(u64::from(reply.queue_status))
+        .bytes(b" transferred=")
+        .decimal(reply.transferred)
+        .bytes(b"\n")
+        .emit();
     fail(operation)
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-tcp-impairment-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-impairment-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

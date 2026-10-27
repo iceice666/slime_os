@@ -40,7 +40,18 @@ typedef struct {
 /* Implemented by each component. Returning is a clean lifecycle exit. */
 void slime_component_main(uint32_t startup_arg);
 
+/* The largest record the console dispatcher prints whole. */
+#define SLIME_CONSOLE_RECORD_BYTES 1024U
+/* The line buffer slime_line_write collects into. */
+#define SLIME_LINE_BYTES 256U
+
+/* One console record per call, up to SLIME_CONSOLE_RECORD_BYTES. Only the C
+ * runtime calls it; a component writes through slime_line_write. */
 void slime_debug_write(const uint8_t *bytes, size_t len);
+/* Buffer console output and send each complete line as one record. */
+void slime_line_write(const uint8_t *bytes, size_t len);
+/* Send any buffered partial line now, e.g. after a prompt or an echoed key. */
+void slime_line_flush(void);
 int64_t slime_input_read(uint32_t slot, SlimeInputEvent *event);
 /* A send followed by a receive on the same endpoint: for a peer that answers
  * with a blocking send. */

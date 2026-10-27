@@ -19,12 +19,13 @@ mod fabric_planes;
 use fabric_planes::{
     drive_boot_plane, drive_call_plane, drive_matrix_plane, drive_operation_plane,
     drive_robot_runtime_plane, drive_stream_plane, drive_traffic_plane, drive_visibility_plane,
-    launch_fabric_graph, write_i64, write_u32,
+    launch_fabric_graph, push_i64,
 };
 
 mod dispatch;
 use dispatch::compose_declared_graph;
 
+use slime_rt::console_line::Line;
 use slime_rt::{Rights, SpawnGrant};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -300,31 +301,40 @@ fn spawn_boot_with(executable: &[u8], grants: &[SpawnGrant]) -> u32 {
     let executable_slot = match slime_rt::resolve_binding(executable) {
         Ok(slot) => slot,
         Err(error) => {
-            slime_rt::debug_write(b"[init] fabric boot unresolved executable error=");
-            write_i64(error);
-            slime_rt::debug_write(b"\n");
+            push_i64(
+                Line::<128>::new().bytes(b"[init] fabric boot unresolved executable error="),
+                error,
+            )
+            .bytes(b"\n")
+            .emit();
             fail_boot(b"resolve participant executable")
         }
     };
     match slime_rt::spawn(executable_slot, grants) {
         Ok(spawned) => spawned.supervision_slot,
         Err(error) => {
-            slime_rt::debug_write(b"[init] fabric boot spawn failed slot=");
-            write_u32(executable_slot);
-            slime_rt::debug_write(b" grants=");
-            write_u32(grants.len() as u32);
-            slime_rt::debug_write(b" error=");
-            write_i64(error);
-            slime_rt::debug_write(b"\n");
+            push_i64(
+                Line::<128>::new()
+                    .bytes(b"[init] fabric boot spawn failed slot=")
+                    .decimal(u64::from(executable_slot))
+                    .bytes(b" grants=")
+                    .decimal(u64::from(grants.len() as u32))
+                    .bytes(b" error="),
+                error,
+            )
+            .bytes(b"\n")
+            .emit();
             fail_boot(b"spawn participant")
         }
     }
 }
 
 fn fail_boot(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] fabric boot fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] fabric boot fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -346,18 +356,21 @@ fn wait_clean(handles: &[u32]) {
                 Ok(None) => slime_rt::yield_now(),
                 Ok(Some(slime_rt::Termination::Exit(0))) => break,
                 other => {
-                    slime_rt::debug_write(b"[init] unclean handle=");
-                    write_u32(*handle);
-                    slime_rt::debug_write(b" kind=");
-                    write_u32(match other {
+                    let kind: u32 = match other {
                         Ok(Some(slime_rt::Termination::Exit(_))) => 1,
                         Ok(Some(slime_rt::Termination::Fault(_))) => 2,
                         Ok(Some(slime_rt::Termination::Timeout)) => 3,
                         Ok(Some(slime_rt::Termination::PeerLoss)) => 4,
                         Ok(Some(slime_rt::Termination::Unhealthy)) => 5,
                         _ => 9,
-                    });
-                    slime_rt::debug_write(b"\n");
+                    };
+                    Line::<64>::new()
+                        .bytes(b"[init] unclean handle=")
+                        .decimal(u64::from(*handle))
+                        .bytes(b" kind=")
+                        .decimal(u64::from(kind))
+                        .bytes(b"\n")
+                        .emit();
                     slime_rt::exit(1)
                 }
             }
@@ -414,9 +427,11 @@ fn console_send_slot() -> u32 {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] channel plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] channel plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -468,9 +483,11 @@ fn drive_sample_plane() {
 }
 
 fn fail_sample(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] sample plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] sample plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -575,9 +592,11 @@ fn drive_demo_plane() {
 }
 
 fn fail_demo(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] demo plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] demo plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -775,7 +794,7 @@ fn drive_probe_plane_with_token(
 ) {
     let probe =
         slime_rt::spawn(executable, grants).unwrap_or_else(|_| fail_plane(plane, b"spawn probe"));
-    slime_rt::debug_write(spawned_marker);
+    Line::<256>::new().bytes(spawned_marker).emit();
     if let Some(slot) = run_token
         && slime_rt::send(slot, b"run", &[]) != slime_rt::ERR_SUCCESS
     {
@@ -785,11 +804,13 @@ fn drive_probe_plane_with_token(
 }
 
 fn fail_plane(plane: &[u8], reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] ");
-    slime_rt::debug_write(plane);
-    slime_rt::debug_write(b" plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] ")
+        .bytes(plane)
+        .bytes(b" plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -832,9 +853,11 @@ fn drive_reclamation_plane() {
 }
 
 fn fail_reclamation(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] reclamation plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] reclamation plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -893,17 +916,21 @@ fn drive_private_memory_cycles_plane() {
     if exits + faults != PRIVATE_CYCLE_COUNT || exits == 0 || faults == 0 {
         fail_private_cycles(b"cycle census incomplete");
     }
-    slime_rt::debug_write(b"[init] private memory cycles exits=");
-    write_u32(exits);
-    slime_rt::debug_write(b" faults=");
-    write_u32(faults);
-    slime_rt::debug_write(b"\n");
+    Line::<96>::new()
+        .bytes(b"[init] private memory cycles exits=")
+        .decimal(u64::from(exits))
+        .bytes(b" faults=")
+        .decimal(u64::from(faults))
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail_private_cycles(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] private memory cycles plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[init] private memory cycles plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

@@ -15,7 +15,7 @@
 use slime_components::console_line::Line;
 use slime_components::network_io::{Connection, NetworkIo, NetworkNotifications, NetworkReply};
 use slime_proto::network_service as net;
-use slime_rt::{debug_write, exit, monotonic_frequency, monotonic_read, resolve_binding};
+use slime_rt::{exit, monotonic_frequency, monotonic_read, resolve_binding};
 
 slime_rt::entry!(main);
 
@@ -337,33 +337,25 @@ fn binding(name: &[u8]) -> u32 {
 }
 
 fn status(operation: &[u8], reply: &NetworkReply) -> ! {
-    debug_write(b"[io-tcp-buffers-probe] ");
-    debug_write(operation);
-    write_number(b" status=", u64::from(reply.status_detail.unsigned_abs()));
-    write_number(b" queue=", u64::from(reply.queue_status));
-    write_number(b" transferred=", reply.transferred);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-buffers-probe] ")
+        .bytes(operation)
+        .bytes(b" status=")
+        .decimal(u64::from(reply.status_detail.unsigned_abs()))
+        .bytes(b" queue=")
+        .decimal(u64::from(reply.queue_status))
+        .bytes(b" transferred=")
+        .decimal(reply.transferred)
+        .bytes(b"\n")
+        .emit();
     fail(operation)
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-tcp-buffers-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-buffers-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

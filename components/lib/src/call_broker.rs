@@ -729,16 +729,20 @@ impl Broker {
         };
         for component in self.client_identities.iter().flatten().copied() {
             if declared(component, DIRECTION_CLIENT) != 1 {
-                slime_rt::debug_write(b"[fabric] call client graph declaration: ");
-                slime_rt::debug_write(component);
-                slime_rt::debug_write(b"\n");
+                slime_rt::console_line::Line::<256>::new()
+                    .bytes(b"[fabric] call client graph declaration: ")
+                    .bytes(component)
+                    .bytes(b"\n")
+                    .emit();
                 fail(b"call client graph declaration");
             }
         }
         if declared(self.server_identity, DIRECTION_SERVER) != 1 {
-            slime_rt::debug_write(b"[fabric] call server graph declaration: ");
-            slime_rt::debug_write(self.server_identity);
-            slime_rt::debug_write(b"\n");
+            slime_rt::console_line::Line::<256>::new()
+                .bytes(b"[fabric] call server graph declaration: ")
+                .bytes(self.server_identity)
+                .bytes(b"\n")
+                .emit();
             fail(b"call server graph declaration");
         }
         // The deadline every admission and retry arms against, resolved from
@@ -2179,9 +2183,11 @@ fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[fabric] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

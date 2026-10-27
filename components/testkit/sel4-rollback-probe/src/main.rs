@@ -39,6 +39,7 @@ use boot_contracts::gpt::{self, GptError};
 use boot_contracts::object_store::{BlockIo as BootBlockIo, IoError};
 use boot_contracts::trace::{Action as TraceAction, Commit as TraceCommit, Record as TraceRecord};
 use slime_components::block_io::BlockIo as DriverBlockIo;
+use slime_rt::console_line::Line;
 
 /// The peer endpoint to the driver, and the buffer factory this probe creates
 /// its ring and payload buffer from.
@@ -415,69 +416,37 @@ fn emit_trace(
         state_root: after.state.state_root,
     }
     .render();
-    slime_rt::debug_write(line.as_str().as_bytes());
-    slime_rt::debug_write(b"\n");
+    // A rendered trace line is at most 640 bytes before its newline.
+    Line::<1024>::new()
+        .bytes(line.as_str().as_bytes())
+        .bytes(b"\n")
+        .emit();
 }
 
 /// One transition, as the gate reads it: which step, the sequence it committed
 /// at, whether a pending generation is live, and how many attempts remain.
 fn report(step: &[u8], state: &BootState) {
-    let mut line = [0u8; 160];
-    let mut len = 0;
-    len += copy(&mut line[len..], b"[sel4-rollback-probe] ");
-    len += copy(&mut line[len..], step);
-    len += copy(&mut line[len..], b" seq=");
-    len += copy(&mut line[len..], &decimal(state.sequence));
-    len += copy(&mut line[len..], b" pending=");
-    len += copy(
-        &mut line[len..],
-        if state.pending.is_some() { b"1" } else { b"0" },
-    );
-    len += copy(&mut line[len..], b" attempts=");
-    len += copy(&mut line[len..], &decimal(state.remaining_attempts as u64));
-    len += copy(&mut line[len..], b" release=");
-    len += copy(&mut line[len..], &decimal(state.accepted_release_sequence));
-    len += copy(&mut line[len..], b"\n");
-    slime_rt::debug_write(&line[..len]);
-}
-
-fn copy(out: &mut [u8], source: &[u8]) -> usize {
-    let len = source.len().min(out.len());
-    out[..len].copy_from_slice(&source[..len]);
-    len
-}
-
-struct Decimal {
-    bytes: [u8; 20],
-    start: usize,
-}
-
-impl core::ops::Deref for Decimal {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.bytes[self.start..]
-    }
-}
-
-fn decimal(mut value: u64) -> Decimal {
-    let mut bytes = [0u8; 20];
-    let mut start = bytes.len();
-    loop {
-        start -= 1;
-        bytes[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    Decimal { bytes, start }
+    Line::<256>::new()
+        .bytes(b"[sel4-rollback-probe] ")
+        .bytes(step)
+        .bytes(b" seq=")
+        .decimal(state.sequence)
+        .bytes(b" pending=")
+        .bytes(if state.pending.is_some() { b"1" } else { b"0" })
+        .bytes(b" attempts=")
+        .decimal(state.remaining_attempts as u64)
+        .bytes(b" release=")
+        .decimal(state.accepted_release_sequence)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sel4-rollback-probe] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-rollback-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

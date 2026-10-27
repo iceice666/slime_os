@@ -62,11 +62,13 @@ pub fn full_graph_active() -> bool {
 }
 
 fn fail(name: &[u8], reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[")
+        .bytes(name)
+        .bytes(b"] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
@@ -174,9 +176,11 @@ fn accept_roles(name: &'static [u8], edges: &[([u8; 32], u32, usize)]) {
         };
         remaining[edge] -= 1;
     }
-    slime_rt::debug_write(b"[");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"] boot role provisioned\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[")
+        .bytes(name)
+        .bytes(b"] boot role provisioned\n")
+        .emit();
 }
 
 /// Block forever on the control endpoint.
@@ -198,9 +202,11 @@ pub fn park(name: &'static [u8]) -> ! {
                 for slot in received.iter().filter(|slot| **slot != 0) {
                     let _ = slime_rt::cap_drop(*slot as u32);
                 }
-                slime_rt::debug_write(b"[");
-                slime_rt::debug_write(name);
-                slime_rt::debug_write(b"] boot idle drained a message\n");
+                slime_rt::console_line::Line::<256>::new()
+                    .bytes(b"[")
+                    .bytes(name)
+                    .bytes(b"] boot idle drained a message\n")
+                    .emit();
             }
         }
     }
@@ -212,9 +218,11 @@ pub fn park(name: &'static [u8]) -> ! {
 /// must exist as its own task with its own grants, and must not invent traffic
 /// to prove it.
 pub fn park_only(name: &'static [u8]) -> ! {
-    slime_rt::debug_write(b"[");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"] boot idle without a role\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[")
+        .bytes(name)
+        .bytes(b"] boot idle without a role\n")
+        .emit();
     park(name)
 }
 

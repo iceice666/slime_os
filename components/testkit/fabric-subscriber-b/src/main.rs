@@ -131,9 +131,11 @@ fn ring_slots_checked(identity: &[u8; 32]) -> usize {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric-subscriber-b] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<128>::new()
+        .bytes(b"[fabric-subscriber-b] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

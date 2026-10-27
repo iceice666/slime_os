@@ -93,9 +93,11 @@ pub(super) fn run() {
     for _schema in 0..schemas {
         let _ = trace.edge(KIND_SCHEMA, ORDER_DATA, 0, 0, 0, 0);
     }
-    slime_rt::debug_write(b"[fabric] matrix admitted ");
-    write_count(schemas as usize);
-    slime_rt::debug_write(b" interface schemas\n");
+    slime_rt::console_line::Line::<128>::new()
+        .bytes(b"[fabric] matrix admitted ")
+        .decimal(schemas as u64)
+        .bytes(b" interface schemas\n")
+        .emit();
 
     // The two telemetry routes carry the same interface under different names.
     // Distinct identities is what makes them distinct authority, so it is
@@ -483,25 +485,6 @@ fn declared_capabilities(graph: &GraphView, component: &[u8]) -> usize {
     control + notifications + graph.declared_edges(component)
 }
 
-/// One decimal count on the current line.
-///
-/// A `usize`-wide fixed buffer: the values this plane prints are all bounded
-/// generation table lengths, but nothing here narrows the type that receives
-/// them, so the buffer is sized for the type rather than for today's inputs.
-fn write_count(mut value: usize) {
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    loop {
-        index -= 1;
-        digits[index] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    slime_rt::debug_write(&digits[index..]);
-}
-
 /// What one poll of a control endpoint found.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Served {
@@ -612,9 +595,11 @@ fn provision(
 ) {
     let edges = graph.declared_edges(component);
     if edges == 0 {
-        slime_rt::debug_write(b"[fabric] matrix denied ungranted: ");
-        slime_rt::debug_write(component);
-        slime_rt::debug_write(b"\n");
+        slime_rt::console_line::Line::<256>::new()
+            .bytes(b"[fabric] matrix denied ungranted: ")
+            .bytes(component)
+            .bytes(b"\n")
+            .emit();
         deny(control, STATUS_NOT_GRANTED, trace);
         return;
     }
@@ -629,9 +614,11 @@ fn provision(
         // Either no such route, or one this component holds no edge on. The
         // two are deliberately one answer: distinguishing them would confirm
         // the route's existence to a caller with no authority over it.
-        slime_rt::debug_write(b"[fabric] matrix denied name mismatch: ");
-        slime_rt::debug_write(component);
-        slime_rt::debug_write(b"\n");
+        slime_rt::console_line::Line::<256>::new()
+            .bytes(b"[fabric] matrix denied name mismatch: ")
+            .bytes(component)
+            .bytes(b"\n")
+            .emit();
         deny(control, STATUS_NAME_MISMATCH, trace);
         return;
     };
@@ -641,9 +628,11 @@ fn provision(
         // `DiagnosticsStream` is not the `telemetry` route: the identity fold
         // includes the interface, so this is a different edge, not a badly
         // typed request against a known one.
-        slime_rt::debug_write(b"[fabric] matrix denied type mismatch: ");
-        slime_rt::debug_write(component);
-        slime_rt::debug_write(b"\n");
+        slime_rt::console_line::Line::<256>::new()
+            .bytes(b"[fabric] matrix denied type mismatch: ")
+            .bytes(component)
+            .bytes(b"\n")
+            .emit();
         deny(control, STATUS_TYPE_MISMATCH, trace);
         return;
     }
@@ -659,9 +648,11 @@ fn provision(
         descriptor(control, rights, direction, &routes[route]);
         *granted += 1;
     }
-    slime_rt::debug_write(b"[fabric] matrix matched exact tuple: ");
-    slime_rt::debug_write(component);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[fabric] matrix matched exact tuple: ")
+        .bytes(component)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn route_type_tag(route: usize) -> u64 {
@@ -719,9 +710,11 @@ fn answer_view(
         0,
         GRAPH_VIEW_ANSWERED,
     );
-    slime_rt::debug_write(b"[fabric] matrix view answered: ");
-    slime_rt::debug_write(component);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[fabric] matrix view answered: ")
+        .bytes(component)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn terminal_view(cursor: u8) -> WireVisibilityRouteRecord {

@@ -253,8 +253,10 @@ fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[clock-probe] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[clock-probe] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

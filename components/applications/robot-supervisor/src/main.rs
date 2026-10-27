@@ -27,6 +27,7 @@
 
 use boot_contracts::lifecycle_policy::STATE_RUNNING;
 use boot_contracts::scheduling_class::CLASS_NORMAL;
+use slime_rt::console_line::Line;
 use slime_rt::{
     debug_write, exit, lifecycle_parameter_write, lifecycle_restart_admit, lifecycle_state_advance,
     monotonic_read, notification_signal, resolve_binding, spawn, supervision_status, timer_arm,
@@ -266,37 +267,29 @@ fn report_termination(termination: slime_rt::Termination) {
 }
 
 fn write_value(prefix: &[u8], value: u64) {
-    let mut digits = [0u8; 20];
-    debug_write(prefix);
-    debug_write(decimal(value, &mut digits));
-    debug_write(b"\n");
-}
-
-fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
-    let mut index = digits.len();
-    let mut remaining = value;
-    if remaining == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while remaining != 0 {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-    }
-    &digits[index..]
+    Line::<128>::new()
+        .bytes(prefix)
+        .decimal(value)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[robot-supervisor] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[robot-supervisor] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }
 
 fn fail_with(reason: &[u8], error: i64) -> ! {
-    debug_write(b"[robot-supervisor] FAIL ");
-    debug_write(reason);
-    write_value(b" error=", error.unsigned_abs());
+    Line::<128>::new()
+        .bytes(b"[robot-supervisor] FAIL ")
+        .bytes(reason)
+        .bytes(b" error=")
+        .decimal(error.unsigned_abs())
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

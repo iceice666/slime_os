@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
 #[path = "../../../lib/src/launch_context.rs"]
+#[allow(dead_code)]
 mod launch_context;
 use slime_proto::spawn::{CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY};
+use slime_rt::console_line::Line;
 use slime_rt::{MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG};
 
 slime_rt::entry!(main);
@@ -34,31 +36,34 @@ fn main(_startup_arg: u32) {
             slime_rt::exit(1);
         }
     }
-    slime_rt::debug_write(b"[echo-agent] command=echo args=");
-    launch_context::debug_decimal(context.argument_count as usize);
-    slime_rt::debug_write(b" env=");
-    launch_context::debug_decimal(context.environment_count as usize);
-    slime_rt::debug_write(b" cwd=");
-    slime_rt::debug_write(
-        if context.capability_roles & CAPABILITY_ROLE_WORKING_DIRECTORY != 0 {
-            b"explicit"
+    Line::<128>::new()
+        .bytes(b"[echo-agent] command=echo args=")
+        .decimal(u64::from(context.argument_count))
+        .bytes(b" env=")
+        .decimal(u64::from(context.environment_count))
+        .bytes(b" cwd=")
+        .bytes(
+            if context.capability_roles & CAPABILITY_ROLE_WORKING_DIRECTORY != 0 {
+                b"explicit"
+            } else {
+                b"none"
+            },
+        )
+        .bytes(b" stdin=")
+        .bytes(if context.capability_roles & CAPABILITY_ROLE_STDIN != 0 {
+            b"explicit\n"
         } else {
-            b"none"
-        },
-    );
-    slime_rt::debug_write(b" stdin=");
-    slime_rt::debug_write(if context.capability_roles & CAPABILITY_ROLE_STDIN != 0 {
-        b"explicit\n"
-    } else {
-        b"none\n"
-    });
-    slime_rt::debug_write(b"echo-agent{tool=echo,value=");
+            b"none\n"
+        })
+        .emit();
+    let mut line = Line::<1024>::new();
+    line.bytes(b"echo-agent{tool=echo,value=");
     if let Some(argument) = context.arguments.argument(0) {
-        slime_rt::debug_write(argument);
+        line.bytes(argument);
     }
-    slime_rt::debug_write(b",env=");
+    line.bytes(b",env=");
     if let Some(environment) = launch_context::field(&context.environment, 0) {
-        slime_rt::debug_write(environment);
+        line.bytes(environment);
     }
-    slime_rt::debug_write(b"}\n");
+    line.bytes(b"}\n").emit();
 }

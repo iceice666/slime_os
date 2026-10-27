@@ -11,6 +11,8 @@ compile_error!(
 );
 
 mod clock;
+/// Whole-record console lines: build a line, then submit it in one write.
+pub mod console_line;
 #[cfg(feature = "heap")]
 mod heap;
 #[cfg(feature = "private-heap")]

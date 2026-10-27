@@ -82,12 +82,14 @@ pub fn probe(factory_slot: u32, base: u64) -> ProbeOutcome {
 /// Returns `true` when the component's quota is live.
 pub fn probe_and_report(label: &[u8], factory_slot: u32, base: u64) -> bool {
     let outcome = probe(factory_slot, base);
-    slime_rt::debug_write(label);
-    slime_rt::debug_write(match outcome {
-        ProbeOutcome::Ok => b" shared-buffer quota live\n" as &[u8],
-        ProbeOutcome::Denied => b" shared-buffer denied\n",
-        ProbeOutcome::QuotaExceeded => b" shared-buffer quota exhausted\n",
-        ProbeOutcome::Failed => b" shared-buffer lifecycle failed\n",
-    });
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(label)
+        .bytes(match outcome {
+            ProbeOutcome::Ok => b" shared-buffer quota live\n" as &[u8],
+            ProbeOutcome::Denied => b" shared-buffer denied\n",
+            ProbeOutcome::QuotaExceeded => b" shared-buffer quota exhausted\n",
+            ProbeOutcome::Failed => b" shared-buffer lifecycle failed\n",
+        })
+        .emit();
     outcome == ProbeOutcome::Ok
 }

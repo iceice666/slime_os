@@ -790,9 +790,11 @@ fn write_record(prefix: &[u8], bytes: &[u8; RECORD_LEN]) {
         encoded[index * 2] = HEX[(byte >> 4) as usize];
         encoded[index * 2 + 1] = HEX[(byte & 0x0f) as usize];
     }
-    slime_rt::debug_write(prefix);
-    slime_rt::debug_write(&encoded);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(prefix)
+        .bytes(&encoded)
+        .bytes(b"\n")
+        .emit();
 }
 
 const _: () = assert!(RECORD_LEN == MAX_MSG);

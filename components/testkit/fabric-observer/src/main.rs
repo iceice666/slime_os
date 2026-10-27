@@ -30,9 +30,11 @@ slime_rt::entry!(main);
 const CONTROL_SLOT: u32 = 0;
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric-observer] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<128>::new()
+        .bytes(b"[fabric-observer] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

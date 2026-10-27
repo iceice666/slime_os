@@ -9,6 +9,7 @@
 //! timeout and therefore proving nothing about deadline handling.
 
 use slime_proto::fabric_call::{CALL_TIME_MAGIC, FORMAT_VERSION, WireCallTimeAdvance};
+use slime_rt::console_line::Line;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
@@ -130,38 +131,30 @@ fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
 }
 
 fn write_value(prefix: &[u8], value: u64) {
-    let mut digits = [0u8; 20];
-    slime_rt::debug_write(prefix);
-    slime_rt::debug_write(decimal(value, &mut digits));
-    slime_rt::debug_write(b"\n");
-}
-
-fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
-    let mut index = digits.len();
-    let mut remaining = value;
-    if remaining == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while remaining != 0 {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-    }
-    &digits[index..]
+    Line::<128>::new()
+        .bytes(prefix)
+        .decimal(value)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[robot-clock] FAIL ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[robot-clock] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 
 fn fail_with(reason: &[u8], error: i64) -> ! {
-    slime_rt::debug_write(b"[robot-clock] FAIL ");
-    slime_rt::debug_write(reason);
-    write_value(b" error=", error.unsigned_abs());
+    Line::<256>::new()
+        .bytes(b"[robot-clock] FAIL ")
+        .bytes(reason)
+        .bytes(b" error=")
+        .decimal(error.unsigned_abs())
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

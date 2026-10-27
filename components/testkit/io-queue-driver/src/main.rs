@@ -5,6 +5,7 @@ use slime_proto::io_queue::{
     self, REQUEST_PAYLOAD_BYTES, STATE_RESET, STATUS_MALFORMED, STATUS_OK, STATUS_RESET,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue};
+use slime_rt::console_line::Line;
 use slime_rt::{
     ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, notification_signal,
     resolve_binding, shared_buffer_loan_map, yield_now,
@@ -248,8 +249,10 @@ fn signal(slot: u32) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-queue-driver] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-queue-driver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

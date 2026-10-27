@@ -25,13 +25,15 @@ fn main(_startup_arg: u32) {
             (1 | 2 | 4, slime_rt::Termination::Exit(0)) => {}
             _ => fail(),
         }
-        slime_rt::debug_write(b"[large-image-owner] incarnation=");
-        slime_rt::debug_write(&[b'0' + incarnation as u8]);
-        slime_rt::debug_write(if incarnation == 3 {
-            b" outcome=fault\n"
-        } else {
-            b" outcome=exit\n"
-        });
+        slime_rt::console_line::Line::<64>::new()
+            .bytes(b"[large-image-owner] incarnation=")
+            .bytes(&[b'0' + incarnation as u8])
+            .bytes(if incarnation == 3 {
+                b" outcome=fault\n"
+            } else {
+                b" outcome=exit\n"
+            })
+            .emit();
     }
     slime_rt::debug_write(b"[large-image-owner] complete incarnations=4 faults=1\n");
     if slime_rt::notification_signal(1) != slime_rt::ERR_SUCCESS {

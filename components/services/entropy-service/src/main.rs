@@ -24,6 +24,7 @@ use slime_proto::entropy_source::{
     WireEntropySourceRequest,
 };
 use slime_proto::{valid_entropy_service_request, valid_entropy_source_reply};
+use slime_rt::console_line::Line;
 use slime_rt::{
     ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, entropy_authority_read, exit,
     resolve_binding, yield_now,
@@ -58,12 +59,14 @@ fn main(_startup_arg: u32) {
         }
         *slot = Some(Holder::declared(&row));
     }
-    Line::new(b"[entropy-service] authority holders=")
-        .number(count as u64)
-        .push(b" hardware=")
-        .number(hardware)
-        .push(b" seeded=")
-        .number(count as u64 - hardware)
+    Line::<128>::new()
+        .bytes(b"[entropy-service] authority holders=")
+        .decimal(count as u64)
+        .bytes(b" hardware=")
+        .decimal(hardware)
+        .bytes(b" seeded=")
+        .decimal(count as u64 - hardware)
+        .bytes(b"\n")
         .emit();
 
     let source = resolve_binding(b"entropy-source").unwrap_or_else(|_| fail(b"source binding"));
@@ -80,8 +83,10 @@ fn main(_startup_arg: u32) {
                 let ready = request_fill(source, &mut fill);
                 match source_ready {
                     None if ready => {
-                        Line::new(b"[entropy-service] source=virtio-rng ready reseed_interval=")
-                            .number(u64::from(RESEED_INTERVAL))
+                        Line::<128>::new()
+                            .bytes(b"[entropy-service] source=virtio-rng ready reseed_interval=")
+                            .decimal(u64::from(RESEED_INTERVAL))
+                            .bytes(b"\n")
                             .emit();
                     }
                     None => {
@@ -329,57 +334,11 @@ fn answer(status: i32, bytes: &[u8]) {
     let _ = slime_rt::reply(&reply.encode());
 }
 
-/// One serial line, written with a single `debug_write` so another
-/// component's output cannot split it.
-struct Line {
-    bytes: [u8; 96],
-    used: usize,
-}
-
-impl Line {
-    fn new(prefix: &[u8]) -> Self {
-        let mut line = Self {
-            bytes: [0; 96],
-            used: 0,
-        };
-        line.push(prefix);
-        line
-    }
-
-    fn push(&mut self, text: &[u8]) -> &mut Self {
-        let end = self
-            .used
-            .checked_add(text.len())
-            .filter(|end| *end <= self.bytes.len())
-            .unwrap_or_else(|| fail(b"marker bounds"));
-        self.bytes[self.used..end].copy_from_slice(text);
-        self.used = end;
-        self
-    }
-
-    fn number(&mut self, mut value: u64) -> &mut Self {
-        let mut digits = [0u8; 20];
-        let mut cursor = digits.len();
-        loop {
-            cursor -= 1;
-            digits[cursor] = b'0' + (value % 10) as u8;
-            value /= 10;
-            if value == 0 {
-                break;
-            }
-        }
-        self.push(&digits[cursor..])
-    }
-
-    fn emit(&mut self) {
-        self.push(b"\n");
-        debug_write(&self.bytes[..self.used]);
-    }
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[entropy-service] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[entropy-service] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }
