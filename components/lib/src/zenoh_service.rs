@@ -70,10 +70,13 @@ pub struct Row<'k> {
     pub subscribe: bool,
 }
 
-/// One sample in a holder's ring.
+/// One sample in a holder's ring. A holder that subscribes to several keys tells them apart by
+/// `subscription`, the id of the subscription that matched, which is the one the core declared for the key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sample<const P: usize> {
     pub sequence: i64,
+    pub timestamp: i64,
+    pub subscription: u16,
     len: u32,
     payload: [u8; P],
 }
@@ -81,15 +84,19 @@ pub struct Sample<const P: usize> {
 impl<const P: usize> Sample<P> {
     const EMPTY: Self = Self {
         sequence: 0,
+        timestamp: 0,
+        subscription: 0,
         len: 0,
         payload: [0; P],
     };
 
-    fn new(sequence: i64, payload: &[u8]) -> Option<Self> {
+    fn new(subscription: u16, sequence: i64, timestamp: i64, payload: &[u8]) -> Option<Self> {
         let mut copy = [0u8; P];
         copy.get_mut(..payload.len())?.copy_from_slice(payload);
         Some(Self {
             sequence,
+            timestamp,
+            subscription,
             len: u32::try_from(payload.len()).ok()?,
             payload: copy,
         })
@@ -417,7 +424,7 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
             Err(SessionError::UndeclaredKey) => Peer::NotSubscribed,
             Err(error) => return Err(error.into()),
         };
-        let reached = self.deliver_key(key, sequence, payload);
+        let reached = self.deliver_key(key, sequence, timestamp, payload);
         Ok(Published { reached, peer })
     }
 
@@ -437,11 +444,11 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
             if let Event::SampleDelivered {
                 subscription,
                 sequence,
+                timestamp,
                 payload,
-                ..
             } = *event
             {
-                self.deliver_subscription(subscription, sequence, payload);
+                self.deliver_subscription(subscription, sequence, timestamp, payload);
             }
         }
         Ok(outcome)
@@ -462,37 +469,43 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
         Ok((usize::from(ring.held), ring.lost))
     }
 
-    fn push_to(&mut self, holder: u16, sequence: i64, payload: &[u8]) -> bool {
-        let Some(sample) = Sample::new(sequence, payload) else {
+    fn push_to(&mut self, row: Stored<'_>, sequence: i64, timestamp: i64, payload: &[u8]) -> bool {
+        let Some(sample) = Sample::new(row.subscription, sequence, timestamp, payload) else {
             return false;
         };
-        let Some(ring) = self.rings.get_mut(usize::from(holder)) else {
+        let Some(ring) = self.rings.get_mut(usize::from(row.holder)) else {
             return false;
         };
         ring.push(sample);
         true
     }
 
-    fn deliver_key(&mut self, key: &str, sequence: i64, payload: &[u8]) -> usize {
+    fn deliver_key(&mut self, key: &str, sequence: i64, timestamp: i64, payload: &[u8]) -> usize {
         let mut reached = 0;
         for index in 0..R {
             let Some(row) = self.rows.get(index).copied() else {
                 continue;
             };
-            if row.subscribe && row.key == key && self.push_to(row.holder, sequence, payload) {
+            if row.subscribe && row.key == key && self.push_to(row, sequence, timestamp, payload) {
                 reached += 1;
             }
         }
         reached
     }
 
-    fn deliver_subscription(&mut self, subscription: u32, sequence: i64, payload: &[u8]) {
+    fn deliver_subscription(
+        &mut self,
+        subscription: u32,
+        sequence: i64,
+        timestamp: i64,
+        payload: &[u8],
+    ) {
         for index in 0..R {
             let Some(row) = self.rows.get(index).copied() else {
                 continue;
             };
             if row.subscribe && u32::from(row.subscription) == subscription {
-                self.push_to(row.holder, sequence, payload);
+                self.push_to(row, sequence, timestamp, payload);
             }
         }
     }
