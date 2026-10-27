@@ -1,10 +1,10 @@
 use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER, RuntimeLimits};
 use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::{
-    CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REPLY_ACK,
-    KIND_REQUEST, KIND_TERMINAL, KIND_TERMINAL_ACK, STATUS_CANCELLED, STATUS_DUPLICATE,
-    STATUS_MALFORMED_REPLY, STATUS_PEER_DEAD, STATUS_REJECTED, STATUS_RETRY_EXHAUSTED,
-    STATUS_STALE, STATUS_TIMEOUT, WireCallEnvelope, WireCallTimeAdvance,
+    CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_HELD, KIND_REPLY,
+    KIND_REPLY_ACK, KIND_REQUEST, KIND_TERMINAL, KIND_TERMINAL_ACK, STATUS_CANCELLED,
+    STATUS_DUPLICATE, STATUS_MALFORMED_REPLY, STATUS_PEER_DEAD, STATUS_REJECTED,
+    STATUS_RETRY_EXHAUSTED, STATUS_STALE, STATUS_TIMEOUT, WireCallEnvelope, WireCallTimeAdvance,
 };
 use slime_proto::interface_schema::parameter_call;
 use slime_proto::sample_descriptor::{
@@ -1455,7 +1455,7 @@ impl Broker {
                 let Some(reply) = decoded.filter(|reply| {
                     length == MAX_MSG
                         && slime_proto::valid_call_envelope(reply, parameter_call::TYPE_TAG)
-                        && reply.kind == KIND_REPLY
+                        && matches!(reply.kind, KIND_REPLY | KIND_HELD)
                         && reply.session == SESSION
                 }) else {
                     if let Some(reply) = decoded
@@ -1470,6 +1470,15 @@ impl Broker {
                     slime_rt::debug_write(b"[fabric] stale call reply rejected\n");
                     return;
                 };
+                if reply.kind == KIND_HELD {
+                    // The server keeps the request outstanding and is back in
+                    // `recv`, which clearing `server_call` above already
+                    // records. A staged cancellation for it is now deliverable
+                    // without blocking against the server's own reply; the
+                    // call itself settles later, by reply, cancel or deadline.
+                    slime_rt::debug_write(b"[fabric] call held\n");
+                    return;
+                }
                 let mut outward = reply;
                 settle_outstanding_request(&mut self.calls[index]);
                 outward.session = self.calls[index].client_session;

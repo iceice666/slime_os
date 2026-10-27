@@ -158,6 +158,18 @@ unchanged, and replay never falls back to live clock access.
 Determinism is therefore a composition claim under declared inputs and limits.
 It is not a scheduler guarantee and does not imply CPU quantity isolation.
 
+## Robot runtime outcomes
+
+The `sel4-robot-runtime` plane produces each call outcome through one
+designated request, so no outcome depends on scheduling. The actuator refuses a
+command above its declared range, never answers the command `4242`, whose
+deadline the broker then expires, and holds the command `4243` without
+applying or answering it. The controller withdraws that held request right
+behind it, so the broker always forwards the cancellation and the actuator
+settles it. An actuator that answered the request on receipt would race the
+reply against the cancellation, and the broker would settle the withdrawal
+itself whenever the reply won.
+
 ## Proposed MCS decision
 
 [`../decisions/mcs-cpu-budgets.md`](../decisions/mcs-cpu-budgets.md) retains the
@@ -173,4 +185,5 @@ admission, and has target-specific assurance consequences.
 - `just scheduling_class_check`
 - `just lifecycle_restart_check`
 - `just robot_runtime_check`
+- `just robot_withdrawn_check`
 - `just sel4_gate_control_check` for missing/reordered/failure controls

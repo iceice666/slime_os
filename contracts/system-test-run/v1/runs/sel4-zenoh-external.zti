@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-zenoh-external";
-  imageClosureIdentity = "d0b34d46fa6a986e8b6768c95b65f47eb552e6d015128413554c456ea98b36ce";
+  imageClosureIdentity = "845435f1688d8691db4099ab76e3710e9a600ca5e6bae18f19de6b33072c3c6d";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
