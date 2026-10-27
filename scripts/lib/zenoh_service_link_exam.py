@@ -76,7 +76,9 @@ def good_lines() -> list[str]:
     out += [
         "servicelink declare 1 queued 0",
         "servicelink refused declare-while-one-waits busy",
+        "servicelink refused publish-while-a-declaration-waits busy",
         "servicelink refused declare-after-the-flush-before-settle busy",
+        "servicelink refused publish-after-the-flush-of-a-declaration busy",
         "servicelink declare 1 declared 1",
         f"servicelink frame declare-1 {_declare_frame(SERVICE_SN, 1, 0)}",
         "servicelink declare 2 queued 1",
@@ -96,7 +98,9 @@ def good_lines() -> list[str]:
         "servicelink held before-the-flush a 0 0",
         "servicelink held before-the-flush b 0 0",
         "servicelink refused publish-while-one-waits busy",
+        "servicelink refused declare-while-a-publication-waits busy",
         "servicelink refused publish-after-the-flush-before-settle busy",
+        "servicelink refused declare-after-the-flush-of-a-publication busy",
         "servicelink settled publish-a 2",
         f"servicelink frame publish-a {_put_frame(SERVICE_SN + 2, 0, 100)}",
         "servicelink published b k3 queued",
@@ -274,16 +278,43 @@ def transcript_controls() -> int:
     return refused
 
 
-def declaration_controls() -> int:
-    """The core is declared with the record the grants contract accepts, and the limits and rows the exam
-    prints are that record's."""
-    _need(grants.contract_accepts(grants.record()), "the record the service core is declared with is refused by the grants contract")
-    printed = good_lines()
+def check_declaration(printed: list[str], record_text: str) -> None:
+    """The record the core is declared with is accepted by the grants contract, and the limits and rows the
+    exam prints are that record's."""
+    _need(grants.contract_accepts(record_text), "the record the service core is declared with is refused by the grants contract")
     holders, slots, sample, _key, local = grants.LIMITS
     _need(printed[0] == f"servicelink limits {holders} {slots} {sample} {local} {NOTICES}", f"the exam prints {printed[0]!r}, the grants record declares {grants.LIMITS}")
     rows = [f"servicelink grant {grants.HOLDERS[h]} {K[k]} {'p' if p else '-'}{'s' if s else '-'}" for h, k, p, s in grants.ROWS]
     _need(printed[1 : 1 + len(rows)] == rows, "the rows the exam prints are not the rows the grants record declares")
-    return 2
+
+
+def declaration_controls() -> int:
+    """A declaration that the contract refuses, or that the exam does not print, is refused. Returns the number
+    of corrupted declarations refused."""
+    good = good_lines()
+    honest = grants.record()
+    check_declaration(good, honest)
+    first = 1 + len(grants.ROWS)
+    flipped = good[1].replace(" ps", " -s") if good[1].endswith(" ps") else good[1] + "x"
+    cases = [
+        ("a record whose stack is one byte under what it needs", good, grants.record(stack=grants.required_stack(*grants.LIMITS[:4], len(grants.ROWS)) - 1)),
+        ("a record at format version 2", good, grants.record(version=2)),
+        ("limits that print one holder fewer", [good[0].replace("limits 3 ", "limits 2 "), *good[1:]], honest),
+        ("limits that print another notice count", [good[0][:-1] + "9", *good[1:]], honest),
+        ("a row printed with its rights changed", [good[0], flipped, *good[2:]], honest),
+        ("a row missing from the printed rows", [*good[:2], *good[3:first], *good[first:]], honest),
+    ]
+    refused = 0
+    for label, lines, record_text in cases:
+        if lines == good and record_text == honest:
+            raise ServiceLinkError(f"control: {label} did not change the declaration")
+        try:
+            check_declaration(lines, record_text)
+        except ServiceLinkError:
+            refused += 1
+            continue
+        raise ServiceLinkError(f"control: the servicelink judge accepted {label}")
+    return refused
 
 
 def size_controls() -> int:
@@ -323,8 +354,8 @@ def all_controls() -> int:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these; once
 # it is gone these still bind. Both counts are exact.
-PINNED_CASES = 52
-PINNED_CONTROLS = 129
+PINNED_CASES = 56
+PINNED_CONTROLS = 141
 ADMISSION = "slime-zenoh-service-link-"
 
 
