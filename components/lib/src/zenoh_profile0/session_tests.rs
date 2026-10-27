@@ -83,6 +83,7 @@ fn owned(outcome: &Outcome<'_>, out: &[u8]) -> (Vec<u8>, Vec<Ev>) {
                 sequence,
                 timestamp,
                 payload,
+                ..
             } => Ev::Sample {
                 sequence,
                 timestamp,

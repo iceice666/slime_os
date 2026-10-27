@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-loan";
-  imageClosureIdentity = "a5d505b3107bf986e1e5ea3f115852b7aba48254e61a5f81c839001d22e30957";
+  imageClosureIdentity = "d6895fed3c607b32fb930a71a1340868c7ab486c30796cef65890f966356c34b";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
