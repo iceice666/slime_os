@@ -61,7 +61,7 @@ _EXCLUDED_MAIN_OUTPUTS = (
 
 
 def _function(source: str, name: str, *, required: bool = True) -> str:
-    match = re.search(rf"\bfn {re.escape(name)}\s*\(", source)
+    match = re.search(rf"\bfn {re.escape(name)}\s*(?:<[^>{{}}]*>\s*)?\(", source)
     if match is None:
         if required:
             raise ValueError(f"actual producer function absent: {name}")
@@ -254,7 +254,7 @@ def audit_producer_routes(root: Path) -> None:
         ("report_observed", r"&observed"),
         ("report_socket_options", r"table"),
         ("allocate_incarnation", r""),
-        ("report_events", r"&mut\s+local_engine"),
+        ("report_events", r"&mut\s+local_engine\s*,\s*application_table\.as_ref\(\)"),
     ):
         if len(re.findall(rf"\b{name}\s*\(\s*{arguments}\s*\)", network_main)) != 1:
             raise ValueError(f"actual local network reporter route changed: {name}")
@@ -265,6 +265,7 @@ def audit_producer_routes(root: Path) -> None:
             "report_authority",
             "report_observed",
             "report_socket_options",
+            "report_pool",
             "report_events",
             "allocate_incarnation",
         )
@@ -337,6 +338,8 @@ def fixture_source(root: Path) -> str:
                 "report_authority",
                 "report_observed",
                 "report_socket_options",
+                "report_pool",
+                "row_name",
                 "report_events",
             )
         ),
@@ -455,7 +458,7 @@ def check_controls(root: Path) -> int:
                         "detached-observed": ("report_observed", "&observed"),
                         "detached-incarnation": ("allocate_incarnation", ""),
                         "detached-options": ("report_socket_options", "table"),
-                        "detached-events": ("report_events", "&mut local_engine"),
+                        "detached-events": ("report_events", "&mut local_engine, application_table.as_ref()"),
                     }[mutation]
                     source = source.replace(
                         f"{name}({arguments})", f"unused_{name}({arguments})", 1
@@ -664,22 +667,29 @@ mod network {
         fn destination(&self, index: usize) -> Option<&Destination> { self.rows.get(index) }
     }
     #[derive(Clone, Copy)]
-    struct Options { keepalive_ms: u32, nagle: bool, hop_limit: u8, idle_timeout_ms: u32 }
+    struct Options { keepalive_ms: u32, nagle: bool, hop_limit: u8, idle_timeout_ms: u32, rx_buffer_bytes: u32, tx_buffer_bytes: u32 }
+    #[derive(Clone, Copy)]
     struct ApplicationEntry<'a> { control_binding: &'a [u8], holder_identity: [u8; 32], options: Options }
     struct NetworkApplications<'a> { rows: &'a [ApplicationEntry<'a>] }
-    impl NetworkApplications<'_> {
+    impl<'a> NetworkApplications<'a> {
         fn application_count(&self) -> usize { self.rows.len() }
         fn application(&self, index: usize) -> Option<&ApplicationEntry<'_>> { self.rows.get(index) }
+        fn by_holder(&self, holder: &[u8; 32]) -> Option<ApplicationEntry<'a>> {
+            self.rows.iter().find(|entry| entry.holder_identity == *holder).copied()
+        }
     }
+    mod network_application { pub type Application<'a> = super::ApplicationEntry<'a>; }
     // Local control stems do not equal the declared publisher/subscriber holder.
     mod boot_contracts { pub mod network_destination {
         pub fn holder_identity(_: &str) -> [u8; 32] { [0; 32] }
     } }
     mod tcp {
+        pub const SOCKETS: usize = 4;
         pub enum Terminal { TimeWait, Closed, Reset, Timeout }
         pub enum Event {
             AcceptedClose { unread: usize, unsent: usize, terminal: Terminal, bytes: usize },
             ListenerClosed { children: usize },
+            Opened { holder: [u8; 32], socket: usize, local_port: u16, rx_bytes: u32, tx_bytes: u32 },
         }
         pub struct Engine<'a> { pub events: std::vec::IntoIter<Event>, pub marker: std::marker::PhantomData<&'a ()> }
         impl Engine<'_> { pub fn take_event(&mut self) -> Option<Event> { self.events.next() } }
@@ -713,14 +723,19 @@ mod network {
     }
     pub fn options() { options_fields(0, true, 64, 10000); }
     pub fn options_fields(keepalive_ms: u32, nagle: bool, hop_limit: u8, idle_timeout_ms: u32) {
-        let options = Options { keepalive_ms, nagle, hop_limit, idle_timeout_ms };
+        let options = Options { keepalive_ms, nagle, hop_limit, idle_timeout_ms, rx_buffer_bytes: 2048, tx_buffer_bytes: 2048 };
         let rows = [ApplicationEntry { control_binding: b"local-publisher-control", holder_identity: [1; 32], options }, ApplicationEntry { control_binding: b"local-subscriber-control", holder_identity: [2; 32], options }];
         report_socket_options(&NetworkApplications { rows: &rows });
     }
     pub fn events(terminal: u8, unread: usize, unsent: usize, bytes: usize, children: usize) {
         let terminal = match terminal { 0 => tcp::Terminal::TimeWait, 1 => tcp::Terminal::Closed, 2 => tcp::Terminal::Reset, _ => tcp::Terminal::Timeout };
         let events = vec![tcp::Event::AcceptedClose { unread, unsent, terminal, bytes }, tcp::Event::ListenerClosed { children }].into_iter();
-        report_events(&mut tcp::Engine { events, marker: std::marker::PhantomData });
+        report_events(&mut tcp::Engine { events, marker: std::marker::PhantomData }, None);
+    }
+    pub fn pool(backend: &[u8], rx: usize, tx: usize) { report_pool(backend, (rx, tx)); }
+    pub fn opened(socket: usize, local_port: u16, rx_bytes: u32, tx_bytes: u32) {
+        let events = vec![tcp::Event::Opened { holder: [9; 32], socket, local_port, rx_bytes, tx_bytes }].into_iter();
+        report_events(&mut tcp::Engine { events, marker: std::marker::PhantomData }, None);
     }
     pub fn incarnation(next: u64) { @INCARNATION@ }
     pub fn congestion() { let engine = Engine { handles: 0 }; @CONGESTION@ }
@@ -819,12 +834,20 @@ fn main() {
     case!("congestion", network::congestion(), None, &[b"[network-service] tcp congestion control=reno\n".as_slice()]);
     case!("local options", network::options(), None, &[
         b"[network-service] tcp options holder=unnamed keepalive_ms=0 nagle=1 hop_limit=64 idle_timeout_ms=10000\n".as_slice(),
+        b"[network-service] tcp buffers holder=unnamed rx_bytes=2048 tx_bytes=2048\n".as_slice(),
         b"[network-service] tcp options holder=unnamed keepalive_ms=0 nagle=1 hop_limit=64 idle_timeout_ms=10000\n".as_slice(),
+        b"[network-service] tcp buffers holder=unnamed rx_bytes=2048 tx_bytes=2048\n".as_slice(),
     ]);
     case!("option fields", network::options_fields(3, false, 7, 11), None, &[
         b"[network-service] tcp options holder=unnamed keepalive_ms=3 nagle=0 hop_limit=7 idle_timeout_ms=11\n".as_slice(),
+        b"[network-service] tcp buffers holder=unnamed rx_bytes=2048 tx_bytes=2048\n".as_slice(),
         b"[network-service] tcp options holder=unnamed keepalive_ms=3 nagle=0 hop_limit=7 idle_timeout_ms=11\n".as_slice(),
+        b"[network-service] tcp buffers holder=unnamed rx_bytes=2048 tx_bytes=2048\n".as_slice(),
     ]);
+    case!("external pool", network::pool(b"external", 2048, 2048), None, &[b"[network-service] tcp pool backend=external sockets=4 rx_bytes=2048 tx_bytes=2048\n".as_slice()]);
+    case!("loopback pool", network::pool(b"loopback", 2048, 2048), None, &[b"[network-service] tcp pool backend=loopback sockets=4 rx_bytes=2048 tx_bytes=2048\n".as_slice()]);
+    case!("pool fields", network::pool(b"external", 65536, 4096), None, &[b"[network-service] tcp pool backend=external sockets=4 rx_bytes=65536 tx_bytes=4096\n".as_slice()]);
+    case!("unnamed open", network::opened(1, 49152, 2048, 2048), None, &[b"[network-service] tcp open holder=unnamed socket=1 local_port=49152 rx_bytes=2048 tx_bytes=2048\n".as_slice()]);
     case!("local events", network::events(1, 0, 0, 4096, 0), None, &[
         b"[network-service] tcp accepted close unread=0 unsent=0 terminal=closed handles=1 bytes=4096\n".as_slice(),
         b"[network-service] tcp listener closed children=0\n".as_slice(),
