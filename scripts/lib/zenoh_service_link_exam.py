@@ -134,7 +134,16 @@ def good_lines() -> list[str]:
         f"servicelink held after-the-burst a {BURST_RING} {BURST_LOST}",
         "servicelink ok a-burst-waits-in-the-stream-and-the-ring-counts-the-loss",
     ]
-    # Seven: a stream that accepts the frame and then resets.
+    # Seven: a keep-alive that the link queued holds the send slot while the core has nothing pending. The core
+    # refuses both operations as busy and queues a publication once the stream took the keep-alive.
+    out += [
+        "servicelink keep-alive queued",
+        "servicelink refused publish-while-a-keep-alive-waits busy",
+        "servicelink refused declare-while-a-keep-alive-waits busy",
+        "servicelink published a k1 queued-after-the-keep-alive",
+        "servicelink ok a-keep-alive-holds-the-send-slot-and-the-core-says-busy",
+    ]
+    # Eight: a stream that accepts the frame and then resets.
     out += [
         "servicelink published a k1 queued-on-a-stream-that-will-reset",
         "servicelink pump reset",
@@ -170,6 +179,7 @@ SHAPES = {
     "delivered": 7,
     "routed": 3,
     "burst": 4,
+    "keep-alive": 3,
     "pump": 3,
     "peer-received": 4,
 }
@@ -354,8 +364,8 @@ def all_controls() -> int:
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. While the item is active its stored body is compared with these; once
 # it is gone these still bind. Both counts are exact.
-PINNED_CASES = 56
-PINNED_CONTROLS = 141
+PINNED_CASES = 61
+PINNED_CONTROLS = 151
 ADMISSION = "slime-zenoh-service-link-"
 
 

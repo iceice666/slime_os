@@ -1,10 +1,10 @@
 ---
 schema: work-item/v2
-id: 01a17d56-876c-7351-a736-abe6d353a99d
+id: 01a17dad-fa21-739d-a55e-ef59fa3ce0ea
 kind: task
 state: open
-created: 2026-10-27T12:29:45+00:00
-updated: 2026-10-27T12:30:12+00:00
+created: 2026-10-27T14:05:16+00:00
+updated: 2026-10-27T14:05:35+00:00
 parent: 01a0f5fa-f2c4-71cf-962b-c62cbea2ef68
 depends:
   - 01a15d1f-26d2-7653-924b-a3f113a718e6
@@ -13,8 +13,8 @@ devloop:
   recordSchema: devloop-consumer/v1
   bodyProfile: fenced-zti/v1
   helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
-  requirementsDigest: 1620f71761b71a254deb552f4fa1fbcfb7be050052fee5b3374799c9fefb3c01
-  admission: slime-zenoh-service-client-20261027c
+  requirementsDigest: 3026946fa200c9a51dcbfd07c5c9d66ca605e517e5d16e76baec5d8d90185fa2
+  admission: slime-zenoh-service-client-20261027d
   epoch: unstarted
   evidence: []
 ---
@@ -45,7 +45,7 @@ devloop:
   requirements = [
     {
       id = "constants-are-pinned";
-      statement = "The schema states format version 1 and the magic for `ZSVC`. It states four queue slots, one ring page and one data page of 4096 bytes each. A success status is zero.";
+      statement = "The schema states format version 1 and the magic for `ZSVC`, as a little-endian integer. It states four queue slots, one ring page and one data page of 4096 bytes each. A success status is zero.";
       acceptance = [
         "cases-observed";
       ];
@@ -94,7 +94,7 @@ devloop:
     };
     {
       id = "values-are-distinct-and-signed";
-      statement = "The five operations, the six statuses, the three items and the two loan roles are distinct within their group. Operations are positive and failures are negative. The item none is zero.";
+      statement = "The five operations, the six statuses, the three items and the two loan roles are distinct within their group. Operations are positive and failures are negative. The item none is zero. Each value fits the width and sign of the field that carries it.";
       acceptance = [
         "cases-observed";
       ];
@@ -122,7 +122,7 @@ devloop:
     };
     {
       id = "judge-holds";
-      statement = "The judge refuses 74 corruptions before it checks the generated file. They are 60 edits of the schema, 4 holders that the protocol cannot serve and 10 edits of the generated file.";
+      statement = "The judge refuses 80 corruptions before it checks the generated file. They are 66 edits of the schema, 4 holders that the protocol cannot serve and 10 edits of the generated file.";
       acceptance = [
         "controls-refused";
       ];
@@ -142,7 +142,7 @@ devloop:
       observation = "casesObserved";
       expected = {
         kind = "int";
-        intValue = 23;
+        intValue = 24;
         boolValue = false;
         textValue = "";
       };
@@ -153,12 +153,12 @@ devloop:
       members = [];
     };
     {
-      id = "exactly-74-controls";
+      id = "exactly-80-controls";
       kind = "equal";
       observation = "negativeControlsRefused";
       expected = {
         kind = "int";
-        intValue = 74;
+        intValue = 80;
         boolValue = false;
         textValue = "";
       };
@@ -207,7 +207,7 @@ devloop:
   acceptance = [
     {
       id = "cases-observed";
-      rationale = "The checker counts 23 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      rationale = "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
       gate = "just-observations";
       mode = "automated";
       mandatory = true;
@@ -215,11 +215,11 @@ devloop:
     };
     {
       id = "controls-refused";
-      rationale = "The checker refuses exactly 74 corruptions before it checks the generated file. They are 60 edits of the schema, 4 holders the protocol cannot serve and 10 edits of the generated file. A dropped or invented control changes the count and re-admits the item.";
+      rationale = "The checker refuses exactly 80 corruptions before it checks the generated file. They are 66 edits of the schema, 4 holders the protocol cannot serve and 10 edits of the generated file. A dropped or invented control changes the count and re-admits the item.";
       gate = "just-observations";
       mode = "automated";
       mandatory = true;
-      predicate = "exactly-74-controls";
+      predicate = "exactly-80-controls";
     };
     {
       id = "recipe-passed";

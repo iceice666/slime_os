@@ -59,7 +59,7 @@ LAYOUT_PINS = {
 }
 PINNED = {
     "formatVersion": 1,
-    "serviceMagic": int.from_bytes(b"ZSVC", "big"),
+    "serviceMagic": int.from_bytes(b"ZSVC", "little"),
     "queueSlots": 4,
     "ringPages": 1,
     "dataPages": 1,
@@ -67,11 +67,24 @@ PINNED = {
     "dataBytes": 4096,
     "statusSuccess": 0,
 }
+
+
 OPERATIONS = ("opAttach", "opPublish", "opTake", "opDetach", "opAbort")
 STATUSES = ("statusSuccess", "statusDenied", "statusMalformed", "statusUnsupported", "statusTooLarge", "statusLinkClosed")
 ITEMS = ("itemNone", "itemSample", "itemLoss")
 ROLES = ("loanRoleRing", "loanRoleData")
 FLAGS = ("flagPeerSent",)
+
+# The field that carries each group of constants, as (layout, field). A constant must fit that field's width
+# and signedness, or no record can hold it: an operation of 256 does not fit the one-byte `op`.
+CARRIED_BY = (
+    ("operations", OPERATIONS, "requestLayout", "op"),
+    ("completion operations", OPERATIONS, "completionLayout", "op"),
+    ("items", ITEMS, "completionLayout", "item"),
+    ("statuses", STATUSES, "completionLayout", "status"),
+    ("loan roles", ROLES, "loanLayout", "role"),
+    ("flags", FLAGS, "completionLayout", "flags"),
+)
 
 
 class ClientError(Exception):
@@ -204,6 +217,14 @@ def facts(text: str | None = None) -> list[str]:
     _need(all(found[name] < 0 for name in STATUSES[1:]), "client: a failure status is not negative")
     _need(found["itemNone"] == 0 and found["itemSample"] > 0 and found["itemLoss"] > 0, "client: the items are not none, then two positive values")
     out.append("signs operations statuses items")
+    out.append("fits-fields " + " ".join(label.replace(" ", "-") for label, *_ in CARRIED_BY))
+    for label, names, layout_name, field_name in CARRIED_BY:
+        carrier = {name: (width, signed) for name, width, signed, _ in layout(text, layout_name)}
+        _need(field_name in carrier, f"client: {layout_name} has no field {field_name} to carry the {label}")
+        width, signed = carrier[field_name]
+        low, high = (-(1 << (8 * width - 1)), (1 << (8 * width - 1)) - 1) if signed else (0, (1 << (8 * width)) - 1)
+        for name in names:
+            _need(low <= found[name] <= high, f"client: {name} is {found[name]}, outside the {width}-byte {'signed' if signed else 'unsigned'} {field_name} field of {layout_name}")
     _need(found["knownCompletionFlags"] == sum(found[name] for name in FLAGS), "client: knownCompletionFlags is not the sum of the flags")
     _need(all(found[name] & (found[name] - 1) == 0 and found[name] > 0 for name in FLAGS), "client: a flag is not one bit")
     out.append("flags known")
@@ -277,6 +298,12 @@ def mutations() -> list[tuple[str, object]]:
         ("a width moved from one field to another with the sum kept", lambda t: _edit('{ name = "flags"; width = 1; signed = false; byteArray = false; };\n  { name = "row"; width = 2;', '{ name = "flags"; width = 2; signed = false; byteArray = false; };\n  { name = "row"; width = 2;')(_edit('{ name = "reserved2"; width = 12;', '{ name = "reserved2"; width = 11;')(t))),
         ("the completion length narrowed and its padding widened", lambda t: _edit('{ name = "length"; width = 4; signed = false; byteArray = false; };\n  { name = "flags"; width = 4;', '{ name = "length"; width = 2; signed = false; byteArray = false; };\n  { name = "flags"; width = 6;')(t)),
         ("a record field added to a type and a layout with the sizes kept", lambda t: _edit("  reserved2 : Int;\n};", "  reserved2 : Int;\n  extra : Int;\n};")(_edit('{ name = "reserved2"; width = 12; signed = false; byteArray = true; };', '{ name = "reserved2"; width = 11; signed = false; byteArray = true; };\n  { name = "extra"; width = 1; signed = false; byteArray = false; };')(t))),
+        ("an operation that does not fit the one-byte op field", _edit("opDetach :: Int = 4;", "opDetach :: Int = 256;")),
+        ("an item that does not fit the one-byte item field", _edit("itemLoss :: Int = 2;", "itemLoss :: Int = 300;")),
+        ("a status below the signed 4-byte field", _edit("statusLinkClosed :: Int = -5;", "statusLinkClosed :: Int = -2147483649;")),
+        ("a loan role that does not fit the one-byte role field", _edit("loanRoleData :: Int = 2;", "loanRoleData :: Int = 256;")),
+        ("a flag that does not fit the 4-byte flags field", lambda t: _edit("flagPeerSent :: Int = 1;", "flagPeerSent :: Int = 4294967296;")(_edit("knownCompletionFlags :: Int = 1;", "knownCompletionFlags :: Int = 4294967296;")(t))),
+        ("a magic stored in the byte order the codec does not write", _edit("serviceMagic :: Int = 1129730906; -- `ZSVC`", "serviceMagic :: Int = 1515411011; -- `ZSVC`")),
         ("a field named twice", lambda t: _edit('  { name = "reserved2"; width = 12; signed = false; byteArray = true; };', '  { name = "reserved"; width = 12; signed = false; byteArray = true; };')(_edit("  reserved2 : Int;\n};", "  reserved : Int;\n};")(t))),
     ]
     return out
@@ -403,8 +430,8 @@ def all_controls() -> int:
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed
 # and retired to .tasks/terminal. Both counts are exact.
-PINNED_CASES = 23
-PINNED_CONTROLS = 74
+PINNED_CASES = 24
+PINNED_CONTROLS = 80
 ADMISSION = "slime-zenoh-service-client-"
 
 

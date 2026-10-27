@@ -6,7 +6,7 @@
 -- travel in the data page beside the request, as they do in `network-service/v1`.
 
 formatVersion :: Int = 1;
-serviceMagic :: Int = 1515411011;
+serviceMagic :: Int = 1129730906; -- `ZSVC`
 
 -- IO0 limits this protocol must fit in: a request payload of 56 bytes and a completion payload of 24.
 requestBytes :: Int = 32;
