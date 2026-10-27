@@ -89,9 +89,9 @@
   ];
   bootProfiles = [];
   clockAuthority = [
-    { holder = "network-service"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-network-request"; timerBadgeBit = 7; };
-    { holder = "buffers-large"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-large-done"; timerBadgeBit = 7; };
-    { holder = "buffers-baseline"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-baseline-done"; timerBadgeBit = 6; };
+    { holder = "network-service"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-network-request"; timerBadgeBit = 7; };
+    { holder = "buffers-large"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-large-done"; timerBadgeBit = 7; };
+    { holder = "buffers-baseline"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "buffers-baseline-done"; timerBadgeBit = 6; };
   ];
   clockAuthorityObject = true;
   ioResourceBudget = [

@@ -14,6 +14,7 @@ test = false
 [dependencies]
 boot-contracts = { path = "../../../boot-contracts" }
 sel4 = { path = "../../../deps/rust-sel4/crates/sel4" }
+slime-components = { path = "../../lib" }
 slime-proto = { path = "../../proto" }
 slime-rt = { path = "../../runtime" }
 

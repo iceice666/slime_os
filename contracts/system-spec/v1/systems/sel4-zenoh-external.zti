@@ -79,8 +79,8 @@
   ];
   bootProfiles = [];
   clockAuthority = [
-    { holder = "network-service"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "zenoh-network-request"; timerBadgeBit = 1; };
-    { holder = "ros2-demo-publisher"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "zenoh-publisher-done"; timerBadgeBit = 3; };
+    { holder = "network-service"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "zenoh-network-request"; timerBadgeBit = 1; };
+    { holder = "ros2-demo-publisher"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "zenoh-publisher-done"; timerBadgeBit = 3; };
   ];
   clockAuthorityObject = true;
   ioResourceBudget = [

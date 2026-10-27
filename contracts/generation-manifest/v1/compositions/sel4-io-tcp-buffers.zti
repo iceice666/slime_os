@@ -562,7 +562,6 @@
   clockAuthority = [
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -572,7 +571,6 @@
     };
     {
       holder = "buffers-large";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -582,7 +580,6 @@
     };
     {
       holder = "buffers-baseline";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 6;

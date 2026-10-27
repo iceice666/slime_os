@@ -83,11 +83,14 @@ rightBits :: List RightBit = {
   right "BUFFER_CREATE" 24 "bufferCreate" "neutral";
   -- Mapping a loan reads bytes a peer wrote, and no record carries them.
   right "BUFFER_LOAN" 25 "bufferLoan" "unrecorded";
-  -- The three the C9.5 recorder genuinely captures: a monotonic read, a
-  -- simulated read, and a timer expiry each have a `fabric-trace/v1` family
-  -- carrying the exact value the root answered, and `Replay` returns that value
-  -- instead of asking again.
-  right "CLOCK_MONOTONIC_READ" 26 "clockMonotonicRead" "recorded";
+  -- Bit 26 was `CLOCK_MONOTONIC_READ`, retired with `clock-authority/v2`:
+  -- reading the monotonic counter is ambient, because every AArch64 and RISC-V
+  -- thread can read it without the root. The position stays reserved.
+  --
+  -- The two the C9.5 recorder genuinely captures: a simulated read and a timer
+  -- expiry each have a `fabric-trace/v1` family carrying the exact value the
+  -- root answered, and `Replay` returns that value instead of asking again. A
+  -- monotonic read is recorded by the component that made it.
   right "CLOCK_TIMER_USE" 27 "clockTimerUse" "recorded";
   right "CLOCK_SIMULATED_READ" 28 "clockSimulatedRead" "recorded";
   -- `SIMULATED_ADVANCE` answers the value *before* the advance, which depends on

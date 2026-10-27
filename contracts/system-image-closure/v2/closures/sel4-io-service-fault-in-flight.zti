@@ -4,9 +4,9 @@
   systemSpec = {
     path = "contracts/system-spec/v1/systems/sel4-io-service-fault.zti";
     kind = "file";
-    identity = "b08862951228d6edbeb87a77eb9b5bc8432777069a94123dd61a8dac7b9c0808";
+    identity = "399813a9eea7686266055a3daa452ce50ec35d045adace6291742d454ea93a1c";
   };
-  systemIdentity = "9acc4eb2df4f2442b0e30ac147e284b2d51401f1c9f89784c0cf4e1ffad277bd";
+  systemIdentity = "1e57ec8586ec697acd70aecf990cba4a2214d16e2e8d8ec34b2bb3dbf9e3aaaf";
   implementations = [
     {
       component = "init";
@@ -69,7 +69,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "905ef9773c0b6a519fb7150c34e77cb4fc5c2cd797f404064ac9c4ee95c2130a";
+      identity = "b2faa76c699dc4cf66e26abd1c672bf559d1d0c094f395e58da15d26506ebb86";
     };
     parameters = [];
   };
@@ -88,7 +88,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "aa59e6778335674d2f16ec2a0e328deaaab16ca8ee0aeb15a77e3e5e642ad5f3";
+        identity = "74b7ed0d477859d0a4d93db59c4b32b7e515b85c0ae8ce5c6e7d6fdbab6f6b1a";
       };
     };
     {
@@ -96,7 +96,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "d30689e67e8fb1270e59750b7f0e936c117c11407834bfa9e69fc051bcd99438";
+        identity = "29b5bb613f31cd0a151ca0075b07e3ece9895c1da2e4673381153543ca513fa0";
       };
     };
     {
@@ -136,7 +136,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "15cb7364b7ab4a68a933983164e328f3682f813f4d9b7a1fc5be47977460ae01";
+        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
       };
     };
     {

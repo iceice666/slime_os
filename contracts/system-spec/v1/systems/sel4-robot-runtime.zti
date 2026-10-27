@@ -679,7 +679,6 @@
   clockAuthority = [
     {
       holder = "robot-sensor";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;
@@ -689,7 +688,6 @@
     };
     {
       holder = "robot-supervisor";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;

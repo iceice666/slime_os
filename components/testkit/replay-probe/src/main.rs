@@ -401,9 +401,11 @@ fn run_replayer(capacity: u32) -> ! {
         Err(error) => fail_recording(b"replay lifecycle transition", error),
     };
 
-    // This component holds no clock, so every live read must be refused. Without
-    // this the replay could be reading the hardware and agreeing by luck.
-    if monotonic_read().is_ok() || simulated_time_read().is_ok() {
+    // This component holds no clock authority, so a live simulated read must be
+    // refused. A monotonic read is ambient (`clock-authority/v2`) and cannot be
+    // refused; the replayed instant is taken from the recording above, never
+    // from a live read, and the outputs below are recomputed from it alone.
+    if simulated_time_read().is_ok() {
         fail(b"the replayer holds live clock authority")
     }
     // The recorded hardware instant must be a real observation rather than a

@@ -104,7 +104,6 @@
   clockAuthority = [
     {
       holder = "sched-foreground";
-      monotonicRead = false;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;

@@ -534,7 +534,6 @@
   clockAuthority = [
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -544,7 +543,6 @@
     };
     {
       holder = "options-baseline";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -554,7 +552,6 @@
     };
     {
       holder = "options-tuned";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 6;

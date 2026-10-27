@@ -94,16 +94,7 @@
   bootProfiles = [];
   clockAuthority = [
     {
-      holder = "clock-monotonic";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
-    };
-    {
       holder = "clock-timer";
-      monotonicRead = false;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 9;
@@ -113,7 +104,6 @@
     };
     {
       holder = "clock-simulated-reader";
-      monotonicRead = false;
       simulatedAdvance = false;
       simulatedRead = true;
       timerQuota = 0;
@@ -121,7 +111,6 @@
     };
     {
       holder = "clock-simulated-advancer";
-      monotonicRead = false;
       simulatedAdvance = true;
       simulatedRead = false;
       timerQuota = 0;

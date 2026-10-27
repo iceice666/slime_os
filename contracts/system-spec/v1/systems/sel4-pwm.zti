@@ -380,17 +380,8 @@
   notifications = [];
   notificationBindings = [];
   bootProfiles = [];
-  clockAuthority = [
-    {
-      holder = "pwm-servo-driver";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
-    };
-  ];
-  clockAuthorityObject = true;
+  clockAuthority = [];
+  clockAuthorityObject = false;
   ioResourceBudget = [
     {
       bufferLoans = 0;

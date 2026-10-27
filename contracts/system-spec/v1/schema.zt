@@ -211,10 +211,10 @@ SystemBootProfile :: type {
 
 -- C9.1 root-brokered clock service authority, as `contracts/generation-manifest/v1`'s
 -- `ClockAuthorityEntry`, reproduced field for field: neither list nor grant table
--- can derive who reads which clock or holds a timer quota, so it is declared.
+-- can derive who reads simulated time or holds a timer quota, so it is declared.
+-- Reading the monotonic clock is ambient (`clock-authority/v2`).
 SystemClockAuthority :: type {
   holder : Text;
-  monotonicRead : Bool;
   timerUse : Bool;
   simulatedRead : Bool;
   simulatedAdvance : Bool;

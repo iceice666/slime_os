@@ -439,11 +439,6 @@
       size = 4096;
     };
     {
-      id = "clock-authority";
-      kind = "resource";
-      size = 4096;
-    };
-    {
       id = "io-resource-budget";
       kind = "resource";
       size = 4096;
@@ -508,16 +503,6 @@
     };
   ];
   target = "aarch64-sel4-qemu-virt";
-  clockAuthority = [
-    {
-      holder = "pwm-servo-driver";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
-    };
-  ];
   ioResourceBudget = [
     {
       bufferLoans = 0;

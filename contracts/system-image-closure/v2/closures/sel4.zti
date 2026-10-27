@@ -91,7 +91,7 @@
     implementation = {
       path = "slime-root";
       kind = "tree";
-      identity = "905ef9773c0b6a519fb7150c34e77cb4fc5c2cd797f404064ac9c4ee95c2130a";
+      identity = "b2faa76c699dc4cf66e26abd1c672bf559d1d0c094f395e58da15d26506ebb86";
     };
     parameters = [
       "qemuKeyboard";
@@ -112,7 +112,7 @@
       artifact = {
         path = "boot-contracts";
         kind = "tree";
-        identity = "aa59e6778335674d2f16ec2a0e328deaaab16ca8ee0aeb15a77e3e5e642ad5f3";
+        identity = "74b7ed0d477859d0a4d93db59c4b32b7e515b85c0ae8ce5c6e7d6fdbab6f6b1a";
       };
     };
     {
@@ -120,7 +120,7 @@
       artifact = {
         path = "Cargo.lock";
         kind = "file";
-        identity = "d30689e67e8fb1270e59750b7f0e936c117c11407834bfa9e69fc051bcd99438";
+        identity = "29b5bb613f31cd0a151ca0075b07e3ece9895c1da2e4673381153543ca513fa0";
       };
     };
     {
@@ -160,7 +160,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "15cb7364b7ab4a68a933983164e328f3682f813f4d9b7a1fc5be47977460ae01";
+        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
       };
     };
     {

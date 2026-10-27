@@ -86,9 +86,9 @@
   ];
   bootProfiles = [];
   clockAuthority = [
-    { holder = "network-service"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "listener-network-request"; timerBadgeBit = 7; };
-    { holder = "listener-session"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "listener-session-done"; timerBadgeBit = 7; };
-    { holder = "intruder-session"; monotonicRead = true; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "intruder-session-done"; timerBadgeBit = 6; };
+    { holder = "network-service"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "listener-network-request"; timerBadgeBit = 7; };
+    { holder = "listener-session"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "listener-session-done"; timerBadgeBit = 7; };
+    { holder = "intruder-session"; simulatedAdvance = false; simulatedRead = false; timerQuota = 1; timerUse = true; timerNotification = "intruder-session-done"; timerBadgeBit = 6; };
   ];
   clockAuthorityObject = true;
   ioResourceBudget = [

@@ -10,7 +10,6 @@
   clockAuthority = [
     {
       holder = "http-get";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 1;
@@ -20,21 +19,12 @@
     };
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 1;
       timerNotification = "network-http-request";
       timerQuota = 1;
       timerUse = true;
-    };
-    {
-      holder = "http-launcher";
-      monotonicRead = true;
-      simulatedAdvance = false;
-      simulatedRead = false;
-      timerQuota = 0;
-      timerUse = false;
     };
   ];
   clockAuthorityObject = true;

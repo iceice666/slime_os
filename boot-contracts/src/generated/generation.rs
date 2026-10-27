@@ -178,7 +178,6 @@ pub const RIGHT_DIRECTORY_DERIVE: u64 = 4194304;
 pub const RIGHT_INPUT_READ: u64 = 8388608;
 pub const RIGHT_BUFFER_CREATE: u64 = 16777216;
 pub const RIGHT_BUFFER_LOAN: u64 = 33554432;
-pub const RIGHT_CLOCK_MONOTONIC_READ: u64 = 67108864;
 pub const RIGHT_CLOCK_TIMER_USE: u64 = 134217728;
 pub const RIGHT_CLOCK_SIMULATED_READ: u64 = 268435456;
 pub const RIGHT_CLOCK_SIMULATED_ADVANCE: u64 = 536870912;
@@ -186,7 +185,7 @@ pub const RIGHT_SCHEDULING_PROMOTE: u64 = 1073741824;
 pub const RIGHT_LIFECYCLE_RESTART: u64 = 2147483648;
 pub const RIGHT_PARAMETER_READ: u64 = 4294967296;
 pub const RIGHT_PARAMETER_WRITE: u64 = 8589934592;
-pub const RIGHT_ALL: u64 = 17179735039;
+pub const RIGHT_ALL: u64 = 17112626175;
 
 /// C9.5's nondeterminism classification, as masks over the same
 /// `rightBits` table `RIGHT_*` comes from.
@@ -198,7 +197,7 @@ pub const RIGHT_ALL: u64 = 17179735039;
 /// including the neutral remainder these two masks exclude -- the renderer
 /// refuses to emit otherwise, so a right added without a classification is
 /// a build failure rather than a source silently treated as harmless.
-pub const RIGHT_RECORDED: u64 = 469762048;
+pub const RIGHT_RECORDED: u64 = 402653184;
 pub const RIGHT_UNRECORDED: u64 = 8103244019;
 
 /// The rights bit a generation manifest spells `name`, or `None`.
@@ -232,7 +231,6 @@ pub fn right_named(name: &str) -> Option<u64> {
         "inputRead" => RIGHT_INPUT_READ,
         "bufferCreate" => RIGHT_BUFFER_CREATE,
         "bufferLoan" => RIGHT_BUFFER_LOAN,
-        "clockMonotonicRead" => RIGHT_CLOCK_MONOTONIC_READ,
         "clockTimerUse" => RIGHT_CLOCK_TIMER_USE,
         "clockSimulatedRead" => RIGHT_CLOCK_SIMULATED_READ,
         "clockSimulatedAdvance" => RIGHT_CLOCK_SIMULATED_ADVANCE,

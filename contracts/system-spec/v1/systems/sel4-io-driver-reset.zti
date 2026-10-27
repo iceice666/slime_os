@@ -10,7 +10,6 @@
   clockAuthority = [
     {
       holder = "io-tcp-probe";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -20,7 +19,6 @@
     };
     {
       holder = "network-service";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 7;
@@ -30,7 +28,6 @@
     };
     {
       holder = "network-supervisor";
-      monotonicRead = true;
       simulatedAdvance = false;
       simulatedRead = false;
       timerBadgeBit = 3;
