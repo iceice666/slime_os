@@ -257,6 +257,8 @@ For how the planes work and how to add one, read
 | `just private_memory_stress_check` | C10.2 gate: the generation's declared private-memory budget is the live ceiling. |
 | `just replay_check` | C9.5 gate: a recorded run, a deterministic replay of it, and both refusals. |
 | `just robot_runtime_check` | C9.6 gate: a robot workload composed of every C9 slice, under contention. |
+| `just robot_withdrawn_controls` | The withdrawn arm's controls without booting: one honest withdrawal accepted, 12 broken orderings and counts refused. |
+| `just robot_withdrawn_check` | After `robot_withdrawn_controls` and `robot_runtime_check`, four boots in which the actuator holds the withdrawn command and settles it only on the forwarded cancellation; fails until the implementation lands. |
 | `just scheduling_class_check` | C9.3 gate: a declared class orders the CPU, and no component widens itself. |
 | `just sel4_c_runtime_check` | Build and boot one external C component against the generated runtime ABI. |
 | `just slisp_core_check` | Exercise the bounded Slisp core on the host and as an external seL4 component. |

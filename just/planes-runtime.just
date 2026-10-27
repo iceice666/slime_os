@@ -136,6 +136,19 @@ replay_check: sel4_pin_check
 robot_runtime_check: sel4_pin_check
     python3 scripts/check/check-sel4-robot-runtime-plane.py
 
+# The withdrawn arm's controls, without booting: one honest withdrawal accepted,
+# every broken ordering or count refused.
+[group('planes / runtime')]
+robot_withdrawn_controls: sel4_pin_check
+    python3 scripts/check/check-sel4-robot-runtime-plane.py --arm withdrawn-controls
+
+# The withdrawn command reaches the actuator in every boot: held unanswered,
+# then settled on the forwarded cancellation, never raced by its own reply. The
+# controls run before any boot. Explicit, never part of `all`.
+[group('planes / runtime')]
+robot_withdrawn_check: sel4_pin_check robot_withdrawn_controls robot_runtime_check
+    python3 scripts/check/check-sel4-robot-runtime-plane.py --arm withdrawn
+
 [group('planes / runtime')]
 sel4_c_runtime_check: sel4_pin_check
     python3 scripts/check/check-sel4-c-runtime.py

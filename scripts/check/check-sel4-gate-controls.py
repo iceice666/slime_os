@@ -294,6 +294,60 @@ def rejects(gate, transcript: str) -> bool:
     return False
 
 
+def check_robot_trace_controls() -> int:
+    """Hold the robot plane's cross-boot trace to its declared/observed split.
+
+    Two synthetic boots that differ only in scheduling facts (request ids, and
+    which earlier samples were applied or resumed) must compare equal; a boot
+    whose final command or outcome counts differ must not.
+    """
+    gate = load_script("robot_trace", "check/check-sel4-robot-runtime-plane.py")
+    base = (
+        transcript_for(gate)
+        + "".join(literal_for(pattern) + "\n" for pattern in gate.EXPECTED_UNORDERED)
+        + "[robot-actuator] unanswered total=1\n"
+        + "[robot-actuator] cancelled total=1\n"
+        + "[robot-actuator] refused total=1\n"
+    )
+    cancelled = literal_for(gate.REQUEST_ID_PATTERNS[0])
+    unanswered = literal_for(gate.REQUEST_ID_PATTERNS[1])
+    if cancelled not in base or unanswered not in base:
+        fail("robot trace controls: the synthetic boot lacks a request-id outcome")
+
+    def trace(text: str) -> tuple[str, ...]:
+        try:
+            return gate.semantic_trace(text)
+        except SystemExit as error:
+            fail(f"robot trace controls: the synthetic boot was refused: {error}")
+
+    reference = trace(base)
+    same = (
+        ("a shifted cancelled request id", base.replace(cancelled, cancelled + "1", 1)),
+        ("a shifted unanswered request id", base.replace(unanswered, unanswered + "1", 1)),
+        ("an extra earlier applied value", base + "[robot-actuator] applied value=0\n"),
+        ("an extra earlier resumed value", base + "[robot-controller] command resumed value=0\n"),
+    )
+    for description, text in same:
+        if trace(text) != reference:
+            fail(f"robot trace controls: {description} changed the declared trace")
+    different = (
+        ("a later final applied value", base + "[robot-actuator] applied value=999\n"),
+        ("a later final resumed value", base + "[robot-controller] command resumed value=999\n"),
+        ("a second cancelled outcome", base + cancelled + "\n"),
+        ("a second unanswered outcome", base + unanswered + "\n"),
+    )
+    for description, text in different:
+        if trace(text) == reference:
+            fail(f"robot trace controls: {description} left the declared trace unchanged")
+    return len(same) + len(different)
+
+
+def check_robot_withdrawn_controls() -> int:
+    """The robot plane's own withdrawal controls, run with every gate's."""
+    gate = load_script("robot_withdrawn", "check/check-sel4-robot-runtime-plane.py")
+    return gate.withdrawn_controls()
+
+
 def check_gate(name: str, relative_path: str, expected_required: int) -> int:
     gate = load_script(name, relative_path)
     required = required_of(gate)
@@ -3087,6 +3141,8 @@ def main() -> None:
     total = console_record_controls.check_controls(ROOT, console_gate, literal_for)
     total += check_console_repeat_controls(console_gate)
     total += console_line_controls()
+    total += check_robot_trace_controls()
+    total += check_robot_withdrawn_controls()
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
     total += check_large_image_controls()

@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-visibility";
-  imageClosureIdentity = "a38e246d4d425dea2f1a925da2e2b58b4ba4d40fa4827a962204b6d74e202ade";
+  imageClosureIdentity = "51cbf3088242a5d3a332bf87690d910670339949de37f355ceaa2421970938ef";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
