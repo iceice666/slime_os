@@ -1007,6 +1007,9 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
         KIND_CANCEL => {
             value.flags == 0 && value.status == STATUS_CANCELLED && value.payload_len == 0
         }
+        // A server's word that it holds the named request and is receiving
+        // again. It settles nothing, so it carries no outcome and no payload.
+        KIND_HELD => value.flags == 0 && value.status == STATUS_SUCCESS && value.payload_len == 0,
         KIND_TERMINAL => {
             value.flags == 0
                 && matches!(

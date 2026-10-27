@@ -13,8 +13,11 @@
 //! Two of C9.6's required-distinct outcomes are produced here, and they are
 //! produced *deliberately* rather than emerging from a race:
 //!
-//! - **Cancellation.** A command the controller withdraws arrives as
-//!   `KIND_CANCEL` on the same `(session, request_id)` tuple. This component
+//! - **Cancellation.** The controller's withdrawn command carries
+//!   `WITHDRAWN_COMMAND`, which this component holds without applying or
+//!   answering it, so the withdrawal cannot lose a race to its reply. The
+//!   withdrawal arrives as `KIND_CANCEL` on the same `(session, request_id)`
+//!   tuple. This component
 //!   settles it with `STATUS_CANCELLED` and says so before replying, because
 //!   `send` blocks until the broker takes the message and the broker reports the
 //!   cancellation the moment it does — replying first would always put the
@@ -29,7 +32,7 @@
 //! keeps them distinguishable.
 
 use slime_proto::fabric_call::{
-    CALL_MAGIC, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REQUEST, STATUS_CANCELLED,
+    CALL_MAGIC, FORMAT_VERSION, KIND_CANCEL, KIND_HELD, KIND_REPLY, KIND_REQUEST, STATUS_CANCELLED,
     STATUS_REJECTED, STATUS_SUCCESS, WireCallEnvelope,
 };
 use slime_proto::interface_schema::parameter_call;
@@ -68,6 +71,16 @@ const MAX_COMMAND: u64 = 1_000;
 /// test below, which would otherwise refuse it.
 const UNANSWERED_COMMAND: u64 = 4_242;
 
+/// The one command this actuator holds until the controller withdraws it.
+///
+/// The controller issues its cancellation right behind this request. Applying
+/// and answering the request on receipt would race the reply against the
+/// cancellation, and the broker settles the withdrawal itself whenever the reply
+/// wins, so the cancellation would sometimes never arrive here. Holding the
+/// request unanswered means only its cancellation can settle it. Checked before
+/// the range test, which would otherwise refuse it.
+const WITHDRAWN_COMMAND: u64 = 4_243;
+
 /// The fewest commands the composition guarantees reach actuation.
 ///
 /// Two: the first incarnation consumes two samples and commands on both before
@@ -91,6 +104,7 @@ fn main(_startup_arg: u32) {
     let mut cancelled = 0u32;
     let mut rejected = 0u32;
     let mut unanswered = 0u32;
+    let mut held: Option<u64> = None;
     // Ends on the *sentinel*, not a count of applications. How many samples
     // survive the controller's restart depends on when the replacement's fresh
     // ring is provisioned relative to the sensor's cadence, so an applied-count
@@ -136,6 +150,12 @@ fn main(_startup_arg: u32) {
         }
 
         if request.kind == KIND_CANCEL {
+            // Only the held request is ever withdrawn; a cancellation naming any
+            // other request means the protocol, not scheduling, went wrong.
+            if held != Some(request.request_id) {
+                fail(b"a cancellation named no held request")
+            }
+            held = None;
             // Announced before the reply, for the ordering reason in the module
             // comment.
             cancelled += 1;
@@ -152,6 +172,18 @@ fn main(_startup_arg: u32) {
         // reaching that test would refuse it and close the request the plane
         // needs left open. No reply, no marker of its own — the absence is the
         // behaviour, and the broker's deadline sweep is what reports it.
+        if command == WITHDRAWN_COMMAND {
+            if held.is_some() {
+                fail(b"a second withdrawn command arrived while one was held")
+            }
+            held = Some(request.request_id);
+            // Announced before the held record, for the cancellation's reason
+            // in the module comment: the broker may forward the withdrawal the
+            // moment it takes this record.
+            write_value(b"[robot-actuator] command held id=", request.request_id);
+            send_record(&request, KIND_HELD, STATUS_SUCCESS, 0, wake);
+            continue;
+        }
         if command == UNANSWERED_COMMAND {
             unanswered += 1;
             write_value(
@@ -194,6 +226,9 @@ fn main(_startup_arg: u32) {
     // the floor the composition guarantees, not the exact count: how many of the
     // sensor's later samples land depends on when the replacement's fresh ring
     // is provisioned, which is a scheduling fact rather than a declared one.
+    if held.is_some() {
+        fail(b"the withdrawn command was never cancelled")
+    }
     if applied < MIN_APPLIED {
         fail(b"the chain applied fewer commands than the composition guarantees")
     }
@@ -227,13 +262,18 @@ fn command_of(request: &WireCallEnvelope) -> u64 {
 /// correlation, and a reply that renamed either would be an uncorrelatable
 /// record rather than an answer.
 fn reply(request: &WireCallEnvelope, status: i32, value: u64, wake: u32) {
+    send_record(request, KIND_REPLY, status, value, wake);
+}
+
+/// Send one call record about `request` to the broker over the route.
+fn send_record(request: &WireCallEnvelope, kind: u32, status: i32, value: u64, wake: u32) {
     let mut payload = [0u8; 16];
     let width = core::mem::size_of::<u64>();
     payload[..width].copy_from_slice(&value.to_le_bytes());
     let record = WireCallEnvelope {
         magic: CALL_MAGIC,
         version: FORMAT_VERSION,
-        kind: KIND_REPLY,
+        kind,
         flags: 0,
         session: request.session,
         request_id: request.request_id,
@@ -266,11 +306,19 @@ fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
     }
 }
 
+/// One marker line, written in one console call so a root line cannot split it.
 fn write_value(prefix: &[u8], value: u64) {
     let mut digits = [0u8; 20];
-    slime_rt::debug_write(prefix);
-    slime_rt::debug_write(decimal(value, &mut digits));
-    slime_rt::debug_write(b"\n");
+    let digits = decimal(value, &mut digits);
+    let mut line = [0u8; 96];
+    let length = prefix.len() + digits.len() + 1;
+    if length > line.len() {
+        fail(b"marker exceeds its line")
+    }
+    line[..prefix.len()].copy_from_slice(prefix);
+    line[prefix.len()..length - 1].copy_from_slice(digits);
+    line[length - 1] = b'\n';
+    slime_rt::debug_write(&line[..length]);
 }
 
 fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {

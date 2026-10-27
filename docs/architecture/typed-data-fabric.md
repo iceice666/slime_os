@@ -49,6 +49,11 @@ cannot redelegate its route.
 - Calls add bounded request/reply correlation. Operations compose goal,
   feedback, result, cancellation, and peer-loss transport; application policy
   and ROS action semantics stay outside the fabric.
+- A call's server is single-threaded, so the broker forwards a cancellation
+  only once the server is receiving again: after its reply, or after a
+  `KIND_HELD` record naming the request. A held request settles later, by
+  reply, cancellation or deadline. A blocking send to a server still executing
+  the call would deadlock against that server's own reply.
 
 The fabric graph declares every route and resource ceiling before boot. Current
 format ceilings include 32 routes, 32 participants, nine ingress sources per

@@ -103,6 +103,15 @@ const SAMPLES_BEFORE_FAULT: u32 = 2;
 /// to reach a timeout is a request nothing answers at all.
 const TIMEOUT_COMMAND: u64 = 4_242;
 
+/// The command value the actuator holds unanswered until its cancellation.
+///
+/// The withdrawal is issued right behind its request. An actuator that applied
+/// and answered the request on receipt would race its own reply against the
+/// cancellation, and the broker would settle the withdrawal itself whenever the
+/// reply won. A held request is answered only by its cancellation, so the
+/// withdrawal always reaches the actuator.
+const WITHDRAWN_COMMAND: u64 = 4_243;
+
 /// Base for the two terminal requests issued once, after the last sample.
 /// Offset well clear of any tick-derived request id: there are five ticks in
 /// this scenario, so `TERMINAL_REQUEST_BASE` and `TERMINAL_REQUEST_BASE + 1`
@@ -236,7 +245,7 @@ fn main(_startup_arg: u32) {
                         // cancels rather than completes, which is how
                         // cancellation stays a distinct outcome at the userspace
                         // boundary rather than a timeout or a fault.
-                        cancel_command(TERMINAL_REQUEST_BASE, command, wake);
+                        cancel_command(TERMINAL_REQUEST_BASE, wake);
                         // The refused command: out of the actuator's declared
                         // range, so it comes back settled `STATUS_REJECTED`.
                         // Issued before the timeout arm because a refusal *is*
@@ -351,9 +360,9 @@ fn command_actuator(request_id: u64, command: u64, wake: u32, first_incarnation:
 /// The cancel reuses the request's exact `(session, request_id)` tuple: a
 /// cancellation is a statement about one in-flight request, so a new correlation
 /// would be a second request rather than a withdrawal.
-fn cancel_command(request_id: u64, command: u64, wake: u32) {
+fn cancel_command(request_id: u64, wake: u32) {
     send_call(
-        envelope(request_id, KIND_REQUEST, STATUS_SUCCESS, command),
+        envelope(request_id, KIND_REQUEST, STATUS_SUCCESS, WITHDRAWN_COMMAND),
         wake,
     );
     send_call(envelope(request_id, KIND_CANCEL, STATUS_CANCELLED, 0), wake);
