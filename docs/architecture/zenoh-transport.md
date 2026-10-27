@@ -88,6 +88,7 @@ announced in its `INIT`. Nothing in these modules allocates.
 | `Link` over `ByteLink` | One framed batch awaiting send, partial writes, backpressure, the retry limit, reassembly, notices, generation-checked handles | A socket or a capability: the node passes it the connection the generation granted |
 | Node exchange (`zenoh_node`) | The publisher and subscriber control flow as steppable state machines, the console lines, the service-reply-to-error mapping, the denied requests | Bindings, the connection, the console: those are the component's |
 | Node components | Their bindings, the service connection, the clock and the console, handed to `zenoh_node` through two small traits | Any control flow worth testing |
+| Service core (`zenoh_service`) | The grant rows, one ring of samples for each holder, the subscriptions it declares to the peer, and the routing of a publication and of a peer's sample by the rows | A session of its own (the caller lends one on each call), a link, a clock, network authority |
 
 The session keeps slot tables of the sizes its type states (`SessionOf<K, S, B, E>`:
 `K` key aliases, `S` subscribers of both sides, keys of up to `B` bytes, and `E`
@@ -125,6 +126,29 @@ the 2 s lease. A link whose send slot is occupied runs only the expiry half
 A refused call leaves the session unchanged. The only transitions into
 `Closed` are a received `CLOSE`, a local `close()` and lease expiry; a caller
 that wants the link gone after a refusal says so.
+
+## Service core
+
+The service core (`components/lib/src/zenoh_service.rs`) serves one session to several local holders by
+the rows of `contracts/zenoh-service-grants/v1`. A row names a holder, one exact key and the rights to
+publish and to subscribe, and a key in a request grants nothing. The core is declared with its rows and
+the session's parameters. It does not own the session. The caller lends one on each call, and the core
+refuses a session declared with other parameters, so its size is its own and stays under the overheads
+the contract states.
+
+After the session opens, the core declares one subscription for each distinct subscribe key, numbered
+from 1 in the order the keys first appear in the rows. A publication needs a row that grants the holder
+the right to publish the key. It reaches every holder with a subscribe row on the key, the publisher
+included, and it is written to the peer only if the peer declared a subscriber on the key. Otherwise the
+core reports the peer's copy as not subscribed and the local copies still arrive. A refused publication
+reaches no ring and writes nothing. A peer's sample reaches every holder with a subscribe row on the
+subscription that matched, and `Event::SampleDelivered` names that subscription. A Put for a key no
+subscription holds is refused as `undeclared-key`.
+
+Each holder has a ring of fixed slots. A holder that does not take never blocks another. A full ring
+keeps its newest samples and counts what it dropped, and the next take reports the count once. The core
+serves whole-frame samples only, so a session that reassembles fragments is refused. A component that
+wraps the core, the client interface and the path of the grants from the system spec are later items.
 
 ## Link behaviour
 
