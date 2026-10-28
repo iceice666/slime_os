@@ -89,6 +89,7 @@ ATTACH_FAILURES = (
     ("more-rows-than-the-index-holds", "Malformed", 2),
     ("an-attach-the-service-refused", "Setup", 0),
     ("no-attach-answer", "Lost", 2),
+    ("the-data-loan-never-arrives", "Lost", 1),
     ("no-loans-at-all", "Lost", 0),
 )
 PUBLISH_MALFORMED = (
@@ -339,8 +340,8 @@ def all_controls() -> int:
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed and
 # retired to .tasks/terminal. Both counts are exact.
-PINNED_CASES = 72
-PINNED_CONTROLS = 168
+PINNED_CASES = 73
+PINNED_CONTROLS = 170
 ADMISSION = "slime-zenoh-service-client-io-"
 
 

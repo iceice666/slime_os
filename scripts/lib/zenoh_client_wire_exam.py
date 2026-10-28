@@ -288,14 +288,103 @@ def generated_controls() -> int:
     return refused
 
 
+def _block_comment(text: str) -> bool:
+    """Whether a `/*` opens outside a line comment. The proto crate's header comment names `contracts/*/v1`, which is
+    a path inside a line comment and opens nothing."""
+    return any("/*" in line.split("//", 1)[0] for line in text.splitlines())
+
+
+PROTO_LIB = ROOT / "components" / "proto" / "src" / "lib.rs"
+WIRE_TEST = ROOT / "components" / "proto" / "tests" / "zenoh_service_client_wire.rs"
+EXPORT_MOD = "pub mod zenoh_service_client_wire;"
+TEST_IMPORT = "use slime_proto::zenoh_service_client_wire::{"
+
+
+def check_export_text(text: str) -> None:
+    """`slime-proto` exports the wire records. The Rust test may compile the generated file by path, which passes
+    without the export, so the export is read as text.
+
+    This matches the exact line the neighbouring modules use and rules out what could make it inert. It must stand
+    alone at the start of its line, once, with no attribute directly above it. No block comment may appear in the
+    file, since one could swallow the line, and no inline module may open at the top level, since one could wrap it."""
+    lines = text.splitlines()
+    _need(not _block_comment(text), "wire: lib.rs holds a block comment, which could hide the export")
+    at = [index for index, line in enumerate(lines) if line == EXPORT_MOD]
+    _need(len(at) == 1, f"wire: lib.rs holds {len(at)} lines `{EXPORT_MOD}`, the export needs exactly one")
+    _need(at[0] >= 1 and not lines[at[0] - 1].lstrip().startswith("#["), "wire: an attribute stands directly above the export")
+    wrappers = [line for line in lines if re.match(r"^(pub(\([a-z]+\))? )?mod \w+ *\{", line)]
+    if wrappers:
+        raise WireError(f"wire: lib.rs opens an inline module at the top level: {wrappers[0]!r}")
+
+
+def check_test_text(text: str) -> None:
+    """The Rust test reaches the records through the crate's API, so a consumer is compiled against the export. A
+    test that includes the generated source by path proves nothing about the export."""
+    _need(not _block_comment(text), "wire: the test holds a block comment, which could hide its import")
+    lines = text.splitlines()
+    _need(sum(1 for line in lines if line == TEST_IMPORT) == 1, f"wire: the test needs exactly one line `{TEST_IMPORT}`")
+    _need(not any(re.match(r"^\s*#\[path\b", line) for line in lines), "wire: the test includes a source file by path")
+    _need(not any(re.match(r"^\s*(pub )?mod \w+;", line) for line in lines), "wire: the test declares a module from a file")
+
+
+def check_exports() -> None:
+    for path, check in ((PROTO_LIB, check_export_text), (WIRE_TEST, check_test_text)):
+        _need(path.is_file(), f"wire: {path.relative_to(ROOT)} does not exist")
+        check(path.read_text(encoding="utf-8"))
+
+
+_HONEST_LIB = "\n".join(["#![no_std]", "", "pub mod syscall_abi;", "pub mod zenoh_service_client;", EXPORT_MOD, "pub mod zenoh_service_grants;", ""])
+_HONEST_TEST = "\n".join(["use slime_proto::zenoh_service_client_wire::{", "    WireServiceRequest,", "};", "", "#[test]", "fn a() {}", ""])
+
+
+def export_controls() -> int:
+    """The export check and the test check refuse what would leave the records unexported or unproved."""
+    check_export_text(_HONEST_LIB)
+    check_test_text(_HONEST_TEST)
+    lib_edits = [
+        ("the export removed", _HONEST_LIB.replace(EXPORT_MOD + "\n", "")),
+        ("the export commented out", _HONEST_LIB.replace(EXPORT_MOD, "// " + EXPORT_MOD)),
+        ("the export in a block comment", _HONEST_LIB.replace(EXPORT_MOD, "/* " + EXPORT_MOD + " */")),
+        ("the export under a cfg attribute", _HONEST_LIB.replace(EXPORT_MOD, "#[cfg(test)]\n" + EXPORT_MOD)),
+        ("the export under a never-true attribute", _HONEST_LIB.replace(EXPORT_MOD, "#[cfg(any())]\n" + EXPORT_MOD)),
+        ("the export indented", _HONEST_LIB.replace(EXPORT_MOD, "    " + EXPORT_MOD)),
+        ("the export in an inline module", _HONEST_LIB.replace(EXPORT_MOD, "mod hidden {\n" + EXPORT_MOD + "\n}")),
+        ("a private module", _HONEST_LIB.replace(EXPORT_MOD, "mod zenoh_service_client_wire;")),
+        ("another module name", _HONEST_LIB.replace(EXPORT_MOD, "pub mod zenoh_service_client_wires;")),
+        ("the export twice", _HONEST_LIB.replace(EXPORT_MOD, EXPORT_MOD + "\n" + EXPORT_MOD)),
+        ("an empty file", ""),
+    ]
+    test_edits = [
+        ("the import removed", _HONEST_TEST.replace(TEST_IMPORT, "use std::fmt::{")),
+        ("the generated file included by path", "#[path = \"../src/zenoh_service_client_wire.rs\"]\nmod wire_by_path;\n" + _HONEST_TEST),
+        ("a path attribute beside the import", "    #[path = \"x.rs\"]\n" + _HONEST_TEST),
+        ("a module declared from a file", "mod wire;\n" + _HONEST_TEST),
+        ("the import in a block comment", _HONEST_TEST.replace(TEST_IMPORT, "/* " + TEST_IMPORT + " */")),
+        ("the import twice", _HONEST_TEST.replace(TEST_IMPORT, TEST_IMPORT + "\n};\n" + TEST_IMPORT)),
+        ("an empty file", ""),
+    ]
+    refused = 0
+    for edits, honest, check in ((lib_edits, _HONEST_LIB, check_export_text), (test_edits, _HONEST_TEST, check_test_text)):
+        for label, text in edits:
+            if text == honest:
+                raise WireError(f"control: {label} did not change the file")
+            try:
+                check(text)
+            except WireError:
+                refused += 1
+                continue
+            raise WireError(f"control: the wire export check accepted {label}")
+    return refused
+
+
 def all_controls() -> int:
-    return transcript_controls() + generated_controls() + reference_controls()
+    return transcript_controls() + generated_controls() + reference_controls() + export_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed and
 # retired to .tasks/terminal. Both counts are exact.
 PINNED_CASES = 17
-PINNED_CONTROLS = 58
+PINNED_CONTROLS = 76
 ADMISSION = "slime-zenoh-service-wire-"
 
 

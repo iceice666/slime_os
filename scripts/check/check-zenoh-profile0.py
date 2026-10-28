@@ -1974,6 +1974,9 @@ def client_wire_main(controls_only: bool) -> int:
     # The generated file is the implementation's, so the recipe fails until it lands.
     try:
         zenoh_client_wire_exam.check_generated()
+        # The test reaches the records through the crate, and the crate exports them. A test that includes the
+        # generated file by path passes without the export, so both are read as text.
+        zenoh_client_wire_exam.check_exports()
         positive, refusals = zenoh_client_wire_exam.judge(run_client_wire())
     except zenoh_client_wire_exam.WireError as error:
         fail(str(error))
@@ -2040,13 +2043,17 @@ def client_io_main(controls_only: bool) -> int:
         return 0
     # The wire records the adapter is compiled against are the renderer's output, and their own test passes.
     try:
+        # The adapter and its stand-in read the committed constants. A stale constant they share passes every
+        # transcript, so the committed file is compared with its renderer first.
+        zenoh_client_exam.check_generated()
         zenoh_client_wire_exam.check_generated()
+        zenoh_client_wire_exam.check_exports()
         zenoh_client_wire_exam.judge(run_client_wire())
         # The adapter's test compiles it by path, which passes without the product crate's export, so the export
         # is checked as text.
         zenoh_client_io_exam.check_export()
         positive, refusals = zenoh_client_io_exam.judge(run_client_io())
-    except (zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError) as error:
+    except (zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError, zenoh_client_exam.ClientError) as error:
         fail(str(error))
     print(f"[zenoh-profile0] slice=client-io cases={positive + refusals} refusals={refusals} controls={refused_controls}")
     devloop_observations.record(casesObserved=positive + refusals, negativeControlsRefused=refused_controls)
