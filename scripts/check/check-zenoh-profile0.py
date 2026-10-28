@@ -2042,6 +2042,9 @@ def client_io_main(controls_only: bool) -> int:
     try:
         zenoh_client_wire_exam.check_generated()
         zenoh_client_wire_exam.judge(run_client_wire())
+        # The adapter's test compiles it by path, which passes without the product crate's export, so the export
+        # is checked as text.
+        zenoh_client_io_exam.check_export()
         positive, refusals = zenoh_client_io_exam.judge(run_client_io())
     except (zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError) as error:
         fail(str(error))

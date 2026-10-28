@@ -38,8 +38,8 @@ MAX_PAYLOAD = 4080
 
 # IO0 directions, from `contracts/io-queue/v1`.
 DIRECTION_DEVICE_READ, DIRECTION_DEVICE_WRITE = 1, 2
-# The lease the exam gives the data loan. A request that names a buffer names this one.
-DATA_LEASE = 4
+# The identities the exam gives the data loan. A request that names the data page names these two.
+DATA_BUFFER, DATA_LEASE = 3, 4
 
 
 class ClientIoError(Exception):
@@ -93,13 +93,13 @@ ATTACH_FAILURES = (
 )
 PUBLISH_MALFORMED = (
     "wrong-row", "wrong-operation", "an-item-on-a-publish", "short-transfer", "an-unknown-flag",
-    "a-status-below-the-set", "a-nonzero-reserved", "a-failure-carrying-a-count",
+    "a-status-below-the-set", "a-wrong-magic", "a-wrong-version", "a-nonzero-reserved", "a-failure-carrying-a-count",
 )
 TAKE_MALFORMED = (
     "a-sample-from-a-row-the-holder-lacks", "a-sample-longer-than-the-buffer",
     "a-consistent-sample-longer-than-the-buffer", "a-sample-whose-transfer-does-not-match",
     "a-loss-of-zero", "a-loss-that-moved-bytes", "an-empty-ring-with-a-row", "a-take-failure-carrying-a-count",
-    "a-flag-on-a-take",
+    "a-take-with-a-wrong-magic", "a-take-with-a-wrong-version", "a-flag-on-a-take",
 )
 REFUSED_BEFORE_PUBLISH = (
     ("row-past-the-holders-rows", "BadRequest"),
@@ -123,11 +123,11 @@ def good_lines(text: str | None = None) -> list[str]:
     # Publish.
     out.append(f"clientio publish reply {STATUS_SUCCESS} 2 true")
     out.append(f"clientio publish request {request_bytes(OP['publish'], PUBLISH_ROW, PUBLISH_SEQUENCE, text).hex()}")
-    out.append(f"clientio publish slice 0 {len(PUBLISH_PAYLOAD)} {DIRECTION_DEVICE_READ} {PUBLISH_PAYLOAD.hex()}")
+    out.append(f"clientio publish slice 0 {len(PUBLISH_PAYLOAD)} {DIRECTION_DEVICE_READ} {DATA_BUFFER} {DATA_LEASE} {PUBLISH_PAYLOAD.hex()}")
     # Take.
     out.append(f"clientio take sample {TAKE_ROW} {TAKE_SEQUENCE} {TAKE_TIMESTAMP} {len(TAKE_PAYLOAD)} {TAKE_PAYLOAD.hex()}")
     out.append(f"clientio take request {request_bytes(OP['take'], text=text).hex()}")
-    out.append(f"clientio take slice 0 {HEADER_BYTES + TAKE_BUFFER} {DIRECTION_DEVICE_WRITE}")
+    out.append(f"clientio take slice 0 {HEADER_BYTES + TAKE_BUFFER} {DIRECTION_DEVICE_WRITE} {DATA_BUFFER} {DATA_LEASE}")
     out.append(f"clientio take loss {LOSS}")
     out.append("clientio take none")
     # Refused before publishing: nothing is queued.
@@ -166,15 +166,16 @@ def shapes() -> dict[str, set[int]]:
     return found
 
 
-def judge(lines: list[str]) -> tuple[int, int]:
-    """Check a transcript against the exam; returns (cases, refusals). A refusal is a line that names an error."""
+def judge(lines: list[str], text: str | None = None) -> tuple[int, int]:
+    """Check a transcript against the exam for the layouts in `text`; returns (cases, refusals). A refusal is a line
+    that names an error."""
     known = shapes()
     for line in lines:
         fields = line.split()
         _need(fields[:1] == ["clientio"], f"clientio: a record that is not a clientio exam line: {line!r}")
         _need(len(fields) > 1 and fields[1] in known, f"clientio: unrecognised line: {line}")
         _need(len(fields) in known[fields[1]], f"clientio: a {fields[1]} line has {len(fields)} fields: {line}")
-    wanted = good_lines()
+    wanted = good_lines(text)
     for index, (seen, want) in enumerate(zip(lines, wanted, strict=False)):
         _need(seen == want, f"clientio line {index + 1} is {seen!r}, the exam requires {want!r}")
     if len(lines) < len(wanted):
@@ -250,24 +251,96 @@ def reference_controls() -> int:
             raise ClientIoError(f"control: {label} anchor is not in requestLayout exactly once")
         mutated = text.replace(block.group(0), block.group(0).replace(old, new, 1))
         try:
-            under = good_lines(mutated)
-        except (wire_exam.WireError, KeyError):
+            judge(honest, mutated)
+        except (ClientIoError, wire_exam.WireError, KeyError):
             refused += 1
             continue
-        if under == honest:
-            raise ClientIoError(f"control: {label} did not change the expected transcript")
-        refused += 1
+        raise ClientIoError(f"control: the clientio judge accepted the honest transcript under a schema with {label}")
+    return refused
+
+
+LIB = ROOT / "components" / "lib" / "src" / "lib.rs"
+EXPORT_CFG = '#[cfg(feature = "component-runtime")]'
+EXPORT_MOD = "pub mod zenoh_service_client;"
+
+
+def check_export_text(text: str) -> None:
+    """The product crate exports the adapter. The integration test compiles the adapter by path, so it passes
+    without this export, and a consumer of `slime-components` would then find no adapter.
+
+    This is a text check, so it matches the exact pair of lines the neighbouring modules use and rules out what
+    could make the pair inert. The pair must stand alone at the start of its lines, the attribute directly above the
+    module and no other attribute above that. No block comment may appear anywhere in the file, since one could
+    swallow the pair, and no inline module may open at the top level, since one could wrap it."""
+    lines = text.splitlines()
+    _need("/*" not in text, "clientio: lib.rs holds a block comment, which could hide the export")
+    at = [index for index, line in enumerate(lines) if line == EXPORT_MOD]
+    _need(len(at) == 1, f"clientio: lib.rs holds {len(at)} lines `{EXPORT_MOD}`, the export needs exactly one")
+    index = at[0]
+    _need(index >= 2 and lines[index - 1] == EXPORT_CFG, f"clientio: the line above the export is not `{EXPORT_CFG}`")
+    _need(not lines[index - 2].lstrip().startswith("#["), "clientio: another attribute stands above the export's attribute")
+    wrappers = [line for line in lines if re.match(r"^(pub(\([a-z]+\))? )?mod \w+ *\{", line)]
+    if wrappers:
+        raise ClientIoError(f"clientio: lib.rs opens an inline module at the top level: {wrappers[0]!r}")
+
+
+def check_export() -> None:
+    _need(LIB.is_file(), f"clientio: {LIB.relative_to(ROOT)} does not exist")
+    check_export_text(LIB.read_text(encoding="utf-8"))
+
+
+_HONEST_LIB = "\n".join([
+    "#![cfg_attr(not(test), no_std)]",
+    "",
+    "pub mod zenoh_service;",
+    EXPORT_CFG,
+    EXPORT_MOD,
+    "#[cfg(test)]",
+    "mod zenoh_service_link;",
+    "",
+])
+
+
+def export_controls() -> int:
+    """The export check refuses what would leave the adapter unexported or inert, and accepts the honest pair."""
+    check_export_text(_HONEST_LIB)
+    edits = [
+        ("the export removed", _HONEST_LIB.replace(EXPORT_MOD + "\n", "")),
+        ("the attribute removed", _HONEST_LIB.replace(EXPORT_CFG + "\n" + EXPORT_MOD, EXPORT_MOD)),
+        ("another feature in the attribute", _HONEST_LIB.replace(EXPORT_CFG, '#[cfg(feature = "heap")]')),
+        ("the attribute negated", _HONEST_LIB.replace(EXPORT_CFG, '#[cfg(not(feature = "component-runtime"))]')),
+        ("a test-only attribute", _HONEST_LIB.replace(EXPORT_CFG, "#[cfg(test)]")),
+        ("an attribute that is never true above the pair", _HONEST_LIB.replace(EXPORT_CFG, "#[cfg(any())]\n" + EXPORT_CFG)),
+        ("the export commented out", _HONEST_LIB.replace(EXPORT_MOD, "// " + EXPORT_MOD)),
+        ("the pair inside a block comment", _HONEST_LIB.replace(EXPORT_CFG, "/*\n" + EXPORT_CFG).replace(EXPORT_MOD, EXPORT_MOD + "\n*/")),
+        ("the export indented", _HONEST_LIB.replace(EXPORT_MOD, "    " + EXPORT_MOD)),
+        ("the pair inside an inline module", _HONEST_LIB.replace(EXPORT_CFG, "mod hidden {\n" + EXPORT_CFG).replace(EXPORT_MOD, EXPORT_MOD + "\n}")),
+        ("a private module", _HONEST_LIB.replace(EXPORT_MOD, "mod zenoh_service_client;")),
+        ("another module name", _HONEST_LIB.replace(EXPORT_MOD, "pub mod zenoh_service_clients;")),
+        ("the export twice", _HONEST_LIB.replace(EXPORT_MOD, EXPORT_MOD + "\n" + EXPORT_CFG + "\n" + EXPORT_MOD)),
+        ("an empty file", ""),
+    ]
+    refused = 0
+    for label, text in edits:
+        if text == _HONEST_LIB:
+            raise ClientIoError(f"control: {label} did not change the file")
+        try:
+            check_export_text(text)
+        except ClientIoError:
+            refused += 1
+            continue
+        raise ClientIoError(f"control: the export check accepted {label}")
     return refused
 
 
 def all_controls() -> int:
-    return transcript_controls() + reference_controls()
+    return transcript_controls() + reference_controls() + export_controls()
 
 
 # What the admitted item fixes, held here as well so the gate stays correct after the item is completed and
 # retired to .tasks/terminal. Both counts are exact.
-PINNED_CASES = 68
-PINNED_CONTROLS = 146
+PINNED_CASES = 72
+PINNED_CONTROLS = 168
 ADMISSION = "slime-zenoh-service-client-io-"
 
 
