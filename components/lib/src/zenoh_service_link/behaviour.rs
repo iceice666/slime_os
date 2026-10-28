@@ -156,6 +156,21 @@ fn a_link_declared_with_other_parameters_is_refused_before_anything_is_queued() 
             .expect_err("other parameters"),
         ServiceError::WrongSession
     );
+    // The repeats above return before the core's in-flight marker is read, so they cannot show it is clear.
+    // A link of the core's own parameters can: the same core and `OverLink` queue a declaration on it, which
+    // they could not if a refusal had left the core in flight.
+    let (mut good, mut far, hg, hf) = pair();
+    let mut now = 20u64;
+    assert!(
+        over.declare_next(&mut core, &mut good, hg)
+            .expect("the core is free")
+    );
+    step(&mut good, &mut far, hg, hf, &mut now);
+    assert_eq!(
+        over.settle(&mut core, &good),
+        Ok(Settled::Declared { id: 1 })
+    );
+    assert_eq!(core.declared(), 1);
 }
 
 #[test]
