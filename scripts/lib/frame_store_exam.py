@@ -378,7 +378,6 @@ class Case:
     expect: str  # "accept" or a refusal class
 
 
-LARGE_CASES = ("max-payload", "max-store", "store-bound")
 
 
 def _max_store() -> bytes:
@@ -424,6 +423,16 @@ def cases() -> tuple[Case, ...]:
     ]
     for name, (mutate, expect) in _base_mutations().items():
         built.append(Case(name, lambda mutate=mutate: mutate(base), expect))
+    # Encoded with a text outside its bound, so the length check is the only check that fails.
+    for name, fields in {
+        "encoded-topic-empty": {"topic": ""},
+        "encoded-type-empty": {"type_name": ""},
+        "encoded-schema-empty": {"schema": ""},
+        "encoded-topic-over": {"topic": "/" + "t" * C["maxTopicBytes"]},
+        "encoded-type-over": {"type_name": "p" * (C["maxTypeNameBytes"] + 1)},
+        "encoded-schema-over": {"schema": "s" * (C["maxSchemaBytes"] + 1)},
+    }.items():
+        built.append(Case(name, lambda fields=fields: encode(replace(BASE, **fields)), "header"))
     return tuple(built)
 
 
@@ -446,6 +455,14 @@ def expected_lines(case: str, data: bytes) -> list[str]:
         )
     lines.append(f"{LINE_TAG} {case} end")
     return lines
+
+
+def case_lines(case: Case, data: bytes) -> list[str]:
+    """The transcript lines for one corpus case, after the decoder reaches the case's declared verdict."""
+    found = verdict(data)
+    if found != case.expect:
+        raise ExamError(f"the exam decoder reads corpus case {case.name} as {found}, the corpus declares {case.expect}")
+    return expected_lines(case.name, data)
 
 
 LINE = re.compile(
@@ -774,30 +791,183 @@ def _mcap_controls() -> Iterator[tuple[str, bool]]:
     reading = mcap_format.read(honest)
     yield "mcap-honest", [m.data for m in reading.messages] == [m.data for m in messages]
     message_at = honest.index(bytes([2]) * 9)
+    compressed = mcap_format.write(
+        (mcap_format.ChunkPlan((schema, channel, *messages)), mcap_format.ChunkPlan((), "zstd"))
+    )
+    undeclared = mcap_format.write((mcap_format.ChunkPlan((schema, channel, replace(messages[0], channel_id=2))),))
+    redeclared = mcap_format.write((mcap_format.ChunkPlan((schema, channel, replace(channel, topic="/x"))),))
     corrupt = {
-        "mcap-magic": b"\x00" + honest[1:],
-        "mcap-closing-magic": honest[:-1] + b"\x00",
-        "mcap-truncated": honest[:-20] + honest[-8:],
-        "mcap-compressed": mcap_format.write(
-            (mcap_format.ChunkPlan((schema, channel, *messages)), mcap_format.ChunkPlan((), "zstd"))
-        ),
-        "mcap-chunk-crc": _byte(honest, message_at, 0x7F),
-        "mcap-undeclared-channel": mcap_format.write(
-            (mcap_format.ChunkPlan((schema, channel, replace(messages[0], channel_id=2))),)
-        ),
-        "mcap-redeclared": mcap_format.write((mcap_format.ChunkPlan((schema, channel, replace(channel, topic="/x"))),)),
-        "mcap-chunk-foreign-record": _foreign_record_bag(schema, channel),
+        "mcap-magic": ("magic", b"\x00" + honest[1:]),
+        "mcap-closing-magic": ("magic", honest[:-1] + b"\x00"),
+        "mcap-truncated": ("truncated", honest[:-20] + honest[-8:]),
+        "mcap-compressed": ("compressed-chunk", compressed),
+        "mcap-chunk-crc": ("crc", _byte(honest, message_at, 0x7F)),
+        "mcap-undeclared-channel": ("message", undeclared),
+        "mcap-redeclared": ("channel", redeclared),
+        "mcap-chunk-foreign-record": ("chunk", _foreign_record_bag(schema, channel)),
     }
-    for name, data in corrupt.items():
-        yield name, _refuses(lambda data=data: mcap_format.read(data), mcap_format.McapError)
-    yield "bag-facts", _refuses(lambda: judge_bag(reading))
+    for name, (kind, data) in corrupt.items():
+        yield name, _mcap_refuses(data, kind)
+    yield from _mcap_boundary_controls(schema, channel, messages[0])
+
+
+def _mcap_refuses(data: bytes, kind: str, *, topic: str | None = None) -> bool:
+    """The reader refuses `data` at the named boundary, not at a later one that happens to fail too."""
+    try:
+        bag = mcap_format.read(data)
+        if topic is not None:
+            bag.channel_by_topic(topic)
+    except mcap_format.McapError as error:
+        return error.kind == kind
+    return False
+
+
+def _assemble(
+    data_records: bytes,
+    *,
+    summary: bytes = b"",
+    data_crc: int | None = 0,
+    footer: tuple[int, int, int] | None = None,
+    header: bool = True,
+    after_footer: bytes = b"",
+) -> bytes:
+    """A bag from raw records: header, data records, data end, summary, footer. Each part may be wrong."""
+    out = bytearray(mcap_format.MAGIC)
+    if header:
+        out += mcap_format.record(mcap_format.OP_HEADER, struct.pack("<I", 4) + b"ros2" + struct.pack("<I", 0))
+    out += data_records
+    if data_crc is not None:
+        out += mcap_format.record(mcap_format.OP_DATA_END, struct.pack("<I", data_crc))
+    summary_start = len(out) if summary else 0
+    out += summary
+    start, offset_start, crc = footer if footer is not None else (summary_start, 0, 0)
+    out += mcap_format.record(mcap_format.OP_FOOTER, struct.pack("<QQI", start, offset_start, crc))
+    return bytes(out + after_footer + mcap_format.MAGIC)
+
+
+def _chunk_record(inner: bytes, *, declared_size: int | None = None) -> bytes:
+    size = len(inner) if declared_size is None else declared_size
+    body = struct.pack("<QQQI", 0, 0, size, zlib.crc32(inner)) + struct.pack("<IQ", 0, len(inner)) + inner
+    return mcap_format.record(mcap_format.OP_CHUNK, body)
+
+
+def _mcap_boundary_controls(
+    schema: mcap_format.Schema, channel: mcap_format.Channel, message: mcap_format.Message
+) -> Iterator[tuple[str, bool]]:
+    """One control per refusal in `mcap_format.read`, each on a bag that is otherwise well formed."""
+    definitions = mcap_format.schema_record(schema) + mcap_format.channel_record(channel)
+    plain = definitions + mcap_format.message_record(message)
+    with_crc = _assemble(plain, data_crc=None)
+    with_crc = _assemble(plain, data_crc=zlib.crc32(with_crc[: len(with_crc) - 8 - 29]))
+    statistics = mcap_format.record(mcap_format.OP_STATISTICS, bytes(46))
+
+    def summary_crc(summary: bytes) -> bytes:
+        draft = _assemble(plain, summary=summary)
+        start = len(draft) - 8 - 29 - len(summary)
+        head = struct.pack("<BQ", mcap_format.OP_FOOTER, 20) + struct.pack("<QQ", start, 0)
+        return _assemble(plain, summary=summary, footer=(start, 0, zlib.crc32(summary + head)))
+
+    honest = {
+        "mcap-records-outside-chunks": _assemble(plain),
+        "mcap-data-crc": with_crc,
+        "mcap-summary-crc": summary_crc(statistics),
+    }
+    for name, data in honest.items():
+        yield name, len(mcap_format.read(data).messages) == 1
+    bad_text = mcap_format.record(
+        mcap_format.OP_CHANNEL,
+        struct.pack("<HHI", 1, 1, 2) + b"\xff\xfe" + struct.pack("<I", 3) + b"cdr" + struct.pack("<I", 0),
+    )
+    schema_body = mcap_format.schema_record(schema)[9:]
+    summary_start = len(_assemble(plain)) - 37  # before the 29-byte footer and the 8-byte magic
+    past_end = struct.pack("<BQ", mcap_format.OP_METADATA, 1 << 20)
+    after_footer = mcap_format.record(mcap_format.OP_DATA_END, bytes(4))
+    corrupt = {
+        "mcap-too-short": ("magic", mcap_format.MAGIC + mcap_format.MAGIC[:-1]),
+        "mcap-record-past-end": ("truncated", mcap_format.MAGIC + past_end + bytes(16) + mcap_format.MAGIC),
+        "mcap-field-past-record": ("truncated", _assemble(mcap_format.record(mcap_format.OP_SCHEMA, schema_body[:-1]))),
+        "mcap-unread-bytes": ("record", _assemble(mcap_format.record(mcap_format.OP_SCHEMA, schema_body + b"\x00"))),
+        "mcap-string-not-utf8": ("string", _assemble(mcap_format.schema_record(schema) + bad_text)),
+        "mcap-schema-id-zero": ("schema", _assemble(mcap_format.schema_record(replace(schema, id=0)))),
+        "mcap-undeclared-schema": ("channel", _assemble(mcap_format.channel_record(channel))),
+        "mcap-no-header": ("header", _assemble(plain, header=False)),
+        "mcap-record-after-footer": ("footer", _assemble(plain, after_footer=after_footer)),
+        "mcap-no-data-end": ("data-end", _assemble(plain, data_crc=None)),
+        "mcap-summary-record-in-data": ("record", _assemble(plain + statistics)),
+        "mcap-data-crc-wrong": ("crc", _assemble(plain, data_crc=1)),
+        "mcap-data-record-in-summary": ("record", _assemble(plain, summary=mcap_format.message_record(message))),
+        "mcap-summary-start": ("footer", _assemble(plain, summary=statistics, footer=(0, 0, 0))),
+        "mcap-summary-offset-start": ("footer", _assemble(plain, summary=statistics, footer=(summary_start, 1, 0))),
+        "mcap-summary-crc-wrong": ("crc", _assemble(plain, summary=statistics, footer=(summary_start, 0, 1))),
+        "mcap-chunk-size": ("chunk", _assemble(_chunk_record(plain, declared_size=len(plain) + 1))),
+    }
+    for name, (kind, data) in corrupt.items():
+        yield name, _mcap_refuses(data, kind)
+    twice = _assemble(
+        definitions + mcap_format.channel_record(replace(channel, id=2)) + mcap_format.message_record(message)
+    )
+    yield "mcap-topic-twice", _mcap_refuses(twice, "channel", topic=BAG_CHANNEL)
+    yield "mcap-topic-once", mcap_format.read(_assemble(plain)).channel_by_topic(BAG_CHANNEL) == channel
+
+
+def _honest_bag() -> mcap_format.Bag:
+    """A reading that holds every fact the item states. All messages share one payload object."""
+    payload = bytes(BAG_FRAME_BYTES)
+    start = 1_790_000_000_000_000_000
+    return mcap_format.Bag(
+        profile="ros2",
+        library="exam",
+        schemas={1: mcap_format.Schema(1, BAG_TYPE, "ros2msg", bytes(BAG_SCHEMA_BYTES))},
+        channels={1: mcap_format.Channel(1, 1, BAG_CHANNEL, "cdr", ())},
+        messages=[
+            mcap_format.Message(1, 0, start + i * BAG_PERIOD_NS, start + i * BAG_PERIOD_NS, payload)
+            for i in range(BAG_FRAMES)
+        ],
+        chunks=BAG_CHUNKS,
+        chunk_compressions=[""] * BAG_CHUNKS,
+    )
+
+
+def _bag_controls() -> Iterator[tuple[str, bool]]:
+    """One control per fact `judge_bag` asserts. Each corrupted reading breaks that fact and no other."""
+    yield "bag-honest", not _refuses(lambda: judge_bag(_honest_bag()))
+
+    def edit_channel(bag: mcap_format.Bag, **fields: object) -> None:
+        bag.channels[1] = replace(bag.channels[1], **fields)
+
+    def edit_schema(bag: mcap_format.Bag, **fields: object) -> None:
+        bag.schemas[1] = replace(bag.schemas[1], **fields)
+
+    def edit_message(bag: mcap_format.Bag, index: int, **fields: object) -> None:
+        bag.messages[index] = replace(bag.messages[index], **fields)
+
+    def extra_message(bag: mcap_format.Bag) -> None:
+        last = bag.messages[-1]
+        bag.messages.append(replace(last, channel_id=9, log_time=last.log_time + BAG_PERIOD_NS))
+
+    edits: dict[str, Callable[[mcap_format.Bag], object]] = {
+        "bag-no-channel": lambda bag: edit_channel(bag, topic="/velodyne"),
+        "bag-chunks": lambda bag: setattr(bag, "chunks", BAG_CHUNKS - 1),
+        "bag-compressed-chunk": lambda bag: bag.chunk_compressions.__setitem__(5, "zstd"),
+        "bag-channels": lambda bag: bag.channels.__setitem__(2, mcap_format.Channel(2, 1, "/other", "cdr", ())),
+        "bag-messages": extra_message,
+        "bag-channel-messages": lambda bag: edit_message(bag, BAG_FRAMES - 1, channel_id=9),
+        "bag-message-encoding": lambda bag: edit_channel(bag, message_encoding="json"),
+        "bag-schema-name": lambda bag: edit_schema(bag, name="sensor_msgs/msg/PointCloud"),
+        "bag-schema-encoding": lambda bag: edit_schema(bag, encoding="ros1msg"),
+        "bag-schema-bytes": lambda bag: edit_schema(bag, data=bytes(BAG_SCHEMA_BYTES - 1)),
+        "bag-message-bytes": lambda bag: edit_message(bag, 7, data=bytes(BAG_FRAME_BYTES - 1)),
+        "bag-log-time-step": lambda bag: edit_message(bag, 100, log_time=bag.messages[100].log_time + 1),
+    }
+    for name, edit in edits.items():
+        bag = _honest_bag()
+        edit(bag)
+        yield name, _refuses(lambda bag=bag: judge_bag(bag))
 
 
 def _decoder_controls() -> Iterator[tuple[str, bool]]:
-    """Every small corpus case decodes to its declared verdict, and every accepted one re-encodes to itself."""
+    """Every corpus case decodes to its declared verdict, and every accepted one re-encodes to itself."""
     for case in cases():
-        if case.name in LARGE_CASES:
-            continue
         data = case.build()
         yield f"corpus-{case.name}", verdict(data) == case.expect
         if case.expect == "accept":
@@ -830,4 +1000,5 @@ def controls() -> list[tuple[str, bool]]:
     results.extend(_fixture_controls())
     results.extend(_converter_controls())
     results.extend(_mcap_controls())
+    results.extend(_bag_controls())
     return results

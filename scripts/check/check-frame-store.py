@@ -38,6 +38,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from typing import NoReturn
 
 import frame_store_exam as exam
@@ -173,15 +174,20 @@ def run_reader(converted: bytes) -> int:
     corpus.mkdir()
     manifest = SCRATCH / "corpus.txt"
     transcript = SCRATCH / "transcript.txt"
-    stores = [("fixture", lambda: exam.FIXTURE.read_bytes()), ("converted", lambda: converted)]
-    stores += [(case.name, case.build) for case in exam.cases()]
+    stores: list[tuple[str, exam.Case | None, Callable[[], bytes]]] = [
+        ("fixture", None, exam.FIXTURE.read_bytes), ("converted", None, lambda: converted)
+    ]
+    stores += [(case.name, case, case.build) for case in exam.cases()]
     expected: list[str] = []
     rows = []
-    for name, build in stores:
+    for name, case, build in stores:
         data = build()
         path = corpus / f"{name}.store"
         path.write_bytes(data)
-        expected += exam.expected_lines(name, data)
+        try:
+            expected += exam.expected_lines(name, data) if case is None else exam.case_lines(case, data)
+        except exam.ExamError as error:
+            fail(str(error))
         rows.append(f"{name} {path}\n")
         del data
     manifest.write_text("".join(rows))

@@ -120,7 +120,7 @@ zenoh_service_link_check:
 
 # Judges contracts/frame-store/v1, its Rust reader and its MCAP converter. Converts the LiDAR bag named by
 # SLIME_LIDAR_BAG (refused unless its SHA-256 is the pinned value) twice and compares every payload with the
-# exam's own MCAP reading. The Rust reader must read 64 stores exactly as the exam's decoder does. The
+# exam's own MCAP reading. The Rust reader must read 70 stores exactly as the exam's decoder does. The
 # expectation is scripts/lib/frame_store_exam.py and scripts/lib/mcap_format.py. Needs the bag, which is
 # never committed, so it is explicit and in no aggregate. Fails until the reader and the converter land.
 [group('hardware')]
