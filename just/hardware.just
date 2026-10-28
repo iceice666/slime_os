@@ -118,6 +118,15 @@ zenoh_service_client_check:
 zenoh_service_link_check:
     python3 scripts/check/check-zenoh-profile0.py --slice service-link
 
+# Judges contracts/frame-store/v1, its Rust reader and its MCAP converter. Converts the LiDAR bag named by
+# SLIME_LIDAR_BAG (refused unless its SHA-256 is the pinned value) twice and compares every payload with the
+# exam's own MCAP reading. The Rust reader must read 70 stores exactly as the exam's decoder does. The
+# expectation is scripts/lib/frame_store_exam.py and scripts/lib/mcap_format.py. Needs the bag, which is
+# never committed, so it is explicit and in no aggregate. Fails until the reader and the converter land.
+[group('hardware')]
+frame_store_check:
+    python3 scripts/check/check-frame-store.py
+
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
 # reference. Explicit, never part of `all`; fails until the composition lands.
