@@ -6,8 +6,15 @@ the header and index entry layouts, the refusal classes and the order a reader v
 converter writes a store from an MCAP bag. A no_std reader validates the whole store before it
 exposes any frame.
 
-This directory holds no renderer yet. Work item `01a18064-a82b-70cb-bb32-527657addf86` adds the
-Rust and Python bindings, the reader and the converter. `just frame_store_check` judges them.
+`gen_rust.zt` renders the Rust module `components/proto/src/frame_store.rs` and the Python module
+`scripts/lib/frame_store_contract.py` from the same constants and layouts. Regenerate them with
+`just frame_store_gen`. `just contracts_check` refuses a stale one.
+
+| Part | Owner |
+| --- | --- |
+| Reader | `components/lib/src/frame_store.rs` (`FrameStore::parse`) |
+| Converter | `tools/frame-store/convert-mcap.py`, with the library `tools/frame-store/frame_store.py` |
+| Reader fixture | `components/lib/src/frame_store/fixture.bin`, written by `tools/frame-store/write-fixture.py` |
 
 ## Layout
 
@@ -67,6 +74,20 @@ refusal with its own by name.
 - The message encoding is always CDR and the schema encoding is always ros2msg. A store for another
   encoding needs a new format version.
 
+## Converter
+
+The converter reads the bag's data section in file order with its own MCAP reader. It takes the
+messages of one channel, sorts them by log time and keeps file order among equal times.
+
+- **Period.** The declared period is `(last log time - first log time) / (frames - 1)`, rounded
+  down. A channel with fewer than two distinct log times has no period, and the converter refuses it.
+- **Type hash.** MCAP does not carry the RIHS01 hash. The converter computes it from the channel's
+  ros2msg schema text, as `rosidl_generator_type_description` does: the type and every type it
+  references, without constants or default values, as JSON, hashed with SHA-256.
+- **Refusal classes.** `bag-hash` (the digest differs), `bag` (not a well-formed MCAP file),
+  `compressed-chunk`, `channel` (missing, declared twice, or not CDR with a ros2msg schema), `schema`
+  (the hash cannot be computed), `bound` (the store would break a bound) and `period`.
+
 ## Validation
 
 `just frame_store_check` runs `scripts/check/check-frame-store.py`. Its expectation is
@@ -75,7 +96,7 @@ binds the implementation through three interfaces:
 
 | Interface | Contract |
 | --- | --- |
-| Converter | `SLIME_LIDAR_BAG=<bag> python3 tools/frame-store/convert-mcap.py --sha256 <hex> --channel <topic> --output <store>`. It refuses a bag by exiting nonzero with `convert-mcap: refused <class>` as its last stderr line, writing no store. The classes are `bag-hash`, `compressed-chunk` and `channel`. |
+| Converter | `SLIME_LIDAR_BAG=<bag> python3 tools/frame-store/convert-mcap.py --sha256 <hex> --channel <topic> --output <store>`. It refuses a bag by exiting nonzero with `convert-mcap: refused <class>` as its last stderr line, writing no store. The exam produces `bag-hash`, `compressed-chunk` and `channel`. |
 | Reader | `cargo test -p slime-components --no-default-features -- frame_store::exam`. For each `<case> <path>` line of the manifest that `SLIME_FRAME_STORE_CORPUS` names, it writes the reader's verdict to the file that `SLIME_FRAME_STORE_TRANSCRIPT` names. The line grammar is in the checker's docstring. |
 | Fixture | `components/lib/src/frame_store/fixture.bin`: at most 4096 bytes, at least 2 frames, at least one payload whose length is not a multiple of 8. |
 

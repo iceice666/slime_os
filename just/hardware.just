@@ -155,10 +155,17 @@ zenoh_service_link_check:
 # SLIME_LIDAR_BAG (refused unless its SHA-256 is the pinned value) twice and compares every payload with the
 # exam's own MCAP reading. The Rust reader must read 70 stores exactly as the exam's decoder does. The
 # expectation is scripts/lib/frame_store_exam.py and scripts/lib/mcap_format.py. Needs the bag, which is
-# never committed, so it is explicit and in no aggregate. Fails until the reader and the converter land.
+# never committed, so it is explicit and in no aggregate.
 [group('hardware')]
 frame_store_check:
     python3 scripts/check/check-frame-store.py
+
+# The converter library without the bag: RIHS01 against five published type hashes, the ros2msg field
+# forms, and each refusal class. Also proves the committed reader fixture is the one the library writes.
+[group('hardware')]
+frame_store_tools_check:
+    python3 -m unittest discover -s tools/frame-store -p 'test_*.py'
+    python3 tools/frame-store/write-fixture.py --check
 
 # R0's end-to-end claim: two node components exchange the declared topic over
 # Zenoh Profile 0 under AArch64 QEMU, judged byte for byte against the host wire
