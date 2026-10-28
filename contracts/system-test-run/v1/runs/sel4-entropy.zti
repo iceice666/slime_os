@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-entropy";
-  imageClosureIdentity = "cf95704d516fbf6b459356c95d1da580b25c74720f06d41b02c64b2ae10dcf15";
+  imageClosureIdentity = "c5e80cf65b724f838af9f37a3fd70a607dd28ea4c3d0d7ca914997309c713955";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];

@@ -21,7 +21,10 @@
 #[cfg(test)]
 mod behaviour;
 #[cfg(test)]
-mod exam;
+pub(crate) mod exam;
+mod over_link;
+
+pub use over_link::{OverLink, Settled};
 
 /// Every section, in the order the exam lists them. The checker looks for this test by its path.
 #[cfg(test)]
@@ -52,6 +55,11 @@ pub enum ServiceError {
     WrongSession,
     /// The session refused the call.
     Session(SessionError),
+    /// A publication or declaration is still waiting for the link to flush it, or the link's send slot is
+    /// taken. Nothing changed.
+    Busy,
+    /// The link refused the call.
+    Link(crate::zenoh_link::Error),
 }
 
 impl From<SessionError> for ServiceError {
@@ -229,6 +237,9 @@ pub struct Core<'k, const H: usize, const N: usize, const P: usize, const R: usi
     /// How many distinct subscribe keys the rows name, and how many of them are declared.
     subscriptions: u16,
     declared: u16,
+    /// Whether a declaration or a publication queued through a link has not yet been settled. Every
+    /// [`OverLink`] over this core sees it, so two of them cannot each queue a frame.
+    in_flight: bool,
 }
 
 impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k, H, N, P, R> {
@@ -257,6 +268,13 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
             "core over its bound"
         );
     };
+
+    /// Puts the core at `declared` of `subscriptions` declared, so a test can reach the last id.
+    #[cfg(test)]
+    pub(crate) fn pretend_declared(&mut self, declared: u16, subscriptions: u16) {
+        self.declared = declared;
+        self.subscriptions = subscriptions;
+    }
 
     /// The stored size of each part, from the layout.
     pub const fn sizes() -> Sizes {
@@ -336,6 +354,7 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
             gid,
             subscriptions,
             declared: 0,
+            in_flight: false,
         })
     }
 
