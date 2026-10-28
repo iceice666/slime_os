@@ -97,6 +97,8 @@ pub struct PumpReport {
 /// A sample the link delivered; the payload is a bounded copy of `P` bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sample<const P: usize = MAX_PAYLOAD_BYTES> {
+    /// The id of the subscription this side declared on the key, which matched the Put.
+    pub subscription: u32,
     pub sequence: i64,
     pub timestamp: i64,
     pub len: usize,
@@ -536,10 +538,10 @@ impl<
                     })
                 }
                 Event::SampleDelivered {
+                    subscription,
                     sequence,
                     timestamp,
                     payload,
-                    ..
                 } => {
                     let mut copy = [0u8; P];
                     let len = payload.len().min(P);
@@ -547,6 +549,7 @@ impl<
                         dst.copy_from_slice(src);
                     }
                     Notice::SampleDelivered(Sample {
+                        subscription,
                         sequence,
                         timestamp,
                         len,
