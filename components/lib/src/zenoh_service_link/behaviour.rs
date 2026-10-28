@@ -144,6 +144,18 @@ fn a_link_declared_with_other_parameters_is_refused_before_anything_is_queued() 
     );
     assert!(!svc.send_pending());
     assert_eq!(core.declared(), 0);
+    // Nothing is left queued: the same calls are refused for the same reason and not as busy.
+    assert!(over.is_idle());
+    assert_eq!(
+        over.declare_next(&mut core, &mut svc, hs)
+            .expect_err("other parameters"),
+        ServiceError::WrongSession
+    );
+    assert_eq!(
+        over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 7, 1007, &payload(7))
+            .expect_err("other parameters"),
+        ServiceError::WrongSession
+    );
 }
 
 #[test]
@@ -511,5 +523,87 @@ fn a_closed_link_frees_the_core_for_another_over_link() {
         )
         .expect_err("closed"),
         ServiceError::Link(LinkError::SendAfterClose)
+    );
+    // That refusal queued nothing. A second call is refused as closed again and not as busy.
+    assert!(two.is_idle());
+    assert_eq!(
+        two.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            102,
+            1102,
+            &payload(102)
+        )
+        .expect_err("closed"),
+        ServiceError::Link(LinkError::SendAfterClose)
+    );
+}
+
+#[test]
+fn a_refused_publication_leaves_nothing_queued() {
+    let (mut svc, mut far, hs, hf) = pair();
+    let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut over = OverLink::<12>::new();
+    let mut now = 20u64;
+    declare_all(
+        &mut core, &mut over, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
+    peer_declares(&mut svc, &mut far, hs, hf, &mut now);
+    let before = (
+        core.held(0).unwrap(),
+        core.held(1).unwrap(),
+        core.held(2).unwrap(),
+    );
+    let bytes = [0u8; 13];
+    // (holder, key, payload length, why it is refused)
+    let refusals = [
+        (3usize, KEYS[0], 3usize, ServiceError::UnknownHolder),
+        (1, KEYS[0], 3, ServiceError::NotGranted),
+        (2, KEYS[2], 3, ServiceError::NotGranted),
+        (0, KEYS[0], 13, ServiceError::TooLarge),
+    ];
+    for (holder, key, len, why) in refusals {
+        for _ in 0..2 {
+            // A second call is refused for the same reason. A refusal that left the core or the OverLink
+            // waiting would turn it into `Busy`.
+            assert_eq!(
+                over.publish(&mut core, &mut svc, hs, holder, key, 7, 1007, &bytes[..len])
+                    .expect_err("refused"),
+                why
+            );
+            assert!(over.is_idle());
+            assert!(!svc.send_pending());
+        }
+    }
+    assert_eq!(
+        before,
+        (
+            core.held(0).unwrap(),
+            core.held(1).unwrap(),
+            core.held(2).unwrap()
+        )
+    );
+    // A valid publication is queued and then settles, which it could not if a refusal had left the core in flight.
+    assert!(
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
+    );
+    step(&mut svc, &mut far, hs, hf, &mut now);
+    assert_eq!(
+        over.settle(&mut core, &svc),
+        Ok(Settled::Published { reached: 2 })
     );
 }
