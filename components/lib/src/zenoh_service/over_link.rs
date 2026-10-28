@@ -15,7 +15,9 @@
 //! cannot know more.
 //!
 //! An `OverLink` belongs to one core and one link. Parameters are checked and identity is not: a second
-//! link declared with the core's parameters is not told apart from the first.
+//! link declared with the core's parameters is not told apart from the first. The core carries a marker
+//! that a frame is in flight, so a second `OverLink` over the same core finds the core busy. An `OverLink`
+//! dropped with a frame in flight leaves the core busy, because only `settle` clears the marker.
 
 use super::{Core, Peer, Published, ServiceError};
 use crate::zenoh_link::{ByteLink, Error as LinkError, LinkHandle, LinkOf, Notice};
@@ -99,13 +101,13 @@ impl<'k, const P: usize> OverLink<'k, P> {
         handle: LinkHandle,
     ) -> Result<bool, ServiceError> {
         core.check(link.session())?;
-        if !self.is_idle() || link.send_pending() {
+        if core.in_flight || !self.is_idle() || link.send_pending() {
             return Err(ServiceError::Busy);
         }
-        let queued = core.declared + 1;
         if core.declared == core.subscriptions {
             return Ok(false);
         }
+        let queued = core.declared + 1;
         let row = core
             .rows
             .iter()
@@ -114,6 +116,7 @@ impl<'k, const P: usize> OverLink<'k, P> {
         link.declare_subscriber(handle, u32::from(queued), row.key)
             .map_err(link_error)?;
         self.pending = Pending::Declare { id: queued };
+        core.in_flight = true;
         Ok(true)
     }
 
@@ -145,7 +148,7 @@ impl<'k, const P: usize> OverLink<'k, P> {
         payload: &[u8],
     ) -> Result<Option<Published>, ServiceError> {
         core.check(link.session())?;
-        if !self.is_idle() || link.send_pending() {
+        if core.in_flight || !self.is_idle() || link.send_pending() {
             return Err(ServiceError::Busy);
         }
         if holder >= H {
@@ -179,6 +182,7 @@ impl<'k, const P: usize> OverLink<'k, P> {
                     len: payload.len() as u32,
                     payload: copy,
                 };
+                core.in_flight = true;
                 Ok(None)
             }
             Err(LinkError::Session(
@@ -221,11 +225,13 @@ impl<'k, const P: usize> OverLink<'k, P> {
         // link queued and empties the slot. A closed link therefore drops what was waiting.
         if link.is_closed() {
             self.pending = Pending::None;
+            core.in_flight = false;
             return Err(ServiceError::Link(LinkError::SendAfterClose));
         }
         if link.send_pending() {
             return Ok(Settled::Waiting);
         }
+        core.in_flight = false;
         match core::mem::replace(&mut self.pending, Pending::None) {
             Pending::None => Ok(Settled::Idle),
             Pending::Declare { id } => {

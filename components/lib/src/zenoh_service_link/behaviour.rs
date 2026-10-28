@@ -292,3 +292,224 @@ fn a_core_at_the_largest_fixed_profile_still_fits_its_declared_budget() {
     assert_eq!(built.err(), Some(ServiceError::InvalidGrants));
     let _over = OverLink::<1024>::new();
 }
+
+#[test]
+fn a_second_over_link_finds_the_core_busy_while_a_frame_is_in_flight() {
+    let (mut svc, mut far, hs, hf) = pair();
+    let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut one = OverLink::<12>::new();
+    let mut two = OverLink::<12>::new();
+    let mut now = 20u64;
+    declare_all(
+        &mut core, &mut one, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
+    peer_declares(&mut svc, &mut far, hs, hf, &mut now);
+    assert!(
+        one.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
+    );
+    // While the frame waits, and after the stream took it and before `one` settled, `two` finds the core busy.
+    let before = (core.held(0).unwrap(), core.held(1).unwrap());
+    assert_eq!(
+        two.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            1,
+            KEYS[2],
+            101,
+            1101,
+            &payload(101)
+        )
+        .expect_err("in flight"),
+        ServiceError::Busy
+    );
+    step(&mut svc, &mut far, hs, hf, &mut now);
+    assert!(!svc.send_pending());
+    assert_eq!(
+        two.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            1,
+            KEYS[2],
+            101,
+            1101,
+            &payload(101)
+        )
+        .expect_err("in flight"),
+        ServiceError::Busy
+    );
+    assert_eq!(
+        two.declare_next(&mut core, &mut svc, hs)
+            .expect_err("in flight"),
+        ServiceError::Busy
+    );
+    assert_eq!(before, (core.held(0).unwrap(), core.held(1).unwrap()));
+    // Once `one` settled, `two` may queue.
+    assert!(matches!(
+        one.settle(&mut core, &svc),
+        Ok(Settled::Published { .. })
+    ));
+    assert!(
+        two.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            1,
+            KEYS[2],
+            101,
+            1101,
+            &payload(101)
+        )
+        .expect("granted")
+        .is_none()
+    );
+}
+
+#[test]
+fn polling_for_the_next_declaration_at_the_last_subscription_id_returns_false() {
+    let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    core.pretend_declared(u16::MAX, u16::MAX);
+    let (mut svc, _far, hs, _hf) = pair();
+    let mut over = OverLink::<12>::new();
+    assert_eq!(over.declare_next(&mut core, &mut svc, hs), Ok(false));
+    assert!(!svc.send_pending());
+}
+
+#[test]
+fn a_second_over_link_finds_the_core_busy_while_a_declaration_is_in_flight() {
+    let (mut svc, mut far, hs, hf) = pair();
+    let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut one = OverLink::<12>::new();
+    let mut two = OverLink::<12>::new();
+    let mut now = 20u64;
+    assert!(one.declare_next(&mut core, &mut svc, hs).expect("queues"));
+    // After the stream took the frame and before `one` settled, `two` finds the core busy.
+    step(&mut svc, &mut far, hs, hf, &mut now);
+    assert!(!svc.send_pending());
+    assert_eq!(
+        two.declare_next(&mut core, &mut svc, hs)
+            .expect_err("in flight"),
+        ServiceError::Busy
+    );
+    assert_eq!(core.declared(), 0);
+    assert_eq!(one.settle(&mut core, &svc), Ok(Settled::Declared { id: 1 }));
+    assert!(
+        two.declare_next(&mut core, &mut svc, hs)
+            .expect("the next one")
+    );
+}
+
+#[test]
+fn a_closed_link_frees_the_core_for_another_over_link() {
+    use super::Link;
+    use super::pair::FailAfterSend;
+    use crate::zenoh_link::Error as LinkError;
+    type Failing = Link<FailAfterSend>;
+    let ab = Rc::new(RefCell::new(Pipe::default()));
+    let ba = Rc::new(RefCell::new(Pipe::default()));
+    let armed = Rc::new(RefCell::new(false));
+    let peer = Params {
+        local: 2,
+        per_side: 3,
+        ..params()
+    };
+    let mut svc = Failing::with_params(
+        FailAfterSend {
+            inner: Io {
+                rx: ab.clone(),
+                tx: ba.clone(),
+            },
+            armed: armed.clone(),
+            sent_since_armed: false,
+        },
+        Role::Listener,
+        &cfg(&[0xb2; 8], &[0xc0; 32], 7000),
+        params(),
+        1,
+    )
+    .expect("service");
+    let mut far = Far::with_params(
+        Io { rx: ba, tx: ab },
+        Role::Connector,
+        &cfg(&[0xa1; 8], b"", 9000),
+        peer,
+        1,
+    )
+    .expect("peer");
+    let (hs, hf) = (svc.handle(), far.handle());
+    far.open(hf, 0).expect("open");
+    let mut now = 0u64;
+    for _ in 0..12 {
+        step(&mut svc, &mut far, hs, hf, &mut now);
+        if svc.is_open() && far.is_open() {
+            break;
+        }
+    }
+    let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut one = OverLink::<12>::new();
+    let mut two = OverLink::<12>::new();
+    declare_all(
+        &mut core, &mut one, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
+    far.declare_subscriber(hf, 1, KEYS[0])
+        .expect("the peer declares");
+    for _ in 0..3 {
+        step(&mut svc, &mut far, hs, hf, &mut now);
+    }
+    while svc.next_notice().is_some() {}
+    *armed.borrow_mut() = true;
+    assert!(
+        one.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
+    );
+    now += 1;
+    assert_eq!(
+        svc.pump(hs, now).expect_err("the stream resets"),
+        LinkError::Link(crate::zenoh_link::LinkError::Reset)
+    );
+    now += 1;
+    svc.pump(hs, now)
+        .expect("a pump on a closed link only flushes");
+    // The link closed with a frame in flight. `settle` drops it and frees the core.
+    assert_eq!(
+        one.settle(&mut core, &svc),
+        Err(ServiceError::Link(LinkError::SendAfterClose))
+    );
+    // Another `OverLink` over the same core is not told the core is busy. It finds the closed link.
+    assert_eq!(
+        two.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            101,
+            1101,
+            &payload(101)
+        )
+        .expect_err("closed"),
+        ServiceError::Link(LinkError::SendAfterClose)
+    );
+}
