@@ -22,7 +22,9 @@
 mod behaviour;
 #[cfg(test)]
 pub(crate) mod exam;
-pub(crate) mod over_link;
+mod over_link;
+
+pub use over_link::Settled;
 
 /// Every section, in the order the exam lists them. The checker looks for this test by its path.
 #[cfg(test)]

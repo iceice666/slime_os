@@ -43,6 +43,7 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
         link: &mut LinkOf<L, F, K, S, B, PP, QQ, E>,
         handle: LinkHandle,
     ) -> Result<bool, ServiceError> {
+        self.check(link.session())?;
         if !matches!(self.pending, Pending::None) || link.send_pending() {
             return Err(ServiceError::Busy);
         }
@@ -84,6 +85,10 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
         timestamp: i64,
         payload: &[u8],
     ) -> Result<Option<Published>, ServiceError> {
+        self.check(link.session())?;
+        if !matches!(self.pending, Pending::None) || link.send_pending() {
+            return Err(ServiceError::Busy);
+        }
         if holder >= H {
             return Err(ServiceError::UnknownHolder);
         }
@@ -96,9 +101,6 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
         }
         if payload.len() > P {
             return Err(ServiceError::TooLarge);
-        }
-        if !matches!(self.pending, Pending::None) || link.send_pending() {
-            return Err(ServiceError::Busy);
         }
         if !link.is_open() {
             return Err(ServiceError::Link(LinkError::SendAfterClose));

@@ -6,14 +6,14 @@
 //! `scripts/check/check-zenoh-profile0.py --slice service-link` owns what these lines must be, and
 //! `scripts/lib/zenoh_service_link_exam.py` the bytes, the order, the counts and the classes.
 
+mod behaviour;
 mod pair;
 
 use crate::zenoh_link::{ByteLink, Error as LinkError, LinkHandle, LinkOf, Notice};
 use crate::zenoh_profile0::encode;
 use crate::zenoh_profile0::session::{Params, Role};
 use crate::zenoh_service::exam::{Exam, GID, HOLDERS, KEYS, ROWS, hex, params, rows};
-use crate::zenoh_service::over_link::Settled;
-use crate::zenoh_service::{Item, Peer, ServiceError};
+use crate::zenoh_service::{Item, Peer, ServiceError, Settled};
 use pair::{FailAfterSend, Far, Io, Pipe, Stalling, Svc, cfg, pair};
 use std::cell::RefCell;
 use std::rc::Rc;
