@@ -294,7 +294,9 @@ fn the_exam() {
     // Five: a sample from the peer reaches the holders subscribed to the subscription that matched.
     peer_puts(&mut far, &mut svc, hs, hf, KEYS[0], 10, &mut now);
     peer_puts(&mut far, &mut svc, hs, hf, KEYS[1], 11, &mut now);
-    let routed = core.drain_notices(&mut svc);
+    let routed = core
+        .drain_notices(&mut svc)
+        .expect("the link of the core's parameters");
     line(&format!("routed {routed}"));
     for holder in [0, 1, 2] {
         deliver("from-the-peer", &mut core, holder);
@@ -316,10 +318,12 @@ fn the_exam() {
         }
     }
     line(&format!("burst {queued} {}", svc.notices_queued()));
-    core.drain_notices(&mut svc);
+    core.drain_notices(&mut svc)
+        .expect("the link of the core's parameters");
     for _ in 0..20 {
         step(&mut svc, &mut far, hs, hf, &mut now);
-        core.drain_notices(&mut svc);
+        core.drain_notices(&mut svc)
+            .expect("the link of the core's parameters");
     }
     held("after-the-burst", &core, 0);
     line("ok a-burst-waits-in-the-stream-and-the-ring-counts-the-loss");

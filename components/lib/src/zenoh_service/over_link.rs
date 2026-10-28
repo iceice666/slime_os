@@ -150,14 +150,17 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
         &mut self,
         link: &LinkOf<L, F, K, S, B, PP, QQ, E>,
     ) -> Result<Settled, ServiceError> {
+        self.check(link.session())?;
         if matches!(self.pending, Pending::None) {
             return Ok(Settled::Idle);
         }
+        // An empty slot on a closed link does not say the frame left: a later pump flushes the CLOSE the
+        // link queued and empties the slot. A closed link therefore drops what was waiting.
+        if link.is_closed() {
+            self.pending = Pending::None;
+            return Err(ServiceError::Link(LinkError::SendAfterClose));
+        }
         if link.send_pending() {
-            if link.is_closed() {
-                self.pending = Pending::None;
-                return Err(ServiceError::Link(LinkError::SendAfterClose));
-            }
             return Ok(Settled::Waiting);
         }
         match core::mem::replace(&mut self.pending, Pending::None) {
@@ -181,7 +184,8 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
     }
 
     /// Takes the link's notices and routes each sample to the holders subscribed to the subscription that
-    /// matched. Returns how many samples it routed.
+    /// matched. Returns how many samples it routed. A link whose session has other parameters than the core's
+    /// is refused before any notice is taken.
     pub fn drain_notices<
         L: ByteLink,
         const F: usize,
@@ -193,7 +197,8 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
     >(
         &mut self,
         link: &mut LinkOf<L, F, K, S, B, P, QQ, E>,
-    ) -> usize {
+    ) -> Result<usize, ServiceError> {
+        self.check(link.session())?;
         let mut routed = 0;
         while let Some(notice) = link.next_notice() {
             if let Notice::SampleDelivered(sample) = notice {
@@ -206,7 +211,7 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
                 routed += 1;
             }
         }
-        routed
+        Ok(routed)
     }
 }
 
