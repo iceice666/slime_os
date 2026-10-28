@@ -1,0 +1,396 @@
+//! Reader of `contracts/frame-store/v1`: the recorded messages of one ROS 2 topic.
+//!
+//! [`FrameStore::parse`] validates the whole store before it exposes any frame, in the order the
+//! schema lists its checks, and refuses with the class of the first check that fails. The order is
+//! part of the format: the exam compares a refusal's class by name. The reader never panics and
+//! never allocates, so it runs over a store mapped into a component's memory.
+
+use slime_proto::frame_store::{
+    self as wire, ALIGNMENT, FORMAT_VERSION, FRAME_STORE_MAGIC, HASH_VERSION_RIHS01, HEADER_BYTES,
+    INDEX_ENTRY_BYTES, MAX_FRAMES, MAX_PAYLOAD_BYTES, MAX_SCHEMA_BYTES, MAX_STORE_BYTES,
+    MAX_TOPIC_BYTES, MAX_TYPE_NAME_BYTES, REFUSAL_CLASSES, TYPE_HASH_BYTES, WireFrameIndexEntry,
+    WireFrameStoreHeader,
+};
+
+/// Why a store was refused. The discriminant is the class's position in `REFUSAL_CLASSES`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    StoreBound = 0,
+    Truncated = 1,
+    Magic = 2,
+    Version = 3,
+    Header = 4,
+    FrameCount = 5,
+    PayloadBound = 6,
+    Order = 7,
+    Range = 8,
+    Overlap = 9,
+    Padding = 10,
+    Trailing = 11,
+}
+
+impl Refusal {
+    /// The contract's name for this class.
+    pub fn class(self) -> &'static str {
+        REFUSAL_CLASSES[self as usize]
+    }
+}
+
+/// One recorded message: its CDR bytes as recorded and its MCAP log time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Frame<'a> {
+    pub log_time_ns: u64,
+    pub payload: &'a [u8],
+    /// Where `payload` starts, from the start of the store.
+    pub offset: usize,
+}
+
+/// A store that passed every check. Its accessors cannot fail.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameStore<'a> {
+    bytes: &'a [u8],
+    topic: &'a str,
+    type_name: &'a str,
+    schema: &'a str,
+    type_hash: [u8; TYPE_HASH_BYTES],
+    frame_period_ns: u64,
+    frame_count: usize,
+    index_start: usize,
+}
+
+const fn align(value: usize) -> usize {
+    value.div_ceil(ALIGNMENT) * ALIGNMENT
+}
+
+fn text(raw: &[u8]) -> Result<&str, Refusal> {
+    let text = core::str::from_utf8(raw).map_err(|_| Refusal::Header)?;
+    if raw.contains(&0) {
+        return Err(Refusal::Header);
+    }
+    Ok(text)
+}
+
+fn zero(bytes: &[u8]) -> bool {
+    bytes.iter().all(|&byte| byte == 0)
+}
+
+fn entry(bytes: &[u8], index_start: usize, index: usize) -> Option<WireFrameIndexEntry> {
+    let start = index_start + index * INDEX_ENTRY_BYTES;
+    WireFrameIndexEntry::decode(bytes.get(start..start + INDEX_ENTRY_BYTES)?)
+}
+
+impl<'a> FrameStore<'a> {
+    /// Validates the whole store in the contract's order.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, Refusal> {
+        let size = bytes.len();
+        if size > MAX_STORE_BYTES {
+            return Err(Refusal::StoreBound);
+        }
+        let header = WireFrameStoreHeader::decode(bytes).ok_or(Refusal::Truncated)?;
+        if header.magic != FRAME_STORE_MAGIC {
+            return Err(Refusal::Magic);
+        }
+        if header.version != FORMAT_VERSION {
+            return Err(Refusal::Version);
+        }
+        if header.hashVersion != HASH_VERSION_RIHS01
+            || !zero(&header.reserved0)
+            || !zero(&header.reserved1)
+            || header.framePeriodNs == 0
+        {
+            return Err(Refusal::Header);
+        }
+        let topic_len = usize::from(header.topicBytes);
+        let type_len = usize::from(header.typeNameBytes);
+        let schema_len = header.schemaBytes as usize;
+        if !(1..=MAX_TOPIC_BYTES).contains(&topic_len)
+            || !(1..=MAX_TYPE_NAME_BYTES).contains(&type_len)
+            || !(1..=MAX_SCHEMA_BYTES).contains(&schema_len)
+        {
+            return Err(Refusal::Header);
+        }
+        let frame_count = header.frameCount as usize;
+        if !(1..=MAX_FRAMES).contains(&frame_count) {
+            return Err(Refusal::FrameCount);
+        }
+        // Every term is bounded above, so none of these sums can overflow a 32-bit usize.
+        let topic_end = HEADER_BYTES + topic_len;
+        let type_end = topic_end + type_len;
+        let text_end = type_end + schema_len;
+        let index_start = align(text_end);
+        let data_start = index_start + frame_count * INDEX_ENTRY_BYTES;
+        if size < data_start {
+            return Err(Refusal::Truncated);
+        }
+        let topic = text(&bytes[HEADER_BYTES..topic_end])?;
+        let type_name = text(&bytes[topic_end..type_end])?;
+        let schema = text(&bytes[type_end..text_end])?;
+        if !zero(&bytes[text_end..index_start]) {
+            return Err(Refusal::Header);
+        }
+
+        // `cursor` is where the next payload must start: the aligned end of the previous payload.
+        let mut cursor = data_start;
+        let mut previous_end = data_start;
+        let mut previous_time: Option<u64> = None;
+        for index in 0..frame_count {
+            let entry = entry(bytes, index_start, index).ok_or(Refusal::Truncated)?;
+            if !zero(&entry.reserved) {
+                return Err(Refusal::Header);
+            }
+            let length = entry.payloadBytes as usize;
+            if length > MAX_PAYLOAD_BYTES {
+                return Err(Refusal::PayloadBound);
+            }
+            if previous_time.is_some_and(|previous| entry.logTimeNs < previous) {
+                return Err(Refusal::Order);
+            }
+            let offset = match usize::try_from(entry.payloadOffset) {
+                Ok(offset) if offset <= size && length <= size - offset => offset,
+                _ => return Err(Refusal::Range),
+            };
+            if offset < cursor {
+                return Err(Refusal::Overlap);
+            }
+            if offset > cursor || !zero(&bytes[previous_end..offset]) {
+                return Err(Refusal::Padding);
+            }
+            previous_time = Some(entry.logTimeNs);
+            previous_end = offset + length;
+            cursor = align(previous_end);
+        }
+        if !zero(&bytes[previous_end..cursor.min(size)]) {
+            return Err(Refusal::Padding);
+        }
+        if size < cursor {
+            return Err(Refusal::Range);
+        }
+        if size > cursor {
+            return Err(Refusal::Trailing);
+        }
+        Ok(Self {
+            bytes,
+            topic,
+            type_name,
+            schema,
+            type_hash: header.typeHash,
+            frame_period_ns: header.framePeriodNs,
+            frame_count,
+            index_start,
+        })
+    }
+
+    pub fn topic(&self) -> &'a str {
+        self.topic
+    }
+
+    pub fn type_name(&self) -> &'a str {
+        self.type_name
+    }
+
+    /// The ros2msg schema text the messages were recorded with.
+    pub fn schema(&self) -> &'a str {
+        self.schema
+    }
+
+    /// The RIHS01 digest of the message type.
+    pub fn type_hash(&self) -> &[u8; TYPE_HASH_BYTES] {
+        &self.type_hash
+    }
+
+    /// The period a publisher replays the frames at, as the converter declared it.
+    pub fn frame_period_ns(&self) -> u64 {
+        self.frame_period_ns
+    }
+
+    /// The number of frames, at least 1.
+    pub fn len(&self) -> usize {
+        self.frame_count
+    }
+
+    /// Always false: a valid store holds at least one frame.
+    pub fn is_empty(&self) -> bool {
+        self.frame_count == 0
+    }
+
+    /// Frame `index` in log-time order, or `None` past the last frame.
+    pub fn frame(&self, index: usize) -> Option<Frame<'a>> {
+        if index >= self.frame_count {
+            return None;
+        }
+        let entry = entry(self.bytes, self.index_start, index)?;
+        let offset = usize::try_from(entry.payloadOffset).ok()?;
+        let payload = self
+            .bytes
+            .get(offset..offset + entry.payloadBytes as usize)?;
+        Some(Frame {
+            log_time_ns: entry.logTimeNs,
+            payload,
+            offset,
+        })
+    }
+
+    pub fn frames(&self) -> impl Iterator<Item = Frame<'a>> + '_ {
+        (0..self.frame_count).filter_map(move |index| self.frame(index))
+    }
+}
+
+// The class table and the enum must agree; this fails to compile if the table changes length.
+const _: [(); 12] = [(); wire::REFUSAL_CLASSES.len()];
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameStore, Refusal};
+    use slime_proto::frame_store::REFUSAL_CLASSES;
+
+    const FIXTURE: &[u8] = include_bytes!("frame_store/fixture.bin");
+
+    const ALL: [Refusal; 12] = [
+        Refusal::StoreBound,
+        Refusal::Truncated,
+        Refusal::Magic,
+        Refusal::Version,
+        Refusal::Header,
+        Refusal::FrameCount,
+        Refusal::PayloadBound,
+        Refusal::Order,
+        Refusal::Range,
+        Refusal::Overlap,
+        Refusal::Padding,
+        Refusal::Trailing,
+    ];
+
+    #[test]
+    fn classes_follow_the_contract_order() {
+        for (index, refusal) in ALL.iter().enumerate() {
+            assert_eq!(refusal.class(), REFUSAL_CLASSES[index]);
+        }
+    }
+
+    #[test]
+    fn fixture_reads_as_written() {
+        let store = FrameStore::parse(FIXTURE).expect("fixture is valid");
+        assert_eq!(store.topic(), "/fixture/chatter");
+        assert_eq!(store.type_name(), "std_msgs/msg/String");
+        assert_eq!(store.schema(), "string data\n");
+        assert_eq!(store.frame_period_ns(), 100_000_000);
+        assert_eq!(store.len(), 2);
+        let frames: [_; 2] = core::array::from_fn(|index| store.frame(index).expect("frame"));
+        assert_eq!(frames[0].log_time_ns, 1_000_000_000);
+        assert_eq!(
+            frames[0].payload,
+            b"\x00\x01\x00\x00\x06\x00\x00\x00hello\x00"
+        );
+        assert_eq!(frames[1].log_time_ns, 1_100_000_000);
+        assert_eq!(
+            frames[1].payload,
+            b"\x00\x01\x00\x00\x07\x00\x00\x00world!\x00"
+        );
+        assert!(store.frame(2).is_none());
+        assert_eq!(store.frames().count(), 2);
+    }
+
+    #[test]
+    fn fixture_edits_are_refused_by_class() {
+        let refused = |edit: &dyn Fn(&mut Vec<u8>), class: Refusal| {
+            let mut bytes = FIXTURE.to_vec();
+            edit(&mut bytes);
+            assert_eq!(FrameStore::parse(&bytes).err(), Some(class));
+        };
+        refused(&|bytes| bytes.truncate(63), Refusal::Truncated);
+        refused(&|bytes| bytes[0] ^= 1, Refusal::Magic);
+        refused(&|bytes| bytes[4] = 2, Refusal::Version);
+        refused(&|bytes| bytes[7] = 1, Refusal::Header);
+        refused(
+            &|bytes| bytes[8..12].copy_from_slice(&0u32.to_le_bytes()),
+            Refusal::FrameCount,
+        );
+        refused(&|bytes| bytes.push(0), Refusal::Trailing);
+        let last = FIXTURE.len() - 1;
+        refused(&move |bytes| bytes[last] = 1, Refusal::Padding);
+    }
+
+    #[test]
+    fn offset_near_the_top_of_u64_is_out_of_range() {
+        let store = FrameStore::parse(FIXTURE).expect("fixture is valid");
+        let entry = store.index_start;
+        let mut bytes = FIXTURE.to_vec();
+        bytes[entry..entry + 8].copy_from_slice(&(u64::MAX - 7).to_le_bytes());
+        assert_eq!(FrameStore::parse(&bytes).err(), Some(Refusal::Range));
+    }
+}
+
+/// The exam's corpus run. `scripts/check/check-frame-store.py` names a manifest of `<case> <path>`
+/// lines in SLIME_FRAME_STORE_CORPUS and a transcript file in SLIME_FRAME_STORE_TRANSCRIPT. Without
+/// them the test does nothing.
+#[cfg(test)]
+mod exam {
+    use super::FrameStore;
+    use std::fmt::Write as _;
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+                let _ = write!(out, "{byte:02x}");
+                out
+            })
+    }
+
+    fn report(out: &mut String, case: &str, bytes: &[u8]) {
+        let store = match FrameStore::parse(bytes) {
+            Ok(store) => store,
+            Err(refusal) => {
+                let _ = writeln!(out, "[frame-store] {case} refuse {}", refusal.class());
+                return;
+            }
+        };
+        let _ = writeln!(
+            out,
+            "[frame-store] {case} accept frames={} period={} hash={} topic={} type={} schema={}",
+            store.len(),
+            store.frame_period_ns(),
+            hex(store.type_hash()),
+            hex(store.topic().as_bytes()),
+            hex(store.type_name().as_bytes()),
+            hex(store.schema().as_bytes()),
+        );
+        for (index, frame) in store.frames().enumerate() {
+            let digest = boot_contracts::sha256::digest(frame.payload);
+            let _ = writeln!(
+                out,
+                "[frame-store] {case} frame {index} offset={} bytes={} log={} sha256={}",
+                frame.offset,
+                frame.payload.len(),
+                frame.log_time_ns,
+                hex(&digest),
+            );
+        }
+        let _ = writeln!(out, "[frame-store] {case} end");
+    }
+
+    #[test]
+    fn corpus() {
+        let (Ok(manifest), Ok(transcript)) = (
+            std::env::var("SLIME_FRAME_STORE_CORPUS"),
+            std::env::var("SLIME_FRAME_STORE_TRANSCRIPT"),
+        ) else {
+            return;
+        };
+        let mut out = String::new();
+        for line in std::fs::read_to_string(manifest)
+            .expect("read the corpus manifest")
+            .lines()
+        {
+            let (case, path) = line
+                .split_once(' ')
+                .expect("a manifest line is `<case> <path>`");
+            report(
+                &mut out,
+                case,
+                &std::fs::read(path).expect("read a corpus store"),
+            );
+        }
+        std::fs::write(transcript, out).expect("write the transcript");
+    }
+}
