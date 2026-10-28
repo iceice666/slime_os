@@ -116,6 +116,8 @@ import zenoh_exchange
 import zenoh_links_exam
 import zenoh_grants_exam
 import zenoh_client_exam
+import zenoh_client_io_exam
+import zenoh_client_wire_exam
 import zenoh_service_exam
 import zenoh_service_link_exam
 import zenoh_stock_peer
@@ -1915,6 +1917,150 @@ def client_main(controls_only: bool) -> int:
     return 0
 
 
+CLIENT_WIRE_TEST = "every_record_encodes_to_the_layout_and_decodes_back"
+
+
+def run_client_wire() -> list[str]:
+    """The proto crate's test for the wire records, run alone: it needs no other crate and no neighbour exam."""
+    host = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True)
+    target = next(line.split(": ", 1)[1] for line in host.stdout.splitlines() if line.startswith("host: "))
+    command = [
+        "cargo", "test", "--target", target, "-p", "slime-proto", "--test", "zenoh_service_client_wire",
+        "--", "--nocapture", "--test-threads=1",
+    ]
+    result = subprocess.run(command, cwd=ROOT / "components", capture_output=True, text=True, env={**_os.environ})
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        _sys.stderr.write(output[-4000:])
+        fail(f"{' '.join(command)} exited {result.returncode}")
+    if CLIENT_WIRE_TEST not in tests_passed(output):
+        fail(f"client-wire: the exam's test did not run and pass: {CLIENT_WIRE_TEST}")
+    return exam_lines(result.stdout)
+
+
+def client_schema_precondition() -> None:
+    """The wire records are rendered from the client schema, so the schema's judge and its pins hold first. Its
+    refusals are not counted: they belong to the client gate, which pins them."""
+    try:
+        controls = zenoh_client_exam.all_controls()
+        facts = len(zenoh_client_exam.facts())
+    except zenoh_client_exam.ClientError as error:
+        fail(str(error))
+    if facts != zenoh_client_exam.PINNED_CASES or controls != zenoh_client_exam.PINNED_CONTROLS:
+        fail(f"client schema: {facts} facts and {controls} controls, the checker pins {zenoh_client_exam.PINNED_CASES} and {zenoh_client_exam.PINNED_CONTROLS}")
+
+
+def client_wire_main(controls_only: bool) -> int:
+    if CLIENT_WIRE_TEST in tests_passed(""):
+        fail("control: a run with the wire exam test missing was read as complete")
+    client_schema_precondition()
+    try:
+        refused_controls = zenoh_client_wire_exam.all_controls()
+        item_cases, item_controls = zenoh_client_wire_exam.item_pins()
+        positive, refusals = zenoh_client_wire_exam.judge(zenoh_client_wire_exam.good_lines())
+    except zenoh_client_wire_exam.WireError as error:
+        fail(str(error))
+    if positive + refusals != zenoh_client_wire_exam.PINNED_CASES:
+        fail(f"client-wire: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_client_wire_exam.PINNED_CASES}")
+    if refused_controls != zenoh_client_wire_exam.PINNED_CONTROLS:
+        fail(f"client-wire: {refused_controls} controls, the checker pins {zenoh_client_wire_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_client_wire_exam.PINNED_CASES:
+        fail(f"client-wire: the admitted item fixes {item_cases} cases, the checker pins {zenoh_client_wire_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_client_wire_exam.PINNED_CONTROLS:
+        fail(f"client-wire: the admitted item requires {item_controls} controls, the checker pins {zenoh_client_wire_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 client-wire judge: refused {refused_controls} corrupted records")
+        return 0
+    # The generated file is the implementation's, so the recipe fails until it lands.
+    try:
+        zenoh_client_wire_exam.check_generated()
+        # The test reaches the records through the crate, and the crate exports them. A test that includes the
+        # generated file by path passes without the export, so both are read as text.
+        zenoh_client_wire_exam.check_exports()
+        positive, refusals = zenoh_client_wire_exam.judge(run_client_wire())
+    except zenoh_client_wire_exam.WireError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=client-wire cases={positive + refusals} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=positive + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 client-wire check: every record encodes to the schema's layout, decodes back, and refuses a short buffer")
+    return 0
+
+
+CLIENT_IO_TEST = "zenoh_service_client::tests::the_client_exam"
+
+
+def run_client_io() -> list[str]:
+    """The proto crate's test of the client adapter, run alone: the adapter is compiled into it by path, against a
+    stand-in runtime, so it needs no other crate and no neighbour exam."""
+    host = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True)
+    target = next(line.split(": ", 1)[1] for line in host.stdout.splitlines() if line.startswith("host: "))
+    command = [
+        "cargo", "test", "--target", target, "-p", "slime-proto", "--test", "zenoh_service_client",
+        "--", "--nocapture", "--test-threads=1",
+    ]
+    result = subprocess.run(command, cwd=ROOT / "components", capture_output=True, text=True, env={**_os.environ})
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        _sys.stderr.write(output[-4000:])
+        fail(f"{' '.join(command)} exited {result.returncode}")
+    if CLIENT_IO_TEST not in tests_passed(output):
+        fail(f"client-io: the exam's test did not run and pass: {CLIENT_IO_TEST}")
+    return exam_lines(result.stdout)
+
+
+def wire_precondition() -> None:
+    """The adapter encodes and decodes with the generated wire records, so their judge and its pins hold first."""
+    client_schema_precondition()
+    try:
+        controls = zenoh_client_wire_exam.all_controls()
+        positive, refusals = zenoh_client_wire_exam.judge(zenoh_client_wire_exam.good_lines())
+    except zenoh_client_wire_exam.WireError as error:
+        fail(str(error))
+    if positive + refusals != zenoh_client_wire_exam.PINNED_CASES or controls != zenoh_client_wire_exam.PINNED_CONTROLS:
+        fail(f"client wire: {positive + refusals} cases and {controls} controls, the checker pins {zenoh_client_wire_exam.PINNED_CASES} and {zenoh_client_wire_exam.PINNED_CONTROLS}")
+
+
+def client_io_main(controls_only: bool) -> int:
+    if CLIENT_IO_TEST in tests_passed(""):
+        fail("control: a run with the client exam test missing was read as complete")
+    wire_precondition()
+    try:
+        refused_controls = zenoh_client_io_exam.all_controls()
+        item_cases, item_controls = zenoh_client_io_exam.item_pins()
+        positive, refusals = zenoh_client_io_exam.judge(zenoh_client_io_exam.good_lines())
+    except (zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError) as error:
+        fail(str(error))
+    if positive + refusals != zenoh_client_io_exam.PINNED_CASES:
+        fail(f"client-io: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_client_io_exam.PINNED_CASES}")
+    if refused_controls != zenoh_client_io_exam.PINNED_CONTROLS:
+        fail(f"client-io: {refused_controls} controls, the checker pins {zenoh_client_io_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_client_io_exam.PINNED_CASES:
+        fail(f"client-io: the admitted item fixes {item_cases} cases, the checker pins {zenoh_client_io_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_client_io_exam.PINNED_CONTROLS:
+        fail(f"client-io: the admitted item requires {item_controls} controls, the checker pins {zenoh_client_io_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 client-io judge: refused {refused_controls} corrupted records")
+        return 0
+    # The wire records the adapter is compiled against are the renderer's output, and their own test passes.
+    try:
+        # The adapter and its stand-in read the committed constants. A stale constant they share passes every
+        # transcript, so the committed file is compared with its renderer first.
+        zenoh_client_exam.check_generated()
+        zenoh_client_wire_exam.check_generated()
+        zenoh_client_wire_exam.check_exports()
+        zenoh_client_wire_exam.judge(run_client_wire())
+        # The adapter's test compiles it by path, which passes without the product crate's export, so the export
+        # is checked as text.
+        zenoh_client_io_exam.check_export()
+        positive, refusals = zenoh_client_io_exam.judge(run_client_io())
+    except (zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError, zenoh_client_exam.ClientError) as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=client-io cases={positive + refusals} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=positive + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 client-io check: the adapter bounds every request, checks every answer and returns every loan")
+    return 0
+
+
 SERVICE_FILTER = "zenoh_service::"
 SERVICE_TESTS = ("zenoh_service::the_service_exam",)
 
@@ -2053,7 +2199,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2072,6 +2218,10 @@ def main() -> int:
         return grants_main(arguments.controls_only)
     if arguments.slice == "client":
         return client_main(arguments.controls_only)
+    if arguments.slice == "client-wire":
+        return client_wire_main(arguments.controls_only)
+    if arguments.slice == "client-io":
+        return client_io_main(arguments.controls_only)
     if arguments.slice == "service":
         return service_main(arguments.controls_only)
     if arguments.slice == "service-link":

@@ -109,6 +109,23 @@ zenoh_service_check:
 zenoh_service_client_check:
     python3 scripts/check/check-zenoh-profile0.py --slice client
 
+# Judges the wire records of the Zenoh service client protocol, the encoders and decoders a holder and the service
+# share. The judge renders them from the schema's layouts, requires the committed Rust file to equal that text, and
+# compares the bytes the Rust test prints with what Python's struct writes from the same layouts. The expectation is
+# scripts/lib/zenoh_client_wire_exam.py. Nothing here needs a registry. The recipe fails until the generated file
+# lands.
+[group('hardware')]
+zenoh_service_client_wire_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice client-wire
+
+# Judges the Zenoh service client adapter, which speaks the client protocol over one IO0 ring. The judge reads what
+# the Rust test prints from a scripted service and requires every request, every refusal and every returned loan to
+# be the ones it lists. The expectation is scripts/lib/zenoh_client_io_exam.py. The wire records run beside it. The
+# recipe fails until the adapter lands.
+[group('hardware')]
+zenoh_service_client_io_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice client-io
+
 # Judges the Zenoh service core over a link. The core queues a declaration or a publication through the
 # link's single send slot and delivers to its rings after the slot flushed. The judge reads what the Rust
 # test prints. The expectation is scripts/lib/zenoh_service_link_exam.py. The subscribers, links and
