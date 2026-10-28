@@ -24,7 +24,7 @@ mod behaviour;
 pub(crate) mod exam;
 mod over_link;
 
-pub use over_link::Settled;
+pub use over_link::{OverLink, Settled};
 
 /// Every section, in the order the exam lists them. The checker looks for this test by its path.
 #[cfg(test)]
@@ -227,24 +227,6 @@ pub struct Sizes {
     pub fixed: usize,
 }
 
-/// What the core queued through the link and has not yet seen flushed.
-#[derive(Clone, Copy, Debug)]
-enum Pending<'k, const P: usize> {
-    None,
-    /// Subscription `id` is in the link's send slot.
-    Declare {
-        id: u16,
-    },
-    /// A publication is in the link's send slot. Its local copies wait for the flush.
-    Publish {
-        key: &'k str,
-        sequence: i64,
-        timestamp: i64,
-        len: u32,
-        payload: [u8; P],
-    },
-}
-
 /// The core over `H` holders, ring slots of `N` samples of `P` payload bytes, and `R` rows.
 #[derive(Debug)]
 pub struct Core<'k, const H: usize, const N: usize, const P: usize, const R: usize> {
@@ -255,7 +237,6 @@ pub struct Core<'k, const H: usize, const N: usize, const P: usize, const R: usi
     /// How many distinct subscribe keys the rows name, and how many of them are declared.
     subscriptions: u16,
     declared: u16,
-    pending: Pending<'k, P>,
 }
 
 impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k, H, N, P, R> {
@@ -363,7 +344,6 @@ impl<'k, const H: usize, const N: usize, const P: usize, const R: usize> Core<'k
             gid,
             subscriptions,
             declared: 0,
-            pending: Pending::None,
         })
     }
 

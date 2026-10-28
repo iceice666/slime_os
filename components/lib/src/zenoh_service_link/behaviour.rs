@@ -5,7 +5,7 @@ use super::pair::{Far, Io, Pipe, Svc, cfg, pair};
 use super::{declare_all, payload, peer_declares, step};
 use crate::zenoh_profile0::session::{Params, Role};
 use crate::zenoh_service::exam::{Exam, GID, KEYS, params, rows};
-use crate::zenoh_service::{ServiceError, Settled};
+use crate::zenoh_service::{OverLink, ServiceError, Settled};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -13,23 +13,35 @@ use std::rc::Rc;
 fn a_publication_that_finds_the_slot_taken_is_busy_whatever_else_is_wrong_with_it() {
     let (mut svc, mut far, hs, hf) = pair();
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut over = OverLink::<12>::new();
     let mut now = 20u64;
-    declare_all(&mut core, &mut svc, &mut far, hs, hf, &mut now, false);
+    declare_all(
+        &mut core, &mut over, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
     peer_declares(&mut svc, &mut far, hs, hf, &mut now);
     assert!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 100, 1100, &payload(100))
-            .expect("granted")
-            .is_none()
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
     );
     let before = (
         core.held(0).unwrap(),
         core.held(1).unwrap(),
         core.held(2).unwrap(),
     );
-    let unknown = core.publish_over(&mut svc, hs, 3, KEYS[0], 7, 1007, &payload(7));
-    let no_right = core.publish_over(&mut svc, hs, 1, KEYS[0], 7, 1007, &payload(7));
-    let no_row = core.publish_over(&mut svc, hs, 2, KEYS[2], 7, 1007, &payload(7));
-    let oversized = core.publish_over(&mut svc, hs, 0, KEYS[0], 7, 1007, &[0u8; 13]);
+    let unknown = over.publish(&mut core, &mut svc, hs, 3, KEYS[0], 7, 1007, &payload(7));
+    let no_right = over.publish(&mut core, &mut svc, hs, 1, KEYS[0], 7, 1007, &payload(7));
+    let no_row = over.publish(&mut core, &mut svc, hs, 2, KEYS[2], 7, 1007, &payload(7));
+    let oversized = over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 7, 1007, &[0u8; 13]);
     for outcome in [unknown, no_right, no_row, oversized] {
         assert_eq!(outcome.expect_err("the slot is taken"), ServiceError::Busy);
     }
@@ -42,20 +54,23 @@ fn a_publication_that_finds_the_slot_taken_is_busy_whatever_else_is_wrong_with_i
         )
     );
     step(&mut svc, &mut far, hs, hf, &mut now);
-    assert!(matches!(core.settle(&svc), Ok(Settled::Published { .. })));
+    assert!(matches!(
+        over.settle(&mut core, &svc),
+        Ok(Settled::Published { .. })
+    ));
     // With the slot free again the same invalid calls are refused for what is wrong with them.
     assert_eq!(
-        core.publish_over(&mut svc, hs, 3, KEYS[0], 7, 1007, &payload(7))
+        over.publish(&mut core, &mut svc, hs, 3, KEYS[0], 7, 1007, &payload(7))
             .expect_err("unknown"),
         ServiceError::UnknownHolder
     );
     assert_eq!(
-        core.publish_over(&mut svc, hs, 1, KEYS[0], 7, 1007, &payload(7))
+        over.publish(&mut core, &mut svc, hs, 1, KEYS[0], 7, 1007, &payload(7))
             .expect_err("no right"),
         ServiceError::NotGranted
     );
     assert_eq!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 7, 1007, &[0u8; 13])
+        over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 7, 1007, &[0u8; 13])
             .expect_err("oversized"),
         ServiceError::TooLarge
     );
@@ -116,13 +131,14 @@ fn pair_of_other_parameters() -> (
 fn a_link_declared_with_other_parameters_is_refused_before_anything_is_queued() {
     let (mut svc, _far, hs, _hf) = pair_of_other_parameters();
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut over = OverLink::<12>::new();
     assert_eq!(
-        core.declare_next_over(&mut svc, hs)
+        over.declare_next(&mut core, &mut svc, hs)
             .expect_err("other parameters"),
         ServiceError::WrongSession
     );
     assert_eq!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 7, 1007, &payload(7))
+        over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 7, 1007, &payload(7))
             .expect_err("other parameters"),
         ServiceError::WrongSession
     );
@@ -135,26 +151,35 @@ fn settle_and_drain_refuse_a_link_of_other_parameters_and_change_nothing() {
     let (mut a, mut far, ha, hf) = pair();
     let (mut other, _far_other, _ho, _hfo) = pair_of_other_parameters();
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut over = OverLink::<12>::new();
     let mut now = 20u64;
-    declare_all(&mut core, &mut a, &mut far, ha, hf, &mut now, false);
+    declare_all(
+        &mut core, &mut over, &mut a, &mut far, ha, hf, &mut now, false,
+    );
     peer_declares(&mut a, &mut far, ha, hf, &mut now);
     assert!(
-        core.publish_over(&mut a, ha, 0, KEYS[0], 100, 1100, &payload(100))
+        over.publish(&mut core, &mut a, ha, 0, KEYS[0], 100, 1100, &payload(100))
             .expect("granted")
             .is_none()
     );
     let before = (core.held(0).unwrap(), core.held(1).unwrap());
     // The other link's slot is empty. Settling against it must not commit the copies of the frame on `a`.
-    assert_eq!(core.settle(&other), Err(ServiceError::WrongSession));
+    assert_eq!(
+        over.settle(&mut core, &other),
+        Err(ServiceError::WrongSession)
+    );
     assert_eq!(
         core.drain_notices(&mut other),
         Err(ServiceError::WrongSession)
     );
     assert_eq!(before, (core.held(0).unwrap(), core.held(1).unwrap()));
     // The frame is still waiting on its own link, and settles there once the stream took it.
-    assert_eq!(core.settle(&a), Ok(Settled::Waiting));
+    assert_eq!(over.settle(&mut core, &a), Ok(Settled::Waiting));
     step(&mut a, &mut far, ha, hf, &mut now);
-    assert_eq!(core.settle(&a), Ok(Settled::Published { reached: 2 }));
+    assert_eq!(
+        over.settle(&mut core, &a),
+        Ok(Settled::Published { reached: 2 })
+    );
 }
 
 #[test]
@@ -204,7 +229,10 @@ fn a_closed_link_drops_what_waited_even_when_a_later_pump_emptied_the_slot() {
         }
     }
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
-    declare_all(&mut core, &mut svc, &mut far, hs, hf, &mut now, false);
+    let mut over = OverLink::<12>::new();
+    declare_all(
+        &mut core, &mut over, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
     far.declare_subscriber(hf, 1, KEYS[0])
         .expect("the peer declares");
     for _ in 0..3 {
@@ -213,9 +241,18 @@ fn a_closed_link_drops_what_waited_even_when_a_later_pump_emptied_the_slot() {
     while svc.next_notice().is_some() {}
     *armed.borrow_mut() = true;
     assert!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 100, 1100, &payload(100))
-            .expect("granted")
-            .is_none()
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
     );
     now += 1;
     assert_eq!(
@@ -229,7 +266,7 @@ fn a_closed_link_drops_what_waited_even_when_a_later_pump_emptied_the_slot() {
         .expect("a pump on a closed link only flushes");
     assert!(svc.is_closed() && !svc.send_pending());
     assert_eq!(
-        core.settle(&svc),
+        over.settle(&mut core, &svc),
         Err(ServiceError::Link(LinkError::SendAfterClose))
     );
     assert_eq!(
@@ -237,5 +274,21 @@ fn a_closed_link_drops_what_waited_even_when_a_later_pump_emptied_the_slot() {
         ((0, 0), (0, 0))
     );
     // The waiting publication is gone, so the core is idle and the next call finds the closed link.
-    assert_eq!(core.settle(&svc), Ok(Settled::Idle));
+    assert_eq!(over.settle(&mut core, &svc), Ok(Settled::Idle));
+}
+
+#[test]
+fn a_core_at_the_largest_fixed_profile_still_fits_its_declared_budget() {
+    // `limits::LARGE` carries 1024-byte payloads. The link-facing state lives outside the core, so the
+    // core's fixed size is the same with or without a link and stays within the contract's bound.
+    use crate::zenoh_service::Core;
+    let large = Core::<3, 4, 1024, 5>::sizes();
+    let small = Core::<3, 4, 12, 5>::sizes();
+    assert_eq!(large.fixed, small.fixed);
+    assert!(large.fixed <= slime_proto::zenoh_service_grants::SERVICE_FIXED_BYTES as usize);
+    // `Core::new` evaluates the budget at compile time, so this fails to compile if the core grows. The
+    // refusal for the session's payload bound comes after that evaluation, at run time.
+    let built = Core::<3, 4, 1024, 5>::new(&rows(), GID, &params());
+    assert_eq!(built.err(), Some(ServiceError::InvalidGrants));
+    let _over = OverLink::<1024>::new();
 }

@@ -13,7 +13,7 @@ use crate::zenoh_link::{ByteLink, Error as LinkError, LinkHandle, LinkOf, Notice
 use crate::zenoh_profile0::encode;
 use crate::zenoh_profile0::session::{Params, Role};
 use crate::zenoh_service::exam::{Exam, GID, HOLDERS, KEYS, ROWS, hex, params, rows};
-use crate::zenoh_service::{Item, Peer, ServiceError, Settled};
+use crate::zenoh_service::{Item, OverLink, Peer, ServiceError, Settled};
 use pair::{FailAfterSend, Far, Io, Pipe, Stalling, Svc, cfg, pair};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -87,8 +87,9 @@ fn held(label: &str, core: &Exam<'_>, holder: usize) {
 }
 
 /// Declares every subscription through the link, one frame at a time, and prints the frames the peer took.
-fn declare_all<A: ByteLink, B: ByteLink>(
-    core: &mut Exam<'_>,
+fn declare_all<'k, A: ByteLink, B: ByteLink>(
+    core: &mut Exam<'k>,
+    over: &mut OverLink<'k, 12>,
     svc: &mut Link<A>,
     far: &mut Link<B>,
     hs: LinkHandle,
@@ -97,15 +98,15 @@ fn declare_all<A: ByteLink, B: ByteLink>(
     show: bool,
 ) {
     for id in 1..=2u16 {
-        assert!(core.declare_next_over(svc, hs).expect("queues"));
+        assert!(over.declare_next(core, svc, hs).expect("queues"));
         let frame = svc.last_sent_batch().to_vec();
         if show {
             line(&format!("declare {id} queued {}", core.declared()));
-            refused("declare-while-one-waits", core.declare_next_over(svc, hs));
+            refused("declare-while-one-waits", over.declare_next(core, svc, hs));
             if id == 1 {
                 refused(
                     "publish-while-a-declaration-waits",
-                    core.publish_over(svc, hs, 0, KEYS[0], 7, 1007, &payload(7)),
+                    over.publish(core, svc, hs, 0, KEYS[0], 7, 1007, &payload(7)),
                 );
             }
         }
@@ -113,23 +114,23 @@ fn declare_all<A: ByteLink, B: ByteLink>(
         if show {
             refused(
                 "declare-after-the-flush-before-settle",
-                core.declare_next_over(svc, hs),
+                over.declare_next(core, svc, hs),
             );
             if id == 1 {
                 refused(
                     "publish-after-the-flush-of-a-declaration",
-                    core.publish_over(svc, hs, 0, KEYS[0], 7, 1007, &payload(7)),
+                    over.publish(core, svc, hs, 0, KEYS[0], 7, 1007, &payload(7)),
                 );
             }
         }
-        let settled = core.settle(svc).expect("settle");
+        let settled = over.settle(core, svc).expect("settle");
         assert_eq!(settled, Settled::Declared { id });
         if show {
             line(&format!("declare {id} declared {}", core.declared()));
             line(&format!("frame declare-{id} {}", hex(&frame)));
         }
     }
-    assert!(!core.declare_next_over(svc, hs).expect("nothing left"));
+    assert!(!over.declare_next(core, svc, hs).expect("nothing left"));
 }
 
 /// The peer declares `k1` and `k3`, so the service may send to them.
@@ -170,6 +171,7 @@ fn peer_puts<A: ByteLink, B: ByteLink>(
 fn the_exam() {
     let (mut svc, mut far, hs, hf) = pair();
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
+    let mut over = OverLink::<12>::new();
     let mut now = 20u64;
     line(&format!("limits 3 4 12 3 {NOTICES}"));
     for (holder, key, publish, subscribe) in ROWS {
@@ -188,12 +190,14 @@ fn the_exam() {
     line(&format!("size fixed {}", sizes.fixed));
 
     // One: the declarations go out one frame at a time. A second waits for the send slot.
-    declare_all(&mut core, &mut svc, &mut far, hs, hf, &mut now, true);
+    declare_all(
+        &mut core, &mut over, &mut svc, &mut far, hs, hf, &mut now, true,
+    );
     line("ok declaration-goes-one-frame-at-a-time");
 
     // Two: a publication before the peer declares its key reaches the local holders at once.
-    let published = core
-        .publish_over(&mut svc, hs, 0, KEYS[0], 99, 1099, &payload(99))
+    let published = over
+        .publish(&mut core, &mut svc, hs, 0, KEYS[0], 99, 1099, &payload(99))
         .expect("granted")
         .expect("delivered at once");
     assert_eq!(published.peer, Peer::NotSubscribed);
@@ -208,9 +212,18 @@ fn the_exam() {
 
     // Three: a publication the peer subscribed to waits for the flush, and a second one waits behind it.
     assert!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 100, 1100, &payload(100))
-            .expect("granted")
-            .is_none()
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
     );
     let frame_a = svc.last_sent_batch().to_vec();
     line("published a k1 queued");
@@ -218,36 +231,66 @@ fn the_exam() {
     held("before-the-flush", &core, 1);
     refused(
         "publish-while-one-waits",
-        core.publish_over(&mut svc, hs, 1, KEYS[2], 101, 1101, &payload(101)),
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            1,
+            KEYS[2],
+            101,
+            1101,
+            &payload(101),
+        ),
     );
     refused(
         "declare-while-a-publication-waits",
-        core.declare_next_over(&mut svc, hs),
+        over.declare_next(&mut core, &mut svc, hs),
     );
-    assert_eq!(core.settle(&svc).expect("settle"), Settled::Waiting);
+    assert_eq!(
+        over.settle(&mut core, &svc).expect("settle"),
+        Settled::Waiting
+    );
     step(&mut svc, &mut far, hs, hf, &mut now);
     refused(
         "publish-after-the-flush-before-settle",
-        core.publish_over(&mut svc, hs, 1, KEYS[2], 101, 1101, &payload(101)),
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            1,
+            KEYS[2],
+            101,
+            1101,
+            &payload(101),
+        ),
     );
     refused(
         "declare-after-the-flush-of-a-publication",
-        core.declare_next_over(&mut svc, hs),
+        over.declare_next(&mut core, &mut svc, hs),
     );
-    let Settled::Published { reached } = core.settle(&svc).expect("settle") else {
+    let Settled::Published { reached } = over.settle(&mut core, &svc).expect("settle") else {
         panic!("the frame left")
     };
     line(&format!("settled publish-a {reached}"));
     line(&format!("frame publish-a {}", hex(&frame_a)));
     assert!(
-        core.publish_over(&mut svc, hs, 1, KEYS[2], 101, 1101, &payload(101))
-            .expect("granted")
-            .is_none()
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            1,
+            KEYS[2],
+            101,
+            1101,
+            &payload(101)
+        )
+        .expect("granted")
+        .is_none()
     );
     let frame_b = svc.last_sent_batch().to_vec();
     line("published b k3 queued");
     step(&mut svc, &mut far, hs, hf, &mut now);
-    let Settled::Published { reached } = core.settle(&svc).expect("settle") else {
+    let Settled::Published { reached } = over.settle(&mut core, &svc).expect("settle") else {
         panic!("the frame left")
     };
     line(&format!("settled publish-b {reached}"));
@@ -266,19 +309,19 @@ fn the_exam() {
     );
     refused(
         "publish-without-a-publish-right",
-        core.publish_over(&mut svc, hs, 1, KEYS[0], 7, 1007, &payload(7)),
+        over.publish(&mut core, &mut svc, hs, 1, KEYS[0], 7, 1007, &payload(7)),
     );
     refused(
         "publish-to-a-key-with-no-row",
-        core.publish_over(&mut svc, hs, 2, KEYS[2], 7, 1007, &payload(7)),
+        over.publish(&mut core, &mut svc, hs, 2, KEYS[2], 7, 1007, &payload(7)),
     );
     refused(
         "publish-by-an-unknown-holder",
-        core.publish_over(&mut svc, hs, 3, KEYS[0], 7, 1007, &payload(7)),
+        over.publish(&mut core, &mut svc, hs, 3, KEYS[0], 7, 1007, &payload(7)),
     );
     refused(
         "publish-payload-over-the-sample-size",
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 7, 1007, &[0u8; 13]),
+        over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 7, 1007, &[0u8; 13]),
     );
     assert_eq!(
         before,
@@ -377,7 +420,10 @@ fn keep_alive_slot() {
     }
     assert!(svc.is_open() && far.is_open());
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
-    declare_all(&mut core, &mut svc, &mut far, hs, hf, &mut now, false);
+    let mut over = OverLink::<12>::new();
+    declare_all(
+        &mut core, &mut over, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
     far.declare_subscriber(hf, 1, KEYS[0])
         .expect("the peer declares");
     for _ in 0..3 {
@@ -401,11 +447,11 @@ fn keep_alive_slot() {
     );
     refused(
         "publish-while-a-keep-alive-waits",
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 8, 1008, &payload(8)),
+        over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 8, 1008, &payload(8)),
     );
     refused(
         "declare-while-a-keep-alive-waits",
-        core.declare_next_over(&mut svc, hs),
+        over.declare_next(&mut core, &mut svc, hs),
     );
     assert_eq!(
         held_before,
@@ -415,14 +461,14 @@ fn keep_alive_slot() {
             core.held(2).unwrap()
         )
     );
-    assert_eq!(core.settle(&svc).expect("settle"), Settled::Idle);
+    assert_eq!(over.settle(&mut core, &svc).expect("settle"), Settled::Idle);
     *stall.borrow_mut() = false;
     now += 1;
     svc.pump(hs, now)
         .expect("pump after the stream takes the keep-alive");
     assert!(!svc.send_pending());
     assert!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 9, 1009, &payload(9))
+        over.publish(&mut core, &mut svc, hs, 0, KEYS[0], 9, 1009, &payload(9))
             .expect("granted")
             .is_none()
     );
@@ -475,7 +521,10 @@ fn failing_stream() {
     }
     assert!(svc.is_open() && far.is_open());
     let mut core = Exam::new(&rows(), GID, &params()).expect("the honest grants");
-    declare_all(&mut core, &mut svc, &mut far, hs, hf, &mut now, false);
+    let mut over = OverLink::<12>::new();
+    declare_all(
+        &mut core, &mut over, &mut svc, &mut far, hs, hf, &mut now, false,
+    );
     far.declare_subscriber(hf, 1, KEYS[0])
         .expect("the peer declares");
     for _ in 0..3 {
@@ -484,16 +533,25 @@ fn failing_stream() {
     while svc.next_notice().is_some() {}
     *armed.borrow_mut() = true;
     assert!(
-        core.publish_over(&mut svc, hs, 0, KEYS[0], 100, 1100, &payload(100))
-            .expect("granted")
-            .is_none()
+        over.publish(
+            &mut core,
+            &mut svc,
+            hs,
+            0,
+            KEYS[0],
+            100,
+            1100,
+            &payload(100)
+        )
+        .expect("granted")
+        .is_none()
     );
     line("published a k1 queued-on-a-stream-that-will-reset");
     now += 1;
     let error = svc.pump(hs, now).expect_err("the stream resets");
     assert_eq!(error, LinkError::Link(crate::zenoh_link::LinkError::Reset));
     line("pump reset");
-    refused("settle-after-reset", core.settle(&svc));
+    refused("settle-after-reset", over.settle(&mut core, &svc));
     held("after-the-reset", &core, 0);
     held("after-the-reset", &core, 1);
     now += 1;
