@@ -2,9 +2,10 @@
 schema: work-item/v2
 id: 01a17dad-fa21-739d-a55e-ef59fa3ce0ea
 kind: task
-state: active
+state: done
 created: 2026-10-27T14:05:16+00:00
-updated: 2026-10-28T04:22:42+00:00
+updated: 2026-10-28T04:33:17+00:00
+closed: 2026-10-28T04:33:17+00:00
 parent: 01a0f5fa-f2c4-71cf-962b-c62cbea2ef68
 depends:
   - 01a15d1f-26d2-7653-924b-a3f113a718e6
