@@ -51,20 +51,31 @@ fn run_owner(executable: u32) -> ! {
             Err(_) => fail(b"quitter supervision"),
         }
     };
-    slime_rt::debug_write(b"[lifetime-probe] role=owner quitter outcome=");
-    slime_rt::debug_write(match outcome {
-        Termination::Unhealthy => b"unhealthy\n",
-        Termination::Exit(_) => b"exit\n",
-        Termination::Fault(_) => b"fault\n",
-        Termination::Timeout => b"timeout\n",
-        Termination::PeerLoss => b"peer-loss\n",
-    });
+    match outcome {
+        Termination::Unhealthy => {
+            slime_rt::debug_write(b"[lifetime-probe] role=owner quitter outcome=unhealthy\n")
+        }
+        Termination::Exit(_) => {
+            slime_rt::debug_write(b"[lifetime-probe] role=owner quitter outcome=exit\n")
+        }
+        Termination::Fault(_) => {
+            slime_rt::debug_write(b"[lifetime-probe] role=owner quitter outcome=fault\n")
+        }
+        Termination::Timeout => {
+            slime_rt::debug_write(b"[lifetime-probe] role=owner quitter outcome=timeout\n")
+        }
+        Termination::PeerLoss => {
+            slime_rt::debug_write(b"[lifetime-probe] role=owner quitter outcome=peer-loss\n")
+        }
+    };
     slime_rt::exit(0)
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[lifetime-probe] FAIL ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[lifetime-probe] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

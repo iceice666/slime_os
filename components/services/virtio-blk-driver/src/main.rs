@@ -19,6 +19,7 @@ use slime_proto::io_queue::{
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError};
 use slime_proto::{valid_block_v2_request, valid_buffer_slice};
+use slime_rt::console_line::Line;
 use slime_rt::{
     DmaDirection, DmaMapping, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, block_ring_authority_read,
     capability_import, debug_write, exit, io_device_bind, io_dma_map, io_queue_map,
@@ -115,15 +116,19 @@ fn main(_startup_arg: u32) {
     // ring from a read-write one must not accept a request, so this refuses the
     // boot rather than serving without the gate.
     let authority = Authority::read();
-    debug_write(b"[virtio-blk-driver] authority rings=");
-    debug_u64(authority.table().ring_count() as u64);
-    debug_write(b" rights=read,write source=generation\n");
+    Line::<128>::new()
+        .bytes(b"[virtio-blk-driver] authority rings=")
+        .decimal(authority.table().ring_count() as u64)
+        .bytes(b" rights=read,write source=generation\n")
+        .emit();
     send_ready(capacity);
-    debug_write(b"[virtio-blk-driver] ready capacity=");
-    debug_u64(capacity);
-    debug_write(b" epoch=");
-    debug_u64(device.epoch);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[virtio-blk-driver] ready capacity=")
+        .decimal(capacity)
+        .bytes(b" epoch=")
+        .decimal(device.epoch)
+        .bytes(b"\n")
+        .emit();
 
     // Serve until the peer says stop. B83's synchronous clients submit one
     // request per signal and wait for that completion before the next, so a
@@ -300,9 +305,11 @@ fn drain(
             Err(error) => {
                 if error.request_id == 0 {
                     *unanswerable_requests += 1;
-                    debug_write(b"[virtio-blk-driver] unanswerable requests=");
-                    debug_u64(*unanswerable_requests);
-                    debug_write(b"\n");
+                    Line::<128>::new()
+                        .bytes(b"[virtio-blk-driver] unanswerable requests=")
+                        .decimal(*unanswerable_requests)
+                        .bytes(b"\n")
+                        .emit();
                 } else {
                     complete(
                         queue,
@@ -789,21 +796,10 @@ fn binding(name: &[u8]) -> u32 {
     resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[virtio-blk-driver] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[virtio-blk-driver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
-}
-fn debug_u64(mut value: u64) {
-    let mut bytes = [0u8; 20];
-    let mut cursor = bytes.len();
-    loop {
-        cursor -= 1;
-        bytes[cursor] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(&bytes[cursor..]);
 }

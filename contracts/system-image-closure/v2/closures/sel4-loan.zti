@@ -14,7 +14,7 @@
       artifact = {
         path = "components/system/console";
         kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
+        identity = "9daaf88bf8da06b9fee2416d3492e0f40cfe70d90dd0a2b2e7c010a8d1bde9d0";
       };
       identity = "04bf64588b961d007d7af1fd846e8f48e1341efe47f9437378048fa63b570121";
       buildProfile = "default";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "6f11475f9a337d7bbca72f998ad9c3ef737ebc6e8b35aa7866f5faac31b8928c";
+        identity = "caa2095cd9c80a1f038a8c95ac0682626383b0fe329cf9fb68c2b2ffb3724793";
       };
       identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
@@ -36,7 +36,7 @@
       artifact = {
         path = "components/testkit/sample-receiver";
         kind = "tree";
-        identity = "c717acd35f4dcac6b068016c2a93f76e9c1d79723e27afaa3889ebce514dc750";
+        identity = "30ff6564a334547dcecb2d3cdf20cdee287df326ab23a8020d3165a12fbaa491";
       };
       identity = "1646add2af7492f0d2bbc226473db1711fe6494050253078f05cd9cb7bfa856c";
       buildProfile = "default";
@@ -109,7 +109,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -125,7 +125,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -133,7 +133,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {

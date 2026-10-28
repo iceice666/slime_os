@@ -22,6 +22,7 @@
 //!   authority permits BootState reads and writes.
 
 use slime_proto::generation::{self, WireGenerationReply, WireGenerationRequest};
+use slime_rt::console_line::Line;
 
 /// The RPC endpoint to the manager, and this component's only grant.
 const RPC_SLOT: u32 = 0;
@@ -180,9 +181,11 @@ fn identity_of(reply: &WireGenerationReply) -> [u8; 32] {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sel4-generation-client] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-generation-client] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

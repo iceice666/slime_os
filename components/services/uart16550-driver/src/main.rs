@@ -27,6 +27,7 @@ use slime_proto::serial_device::{
     WireSerialRequest,
 };
 use slime_proto::valid_serial_request;
+use slime_rt::console_line::Line as ConsoleLine;
 use slime_rt::{
     MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, io_device_bind, io_mmio_map, monotonic_frequency,
     monotonic_read, recv_blocking, reply,
@@ -153,19 +154,23 @@ fn bring_up(page: Page, line: Line) -> Option<Uart<Port>> {
     };
     match Uart::configure(port, line, tick_hz, &mut now) {
         Ok(uart) => {
-            write_number(
-                b"[uart16550-driver] ready clk_hz=",
-                u64::from(line.clock_hz),
-            );
-            write_number(b" divisor=", u64::from(line.divisor));
-            debug_write(b"\n");
+            ConsoleLine::<128>::new()
+                .bytes(b"[uart16550-driver] ready clk_hz=")
+                .decimal(u64::from(line.clock_hz))
+                .bytes(b" divisor=")
+                .decimal(u64::from(line.divisor))
+                .bytes(b"\n")
+                .emit();
             Some(uart)
         }
         Err(fault) => {
-            debug_write(b"[uart16550-driver] line config mismatch reg=");
-            debug_write(fault.reg.as_bytes());
-            write_number(b" got=", u64::from(fault.got));
-            debug_write(b", refusing requests\n");
+            ConsoleLine::<128>::new()
+                .bytes(b"[uart16550-driver] line config mismatch reg=")
+                .bytes(fault.reg.as_bytes())
+                .bytes(b" got=")
+                .decimal(u64::from(fault.got))
+                .bytes(b", refusing requests\n")
+                .emit();
             None
         }
     }
@@ -212,25 +217,11 @@ fn answer(status: i32, bytes_written: u16, detail: u32) -> WireSerialReply {
     }
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    debug_write(prefix);
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    if value == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while value != 0 {
-        index -= 1;
-        digits[index] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    debug_write(&digits[index..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[uart16550-driver] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    ConsoleLine::<256>::new()
+        .bytes(b"[uart16550-driver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

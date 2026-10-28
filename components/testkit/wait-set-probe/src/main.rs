@@ -20,6 +20,7 @@
 //!   rather than an unbounded one.
 
 use boot_contracts::wait_set::SourceKind;
+use slime_rt::console_line::Line;
 use slime_rt::wait_set::{MAX_CALLBACKS_PER_WAKE, MAX_SOURCES};
 use slime_rt::{
     ERR_SUCCESS, WaitError, WaitSet, debug_write, exit, resolve_binding, send, spawn, timer_arm,
@@ -307,62 +308,41 @@ fn run_denied(mut set: WaitSet) -> ! {
 }
 
 fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {
-    let mut first_digits = [0u8; 20];
-    let mut second_digits = [0u8; 20];
-    debug_write(prefix);
-    debug_write(decimal(first, &mut first_digits));
-    debug_write(middle);
-    debug_write(decimal(second, &mut second_digits));
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(prefix)
+        .decimal(first)
+        .bytes(middle)
+        .decimal(second)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn write_hex(prefix: &[u8], value: u64) {
-    let mut digits = [0u8; 16];
-    let mut index = digits.len();
-    let mut remaining = value;
-    if remaining == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while remaining != 0 {
-        index -= 1;
-        digits[index] = b"0123456789abcdef"[(remaining & 0xf) as usize];
-        remaining >>= 4;
-    }
-    debug_write(prefix);
-    debug_write(b"0x");
-    debug_write(&digits[index..]);
-    debug_write(b"\n");
-}
-
-fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
-    if value == 0 {
-        digits[19] = b'0';
-        return &digits[19..];
-    }
-    let mut remaining = value;
-    let mut index = digits.len();
-    while remaining != 0 {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-    }
-    &digits[index..]
+    Line::<256>::new()
+        .bytes(prefix)
+        .bytes(b"0x")
+        .hex(value)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail_with(reason: &[u8], error: WaitError) -> ! {
-    debug_write(b"[wait-set] FAIL ");
-    debug_write(reason);
-    match error {
-        WaitError::Registry(_) => debug_write(b" registry\n"),
-        WaitError::Transport(_) => debug_write(b" transport\n"),
-    };
+    Line::<256>::new()
+        .bytes(b"[wait-set] FAIL ")
+        .bytes(reason)
+        .bytes(match error {
+            WaitError::Registry(_) => b" registry\n".as_slice(),
+            WaitError::Transport(_) => b" transport\n",
+        })
+        .emit();
     exit(1)
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[wait-set] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[wait-set] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

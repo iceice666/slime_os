@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use slime_rt::console_line::Line;
 use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
@@ -44,8 +45,10 @@ fn main(_startup_arg: u32) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[crossing-peer] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[crossing-peer] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

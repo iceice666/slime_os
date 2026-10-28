@@ -17,6 +17,7 @@ use slime_proto::link_device::{
     OP_TRANSMIT, WireLinkReply, WireLinkRequest,
 };
 use slime_proto::{valid_link_frame_bounds, valid_link_reply, valid_link_request};
+use slime_rt::console_line::Line;
 use slime_rt::{
     BufferLoan, CapabilityDisposition, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, WaitSet,
     capability_delegate, debug_write, exit, notification_signal, resolve_binding,
@@ -123,8 +124,11 @@ fn main(_startup_arg: u32) {
         .unwrap_or_else(|_| fail(b"rx submit"));
     }
     signal(rx_request_ready);
-    write_number(b"[io-link-probe] rx provisioned=", RX_PROVISION as u64);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] rx provisioned=")
+        .decimal(RX_PROVISION as u64)
+        .bytes(b"\n")
+        .emit();
 
     // ---- one allowed frame reaches the device ----
     let (buffer, loan, base) = data[RX_PROVISION].unwrap_or_else(|| unreachable!());
@@ -140,20 +144,20 @@ fn main(_startup_arg: u32) {
     )
     .unwrap_or_else(|_| fail(b"transmit submit"));
     signal(tx_request_ready);
-    write_number(
-        b"[io-link-probe] transmit allowed bytes=",
-        MIN_FRAME_BYTES as u64,
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] transmit allowed bytes=")
+        .decimal(MIN_FRAME_BYTES as u64)
+        .bytes(b"\n")
+        .emit();
     let reply = take_expected(&mut tx, &mut tx_wait, 2, STATUS_OK);
     if reply.op != OP_TRANSMIT || reply.frame_len as usize != MIN_FRAME_BYTES {
         fail(b"transmit reply");
     }
-    write_number(
-        b"[io-link-probe] transmit completion status=ok bytes=",
-        reply.frame_len as u64,
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] transmit completion status=ok bytes=")
+        .decimal(reply.frame_len as u64)
+        .bytes(b"\n")
+        .emit();
 
     // ---- the backend echoes with the addresses swapped, so a received frame
     // proves the transmitted bytes actually left the guest ----
@@ -171,12 +175,13 @@ fn main(_startup_arg: u32) {
     if observed[12..MIN_FRAME_BYTES].iter().any(|byte| *byte != 1) {
         fail(b"echo payload");
     }
-    write_number(
-        b"[io-link-probe] echo verified bytes=",
-        echo.frame_len as u64,
-    );
-    write_number(b" payload-intact=", 1);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] echo verified bytes=")
+        .decimal(echo.frame_len as u64)
+        .bytes(b" payload-intact=")
+        .decimal(1)
+        .bytes(b"\n")
+        .emit();
 
     // ---- bounded transmit queue backpressures without overwriting ----
     let mut rx_outstanding = RX_PROVISION - 1;
@@ -218,23 +223,27 @@ fn main(_startup_arg: u32) {
     {
         fail(b"tx overwrite");
     }
-    write_number(
-        b"[io-link-probe] tx backpressure accepted=",
-        accepted as u64,
-    );
-    write_number(b" full=", 1);
-    write_number(b" overwrite=", 0);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] tx backpressure accepted=")
+        .decimal(accepted as u64)
+        .bytes(b" full=")
+        .decimal(1)
+        .bytes(b" overwrite=")
+        .decimal(0)
+        .bytes(b"\n")
+        .emit();
     // Receive replenishment is exhausted: every provisioned buffer is either
     // in flight or already consumed, and the declared policy is to pause
     // rather than reuse a device-owned buffer.
-    write_number(
-        b"[io-link-probe] rx exhausted policy=pause outstanding=",
-        rx_outstanding as u64,
-    );
-    write_number(b" dropped=", 0);
-    write_number(b" overwrite=", 0);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] rx exhausted policy=pause outstanding=")
+        .decimal(rx_outstanding as u64)
+        .bytes(b" dropped=")
+        .decimal(0)
+        .bytes(b" overwrite=")
+        .decimal(0)
+        .bytes(b"\n")
+        .emit();
     signal(tx_request_ready);
 
     // ---- coalesced readiness: one wake may answer many completions, so a
@@ -261,20 +270,24 @@ fn main(_startup_arg: u32) {
             wait_ready(&mut rx_wait);
         }
     }
-    write_number(
-        b"[io-link-probe] rx continuous frames=",
-        (RX_PROVISION) as u64,
-    );
-    write_number(b" replenished=", (RX_PROVISION) as u64);
-    debug_write(b"\n");
-    write_number(
-        b"[io-link-probe] readiness completions=",
-        tx_completions as u64,
-    );
-    write_number(b" wakes=", wakes as u64);
-    write_number(b" max-per-wake=", max_per_wake as u64);
-    write_number(b" pending=", tx.outstanding.len() as u64);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] rx continuous frames=")
+        .decimal((RX_PROVISION) as u64)
+        .bytes(b" replenished=")
+        .decimal((RX_PROVISION) as u64)
+        .bytes(b"\n")
+        .emit();
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] readiness completions=")
+        .decimal(tx_completions as u64)
+        .bytes(b" wakes=")
+        .decimal(wakes as u64)
+        .bytes(b" max-per-wake=")
+        .decimal(max_per_wake as u64)
+        .bytes(b" pending=")
+        .decimal(tx.outstanding.len() as u64)
+        .bytes(b"\n")
+        .emit();
 
     // ---- frame bounds: the contract refuses both directions of the range,
     // and the driver refuses them again on the wire ----
@@ -301,9 +314,13 @@ fn main(_startup_arg: u32) {
     );
     signal(tx_request_ready);
     take_status(&mut tx, &mut tx_wait, 151, STATUS_MALFORMED);
-    write_number(b"[io-link-probe] frame bounds refused undersized=", 1);
-    write_number(b" oversized=", 1);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] frame bounds refused undersized=")
+        .decimal(1)
+        .bytes(b" oversized=")
+        .decimal(1)
+        .bytes(b"\n")
+        .emit();
 
     // ---- a malformed descriptor: a frame length longer than the slice it
     // names, which would make the device write past the lease ----
@@ -335,8 +352,11 @@ fn main(_startup_arg: u32) {
         .unwrap_or_else(|_| fail(b"malformed outstanding"));
     signal(tx_request_ready);
     take_status(&mut tx, &mut tx_wait, 190, io_queue::STATUS_BAD_SLICE);
-    write_number(b"[io-link-probe] malformed descriptor refused=", 1);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] malformed descriptor refused=")
+        .decimal(1)
+        .bytes(b"\n")
+        .emit();
 
     // ---- reset settles every outstanding request in both directions ----
     let (buffer, loan, _) = data[1].unwrap_or_else(|| unreachable!());
@@ -384,9 +404,13 @@ fn main(_startup_arg: u32) {
             yield_now();
         }
     }
-    write_number(b"[io-link-probe] reset completions tx=", reset_tx as u64);
-    write_number(b" rx=", reset_rx as u64);
-    debug_write(b" status=reset\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] reset completions tx=")
+        .decimal(reset_tx as u64)
+        .bytes(b" rx=")
+        .decimal(reset_rx as u64)
+        .bytes(b" status=reset\n")
+        .emit();
     // The driver cannot advance the epoch until these terminal answers are
     // read, because advancing zeroes both rings. Acknowledge explicitly.
     send_ack();
@@ -412,13 +436,15 @@ fn main(_startup_arg: u32) {
     rx.outstanding
         .adopt_epoch(fresh)
         .unwrap_or_else(|_| fail(b"rx epoch adopt"));
-    write_number(
-        b"[io-link-probe] stale completions refused tx=",
-        stale_tx as u64,
-    );
-    write_number(b" rx=", stale_rx as u64);
-    write_number(b" fresh-epoch=", fresh);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] stale completions refused tx=")
+        .decimal(stale_tx as u64)
+        .bytes(b" rx=")
+        .decimal(stale_rx as u64)
+        .bytes(b" fresh-epoch=")
+        .decimal(fresh)
+        .bytes(b"\n")
+        .emit();
     debug_write(b"[io-link-probe] io link plane complete\n");
     exit(0)
 }
@@ -686,23 +712,11 @@ fn signal(slot: u32) {
         fail(b"signal");
     }
 }
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-link-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

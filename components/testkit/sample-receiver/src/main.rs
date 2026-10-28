@@ -31,9 +31,11 @@ const BASE: u64 = 0x0000_000A_0000_0000;
 const PROBE_YIELDS: usize = 4096;
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sample-receiver] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[sample-receiver] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

@@ -22,9 +22,10 @@ use slime_proto::serial_device::{
     WireSerialReply, WireSerialRequest,
 };
 use slime_proto::valid_serial_reply;
+use slime_rt::console_line::Line;
 use slime_rt::{
-    MAX_MSG, call, debug_write, exit, monotonic_frequency, monotonic_read, notification_wait,
-    resolve_binding, timer_arm,
+    MAX_MSG, call, exit, monotonic_frequency, monotonic_read, notification_wait, resolve_binding,
+    timer_arm,
 };
 
 slime_rt::entry!(main);
@@ -43,12 +44,17 @@ fn main(_: u32) {
     loop {
         let now = clock();
         let status = send(&encode_heartbeat(seq));
-        write_number(b"[mavlink-heartbeat] send seq=", u64::from(seq));
-        debug_write(b" status=");
-        debug_write(status);
-        write_number(b" deadline=", deadline);
-        write_number(b" now=", now);
-        debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[mavlink-heartbeat] send seq=")
+            .decimal(u64::from(seq))
+            .bytes(b" status=")
+            .bytes(status)
+            .bytes(b" deadline=")
+            .decimal(deadline)
+            .bytes(b" now=")
+            .decimal(now)
+            .bytes(b"\n")
+            .emit();
         deadline = deadline.saturating_add(period);
         wait_until(tick, deadline);
         seq = seq.wrapping_add(1);
@@ -121,25 +127,11 @@ fn clock() -> u64 {
     monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"))
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    debug_write(prefix);
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    if value == 0 {
-        index -= 1;
-        digits[index] = b'0';
-    }
-    while value != 0 {
-        index -= 1;
-        digits[index] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    debug_write(&digits[index..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[mavlink-heartbeat] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[mavlink-heartbeat] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

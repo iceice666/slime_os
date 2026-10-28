@@ -96,6 +96,7 @@ use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 use slime_proto::{valid_fabric_request, valid_sample_descriptor};
+use slime_rt::console_line::Line;
 use slime_rt::{
     CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
     MAX_MSG,
@@ -279,34 +280,12 @@ const UPSTREAM_BASE: u64 = 0x0000_000B_0000_0000;
 const COPY_BASE: u64 = 0x0000_000C_0000_0000;
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[fabric] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
-}
-
-/// Decimal `u32` on the debug sink. Diagnostic only: slot numbers and error
-/// codes are what make a refusal actionable, and neither fits a fixed string.
-fn write_u32(mut value: u32) {
-    if value == 0 {
-        slime_rt::debug_write(b"0");
-        return;
-    }
-    let mut buffer = [0u8; 10];
-    let mut cursor = buffer.len();
-    while value != 0 {
-        cursor -= 1;
-        buffer[cursor] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    slime_rt::debug_write(&buffer[cursor..]);
-}
-
-fn write_i64(value: i64) {
-    if value < 0 {
-        slime_rt::debug_write(b"-");
-    }
-    write_u32(value.unsigned_abs() as u32);
 }
 
 fn qos_check() -> bool {
@@ -653,17 +632,20 @@ fn claim_stream_tables() -> StreamTables {
         fail(b"frame table exceeds the declared private-memory quota");
     }
     frames.resize(capacity.frames, Frame::EMPTY);
-    slime_rt::debug_write(b"[fabric] tables sized from the declared graph publishers=");
-    write_u32(capacity.publishers as u32);
-    slime_rt::debug_write(b" subscribers=");
-    write_u32(capacity.subscribers as u32);
-    slime_rt::debug_write(b" frames=");
-    write_u32(capacity.frames as u32);
-    slime_rt::debug_write(b" ceilings=");
-    write_u32(MAX_ROLE_PARTICIPANTS as u32);
-    slime_rt::debug_write(b"/");
-    write_u32(MAX_FRAMES as u32);
-    slime_rt::debug_write(b"\n");
+    // Diagnostic counts print as decimal `u32`, as every fabric number does.
+    Line::<160>::new()
+        .bytes(b"[fabric] tables sized from the declared graph publishers=")
+        .decimal(u64::from(capacity.publishers as u32))
+        .bytes(b" subscribers=")
+        .decimal(u64::from(capacity.subscribers as u32))
+        .bytes(b" frames=")
+        .decimal(u64::from(capacity.frames as u32))
+        .bytes(b" ceilings=")
+        .decimal(u64::from(MAX_ROLE_PARTICIPANTS as u32))
+        .bytes(b"/")
+        .decimal(u64::from(MAX_FRAMES as u32))
+        .bytes(b"\n")
+        .emit();
     StreamTables {
         publishers: publishers.into_boxed_slice(),
         subscribers: subscribers.into_boxed_slice(),
@@ -1209,11 +1191,14 @@ fn provision(
                 // how" is the whole diagnosis; a bare reason string sent the
                 // reader guessing between a dead peer and a bad capability.
                 error if error < 0 => {
-                    slime_rt::debug_write(b"[fabric] control recv slot=");
-                    write_u32(control_slot);
-                    slime_rt::debug_write(b" error=");
-                    write_i64(error);
-                    slime_rt::debug_write(b"\n");
+                    Line::<96>::new()
+                        .bytes(b"[fabric] control recv slot=")
+                        .decimal(u64::from(control_slot))
+                        .bytes(b" error=")
+                        .bytes(if error < 0 { b"-" } else { b"" })
+                        .decimal(u64::from(error.unsigned_abs() as u32))
+                        .bytes(b"\n")
+                        .emit();
                     fail(b"control recv")
                 }
                 n => n as usize,
@@ -1237,9 +1222,11 @@ fn provision(
             let _ = (request.direction, request.type_identity, request.route_name);
 
             if declared_edges(&graph_rows[..row_count], client.component) == 0 {
-                slime_rt::debug_write(b"[fabric] ungranted component denied: ");
-                slime_rt::debug_write(client.component);
-                slime_rt::debug_write(b"\n");
+                Line::<160>::new()
+                    .bytes(b"[fabric] ungranted component denied: ")
+                    .bytes(client.component)
+                    .bytes(b"\n")
+                    .emit();
                 deny(control_slot, &routes[0], STATUS_NOT_GRANTED);
                 continue;
             }
@@ -1463,19 +1450,21 @@ fn provision_edge(
         _ => unreachable!(),
     }
     refresh_matches(route_index, publishers, subscribers);
-    slime_rt::debug_write(if reprovisioned {
-        b"[fabric] reprovisioned "
-    } else {
-        b"[fabric] provisioned "
-    });
-    slime_rt::debug_write(component);
-    slime_rt::debug_write(b" ");
-    slime_rt::debug_write(ROUTE_NAMES[route_index].as_bytes());
-    slime_rt::debug_write(if direction == DIRECTION_PUBLISH {
-        b" publish ring\n"
-    } else {
-        b" subscribe ring\n"
-    });
+    Line::<256>::new()
+        .bytes(if reprovisioned {
+            b"[fabric] reprovisioned "
+        } else {
+            b"[fabric] provisioned "
+        })
+        .bytes(component)
+        .bytes(b" ")
+        .bytes(ROUTE_NAMES[route_index].as_bytes())
+        .bytes(if direction == DIRECTION_PUBLISH {
+            b" publish ring\n"
+        } else {
+            b" subscribe ring\n"
+        })
+        .emit();
 }
 
 /// Everything the stale incarnation's subscriber role had not yet delivered to
@@ -2492,11 +2481,11 @@ fn admit_shared(
     // downstream loan below refers to the fabric's own buffer.
     let _ = slime_rt::shared_buffer_return(loan_slot);
     if !mapped_copy {
-        slime_rt::debug_write(if mapped_upstream {
-            b"[fabric] reject: copy buffer map\n" as &[u8]
+        if mapped_upstream {
+            slime_rt::debug_write(b"[fabric] reject: copy buffer map\n");
         } else {
-            b"[fabric] reject: upstream loan map\n"
-        });
+            slime_rt::debug_write(b"[fabric] reject: upstream loan map\n");
+        }
         let _ = slime_rt::shared_buffer_release(copy.slot);
         return None;
     }
@@ -3070,11 +3059,11 @@ fn refresh_matches(
                 0,
                 route_type_tag(route),
             ) {
-                slime_rt::debug_write(if event == EVENT_MATCHED {
-                    b"[fabric] QoS matched\n" as &[u8]
+                if event == EVENT_MATCHED {
+                    slime_rt::debug_write(b"[fabric] QoS matched\n");
                 } else {
-                    b"[fabric] QoS unmatched\n"
-                });
+                    slime_rt::debug_write(b"[fabric] QoS unmatched\n");
+                }
             }
         }
         if incompatible != 0

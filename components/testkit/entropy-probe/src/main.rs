@@ -13,6 +13,7 @@ use slime_proto::entropy_service::{
     STATUS_OK, STATUS_UNAVAILABLE, WireEntropyServiceReply, WireEntropyServiceRequest,
 };
 use slime_proto::valid_entropy_service_reply;
+use slime_rt::console_line::Line as ConsoleLine;
 use slime_rt::{MAX_MSG, debug_write, exit};
 
 slime_rt::entry!(main);
@@ -148,7 +149,7 @@ impl Probe {
     }
 }
 
-/// One serial line, written with a single `debug_write` so another
+/// One serial line, submitted as one console record so another
 /// component's output cannot split it.
 struct Line {
     bytes: [u8; 160],
@@ -203,13 +204,17 @@ impl Line {
 
     fn emit(&mut self) {
         self.push(b"\n");
-        debug_write(&self.bytes[..self.used]);
+        ConsoleLine::<160>::new()
+            .bytes(&self.bytes[..self.used])
+            .emit();
     }
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[entropy-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    ConsoleLine::<256>::new()
+        .bytes(b"[entropy-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

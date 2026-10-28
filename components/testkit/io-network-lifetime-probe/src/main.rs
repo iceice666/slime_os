@@ -4,6 +4,7 @@
 use boot_contracts::generation::RIGHT_SUPERVISE;
 use slime_components::network_io::{Connection, NetworkError, NetworkIo, NetworkNotifications};
 use slime_proto::network_service as net;
+use slime_rt::console_line::Line;
 use slime_rt::{PARAMETER_SELF_SLOT, SpawnGrant, Termination, debug_write, exit, resolve_binding};
 
 slime_rt::entry!(main);
@@ -71,9 +72,11 @@ fn remember_connection(connection: &Connection, old: Option<u64>, role: &[u8]) {
         if connection.id() == old {
             fail(b"connection identity reused");
         }
-        debug_write(b"[io-network-lifetime-probe] role=");
-        debug_write(role);
-        debug_write(b" old_handle_refused=1 fresh_identity=1\n");
+        Line::<256>::new()
+            .bytes(b"[io-network-lifetime-probe] role=")
+            .bytes(role)
+            .bytes(b" old_handle_refused=1 fresh_identity=1\n")
+            .emit();
     } else {
         for (key, value) in [
             (3, connection.id() & u32::MAX as u64),
@@ -443,8 +446,10 @@ fn check_deadline(until: u64) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-network-lifetime-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-lifetime-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

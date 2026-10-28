@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 
-use slime_rt::{debug_write, exit, resolve_binding};
+use slime_rt::console_line::Line;
+use slime_rt::{exit, resolve_binding};
 
 slime_rt::entry!(main);
 
@@ -24,29 +25,19 @@ fn main(_startup_arg: u32) {
         }
         refused += 1;
     }
-    write_number(b"[io-link-intruder] binding-resolution refused=", refused);
-    debug_write(b"\n");
+    Line::<96>::new()
+        .bytes(b"[io-link-intruder] binding-resolution refused=")
+        .decimal(refused)
+        .bytes(b"\n")
+        .emit();
     exit(0)
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-link-intruder] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-link-intruder] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

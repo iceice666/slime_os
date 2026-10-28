@@ -14,7 +14,8 @@ use slime_components::network_io::{
     Connection, Listener, NetworkError, NetworkIo, NetworkNotifications, NetworkReply,
 };
 use slime_proto::network_service as net;
-use slime_rt::{debug_write, exit, monotonic_frequency, resolve_binding};
+use slime_rt::console_line::Line;
+use slime_rt::{exit, monotonic_frequency, resolve_binding};
 
 slime_rt::entry!(main);
 
@@ -114,9 +115,12 @@ impl Probe<'_> {
             .unwrap_or_else(|_| fail(b"listen request"))
             .take_listener()
             .unwrap_or_else(|| fail(b"listen"));
-        debug_write(b"[io-tcp-listener-probe] role=listener listening=1 address=10.0.0.1");
-        write_number(b" port=", u64::from(LISTEN_PORT));
-        debug_write(b"\n");
+        Record::new()
+            .bytes(b"[io-tcp-listener-probe] role=listener listening=1 address=10.0.0.1")
+            .bytes(b" port=")
+            .decimal(u64::from(LISTEN_PORT))
+            .bytes(b"\n")
+            .emit();
         let control = self.connect_control();
         self.line(&control, b"ready\n");
 
@@ -127,10 +131,14 @@ impl Probe<'_> {
         self.receive_exact(&exchange, &mut echoed);
         verify(&echoed, EXCHANGE);
         self.send_all(&exchange, &echoed);
-        debug_write(b"[io-tcp-listener-probe] role=listener accepted=1");
-        write_number(b" sent=", echoed.len() as u64);
-        write_number(b" received=", echoed.len() as u64);
-        debug_write(b" identical=1\n");
+        Record::new()
+            .bytes(b"[io-tcp-listener-probe] role=listener accepted=1")
+            .bytes(b" sent=")
+            .decimal(echoed.len() as u64)
+            .bytes(b" received=")
+            .decimal(echoed.len() as u64)
+            .bytes(b" identical=1\n")
+            .emit();
 
         // The peer's third connection found the backlog slot held; only then
         // is the held connection accepted, and then the accepted limit holds.
@@ -153,11 +161,13 @@ impl Probe<'_> {
         let received = self.receive_to_eof(&exchange, LOCAL_HALF_PEER);
         let stale = self.close(exchange);
         self.line(&control, b"done local-half-close\n");
-        scenario(b"local-half-close");
-        write_number(b" sent=", LOCAL_HALF_GUEST.1 as u64);
-        write_number(b" received=", received);
-        debug_write(b" eof=1");
-        closed(stale);
+        let mut line = scenario(b"local-half-close");
+        line.bytes(b" sent=")
+            .decimal(LOCAL_HALF_GUEST.1 as u64)
+            .bytes(b" received=")
+            .decimal(received)
+            .bytes(b" eof=1");
+        closed(line, stale);
 
         // Peer half-close: the peer's bytes and FIN first, then ours.
         let received = self.receive_to_eof(&held, PEER_HALF_PEER);
@@ -165,19 +175,20 @@ impl Probe<'_> {
         self.send_all(&held, &bytes[..PEER_HALF_GUEST.1]);
         let stale = self.close(held);
         self.line(&control, b"done peer-half-close\n");
-        scenario(b"peer-half-close");
-        write_number(b" received=", received);
-        debug_write(b" eof=1");
-        write_number(b" sent=", PEER_HALF_GUEST.1 as u64);
-        closed(stale);
+        let mut line = scenario(b"peer-half-close");
+        line.bytes(b" received=")
+            .decimal(received)
+            .bytes(b" eof=1")
+            .bytes(b" sent=")
+            .decimal(PEER_HALF_GUEST.1 as u64);
+        closed(line, stale);
 
         // Simultaneous close: our FIN crosses the peer's.
         let crossing = self.accept(&listener);
         self.line(&control, b"accepted 3\n");
         let stale = self.close(crossing);
         self.line(&control, b"done simultaneous-close\n");
-        scenario(b"simultaneous-close");
-        closed(stale);
+        closed(scenario(b"simultaneous-close"), stale);
 
         // Close with the peer's bytes still unread.
         let unread = self.accept(&listener);
@@ -185,9 +196,9 @@ impl Probe<'_> {
         self.cue(&control, b'U');
         let stale = self.close(unread);
         self.line(&control, b"done unread-close\n");
-        scenario(b"unread-close");
-        write_number(b" unread=", UNREAD_BYTES);
-        closed(stale);
+        let mut line = scenario(b"unread-close");
+        line.bytes(b" unread=").decimal(UNREAD_BYTES);
+        closed(line, stale);
 
         // Close with bytes queued behind the peer's zero window.
         let unsent = self.accept(&listener);
@@ -197,9 +208,9 @@ impl Probe<'_> {
         self.line(&control, b"queued unsent-close\n");
         let stale = self.close(unsent);
         self.line(&control, b"done unsent-close\n");
-        scenario(b"unsent-close");
-        write_number(b" queued=", queued as u64);
-        closed(stale);
+        let mut line = scenario(b"unsent-close");
+        line.bytes(b" queued=").decimal(queued as u64);
+        closed(line, stale);
 
         let reply = self
             .io
@@ -387,16 +398,22 @@ fn verify(bytes: &[u8], declared: (u8, usize)) {
     }
 }
 
-fn scenario(name: &[u8]) {
-    debug_write(b"[io-tcp-listener-probe] role=listener scenario=");
-    debug_write(name);
+/// One diagnostic record; the longest carries an operation name and three numbers.
+type Record = Line<256>;
+
+/// Start a scenario record; [`closed`] completes and emits it.
+fn scenario(name: &[u8]) -> Record {
+    let mut line = Record::new();
+    line.bytes(b"[io-tcp-listener-probe] role=listener scenario=")
+        .bytes(name);
+    line
 }
 
-fn closed(stale: bool) {
+fn closed(mut line: Record, stale: bool) {
     if !stale {
         fail(b"stale handle accepted");
     }
-    debug_write(b" close=success stale_refused=1\n");
+    line.bytes(b" close=success stale_refused=1\n").emit();
 }
 
 /// A blocking request the service released unfinished: waiting, not failure.
@@ -423,11 +440,13 @@ fn refused(reply: Result<NetworkReply, NetworkError>, expected: i32) {
 }
 
 fn marker(role: &[u8], message: &[u8]) {
-    debug_write(b"[io-tcp-listener-probe] role=");
-    debug_write(role);
-    debug_write(b" ");
-    debug_write(message);
-    debug_write(b"\n");
+    Record::new()
+        .bytes(b"[io-tcp-listener-probe] role=")
+        .bytes(role)
+        .bytes(b" ")
+        .bytes(message)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn binding(name: &[u8]) -> u32 {
@@ -435,33 +454,25 @@ fn binding(name: &[u8]) -> u32 {
 }
 
 fn status(operation: &[u8], reply: &NetworkReply) -> ! {
-    debug_write(b"[io-tcp-listener-probe] ");
-    debug_write(operation);
-    write_number(b" status=", u64::from(reply.status_detail.unsigned_abs()));
-    write_number(b" queue=", u64::from(reply.queue_status));
-    write_number(b" transferred=", reply.transferred);
-    debug_write(b"\n");
+    Record::new()
+        .bytes(b"[io-tcp-listener-probe] ")
+        .bytes(operation)
+        .bytes(b" status=")
+        .decimal(u64::from(reply.status_detail.unsigned_abs()))
+        .bytes(b" queue=")
+        .decimal(u64::from(reply.queue_status))
+        .bytes(b" transferred=")
+        .decimal(reply.transferred)
+        .bytes(b"\n")
+        .emit();
     fail(operation)
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-tcp-listener-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Record::new()
+        .bytes(b"[io-tcp-listener-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

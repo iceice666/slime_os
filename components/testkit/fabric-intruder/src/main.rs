@@ -28,6 +28,7 @@ use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::{
     valid_capability_transfer, valid_interposition_trace, valid_stream_ack, valid_stream_sample,
 };
+use slime_rt::console_line::Line;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 // B59: the capability-rights vocabulary is generated from
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
@@ -43,9 +44,11 @@ const ROUTE_NAME: &str = "telemetry";
 const DIRECTION_PUBLISH: u32 = 1;
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[fabric-intruder] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[fabric-intruder] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

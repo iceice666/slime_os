@@ -762,31 +762,20 @@ pub(super) fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
 /// same composition differently, so the plane word is a parameter rather than
 /// two copies of this launcher.
 fn plane_marker(plane: &[u8], suffix: &[u8]) {
-    slime_rt::debug_write(b"[init] ");
-    slime_rt::debug_write(plane);
-    slime_rt::debug_write(suffix);
+    Line::<256>::new()
+        .bytes(b"[init] ")
+        .bytes(plane)
+        .bytes(suffix)
+        .emit();
 }
 
-pub(super) fn write_i64(value: i64) {
+/// Append a status as init has always printed it: the magnitude narrowed to
+/// `u32`, with `-` for a negative value.
+pub(super) fn push_i64<const N: usize>(line: &mut Line<N>, value: i64) -> &mut Line<N> {
     if value < 0 {
-        slime_rt::debug_write(b"-");
-        write_u32(value.unsigned_abs() as u32);
+        line.bytes(b"-")
+            .decimal(u64::from(value.unsigned_abs() as u32))
     } else {
-        write_u32(value as u32);
+        line.decimal(u64::from(value as u32))
     }
-}
-
-pub(super) fn write_u32(mut value: u32) {
-    let mut buffer = [0u8; 10];
-    let mut cursor = buffer.len();
-    if value == 0 {
-        slime_rt::debug_write(b"0");
-        return;
-    }
-    while value != 0 {
-        cursor -= 1;
-        buffer[cursor] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    slime_rt::debug_write(&buffer[cursor..]);
 }

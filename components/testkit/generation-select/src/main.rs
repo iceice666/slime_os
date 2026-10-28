@@ -3,6 +3,7 @@
 
 #[path = "../../../lib/src/generation_command.rs"]
 mod command;
+use slime_rt::console_line::Line;
 
 slime_rt::entry!(main);
 
@@ -15,7 +16,9 @@ fn main(_startup_arg: u32) {
     {
         command::fail();
     }
-    slime_rt::debug_write(b"[generation-select] pending attempts=");
-    command::write_u32(reply.remaining_attempts);
-    slime_rt::debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[generation-select] pending attempts=")
+        .decimal(u64::from(reply.remaining_attempts))
+        .bytes(b"\n")
+        .emit();
 }

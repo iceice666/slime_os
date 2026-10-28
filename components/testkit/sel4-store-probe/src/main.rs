@@ -32,6 +32,7 @@ extern crate alloc;
 use boot_contracts::gpt::{self, GptError, Recovery};
 use boot_contracts::object_store::{BlockIo as StoreBlockIo, IoError, ObjectStore, StoreError};
 use slime_components::block_io::BlockIo as DriverBlockIo;
+use slime_rt::console_line::Line;
 
 const PEER_SLOT: u32 = 8;
 const FACTORY_SLOT: u32 = 3;
@@ -342,9 +343,11 @@ fn report_gpt(error: GptError) {
         GptError::NoStorePartition => b"no-store-partition",
         GptError::AmbiguousStorePartition => b"ambiguous-store-partition",
     };
-    slime_rt::debug_write(b"[sel4-store-probe] gpt error=");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-store-probe] gpt error=")
+        .bytes(name)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn report_store(error: StoreError) {
@@ -361,74 +364,41 @@ fn report_store(error: StoreError) {
         StoreError::DuplicateIdentity => b"duplicate-identity",
         StoreError::HashMismatch => b"hash-mismatch",
     };
-    slime_rt::debug_write(b"[sel4-store-probe] store error=");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-store-probe] store error=")
+        .bytes(name)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {
-    let mut line = [0u8; 128];
-    let mut len = 0;
-    len += copy(&mut line[len..], prefix);
-    len += copy(&mut line[len..], &decimal(first));
-    len += copy(&mut line[len..], middle);
-    len += copy(&mut line[len..], &decimal(second));
-    len += copy(&mut line[len..], b"\n");
-    slime_rt::debug_write(&line[..len]);
+    Line::<256>::new()
+        .bytes(prefix)
+        .decimal(first)
+        .bytes(middle)
+        .decimal(second)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn write_line(prefix: &[u8], first: u64, middle: &[u8], second: u64, tail: &[u8], name: &[u8]) {
-    let mut line = [0u8; 160];
-    let mut len = 0;
-    len += copy(&mut line[len..], prefix);
-    len += copy(&mut line[len..], &decimal(first));
-    len += copy(&mut line[len..], middle);
-    len += copy(&mut line[len..], &decimal(second));
-    len += copy(&mut line[len..], tail);
-    len += copy(&mut line[len..], name);
-    len += copy(&mut line[len..], b"\n");
-    slime_rt::debug_write(&line[..len]);
-}
-
-fn copy(out: &mut [u8], source: &[u8]) -> usize {
-    let len = source.len().min(out.len());
-    out[..len].copy_from_slice(&source[..len]);
-    len
-}
-
-/// A decimal rendering with no allocator dependency, returned by value so the
-/// callers above can concatenate without a formatter.
-struct Decimal {
-    bytes: [u8; 20],
-    start: usize,
-}
-
-impl core::ops::Deref for Decimal {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.bytes[self.start..]
-    }
-}
-
-fn decimal(mut value: u64) -> Decimal {
-    let mut bytes = [0u8; 20];
-    let mut start = bytes.len();
-    loop {
-        start -= 1;
-        bytes[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    Decimal { bytes, start }
+    Line::<256>::new()
+        .bytes(prefix)
+        .decimal(first)
+        .bytes(middle)
+        .decimal(second)
+        .bytes(tail)
+        .bytes(name)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sel4-store-probe] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-store-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

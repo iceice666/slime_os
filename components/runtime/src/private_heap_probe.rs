@@ -35,9 +35,9 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::console_line::Line;
 use crate::private_heap::{GROWTH_PAGES, private_heap_stats};
 use crate::runtime::GRANULE;
-use crate::syscall::debug_write;
 
 /// Result of the startup private-heap self-check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,8 +163,10 @@ pub fn probe(label: &[u8]) -> ProbeReport {
     // reuse would be `reuse_growths` in this component's own report — a number
     // produced by the allocator under test, which an allocator that lost the
     // freed spans and grew again could under-count into agreement.
-    debug_write(label);
-    debug_write(b" private-heap reuse phase begins\n");
+    Line::<256>::new()
+        .bytes(label)
+        .bytes(b" private-heap reuse phase begins\n")
+        .emit();
     drop(numbers);
     drop(text);
     drop(boxed);
@@ -205,35 +207,22 @@ pub fn probe(label: &[u8]) -> ProbeReport {
 /// declares it no quota — in both cases the component may proceed.
 pub fn probe_and_report(label: &[u8]) -> bool {
     let report = probe(label);
-    debug_write(label);
-    debug_write(match report.outcome {
-        ProbeOutcome::Ok => b" private-heap quota live pages=" as &[u8],
-        ProbeOutcome::Denied => b" private-heap denied pages=",
-        ProbeOutcome::Exhausted => b" private-heap exhausted pages=",
-        ProbeOutcome::Failed => b" private-heap failed pages=",
-    });
-    write_decimal(report.pages);
-    debug_write(b" growths=");
-    write_decimal(report.growths);
-    debug_write(b" reuse_growths=");
-    write_decimal(report.reuse_growths);
-    debug_write(b" leaked=");
-    write_decimal(report.leaked);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(label)
+        .bytes(match report.outcome {
+            ProbeOutcome::Ok => b" private-heap quota live pages=" as &[u8],
+            ProbeOutcome::Denied => b" private-heap denied pages=",
+            ProbeOutcome::Exhausted => b" private-heap exhausted pages=",
+            ProbeOutcome::Failed => b" private-heap failed pages=",
+        })
+        .decimal(report.pages as u64)
+        .bytes(b" growths=")
+        .decimal(report.growths as u64)
+        .bytes(b" reuse_growths=")
+        .decimal(report.reuse_growths as u64)
+        .bytes(b" leaked=")
+        .decimal(report.leaked as u64)
+        .bytes(b"\n")
+        .emit();
     matches!(report.outcome, ProbeOutcome::Ok | ProbeOutcome::Denied)
-}
-
-fn write_decimal(value: usize) {
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    let mut remaining = value;
-    loop {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-        if remaining == 0 {
-            break;
-        }
-    }
-    debug_write(&digits[index..]);
 }

@@ -15,9 +15,11 @@ use super::{
 };
 
 fn fail_spawn(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] spawn plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[init] spawn plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 /// Drive the P5.3.3 spawn plane: construct children from grant-resolved

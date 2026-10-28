@@ -34,6 +34,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use slime_rt::console_line::Line;
 
 mod stress;
 
@@ -114,8 +115,10 @@ const DECLARED_FACTORY_SLOT: u32 = 1;
 /// and the check's own denied arm is what states that.
 fn self_check(label: &[u8]) {
     if !slime_rt::private_heap_probe::probe_and_report(label) {
-        slime_rt::debug_write(label);
-        slime_rt::debug_write(b" FAIL startup self-check\n");
+        Line::<128>::new()
+            .bytes(label)
+            .bytes(b" FAIL startup self-check\n")
+            .emit();
         slime_rt::exit(1)
     }
 }
@@ -251,11 +254,13 @@ fn both_planes(factory_slot: u32, buffer_slot: u32) -> ! {
         slime_rt::exit(1)
     }
 
-    slime_rt::debug_write(b"[private-heap-probe:both] both pages=");
-    write_decimal(stats.pages);
-    slime_rt::debug_write(b" growths=");
-    write_decimal(stats.growths);
-    slime_rt::debug_write(b" buffers=1 window_map_refused=1 outside_map=1 released=1 reused=1\n");
+    Line::<256>::new()
+        .bytes(b"[private-heap-probe:both] both pages=")
+        .decimal(stats.pages as u64)
+        .bytes(b" growths=")
+        .decimal(stats.growths as u64)
+        .bytes(b" buffers=1 window_map_refused=1 outside_map=1 released=1 reused=1\n")
+        .emit();
     slime_rt::exit(0)
 }
 
@@ -304,15 +309,17 @@ fn granted() -> ! {
     // separately because the milestone requires payload, allocator overhead,
     // and capacity to be distinguishable rather than one fused total.
     let backed = held.pages * 4096;
-    slime_rt::debug_write(b"[private-heap-probe:granted] capacity payload=");
-    write_decimal(PAYLOAD);
-    slime_rt::debug_write(b" overhead=");
-    write_decimal(overhead);
-    slime_rt::debug_write(b" backed=");
-    write_decimal(backed);
-    slime_rt::debug_write(b" pages=");
-    write_decimal(held.pages);
-    slime_rt::debug_write(b" touched=1\n");
+    Line::<256>::new()
+        .bytes(b"[private-heap-probe:granted] capacity payload=")
+        .decimal(PAYLOAD as u64)
+        .bytes(b" overhead=")
+        .decimal(overhead as u64)
+        .bytes(b" backed=")
+        .decimal(backed as u64)
+        .bytes(b" pages=")
+        .decimal(held.pages as u64)
+        .bytes(b" touched=1\n")
+        .emit();
 
     let Some(to_reservation) = RESERVATION_PAGES.checked_sub(held.pages) else {
         slime_rt::debug_write(b"[private-heap-probe:granted] FAIL backed past reservation\n");
@@ -346,11 +353,13 @@ fn granted() -> ! {
         small.push(index);
     }
     let end = slime_rt::private_heap_stats();
-    slime_rt::debug_write(b"[private-heap-probe:granted] granted pages=");
-    write_decimal(end.pages);
-    slime_rt::debug_write(b" growths=");
-    write_decimal(end.growths);
-    slime_rt::debug_write(b" refused=1 reused=1\n");
+    Line::<128>::new()
+        .bytes(b"[private-heap-probe:granted] granted pages=")
+        .decimal(end.pages as u64)
+        .bytes(b" growths=")
+        .decimal(end.growths as u64)
+        .bytes(b" refused=1 reused=1\n")
+        .emit();
     slime_rt::exit(0)
 }
 
@@ -375,19 +384,4 @@ fn denied() -> ! {
     }
     slime_rt::debug_write(b"[private-heap-probe:denied] denied pages=0 growths=0 refused=1\n");
     slime_rt::exit(0)
-}
-
-fn write_decimal(value: usize) {
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    let mut remaining = value;
-    loop {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-        if remaining == 0 {
-            break;
-        }
-    }
-    slime_rt::debug_write(&digits[index..]);
 }

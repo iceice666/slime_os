@@ -355,14 +355,17 @@ fn main(_: u32) {
                         } else {
                             false
                         };
-                        write_number(
-                            b"[network-service] client death handles=",
-                            reclaimed.handles as u64,
-                        );
-                        write_number(b" sockets=", reclaimed.sockets as u64);
-                        write_number(b" bytes=", reclaimed.bytes as u64);
-                        write_number(b" sessions_released=", u64::from(session_released));
-                        debug_write(b"\n");
+                        Line::<256>::new()
+                            .bytes(b"[network-service] client death handles=")
+                            .decimal(reclaimed.handles as u64)
+                            .bytes(b" sockets=")
+                            .decimal(reclaimed.sockets as u64)
+                            .bytes(b" bytes=")
+                            .decimal(reclaimed.bytes as u64)
+                            .bytes(b" sessions_released=")
+                            .decimal(u64::from(session_released))
+                            .bytes(b"\n")
+                            .emit();
                         if resident {
                             release_capabilities(&mut capabilities, client.holder);
                         }
@@ -605,13 +608,15 @@ fn main(_: u32) {
             engine.observe_peaks();
             report_events(&mut engine, application_table.as_ref());
             while let Some(reclaimed) = engine.take_timeout_reclamation() {
-                write_number(
-                    b"[network-service] tcp timeout handles=",
-                    reclaimed.handles as u64,
-                );
-                write_number(b" sockets=", reclaimed.sockets as u64);
-                write_number(b" bytes=", reclaimed.bytes as u64);
-                debug_write(b"\n");
+                Line::<256>::new()
+                    .bytes(b"[network-service] tcp timeout handles=")
+                    .decimal(reclaimed.handles as u64)
+                    .bytes(b" sockets=")
+                    .decimal(reclaimed.sockets as u64)
+                    .bytes(b" bytes=")
+                    .decimal(reclaimed.bytes as u64)
+                    .bytes(b"\n")
+                    .emit();
             }
         }
         if let Some(stack) = local.as_mut() {
@@ -655,11 +660,17 @@ fn main(_: u32) {
                 .flatten()
                 .map(application::Application::reset_requests)
                 .sum();
-            write_number(b"[network-service] driver reset requests=", settled as u64);
-            write_number(b" handles=", reclaimed.handles as u64);
-            write_number(b" sockets=", reclaimed.sockets as u64);
-            write_number(b" bytes=", reclaimed.bytes as u64);
-            debug_write(b"\n");
+            Line::<256>::new()
+                .bytes(b"[network-service] driver reset requests=")
+                .decimal(settled as u64)
+                .bytes(b" handles=")
+                .decimal(reclaimed.handles as u64)
+                .bytes(b" sockets=")
+                .decimal(reclaimed.sockets as u64)
+                .bytes(b" bytes=")
+                .decimal(reclaimed.bytes as u64)
+                .bytes(b"\n")
+                .emit();
         }
         if option_env!("SLIME_NETWORK_FAULT_IN_FLIGHT") == Some("1")
             && incarnation == 1
@@ -768,22 +779,27 @@ fn main(_: u32) {
     }
     if let Some(mut stack) = stack {
         if external_listeners != 0 {
-            write_number(
-                b"[network-service] tcp listener refusals unadmitted=",
-                u64::from(stack.link.unadmitted),
-            );
-            write_number(b" excess=", u64::from(engine.excess_refusals()));
-            debug_write(b"\n");
+            Line::<128>::new()
+                .bytes(b"[network-service] tcp listener refusals unadmitted=")
+                .decimal(u64::from(stack.link.unadmitted))
+                .bytes(b" excess=")
+                .decimal(u64::from(engine.excess_refusals()))
+                .bytes(b"\n")
+                .emit();
         }
         let peaks = engine.peaks();
-        write_number(b"[network-service] tcp peaks rx_bytes=", peaks.rx as u64);
-        write_number(b" tx_bytes=", peaks.tx as u64);
-        debug_write(b"\n");
-        write_number(
-            b"[network-service] application connection handles live=",
-            engine.allocated() as u64,
-        );
-        debug_write(b"\n");
+        Line::<128>::new()
+            .bytes(b"[network-service] tcp peaks rx_bytes=")
+            .decimal(peaks.rx as u64)
+            .bytes(b" tx_bytes=")
+            .decimal(peaks.tx as u64)
+            .bytes(b"\n")
+            .emit();
+        Line::<128>::new()
+            .bytes(b"[network-service] application connection handles live=")
+            .decimal(engine.allocated() as u64)
+            .bytes(b"\n")
+            .emit();
         if stack.active {
             release_stack(&mut stack);
         }
@@ -822,15 +838,21 @@ fn admit_external_listeners(
         }) {
             fail(b"external listener rules");
         }
-        debug_write(b"[network-service] tcp listener backend=external address=");
-        write_ipv4(entry.local_ipv4);
-        write_number(b" port=", u64::from(entry.local_port));
-        debug_write(b" peer=");
-        write_ipv4(entry.admitted_peer_ipv4);
-        write_number(b" backlog=", u64::from(entry.backlog));
-        write_number(b" accepted_limit=", u64::from(entry.accepted_socket_limit));
-        write_number(b" bytes=", u64::from(entry.byte_budget));
-        debug_write(b"\n");
+        let mut line = Line::<256>::new();
+        line.bytes(b"[network-service] tcp listener backend=external address=");
+        ipv4(&mut line, entry.local_ipv4)
+            .bytes(b" port=")
+            .decimal(u64::from(entry.local_port))
+            .bytes(b" peer=");
+        ipv4(&mut line, entry.admitted_peer_ipv4)
+            .bytes(b" backlog=")
+            .decimal(u64::from(entry.backlog))
+            .bytes(b" accepted_limit=")
+            .decimal(u64::from(entry.accepted_socket_limit))
+            .bytes(b" bytes=")
+            .decimal(u64::from(entry.byte_budget))
+            .bytes(b"\n")
+            .emit();
         count += 1;
     }
     count
@@ -1002,8 +1024,11 @@ fn attach_stack(capacity: (usize, usize)) -> Option<Stack> {
     let rate = monotonic_frequency().unwrap_or_else(|_| fail(b"clock rate"));
     let base = monotonic_read().unwrap_or_else(|_| fail(b"monotonic read"));
     let clock = TickClock::new(rate, base).unwrap_or_else(|_| fail(b"clock rate too slow"));
-    write_number(b"[network-service] clock rate=", rate);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[network-service] clock rate=")
+        .decimal(rate)
+        .bytes(b"\n")
+        .emit();
     report_interface(&declared);
     report_tcp_bounds(capacity);
 
@@ -1012,11 +1037,11 @@ fn attach_stack(capacity: (usize, usize)) -> Option<Stack> {
         fail(b"link down");
     }
     link.replenish();
-    write_number(
-        b"[network-service] link query state=up rx provisioned=",
-        link.rx_provisioned() as u64,
-    );
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[network-service] link query state=up rx provisioned=")
+        .decimal(link.rx_provisioned() as u64)
+        .bytes(b"\n")
+        .emit();
 
     let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress(declared.mac)));
     config.random_seed = base;
@@ -1055,24 +1080,31 @@ fn release_stack(stack: &mut Stack) {
         tcp: stack.link.tx.counts.tcp + stack.link.rx.counts.tcp,
         other: stack.link.tx.counts.other + stack.link.rx.counts.other,
     };
-    write_number(
-        b"[network-service] link frames total=",
-        u64::from(counts.frames),
-    );
-    write_number(b" tx=", u64::from(stack.link.tx.counts.frames));
-    write_number(b" rx=", u64::from(stack.link.rx.counts.frames));
-    write_number(b" arp=", u64::from(counts.arp));
-    write_number(b" icmp=", u64::from(counts.icmp));
-    write_number(b" tcp=", u64::from(counts.tcp));
-    write_number(b" other=", u64::from(counts.other));
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[network-service] link frames total=")
+        .decimal(u64::from(counts.frames))
+        .bytes(b" tx=")
+        .decimal(u64::from(stack.link.tx.counts.frames))
+        .bytes(b" rx=")
+        .decimal(u64::from(stack.link.rx.counts.frames))
+        .bytes(b" arp=")
+        .decimal(u64::from(counts.arp))
+        .bytes(b" icmp=")
+        .decimal(u64::from(counts.icmp))
+        .bytes(b" tcp=")
+        .decimal(u64::from(counts.tcp))
+        .bytes(b" other=")
+        .decimal(u64::from(counts.other))
+        .bytes(b"\n")
+        .emit();
     let (tx_frames, rx_frames) = stack.link.statistics();
-    write_number(
-        b"[network-service] link statistics tx=",
-        u64::from(tx_frames),
-    );
-    write_number(b" rx=", u64::from(rx_frames));
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[network-service] link statistics tx=")
+        .decimal(u64::from(tx_frames))
+        .bytes(b" rx=")
+        .decimal(u64::from(rx_frames))
+        .bytes(b"\n")
+        .emit();
     stack.link.release();
     debug_write(b"[network-service] link released\n");
 }
@@ -1202,21 +1234,29 @@ fn read_applications(
 }
 
 fn report_dns(observation: tcp::DnsObservation) {
+    let name = &observation.name[..observation.name_len];
     for address in &observation.addresses[..observation.count] {
-        debug_write(b"[network-service] DNS name=");
-        debug_write(&observation.name[..observation.name_len]);
-        debug_write(b" answer=");
-        write_ipv4(*address);
-        write_number(b" ttl=", u64::from(observation.ttl_seconds));
-        debug_write(b"\n");
+        let mut line = Line::<128>::new();
+        line.bytes(b"[network-service] DNS name=")
+            .bytes(name)
+            .bytes(b" answer=");
+        ipv4(&mut line, *address)
+            .bytes(b" ttl=")
+            .decimal(u64::from(observation.ttl_seconds))
+            .bytes(b"\n")
+            .emit();
     }
-    debug_write(b"[network-service] DNS name=");
-    debug_write(&observation.name[..observation.name_len]);
-    debug_write(b" selected=");
-    write_ipv4(observation.selected);
-    write_number(b" port=", u64::from(observation.port));
-    write_number(b" attempt=", observation.attempt as u64);
-    debug_write(b"\n");
+    let mut line = Line::<128>::new();
+    line.bytes(b"[network-service] DNS name=")
+        .bytes(name)
+        .bytes(b" selected=");
+    ipv4(&mut line, observation.selected)
+        .bytes(b" port=")
+        .decimal(u64::from(observation.port))
+        .bytes(b" attempt=")
+        .decimal(observation.attempt as u64)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn dns_seed() -> Option<[u8; 32]> {
@@ -1294,47 +1334,50 @@ fn read_interface() -> Option<DeclaredInterface> {
 /// The per-socket bounds this build enforces: the external pool's largest
 /// buffers, read from the rows that size it, and the smoltcp configuration.
 fn report_tcp_bounds((rx, tx): (usize, usize)) {
-    write_number(b"[network-service] tcp bounds rx_bytes=", rx as u64);
-    write_number(b" tx_bytes=", tx as u64);
-    write_number(
-        b" assembler_segments=",
-        smoltcp::config::ASSEMBLER_MAX_SEGMENT_COUNT as u64,
-    );
-    write_number(b" timeout_ms=", tcp::OPERATION_TIMEOUT.total_millis());
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[network-service] tcp bounds rx_bytes=")
+        .decimal(rx as u64)
+        .bytes(b" tx_bytes=")
+        .decimal(tx as u64)
+        .bytes(b" assembler_segments=")
+        .decimal(smoltcp::config::ASSEMBLER_MAX_SEGMENT_COUNT as u64)
+        .bytes(b" timeout_ms=")
+        .decimal(tcp::OPERATION_TIMEOUT.total_millis())
+        .bytes(b"\n")
+        .emit();
 }
 
 fn report_interface(declared: &DeclaredInterface) {
-    debug_write(b"[network-service] interface addr=");
-    write_ipv4(declared.address);
-    debug_write(b"/");
-    write_number(b"", u64::from(declared.prefix_len));
-    debug_write(b" gateway=");
+    let mut line = Line::<128>::new();
+    line.bytes(b"[network-service] interface addr=");
+    ipv4(&mut line, declared.address)
+        .bytes(b"/")
+        .decimal(u64::from(declared.prefix_len))
+        .bytes(b" gateway=");
     match declared.gateway {
-        Some(gateway) => write_ipv4(gateway),
-        None => {
-            debug_write(b"none");
-        }
-    }
-    debug_write(b" mac=");
-    write_mac(declared.mac);
-    debug_write(b"\n");
-}
-
-fn write_ipv4(address: [u8; 4]) {
-    for (index, octet) in address.iter().enumerate() {
-        write_number(if index == 0 { b"" } else { b"." }, u64::from(*octet));
-    }
-}
-
-fn write_mac(mac: [u8; 6]) {
+        Some(gateway) => ipv4(&mut line, gateway),
+        None => line.bytes(b"none"),
+    };
+    line.bytes(b" mac=");
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    for (index, byte) in mac.iter().enumerate() {
+    for (index, byte) in declared.mac.iter().enumerate() {
         if index != 0 {
-            debug_write(b":");
+            line.bytes(b":");
         }
-        debug_write(&[HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0xf)]]);
+        line.bytes(&[HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 0xf)]]);
     }
+    line.bytes(b"\n").emit();
+}
+
+/// Append a dotted-decimal IPv4 address to a record under construction.
+fn ipv4<const N: usize>(line: &mut Line<N>, address: [u8; 4]) -> &mut Line<N> {
+    for (index, octet) in address.iter().enumerate() {
+        if index != 0 {
+            line.bytes(b".");
+        }
+        line.decimal(u64::from(*octet));
+    }
+    line
 }
 
 fn dispatch(
@@ -1646,21 +1689,6 @@ fn send(slot: u32, bytes: &[u8]) {
             _ => fail(b"client reply"),
         }
     }
-}
-
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
 }
 
 fn inject_fault() -> ! {

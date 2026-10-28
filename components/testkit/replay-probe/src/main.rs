@@ -45,6 +45,7 @@ use slime_proto::block_v2;
 use slime_proto::recording_stream::{
     MAX_STREAM_BYTES, RECORD_BYTES, Recorder, RecordingError, Replay,
 };
+use slime_rt::console_line::Line;
 use slime_rt::{
     ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, RecordingRole, debug_write, exit, monotonic_read,
     notification_wait, recording_participation, simulated_time_advance, simulated_time_read,
@@ -503,9 +504,15 @@ fn run_unnamed() -> ! {
 /// that the claim is *absent*, which for `replay-unrecorded` is admission's
 /// verdict rather than the manifest's preference.
 fn report_undeclared(role: &[u8], capacity: u32) -> ! {
-    debug_write(b"[replay:");
-    debug_write(role);
-    write_pair(b"] role=replay capacity=", capacity as u64, b" claim=", 0);
+    Line::<128>::new()
+        .bytes(b"[replay:")
+        .bytes(role)
+        .bytes(b"] role=replay capacity=")
+        .decimal(capacity as u64)
+        .bytes(b" claim=")
+        .decimal(0)
+        .bytes(b"\n")
+        .emit();
     exit(0)
 }
 
@@ -609,34 +616,17 @@ fn step(result: Result<(), RecordingError>, reason: &[u8]) {
 }
 
 fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {
-    let mut digits = [0u8; 20];
-    debug_write(prefix);
-    debug_write(decimal(first, &mut digits));
-    debug_write(middle);
-    debug_write(decimal(second, &mut digits));
-    debug_write(b"\n");
-}
-
-fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
-    if value == 0 {
-        digits[0] = b'0';
-        return &digits[..1];
-    }
-    let mut index = digits.len();
-    let mut remaining = value;
-    while remaining > 0 {
-        index -= 1;
-        digits[index] = b'0' + (remaining % 10) as u8;
-        remaining /= 10;
-    }
-    &digits[index..]
+    Line::<256>::new()
+        .bytes(prefix)
+        .decimal(first)
+        .bytes(middle)
+        .decimal(second)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail_recording(reason: &[u8], error: RecordingError) -> ! {
-    debug_write(b"[replay] FAIL ");
-    debug_write(reason);
-    debug_write(b": ");
-    debug_write(match error {
+    let error: &[u8] = match error {
         RecordingError::Full => b"full",
         RecordingError::Malformed => b"malformed",
         RecordingError::OutOfOrder => b"out-of-order",
@@ -645,24 +635,33 @@ fn fail_recording(reason: &[u8], error: RecordingError) -> ! {
         RecordingError::Reordered => b"reordered",
         RecordingError::Exhausted => b"exhausted",
         RecordingError::Closed => b"closed",
-    });
-    debug_write(b"\n");
+    };
+    Line::<256>::new()
+        .bytes(b"[replay] FAIL ")
+        .bytes(reason)
+        .bytes(b": ")
+        .bytes(error)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }
 
 fn fail_with(reason: &[u8], error: i64) -> ! {
-    let mut digits = [0u8; 20];
-    debug_write(b"[replay] FAIL ");
-    debug_write(reason);
-    debug_write(b": ");
-    debug_write(decimal(error.unsigned_abs(), &mut digits));
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[replay] FAIL ")
+        .bytes(reason)
+        .bytes(b": ")
+        .decimal(error.unsigned_abs())
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[replay] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[replay] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

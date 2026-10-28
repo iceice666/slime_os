@@ -47,6 +47,7 @@ use boot_contracts::object_store::{BlockIo as ObjectBlockIo, IoError, ObjectStor
 use boot_contracts::recovery::RecoveryIndex;
 use slime_components::block_io::{BlockError, BlockIo};
 use slime_proto::io_queue;
+use slime_rt::console_line::Line;
 
 const FACTORY_SLOT: u32 = 3;
 const PRIMARY_PEER_SLOT: u32 = 8;
@@ -398,53 +399,21 @@ fn binding(name: &[u8]) -> u32 {
 }
 
 fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {
-    let mut line = [0u8; 128];
-    let mut len = 0;
-    len += copy(&mut line[len..], prefix);
-    len += copy(&mut line[len..], &decimal(first));
-    len += copy(&mut line[len..], middle);
-    len += copy(&mut line[len..], &decimal(second));
-    len += copy(&mut line[len..], b"\n");
-    slime_rt::debug_write(&line[..len]);
-}
-
-fn copy(out: &mut [u8], source: &[u8]) -> usize {
-    let len = source.len().min(out.len());
-    out[..len].copy_from_slice(&source[..len]);
-    len
-}
-
-struct Decimal {
-    bytes: [u8; 20],
-    start: usize,
-}
-
-impl core::ops::Deref for Decimal {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.bytes[self.start..]
-    }
-}
-
-fn decimal(mut value: u64) -> Decimal {
-    let mut bytes = [0u8; 20];
-    let mut start = bytes.len();
-    loop {
-        start -= 1;
-        bytes[start] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    Decimal { bytes, start }
+    Line::<256>::new()
+        .bytes(prefix)
+        .decimal(first)
+        .bytes(middle)
+        .decimal(second)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sel4-recovery-probe] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-recovery-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }
 

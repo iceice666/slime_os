@@ -143,8 +143,10 @@ fn main(_startup_arg: u32) {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sel4-input-probe] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<128>::new()
+        .bytes(b"[sel4-input-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

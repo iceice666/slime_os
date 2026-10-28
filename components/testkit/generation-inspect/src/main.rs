@@ -3,6 +3,7 @@
 
 #[path = "../../../lib/src/generation_command.rs"]
 mod command;
+use slime_rt::console_line::Line;
 
 slime_rt::entry!(main);
 
@@ -12,13 +13,15 @@ fn main(_startup_arg: u32) {
     if reply.status != 0 || command::reply_identity(reply) != identity {
         command::fail();
     }
-    slime_rt::debug_write(b"[generation-inspect] generation=");
-    command::write_u32(reply.generation_number);
-    slime_rt::debug_write(b" objects=");
-    command::write_u32(reply.count);
-    slime_rt::debug_write(b" release=");
-    command::write_u32(reply.release_sequence);
-    slime_rt::debug_write(b" flags=");
-    command::write_u32(reply.flags);
-    slime_rt::debug_write(b"\n");
+    Line::<160>::new()
+        .bytes(b"[generation-inspect] generation=")
+        .decimal(u64::from(reply.generation_number))
+        .bytes(b" objects=")
+        .decimal(u64::from(reply.count))
+        .bytes(b" release=")
+        .decimal(u64::from(reply.release_sequence))
+        .bytes(b" flags=")
+        .decimal(u64::from(reply.flags))
+        .bytes(b"\n")
+        .emit();
 }

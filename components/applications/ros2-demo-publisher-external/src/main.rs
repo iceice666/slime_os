@@ -17,9 +17,8 @@ use slime_components::zenoh_node::{
 };
 use slime_components::zenoh_profile0::session::Role;
 use slime_proto::network_service as net;
-use slime_rt::{
-    debug_write, exit, monotonic_frequency, monotonic_read, resolve_binding, yield_now,
-};
+use slime_rt::console_line::Line as ConsoleLine;
+use slime_rt::{exit, monotonic_frequency, monotonic_read, resolve_binding, yield_now};
 
 slime_rt::entry!(main);
 
@@ -85,7 +84,7 @@ impl Host for Component<'_> {
     }
 
     fn write(&mut self, line: &[u8]) {
-        debug_write(line);
+        ConsoleLine::<256>::new().bytes(line).emit();
     }
 }
 
@@ -250,11 +249,11 @@ fn fail_node(error: NodeError) -> ! {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    let mut line = node::Line::<128>::new();
-    line.put(node::PUBLISHER)
-        .put(b"fail: ")
-        .put(reason)
-        .put(b"\n");
-    debug_write(line.finish());
+    ConsoleLine::<128>::new()
+        .bytes(node::PUBLISHER)
+        .bytes(b"fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

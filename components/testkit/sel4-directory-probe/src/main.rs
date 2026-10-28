@@ -19,6 +19,7 @@
 //! three syscalls. Nothing about them needed a kernel — they needed a place
 //! neither holder controls, which on seL4 is the root task.
 
+use slime_rt::console_line::Line;
 use slime_rt::{DIRECTORY_ROOT_BYTES, MAX_DIRECTORY_PATH};
 // B59: rights bit numbering is generated from
 // `contracts/generation/v5/schema.zt`. The powerbox/fs protocols carry a
@@ -256,8 +257,10 @@ fn spawned_instance() -> bool {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[sel4-directory-probe] fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[sel4-directory-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

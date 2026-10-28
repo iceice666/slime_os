@@ -78,8 +78,10 @@ pub fn drive_crossing_plane() {
     }
 }
 fn fail_crossing(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] crossing plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[init] crossing plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

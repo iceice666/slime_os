@@ -64,17 +64,3 @@ pub fn field(bytes: &[u8; 8], index: usize) -> Option<&[u8]> {
     }
     None
 }
-
-pub fn debug_decimal(mut value: usize) {
-    let mut digits = [0u8; 20];
-    let mut index = digits.len();
-    loop {
-        index -= 1;
-        digits[index] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    slime_rt::debug_write(&digits[index..]);
-}

@@ -11,7 +11,8 @@
 
 use slime_components::network_io::{Connection, NetworkIo, NetworkNotifications, NetworkReply};
 use slime_proto::network_service as net;
-use slime_rt::{debug_write, exit, monotonic_frequency, monotonic_read, resolve_binding};
+use slime_rt::console_line::Line;
+use slime_rt::{exit, monotonic_frequency, monotonic_read, resolve_binding};
 
 slime_rt::entry!(main);
 
@@ -164,10 +165,13 @@ impl Probe<'_> {
             self.sleep_ms(WRITE_GAP_MS);
         }
         self.complete(tcp);
-        scenario(self.role.name, name);
-        write_number(b" writes=", BURST_WRITES as u64);
-        write_number(b" sent=", BURST.1 as u64);
-        debug_write(b" done=1\n");
+        scenario(self.role.name, name)
+            .bytes(b" writes=")
+            .decimal(BURST_WRITES as u64)
+            .bytes(b" sent=")
+            .decimal(BURST.1 as u64)
+            .bytes(b" done=1\n")
+            .emit();
     }
 
     /// A stream twice the transmit buffer, written as fast as it is accepted.
@@ -176,17 +180,20 @@ impl Probe<'_> {
         let bytes = pattern(STREAM);
         self.send_all(&tcp, &bytes[..STREAM.1]);
         self.complete(tcp);
-        scenario(self.role.name, b"loss");
-        write_number(b" sent=", STREAM.1 as u64);
-        debug_write(b" done=1\n");
+        scenario(self.role.name, b"loss")
+            .bytes(b" sent=")
+            .decimal(STREAM.1 as u64)
+            .bytes(b" done=1\n")
+            .emit();
     }
 
     /// Nothing to send: the connection idles until the peer completes it.
     fn quiet(&mut self) {
         let tcp = self.connect(self.role.ports[1]);
         self.complete(tcp);
-        scenario(self.role.name, b"keepalive");
-        debug_write(b" done=1\n");
+        scenario(self.role.name, b"keepalive")
+            .bytes(b" done=1\n")
+            .emit();
     }
 
     /// The peer never speaks after its SYN-ACK; only the declared idle timeout
@@ -229,8 +236,9 @@ impl Probe<'_> {
         if reply.status_detail != net::STATUS_TIMEOUT {
             status(b"mute close", &reply);
         }
-        scenario(self.role.name, name);
-        debug_write(b" terminal=timeout\n");
+        scenario(self.role.name, name)
+            .bytes(b" terminal=timeout\n")
+            .emit();
     }
 
     /// Connect to one scenario port, waiting out a pool held by TIME-WAIT.
@@ -346,19 +354,24 @@ fn waiting(operation: &[u8], reply: &NetworkReply) {
     }
 }
 
-fn scenario(role: &[u8], name: &[u8]) {
-    debug_write(b"[io-tcp-options-probe] role=");
-    debug_write(role);
-    debug_write(b" scenario=");
-    debug_write(name);
+/// The scenario record's prefix; the caller appends the rest of the line.
+fn scenario(role: &[u8], name: &[u8]) -> Line<256> {
+    let mut line = Line::new();
+    line.bytes(b"[io-tcp-options-probe] role=")
+        .bytes(role)
+        .bytes(b" scenario=")
+        .bytes(name);
+    line
 }
 
 fn marker(role: &[u8], message: &[u8]) {
-    debug_write(b"[io-tcp-options-probe] role=");
-    debug_write(role);
-    debug_write(b" ");
-    debug_write(message);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-options-probe] role=")
+        .bytes(role)
+        .bytes(b" ")
+        .bytes(message)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn binding(name: &[u8]) -> u32 {
@@ -366,33 +379,25 @@ fn binding(name: &[u8]) -> u32 {
 }
 
 fn status(operation: &[u8], reply: &NetworkReply) -> ! {
-    debug_write(b"[io-tcp-options-probe] ");
-    debug_write(operation);
-    write_number(b" status=", u64::from(reply.status_detail.unsigned_abs()));
-    write_number(b" queue=", u64::from(reply.queue_status));
-    write_number(b" transferred=", reply.transferred);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-options-probe] ")
+        .bytes(operation)
+        .bytes(b" status=")
+        .decimal(u64::from(reply.status_detail.unsigned_abs()))
+        .bytes(b" queue=")
+        .decimal(u64::from(reply.queue_status))
+        .bytes(b" transferred=")
+        .decimal(reply.transferred)
+        .bytes(b"\n")
+        .emit();
     fail(operation)
 }
 
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
-
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-tcp-options-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-tcp-options-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

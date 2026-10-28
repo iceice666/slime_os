@@ -80,8 +80,10 @@ pub fn drive_supervision_plane() {
     slime_rt::debug_write(b"[init] collected handle refused\n");
 }
 fn fail_supervision(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] supervision plane fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_rt::console_line::Line::<256>::new()
+        .bytes(b"[init] supervision plane fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

@@ -43,6 +43,24 @@ byte is a trapped write on the one CPU, so a line per operation stalled the whol
 graph. The key tables hold 256 entries each; a full table prints the line, so a
 key is never hidden (`slime-root/src/graph_runtime/services/diagnostic_once.rs`).
 
+## Console records
+
+The console dispatcher prints each component write as one record, and a root
+line can be printed between two records. A component therefore writes each
+line in one call. Rust components build a dynamic line in
+`slime_rt::console_line::Line` and submit it with `emit`; a fixed line is one
+byte literal that ends in a newline. C components write through
+`slime_line_write`, which collects bytes until a newline, and call
+`slime_line_flush` for a partial line such as a prompt or an echoed key. The C
+runtime's `slime_debug_write` sends up to 1024 bytes as one record through the
+thread's transfer window, so a C line is no longer split into 16-byte
+messages. `scripts/lib/console_lines.py` refuses any other form in tracked
+component sources.
+
+A `Line` that overflows its capacity or is not UTF-8 is dropped whole rather
+than printed in part. The console relay component therefore no longer forwards
+a non-UTF-8 message to the root's refusal path.
+
 ## Wait sets
 
 Wait sets are userspace, implemented by `components/runtime/src/wait_set.rs`
@@ -187,3 +205,4 @@ admission, and has target-specific assurance consequences.
 - `just robot_runtime_check`
 - `just robot_withdrawn_check`
 - `just sel4_gate_control_check` for missing/reordered/failure controls
+- `just console_lines_check`

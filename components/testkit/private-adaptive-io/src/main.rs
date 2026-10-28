@@ -16,6 +16,7 @@
 //! which is why the positive controls run first: a refusal produced by missing
 //! authority would prove nothing about the window.
 
+use slime_rt::console_line::Line;
 use slime_rt::{
     SpawnGrant, debug_write, exit, io_device_bind, io_mmio_map, io_queue_map, private_memory_grow,
     resolve_binding, spawn,
@@ -162,36 +163,18 @@ const fn grant(slot: u32, rights: u64) -> SpawnGrant {
 }
 
 fn write_value(label: &[u8], value: u64) {
-    let mut digits = [0u8; 20];
-    let mut length = 0;
-    let mut remaining = value;
-    loop {
-        digits[length] = b'0' + (remaining % 10) as u8;
-        length += 1;
-        remaining /= 10;
-        if remaining == 0 {
-            break;
-        }
-    }
-    let mut line = [0u8; 96];
-    let mut cursor = 0;
-    for byte in label.iter().copied().take(line.len() - 24) {
-        line[cursor] = byte;
-        cursor += 1;
-    }
-    while length != 0 {
-        length -= 1;
-        line[cursor] = digits[length];
-        cursor += 1;
-    }
-    line[cursor] = b'\n';
-    cursor += 1;
-    debug_write(&line[..cursor]);
+    Line::<96>::new()
+        .bytes(label)
+        .decimal(value)
+        .bytes(b"\n")
+        .emit();
 }
 
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[private-adaptive:io] FAIL ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[private-adaptive:io] FAIL ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

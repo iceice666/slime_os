@@ -14,7 +14,7 @@
       artifact = {
         path = "components/testkit/fabric-call-worker";
         kind = "tree";
-        identity = "aacdb18c7a219ae5e3cdbb966687b0e5c31962e3c218acef96a2fd43d26d5fe3";
+        identity = "82dca38b0750c38bb46604021511007e53cb7d8b2171c910a831d5f7e114a67c";
       };
       identity = "aa8fe9fda60293cbfadfc986ebc7fc30f93b227bf0a2a1e7d491aca32ee657f0";
       buildProfile = "default";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/services/fabric-service";
         kind = "tree";
-        identity = "8a0ccfdd939bee0edbcaed163373255b3825bd899f455fa9eb673f8fb1455ac8";
+        identity = "ccd1a94353ba859aeb1a1c21a2a9f2cd495dda2b001d4f0fc6649a2c3440a15c";
       };
       identity = "dfb81bacaefb52b9dea8c5f4b10b5d9a990407b95b094e35d7cd3d31cf1e80c5";
       buildProfile = "default";
@@ -36,7 +36,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "6f11475f9a337d7bbca72f998ad9c3ef737ebc6e8b35aa7866f5faac31b8928c";
+        identity = "caa2095cd9c80a1f038a8c95ac0682626383b0fe329cf9fb68c2b2ffb3724793";
       };
       identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
@@ -47,7 +47,7 @@
       artifact = {
         path = "components/applications/robot-actuator";
         kind = "tree";
-        identity = "ac40c562a447be26183b87cef45050ac5910494caf061462b0ecb8e12027719a";
+        identity = "c6928f2286cd78f50240b82bc86cf842eff30d3d8dfecbf99fcdf7396addab8d";
       };
       identity = "848ff8380f22f5feef1b96b3fb9afb15f0a2b7ca34d005364520e00f4dd2cb2a";
       buildProfile = "default";
@@ -58,7 +58,7 @@
       artifact = {
         path = "components/applications/robot-burner";
         kind = "tree";
-        identity = "d8ce8e44c98beb4a2d6cd57138f65d7e9edb188e1c8ab8f1cce79e56ddf98b91";
+        identity = "cf84aa4d2eb19c50e6504d3267584de7cc2336ace217fa13e03014523dda7982";
       };
       identity = "8fe19de7ac05f846a3f28028c106ec8b0cd2c29be69ad20fd53bf70e34a75fd7";
       buildProfile = "default";
@@ -69,7 +69,7 @@
       artifact = {
         path = "components/applications/robot-clock";
         kind = "tree";
-        identity = "82bd3006cd45fe9ed219cb84f34b6a036a781f8c5c7d84e122afe3807f8c005c";
+        identity = "62de7887c45850dcfd6f403b1ad57e18b86c5c31dc533f8f1e6b4fe4b576ae24";
       };
       identity = "86be9daa280e46c18eac80c084792748cac7dd471015fc3f21c34f98f6b3c881";
       buildProfile = "default";
@@ -80,7 +80,7 @@
       artifact = {
         path = "components/applications/robot-controller";
         kind = "tree";
-        identity = "a36cdfa953e64a76fb117f5bb46ba07843da1cf53682ebc4c89156e830e10d99";
+        identity = "9221f262b6187b16d7a406239ad71c376759dfab27c5a9164f221b193feaa581";
       };
       identity = "dfd6701a394def51243568b7ee925f8222957dc7d35e64e08f68a17459135068";
       buildProfile = "default";
@@ -91,7 +91,7 @@
       artifact = {
         path = "components/applications/robot-sensor";
         kind = "tree";
-        identity = "abd4998f49e9de406a5d06e7c5397351f598aecc5029d28c82f64f989092aea5";
+        identity = "f14877282d4714eae57a0f72a10e2dc9584fad0ab40d478342f1df4ab0160c08";
       };
       identity = "26ce55e35c61a1fba90d1e5b87a58671b746e5fe821416f0caf3b2ede1deaec6";
       buildProfile = "default";
@@ -102,7 +102,7 @@
       artifact = {
         path = "components/applications/robot-supervisor";
         kind = "tree";
-        identity = "f1a222ac3cde5ba0e56fbfbec2f23fc3f7afe3a832c3a7c7070fbd8d27d6e2db";
+        identity = "b5137457e28bec7662b0b4ac0d0627c9dea6847ffe57971b89cfbd5b48e00550";
       };
       identity = "cd59fb29c0a7781abd5da937e244beee6c7ed342618d36a5a63d4efdc59ce497";
       buildProfile = "default";
@@ -175,7 +175,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -191,7 +191,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -199,7 +199,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {

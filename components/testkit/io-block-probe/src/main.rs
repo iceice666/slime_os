@@ -8,10 +8,11 @@ use slime_proto::io_queue::{
     STATUS_MALFORMED, STATUS_OK, WireBufferSlice,
 };
 use slime_proto::io_queue_ring::{Outstanding, Queue, QueueError, format};
+use slime_rt::console_line::Line;
 use slime_rt::{
-    CapabilityDisposition, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, capability_delegate,
-    debug_write, exit, notification_signal, resolve_binding, shared_buffer_create,
-    shared_buffer_loan, shared_buffer_map, yield_now,
+    CapabilityDisposition, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_MSG, capability_delegate, exit,
+    notification_signal, resolve_binding, shared_buffer_create, shared_buffer_loan,
+    shared_buffer_map, yield_now,
 };
 
 slime_rt::entry!(main);
@@ -79,15 +80,13 @@ fn main(_startup_arg: u32) {
     } else {
         fail(b"backpressure overwrite");
     }
-    write_number(
-        b"[io-block-probe] backpressure full_refusals=",
-        full_refusals,
-    );
-    write_number(
-        b" overwrite=",
-        queue.submitted().saturating_sub(IO0_SLOTS as u64),
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] backpressure full_refusals=")
+        .decimal(full_refusals)
+        .bytes(b" overwrite=")
+        .decimal(queue.submitted().saturating_sub(IO0_SLOTS as u64))
+        .bytes(b"\n")
+        .emit();
     signal(request_ready);
 
     let mut body = [0u8; COMPLETION_PAYLOAD_BYTES];
@@ -120,11 +119,17 @@ fn main(_startup_arg: u32) {
     if !outstanding.is_empty() {
         fail(b"async completion count");
     }
-    write_number(b"[io-block-probe] async queued=", IO0_SLOTS as u64);
-    write_number(b" completed=", completed);
-    write_number(b" identities=", identities);
-    write_number(b" overwrite=", queue.submitted());
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] async queued=")
+        .decimal(IO0_SLOTS as u64)
+        .bytes(b" completed=")
+        .decimal(completed)
+        .bytes(b" identities=")
+        .decimal(identities)
+        .bytes(b" overwrite=")
+        .decimal(queue.submitted())
+        .bytes(b"\n")
+        .emit();
 
     let mut next_id = 100u64;
     let mut reads = 0u64;
@@ -263,17 +268,24 @@ fn main(_startup_arg: u32) {
         fail(b"readback bytes");
     }
 
-    write_number(b"[io-block-probe] operations read=", reads);
-    write_number(b" write=", writes);
-    write_number(b" flush=", flushes);
-    write_number(b" geometry=", geometries);
-    debug_write(b"\n");
-    write_number(
-        b"[io-block-probe] byte-verification readback=",
-        readback_bytes,
-    );
-    write_number(b" mismatches=", mismatches);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] operations read=")
+        .decimal(reads)
+        .bytes(b" write=")
+        .decimal(writes)
+        .bytes(b" flush=")
+        .decimal(flushes)
+        .bytes(b" geometry=")
+        .decimal(geometries)
+        .bytes(b"\n")
+        .emit();
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] byte-verification readback=")
+        .decimal(readback_bytes)
+        .bytes(b" mismatches=")
+        .decimal(mismatches)
+        .bytes(b"\n")
+        .emit();
 
     let mut out_of_range = 0u64;
     let out_of_range_reply = transact(
@@ -403,21 +415,26 @@ fn main(_startup_arg: u32) {
         fail(b"missing right reply");
     }
 
-    write_number(b"[io-block-probe] refusals out_of_range=", out_of_range);
-    write_number(b" malformed=", malformed);
-    write_number(b" short_buffer=", short_buffer);
-    write_number(b" unsupported=", unsupported);
-    write_number(b" missing_right=", missing_right);
-    debug_write(b"\n");
-    write_number(
-        b"[io-block-probe] io block plane complete observed_operations=",
-        reads + writes + flushes + geometries,
-    );
-    write_number(
-        b" observed_refusals=",
-        out_of_range + malformed + short_buffer + unsupported + missing_right,
-    );
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] refusals out_of_range=")
+        .decimal(out_of_range)
+        .bytes(b" malformed=")
+        .decimal(malformed)
+        .bytes(b" short_buffer=")
+        .decimal(short_buffer)
+        .bytes(b" unsupported=")
+        .decimal(unsupported)
+        .bytes(b" missing_right=")
+        .decimal(missing_right)
+        .bytes(b"\n")
+        .emit();
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] io block plane complete observed_operations=")
+        .decimal(reads + writes + flushes + geometries)
+        .bytes(b" observed_refusals=")
+        .decimal(out_of_range + malformed + short_buffer + unsupported + missing_right)
+        .bytes(b"\n")
+        .emit();
     send_shutdown(request_ready);
     send_shutdown_to(READONLY_PEER_SLOT, readonly_request_ready);
     exit(0)
@@ -563,23 +580,11 @@ fn send_shutdown_to(peer: u32, request_ready: u32) {
 fn binding(name: &[u8]) -> u32 {
     resolve_binding(name).unwrap_or_else(|_| fail(b"notification binding"))
 }
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-block-probe] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-block-probe] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

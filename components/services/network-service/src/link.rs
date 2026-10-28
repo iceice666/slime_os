@@ -692,8 +692,10 @@ fn binding(name: &[u8]) -> u32 {
 }
 
 fn fail(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[network-service] link fail: ");
-    slime_rt::debug_write(reason);
-    slime_rt::debug_write(b"\n");
+    slime_components::console_line::Line::<256>::new()
+        .bytes(b"[network-service] link fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     slime_rt::exit(1)
 }

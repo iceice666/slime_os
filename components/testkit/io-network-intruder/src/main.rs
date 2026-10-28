@@ -2,9 +2,8 @@
 #![no_main]
 use slime_proto::network_service::{self, WireNetworkCompletion, WireNetworkRequest};
 use slime_proto::valid_network_completion;
-use slime_rt::{
-    ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, debug_write, exit, yield_now,
-};
+use slime_rt::console_line::Line;
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, exit, yield_now};
 slime_rt::entry!(main);
 const SERVICE: u32 = 0;
 const SHUTDOWN_CAPABILITY: u64 = u64::MAX;
@@ -48,11 +47,11 @@ fn main(_: u32) {
         deny(request);
         exact_refusals += 1;
     }
-    write_number(
-        b"[io-network-intruder] exact authority refusals=",
-        exact_refusals,
-    );
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[io-network-intruder] exact authority refusals=")
+        .decimal(exact_refusals)
+        .bytes(b"\n")
+        .emit();
 
     // Guessed IDs can name either another holder's legacy handle or no live
     // handle at all; this probe does not establish which denial branch ran.
@@ -64,11 +63,11 @@ fn main(_: u32) {
         }
         guessed += u64::from(reply.status_detail < 0);
     }
-    write_number(
-        b"[io-network-intruder] guessed capability refusals=",
-        guessed,
-    );
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[io-network-intruder] guessed capability refusals=")
+        .decimal(guessed)
+        .bytes(b"\n")
+        .emit();
 
     let recv_only = call(destination(
         network_service::OP_CONNECT,
@@ -98,11 +97,11 @@ fn main(_: u32) {
     }
     let rights_mask_refusals =
         u64::from(missing_send.status_detail < 0) + u64::from(missing_recv.status_detail < 0);
-    write_number(
-        b"[io-network-intruder] rights-mask refusals=",
-        rights_mask_refusals,
-    );
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[io-network-intruder] rights-mask refusals=")
+        .decimal(rights_mask_refusals)
+        .bytes(b"\n")
+        .emit();
 
     for id in [recv_only.capability, send_path.capability] {
         if call(capability(network_service::OP_CLOSE, id)).status_detail != 0 {
@@ -115,12 +114,13 @@ fn main(_: u32) {
         fail(b"shutdown");
     }
     let shutdown_observed = u64::from(shutdown.status_detail == 0);
-    write_number(
-        b"[io-network-intruder] structured denials=",
-        exact_refusals + guessed + rights_mask_refusals,
-    );
-    write_number(b" shutdown=", shutdown_observed);
-    debug_write(b"\n");
+    Line::<128>::new()
+        .bytes(b"[io-network-intruder] structured denials=")
+        .decimal(exact_refusals + guessed + rights_mask_refusals)
+        .bytes(b" shutdown=")
+        .decimal(shutdown_observed)
+        .bytes(b"\n")
+        .emit();
     exit(0)
 }
 fn deny(request: WireNetworkRequest) {
@@ -194,23 +194,11 @@ fn call(request: WireNetworkRequest) -> WireNetworkCompletion {
         }
     }
 }
-fn write_number(prefix: &[u8], mut value: u64) {
-    let mut digits = [0u8; 20];
-    let mut offset = digits.len();
-    loop {
-        offset -= 1;
-        digits[offset] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    debug_write(prefix);
-    debug_write(&digits[offset..]);
-}
 fn fail(reason: &[u8]) -> ! {
-    debug_write(b"[io-network-intruder] fail: ");
-    debug_write(reason);
-    debug_write(b"\n");
+    Line::<256>::new()
+        .bytes(b"[io-network-intruder] fail: ")
+        .bytes(reason)
+        .bytes(b"\n")
+        .emit();
     exit(1)
 }

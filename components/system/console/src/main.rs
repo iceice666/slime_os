@@ -3,6 +3,7 @@
 
 use boot_contracts::generation::BootAction;
 use slime_components::generation_composition;
+use slime_rt::console_line::Line;
 use slime_rt::{MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
@@ -75,7 +76,9 @@ fn main(_startup_arg: u32) {
                     slime_rt::debug_write(b"[console] channel plane complete\n");
                     return;
                 }
-                slime_rt::debug_write(&buf[..n as usize]);
+                // A relayed message carries its own newline; it is submitted
+                // as exactly one record.
+                Line::<MAX_MSG>::new().bytes(&buf[..n as usize]).emit();
                 // P5.3.2's unrelated holder. Under the loan-plane generation
                 // this component is a declared shared-buffer holder that takes
                 // no part in the loan, and the milestone requires the loan's

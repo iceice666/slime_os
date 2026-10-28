@@ -411,7 +411,9 @@ impl Line {
 
     fn emit(&mut self) {
         self.put(b"\n");
-        slime_rt::debug_write(&self.bytes[..self.len]);
+        slime_rt::console_line::Line::<257>::new()
+            .bytes(&self.bytes[..self.len])
+            .emit();
     }
 }
 

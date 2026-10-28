@@ -765,5 +765,7 @@ fn trace(arguments: fmt::Arguments<'_>) {
         slime_rt::exit(1);
     }
     line.bytes[line.used] = b'\n';
-    slime_rt::debug_write(&line.bytes[..line.used + 1]);
+    slime_rt::console_line::Line::<257>::new()
+        .bytes(&line.bytes[..line.used + 1])
+        .emit();
 }

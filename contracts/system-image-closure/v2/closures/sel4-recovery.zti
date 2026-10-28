@@ -14,7 +14,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "6f11475f9a337d7bbca72f998ad9c3ef737ebc6e8b35aa7866f5faac31b8928c";
+        identity = "caa2095cd9c80a1f038a8c95ac0682626383b0fe329cf9fb68c2b2ffb3724793";
       };
       identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/testkit/sel4-recovery-probe";
         kind = "tree";
-        identity = "22586115d8f9237e05e300807c0e3212acc7c52f5dadebf9cdd7ed9294c14ef5";
+        identity = "08b88fce1b555431fd14e429faf7990978567ef646e44e0eb9756a866d3ad042";
       };
       identity = "25405f582f33d9f20df2b532e639604a7024cf37bb2b9a22d9f21f4fa844dcd2";
       buildProfile = "default";
@@ -36,7 +36,7 @@
       artifact = {
         path = "components/services/virtio-blk-driver";
         kind = "tree";
-        identity = "743b8cf8145687f9b070dd961ad147b0cb6719b727a1b12beff308912488fe12";
+        identity = "b42d83fc8d03b9bc6e80aebabd6725a0501eaac59ebd03ab6b32447ab9b9dd26";
       };
       identity = "f74866378529be8b923caa9e08d3e047cb2ae10f4f9dba74c12c1d3e68b9d7a5";
       buildProfile = "default";
@@ -109,7 +109,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -125,7 +125,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -133,7 +133,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {
