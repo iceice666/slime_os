@@ -366,6 +366,18 @@
       ]
     },
     {
+      "id": "lidar-foxglove-viewed",
+      "mode": "human",
+      "argv": [],
+      "ttlSeconds": 604800,
+      "observations": [
+        {
+          "id": "pointCloudViewed",
+          "kind": "bool"
+        }
+      ]
+    },
+    {
       "id": "generated-views",
       "mode": "human",
       "argv": [],
