@@ -34,10 +34,11 @@
 --        `payload-bound`  its payload length is above `maxPayloadBytes`;
 --        `order`          its log time is below the previous entry's log time;
 --        `range`          its payload ends past the end of the store;
---        `overlap`        its payload starts before the aligned end of the previous payload (or before
---                         `dataStart` for the first entry);
---        `padding`        its payload starts after that point, or a byte between that point and its
---                         start is not zero.
+--        `overlap`        its payload starts before the aligned end of the previous payload, or before
+--                         `dataStart` for the first entry;
+--        `padding`        its payload starts after that aligned end, or a byte between the actual end of
+--                         the previous payload and its start is not zero. For the first entry both ends
+--                         are `dataStart`.
 --  10. `padding`       a byte between the end of the last payload and its aligned end is not zero.
 --      `range`         the store ends before the aligned end of the last payload.
 --  11. `trailing`      the store continues past the aligned end of the last payload.
