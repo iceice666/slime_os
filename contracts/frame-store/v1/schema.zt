@@ -1,0 +1,131 @@
+-- Slime OS frame store, format version 1.
+--
+-- A frame store holds the recorded messages of one ROS 2 topic: one serialization of one message type,
+-- each message's CDR bytes kept exactly as recorded, with its original log time. A host converter writes
+-- it from an MCAP bag. A no_std reader validates the whole store before it exposes any frame.
+--
+-- Layout, all integers little-endian:
+--
+--   [0, 64)                    the header (`headerLayout`)
+--   [64, textEnd)              the topic, the type name and the ros2msg schema text, in that order
+--   [textEnd, indexStart)      zero bytes up to the next multiple of 8
+--   [indexStart, dataStart)    `frameCount` index entries (`indexEntryLayout`), 24 bytes each
+--   [dataStart, storeEnd)      the payloads in index order, each at an offset that is a multiple of 8,
+--                              each followed by zero bytes up to the next multiple of 8
+--
+-- The layout is canonical: payload i starts at `dataStart` for i = 0 and at the 8-byte-aligned end of
+-- payload i - 1 otherwise, and the store ends at the 8-byte-aligned end of the last payload. A store has
+-- exactly one valid encoding for a given topic, type, hash, schema, period and frame sequence.
+--
+-- Validation order. A reader applies these checks in this order and refuses the store with the class of
+-- the first check that fails:
+--
+--   1. `store-bound`   the store is longer than `maxStoreBytes`.
+--   2. `truncated`     the store is shorter than `headerBytes`.
+--   3. `magic`         `magic` is not `frameStoreMagic`.
+--   4. `version`       `version` is not `formatVersion`.
+--   5. `header`        `hashVersion` is not `hashVersionRihs01`, a reserved header field is not zero,
+--                      `framePeriodNs` is zero, or a text length is zero or above its bound.
+--   6. `frame-count`   `frameCount` is zero or above `maxFrames`.
+--   7. `truncated`     the store ends before `dataStart`.
+--   8. `header`        a text is not UTF-8 or holds a NUL byte, or a byte in [textEnd, indexStart) is not zero.
+--   9. per index entry, in index order:
+--        `header`         its reserved field is not zero;
+--        `payload-bound`  its payload length is above `maxPayloadBytes`;
+--        `order`          its log time is below the previous entry's log time;
+--        `range`          its payload ends past the end of the store;
+--        `overlap`        its payload starts before the aligned end of the previous payload (or before
+--                         `dataStart` for the first entry);
+--        `padding`        its payload starts after that point, or a byte between that point and its
+--                         start is not zero.
+--  10. `padding`       a byte between the end of the last payload and its aligned end is not zero.
+--      `range`         the store ends before the aligned end of the last payload.
+--  11. `trailing`      the store continues past the aligned end of the last payload.
+--
+-- Equal log times are allowed: the order is the order the bag recorded the messages in. Payload length
+-- zero is allowed. The message encoding is always CDR and the schema encoding is always ros2msg, so the
+-- store names neither.
+
+formatVersion :: Int = 1;
+frameStoreMagic :: Int = 1397115987; -- `SLFS`
+hashVersionRihs01 :: Int = 1;
+
+headerBytes :: Int = 64;
+indexEntryBytes :: Int = 24;
+typeHashBytes :: Int = 32;
+alignment :: Int = 8;
+
+maxFrames :: Int = 4096;
+maxPayloadBytes :: Int = 16777216; -- 16 MiB
+maxStoreBytes :: Int = 134217728; -- 128 MiB
+maxTopicBytes :: Int = 256;
+maxTypeNameBytes :: Int = 256;
+maxSchemaBytes :: Int = 65536;
+
+-- Refusal classes, in the order of the first check that can produce each.
+refusalClasses :: List Text = {
+  "store-bound";
+  "truncated";
+  "magic";
+  "version";
+  "header";
+  "frame-count";
+  "payload-bound";
+  "order";
+  "range";
+  "overlap";
+  "padding";
+  "trailing";
+};
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+-- `typeHash` is the 32-byte digest of a ROS 2 type hash whose version is `hashVersion`. Version 1 is
+-- RIHS01, whose text form is `RIHS01_` followed by the digest in lowercase hex. `framePeriodNs` is the
+-- period at which a publisher replays the frames, declared by the converter, not measured by the reader.
+FrameStoreHeader :: type {
+  magic : Int;
+  version : Int;
+  hashVersion : Int;
+  reserved0 : Int;
+  frameCount : Int;
+  topicBytes : Int;
+  typeNameBytes : Int;
+  schemaBytes : Int;
+  reserved1 : Int;
+  framePeriodNs : Int;
+  typeHash : Int;
+};
+
+-- `payloadOffset` is from the start of the store. `logTimeNs` is the MCAP log time of the message the
+-- payload was recorded as, in nanoseconds.
+FrameIndexEntry :: type {
+  payloadOffset : Int;
+  payloadBytes : Int;
+  reserved : Int;
+  logTimeNs : Int;
+};
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 2; signed = false; byteArray = false; };
+  { name = "hashVersion"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 1; signed = false; byteArray = true; };
+  { name = "frameCount"; width = 4; signed = false; byteArray = false; };
+  { name = "topicBytes"; width = 2; signed = false; byteArray = false; };
+  { name = "typeNameBytes"; width = 2; signed = false; byteArray = false; };
+  { name = "schemaBytes"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved1"; width = 4; signed = false; byteArray = true; };
+  { name = "framePeriodNs"; width = 8; signed = false; byteArray = false; };
+  { name = "typeHash"; width = 32; signed = false; byteArray = true; };
+};
+
+indexEntryLayout :: List WireField = {
+  { name = "payloadOffset"; width = 8; signed = false; byteArray = false; };
+  { name = "payloadBytes"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = true; };
+  { name = "logTimeNs"; width = 8; signed = false; byteArray = false; };
+};
+
+headerSchema ::= schema FrameStoreHeader;
+indexEntrySchema ::= schema FrameIndexEntry;
