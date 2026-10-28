@@ -75,6 +75,10 @@ serial_device_gen:
     python3 scripts/generate/generate-bindings.py serial-device
 
 [group('generate')]
+frame_store_gen:
+    python3 scripts/generate/generate-bindings.py frame-store
+
+[group('generate')]
 mavlink_heartbeat_gen:
     python3 scripts/generate/generate-bindings.py mavlink-heartbeat
 

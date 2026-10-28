@@ -177,6 +177,7 @@ For how the planes work and how to add one, read
 | `just fabric_stream_gen` | `python3 scripts/generate/generate-bindings.py fabric-stream` |
 | `just fabric_trace_gen` | `python3 scripts/generate/generate-bindings.py fabric-trace` |
 | `just fabric_visibility_gen` | `python3 scripts/generate/generate-bindings.py fabric-visibility` |
+| `just frame_store_gen` | `python3 scripts/generate/generate-bindings.py frame-store` |
 | `just generation_gen` | Aggregate: `boot_gen`. |
 | `just generation_management_gen` | `python3 scripts/generate/generate-bindings.py generation-management` |
 | `just interface_schema_gen` | `python3 scripts/generate/generate-interface-schema-bindings.py` |

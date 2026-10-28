@@ -15,6 +15,7 @@ pub mod fabric_stream;
 pub mod fabric_time;
 pub mod fabric_trace;
 pub mod fabric_visibility;
+pub mod frame_store;
 pub mod fs;
 pub mod generation;
 pub mod interface_schema;
