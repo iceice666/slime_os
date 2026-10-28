@@ -14,9 +14,9 @@
       artifact = {
         path = "contracts/system-image-closure/v2/inputs/components/c-runtime-probe.elf";
         kind = "file";
-        identity = "bc4b0f96fa16800e9bab5b8b10a0d03ad2e59bd6a83baed69acfeaa281a4ecca";
+        identity = "d5daa908425953c7cad44934c8ebdea470264e618ec8022ed6c9c603b2b49b89";
       };
-      identity = "09d41b0c6cae8ac5cf4c41f5e97c1375d9057bdb8144f34e303c44933bc619e3";
+      identity = "eb2b199e665f539b509d6308300e85aaedb70ebf8d6eec51c6e7df5c0919abd3";
       buildProfile = "default";
     };
   ];
@@ -87,7 +87,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -103,7 +103,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -111,7 +111,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {

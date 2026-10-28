@@ -14,7 +14,7 @@
       artifact = {
         path = "components/services/sel4-generation-manager";
         kind = "tree";
-        identity = "416f5480d27aa71ef435ff9aaa5a3232162615568387d26147fbefa93a715c5e";
+        identity = "a3892c6bc97b3e9cd00920a8eab3ce7943713176a3d6cec7c51c2f53065e9926";
       };
       identity = "f744d9698bae7f299e09df49a3038a62fbfec4ab7eda702bd0ad72f5cf0e8519";
       buildProfile = "default";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "6f11475f9a337d7bbca72f998ad9c3ef737ebc6e8b35aa7866f5faac31b8928c";
+        identity = "caa2095cd9c80a1f038a8c95ac0682626383b0fe329cf9fb68c2b2ffb3724793";
       };
       identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
@@ -36,7 +36,7 @@
       artifact = {
         path = "components/testkit/sel4-generation-client";
         kind = "tree";
-        identity = "70ff2234da814cfacfc8fcf6e9e0fd54ca2f64f88932e912757181e2837da9b3";
+        identity = "92a4f5fa98aff841ec87af3f7996d0be96a6a7d98dd1a02176679f5be030d92e";
       };
       identity = "5a3e16798c3600d173a1107575c72bb709ab0e48cd63e97fe5e22b88c7bdce25";
       buildProfile = "default";
@@ -47,7 +47,7 @@
       artifact = {
         path = "components/services/virtio-blk-driver";
         kind = "tree";
-        identity = "743b8cf8145687f9b070dd961ad147b0cb6719b727a1b12beff308912488fe12";
+        identity = "b42d83fc8d03b9bc6e80aebabd6725a0501eaac59ebd03ab6b32447ab9b9dd26";
       };
       identity = "f74866378529be8b923caa9e08d3e047cb2ae10f4f9dba74c12c1d3e68b9d7a5";
       buildProfile = "default";
@@ -120,7 +120,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -136,7 +136,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -144,7 +144,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {

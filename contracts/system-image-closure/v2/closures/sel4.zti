@@ -14,7 +14,7 @@
       artifact = {
         path = "components/system/console";
         kind = "tree";
-        identity = "f604b568be6e8b1e64c5839fa7dd028afca0a54d12de2520591d418e25393938";
+        identity = "9daaf88bf8da06b9fee2416d3492e0f40cfe70d90dd0a2b2e7c010a8d1bde9d0";
       };
       identity = "04bf64588b961d007d7af1fd846e8f48e1341efe47f9437378048fa63b570121";
       buildProfile = "default";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/testkit/echo-agent";
         kind = "tree";
-        identity = "946027ff267689d2d68b5c6e9c4a8ecf52d763fde929b4f7b5fb72e3a610d03e";
+        identity = "d2891bdd279734870d369523bd50390a8a73853f2ede2ea0c128c15f2f10791c";
       };
       identity = "f8f7527a954a5a44be9ad2c7ee488f2ba55ed685f1d4f8054f2aa2ddce08eb05";
       buildProfile = "default";
@@ -36,7 +36,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "6f11475f9a337d7bbca72f998ad9c3ef737ebc6e8b35aa7866f5faac31b8928c";
+        identity = "caa2095cd9c80a1f038a8c95ac0682626383b0fe329cf9fb68c2b2ffb3724793";
       };
       identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
@@ -47,9 +47,9 @@
       artifact = {
         path = "contracts/system-image-closure/v2/inputs/components/slisp.elf";
         kind = "file";
-        identity = "7a918842190b32647511e8d2f65a4ae0833494cec4e986a9d71a4ee56b3f49e9";
+        identity = "5b437ce8eed7277d001437cd2350be509abc4cc2974523feca2c5d436df4b75a";
       };
-      identity = "8f9d07c000e8725ee98667873b757064f406d11b7b9e5427ff80099fc71de983";
+      identity = "481e66b256e0c60c60f4b870091196f5e175d97a49618f4e7323a687eb41fb51";
       buildProfile = "default";
     };
     {
@@ -69,7 +69,7 @@
       artifact = {
         path = "components/system/sysinfo";
         kind = "tree";
-        identity = "dbc05730c12bc11ec2aab8eb22e95efa37645a2ad21fa884eb24cd61051a8c3f";
+        identity = "7855e383aeb7c6ae8eb01983549b901c49b9a629a191b644114779ec0df2ca88";
       };
       identity = "832af253b9c6212ce3c55898dc24b09ba68c5e55e105a73e1a189c80e9d0367f";
       buildProfile = "default";
@@ -144,7 +144,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -160,7 +160,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -168,7 +168,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {

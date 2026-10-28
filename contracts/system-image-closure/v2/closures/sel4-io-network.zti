@@ -14,7 +14,7 @@
       artifact = {
         path = "components/system/init";
         kind = "tree";
-        identity = "6f11475f9a337d7bbca72f998ad9c3ef737ebc6e8b35aa7866f5faac31b8928c";
+        identity = "caa2095cd9c80a1f038a8c95ac0682626383b0fe329cf9fb68c2b2ffb3724793";
       };
       identity = "b9119059a642b740144a960178ed29d58c0818154476afb1494a861ba0478f03";
       buildProfile = "default";
@@ -25,7 +25,7 @@
       artifact = {
         path = "components/testkit/io-link-loopback";
         kind = "tree";
-        identity = "5ced7616755026ceb2d3e0a3a7d9d82faaef0cc91dcc7d19bc351908821150fe";
+        identity = "be0019402c06f252bfbdecb8c0a35b8d4f9f6b2bbb375632f75711938e4d01bd";
       };
       identity = "46bace5e159683601bfe5dddc04de92ec1b823c8f5bc9aa8f18c3216ac688c79";
       buildProfile = "default";
@@ -36,7 +36,7 @@
       artifact = {
         path = "components/testkit/io-network-intruder";
         kind = "tree";
-        identity = "f73180c44fea4117f9111de42725bb2dcc9aedb64f135310e4277b0b25483ca8";
+        identity = "f44f182344d7f91e75bf403d2c1b5f0f6a9d09e6dbf033d12b1d96347159e948";
       };
       identity = "3d0bb01f75c233f9e0914928678d2b30e005fc5893766d455e9dad3ee16dd9b9";
       buildProfile = "default";
@@ -47,7 +47,7 @@
       artifact = {
         path = "components/testkit/io-network-probe";
         kind = "tree";
-        identity = "1dbb28b6ad23a6f9fae8a61951e5d9ba8a0429b72c2b2eb7cd3859fe966b8b95";
+        identity = "78b857d930f386d5e4122cb0e527b15217b95076cba8543a05668728e86a3ffe";
       };
       identity = "a03d6661240a06c1d27be27071b1e79b29728ba2950574f702411c7fddae1b95";
       buildProfile = "default";
@@ -58,7 +58,7 @@
       artifact = {
         path = "components/services/network-service";
         kind = "tree";
-        identity = "9b145cce3669bcfe587c6a21a204d6b512f397ca04dc37dbd09db19c65136f25";
+        identity = "28758c46151bdad1791fd937855c74e3cb657a3943f9c781e752c4e264ae88ee";
       };
       identity = "5d153f3b15a1bcfa48ae1038c9751d4fdedb6f34b91f3d900b570332635e5b61";
       buildProfile = "default";
@@ -131,7 +131,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -147,7 +147,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -155,7 +155,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {

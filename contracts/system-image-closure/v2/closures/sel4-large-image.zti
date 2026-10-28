@@ -14,7 +14,7 @@
       artifact = {
         path = "components/testkit/large-image-owner";
         kind = "tree";
-        identity = "7c23e892c58a941e477664957f40aa9989a67f730be149088b3f507b138f48e8";
+        identity = "16070dee7d8364c83b201f181650e35191866e4b8270a6abeda6f253b511926e";
       };
       identity = "4a724e1a612ad53238fc3ff40978497242d79f5d60782cff708148389559e900";
       buildProfile = "default";
@@ -109,7 +109,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "70d5c6eb76303fae53e0d6961bd7a4dd571ff1ff735c5f893e71a66b0bc7d61a";
+        identity = "42b682ba8be85a90585a7ddc0617caf88e3399986e7cccba369c77bf519745b7";
       };
     };
     {
@@ -125,7 +125,7 @@
       artifact = {
         path = "components/runtime";
         kind = "tree";
-        identity = "8e4c22c23794551dd727f57f62daecb64ccc01abdbc714bf726401802be0583d";
+        identity = "5879a7dbffe3eb2ec5830c48b06840bf8be519ccbf09de53a9132aa191ee6d9c";
       };
     };
     {
@@ -133,7 +133,7 @@
       artifact = {
         path = "contracts/component-spec/v1";
         kind = "tree";
-        identity = "a5257167d986c349e283a675c9f4795ebeb849bab9fc6a7a9fc5b407594a29eb";
+        identity = "77d914fe4153e41eeca00381f5a6266919d108cf51e1da0b4d37fd1e856de20d";
       };
     };
     {
