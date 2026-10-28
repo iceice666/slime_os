@@ -2,9 +2,9 @@
 schema: work-item/v2
 id: 01a17dad-fa21-739d-a55e-ef59fa3ce0ea
 kind: task
-state: open
+state: active
 created: 2026-10-27T14:05:16+00:00
-updated: 2026-10-27T14:05:35+00:00
+updated: 2026-10-28T04:22:42+00:00
 parent: 01a0f5fa-f2c4-71cf-962b-c62cbea2ef68
 depends:
   - 01a15d1f-26d2-7653-924b-a3f113a718e6
@@ -15,8 +15,131 @@ devloop:
   helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
   requirementsDigest: 3026946fa200c9a51dcbfd07c5c9d66ca605e517e5d16e76baec5d8d90185fa2
   admission: slime-zenoh-service-client-20261027d
-  epoch: unstarted
-  evidence: []
+  epoch: e345bf9a-b123-4acb-8afa-74a1e4b63208
+  evidence:
+  - acceptance: cases-observed
+    gate: just-observations
+    mode: automated
+    identity:
+      requirements: 3026946fa200c9a51dcbfd07c5c9d66ca605e517e5d16e76baec5d8d90185fa2
+      helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
+      code: cf1483825f759f472d346036acb14f5a4f6ad6ccc0a8db112c11ea5d5d34d591
+      policy: 7e24d538c6090cd8b45edf0615526980d9ddf09df9abc03f29855b2e92c4bd29
+      inputs: e19f235eda94f63be2eae450fff17588b290d1ef11f9a4795ca501beb64b0b1d
+      target: x86_64-linux
+      image: zenoh-client-main-e817e3e4abbd
+      epoch: e345bf9a-b123-4acb-8afa-74a1e4b63208
+    observedAt: 1793161389
+    expiresAt: 1793247789
+    passed: true
+    observer: argv:["python3", "scripts/check/devloop-gate.py", "just-observations"]
+    observations:
+    - id: casesObserved
+      value:
+        kind: int
+        intValue: 24
+        boolValue: false
+        textValue: ''
+    - id: negativeControlsRefused
+      value:
+        kind: int
+        intValue: 80
+        boolValue: false
+        textValue: ''
+    - id: passed
+      value:
+        kind: bool
+        intValue: 0
+        boolValue: true
+        textValue: ''
+    - id: transcriptDigest
+      value:
+        kind: text
+        intValue: 0
+        boolValue: false
+        textValue: b106c5b31c1c47f23b41d62d4eadbe34d270fa43db36440839cec2feb8552f3e
+  - acceptance: controls-refused
+    gate: just-observations
+    mode: automated
+    identity:
+      requirements: 3026946fa200c9a51dcbfd07c5c9d66ca605e517e5d16e76baec5d8d90185fa2
+      helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
+      code: cf1483825f759f472d346036acb14f5a4f6ad6ccc0a8db112c11ea5d5d34d591
+      policy: 7e24d538c6090cd8b45edf0615526980d9ddf09df9abc03f29855b2e92c4bd29
+      inputs: e19f235eda94f63be2eae450fff17588b290d1ef11f9a4795ca501beb64b0b1d
+      target: x86_64-linux
+      image: zenoh-client-main-e817e3e4abbd
+      epoch: e345bf9a-b123-4acb-8afa-74a1e4b63208
+    observedAt: 1793161405
+    expiresAt: 1793247805
+    passed: true
+    observer: argv:["python3", "scripts/check/devloop-gate.py", "just-observations"]
+    observations:
+    - id: casesObserved
+      value:
+        kind: int
+        intValue: 24
+        boolValue: false
+        textValue: ''
+    - id: negativeControlsRefused
+      value:
+        kind: int
+        intValue: 80
+        boolValue: false
+        textValue: ''
+    - id: passed
+      value:
+        kind: bool
+        intValue: 0
+        boolValue: true
+        textValue: ''
+    - id: transcriptDigest
+      value:
+        kind: text
+        intValue: 0
+        boolValue: false
+        textValue: b106c5b31c1c47f23b41d62d4eadbe34d270fa43db36440839cec2feb8552f3e
+  - acceptance: recipe-passed
+    gate: just-observations
+    mode: automated
+    identity:
+      requirements: 3026946fa200c9a51dcbfd07c5c9d66ca605e517e5d16e76baec5d8d90185fa2
+      helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
+      code: cf1483825f759f472d346036acb14f5a4f6ad6ccc0a8db112c11ea5d5d34d591
+      policy: 7e24d538c6090cd8b45edf0615526980d9ddf09df9abc03f29855b2e92c4bd29
+      inputs: e19f235eda94f63be2eae450fff17588b290d1ef11f9a4795ca501beb64b0b1d
+      target: x86_64-linux
+      image: zenoh-client-main-e817e3e4abbd
+      epoch: e345bf9a-b123-4acb-8afa-74a1e4b63208
+    observedAt: 1793161418
+    expiresAt: 1793247818
+    passed: true
+    observer: argv:["python3", "scripts/check/devloop-gate.py", "just-observations"]
+    observations:
+    - id: casesObserved
+      value:
+        kind: int
+        intValue: 24
+        boolValue: false
+        textValue: ''
+    - id: negativeControlsRefused
+      value:
+        kind: int
+        intValue: 80
+        boolValue: false
+        textValue: ''
+    - id: passed
+      value:
+        kind: bool
+        intValue: 0
+        boolValue: true
+        textValue: ''
+    - id: transcriptDigest
+      value:
+        kind: text
+        intValue: 0
+        boolValue: false
+        textValue: b106c5b31c1c47f23b41d62d4eadbe34d270fa43db36440839cec2feb8552f3e
 ---
 
 # Fix the Zenoh service client protocol
