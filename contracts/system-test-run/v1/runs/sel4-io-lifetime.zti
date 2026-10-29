@@ -1,7 +1,7 @@
 {
   formatVersion = 1;
   name = "sel4-io-lifetime";
-  imageClosureIdentity = "bf219caa0bc7937b297f20f0b0b7c3090fcb88b6aaaa75addc2e42a287abc70f";
+  imageClosureIdentity = "08147e3d9074c13f3d43ca9a3dfa082524a7dd738b64bb8738730e3f89789d93";
   executionKind = "emulator";
   executionProfile = "qemu-arm-virt";
   disks = [];
