@@ -38,6 +38,8 @@ mod zenoh_links;
 pub mod zenoh_node;
 pub mod zenoh_profile0;
 pub mod zenoh_service;
+#[cfg(feature = "component-runtime")]
+pub mod zenoh_service_client;
 #[cfg(test)]
 mod zenoh_service_link;
 #[cfg(test)]
