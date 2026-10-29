@@ -126,6 +126,14 @@ zenoh_service_client_wire_check:
 zenoh_service_client_io_check:
     python3 scripts/check/check-zenoh-profile0.py --slice client-io
 
+# Judges what the Zenoh service client adapter does when an attach fails after both loans arrived. The judge reads
+# what the Rust test prints from a scripted service and requires the loans back before the abort, the attach answer
+# read before the abort is sent, and no abort where the service holds no session. The expectation is
+# scripts/lib/zenoh_client_abort_exam.py. The recipe fails until the adapter's test prints these lines.
+[group('hardware')]
+zenoh_service_client_abort_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice client-abort
+
 # Judges the Zenoh service core over a link. The core queues a declaration or a publication through the
 # link's single send slot and delivers to its rings after the slot flushed. The judge reads what the Rust
 # test prints. The expectation is scripts/lib/zenoh_service_link_exam.py. The subscribers, links and
