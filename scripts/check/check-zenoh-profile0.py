@@ -116,6 +116,7 @@ import zenoh_exchange
 import zenoh_links_exam
 import zenoh_grants_exam
 import zenoh_client_exam
+import zenoh_client_abort_exam
 import zenoh_client_io_exam
 import zenoh_client_wire_exam
 import zenoh_service_exam
@@ -2061,6 +2062,84 @@ def client_io_main(controls_only: bool) -> int:
     return 0
 
 
+CLIENT_ABORT_TEST = "zenoh_service_client::tests::the_abort_exam"
+ABORT_LINE = re.compile(r"\[zenoh-abort\] (.*)$")
+
+
+def abort_run_is_scoped(output: str) -> bool:
+    """Whether the run was of the abort test alone: it passed, and nothing else in the target ran. The markers on
+    stdout are attributed to the test only when it is the only test that could have printed them."""
+    results = re.findall(r"test result: (\w+)\. (\d+) passed; (\d+) failed", output)
+    return tests_passed(output) == {CLIENT_ABORT_TEST} and results == [("ok", "1", "0")]
+
+
+def run_client_abort() -> list[str]:
+    """The proto crate's test of a failed attach, run alone with `--exact`: the adapter is compiled into it by path
+    against the stand-in runtime. Another test in the target could print the same markers while this one prints
+    nothing, so only this test runs and the run is checked to have run it alone. Its lines carry their own marker,
+    so the adapter exam never reads them."""
+    host = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True)
+    target = next(line.split(": ", 1)[1] for line in host.stdout.splitlines() if line.startswith("host: "))
+    command = [
+        "cargo", "test", "--target", target, "-p", "slime-proto", "--test", "zenoh_service_client",
+        "--", "--exact", CLIENT_ABORT_TEST, "--nocapture", "--test-threads=1",
+    ]
+    result = subprocess.run(command, cwd=ROOT / "components", capture_output=True, text=True, env={**_os.environ})
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        _sys.stderr.write(output[-4000:])
+        fail(f"{' '.join(command)} exited {result.returncode}")
+    if CLIENT_ABORT_TEST not in tests_passed(output):
+        fail(f"client-abort: the exam's test did not run and pass: {CLIENT_ABORT_TEST}")
+    if not abort_run_is_scoped(output):
+        fail(f"client-abort: the run was not of {CLIENT_ABORT_TEST} alone, so its markers cannot be attributed to it")
+    return [match.group(1).strip() for line in result.stdout.splitlines() if (match := ABORT_LINE.search(line))]
+
+
+def client_abort_main(controls_only: bool) -> int:
+    if CLIENT_ABORT_TEST in tests_passed(""):
+        fail("control: a run with the abort exam test missing was read as complete")
+    passed_alone = f"test {CLIENT_ABORT_TEST} ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n"
+    two_tests = f"test {CLIENT_ABORT_TEST} ... ok\ntest zenoh_service_client::tests::the_client_exam ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored\n"
+    other_test = "test zenoh_service_client::tests::the_client_exam ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n"
+    if not abort_run_is_scoped(passed_alone):
+        fail("control: a run of the abort test alone was read as not scoped")
+    if abort_run_is_scoped(two_tests) or abort_run_is_scoped(other_test) or abort_run_is_scoped(""):
+        fail("control: a run of more than the abort test, or of another test, was read as scoped")
+    wire_precondition()
+    try:
+        io_controls = zenoh_client_io_exam.all_controls()
+        refused_controls = zenoh_client_abort_exam.all_controls()
+        item_cases, item_controls = zenoh_client_abort_exam.item_pins()
+        positive, refusals = zenoh_client_abort_exam.judge(zenoh_client_abort_exam.good_lines())
+    except (zenoh_client_abort_exam.AbortError, zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError) as error:
+        fail(str(error))
+    if io_controls != zenoh_client_io_exam.PINNED_CONTROLS:
+        fail(f"client-abort: the adapter judge refuses {io_controls} controls, the checker pins {zenoh_client_io_exam.PINNED_CONTROLS}")
+    if positive != zenoh_client_abort_exam.PINNED_CASES:
+        fail(f"client-abort: an honest transcript is {positive} cases, the checker pins {zenoh_client_abort_exam.PINNED_CASES}")
+    if refused_controls != zenoh_client_abort_exam.PINNED_CONTROLS:
+        fail(f"client-abort: {refused_controls} controls, the checker pins {zenoh_client_abort_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_client_abort_exam.PINNED_CASES:
+        fail(f"client-abort: the admitted item fixes {item_cases} cases, the checker pins {zenoh_client_abort_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_client_abort_exam.PINNED_CONTROLS:
+        fail(f"client-abort: the admitted item requires {item_controls} controls, the checker pins {zenoh_client_abort_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 client-abort judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        zenoh_client_exam.check_generated()
+        zenoh_client_wire_exam.check_generated()
+        zenoh_client_io_exam.check_export()
+        positive, refusals = zenoh_client_abort_exam.judge(run_client_abort())
+    except (zenoh_client_abort_exam.AbortError, zenoh_client_io_exam.ClientIoError, zenoh_client_wire_exam.WireError, zenoh_client_exam.ClientError) as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=client-abort cases={positive} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=positive, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 client-abort check: a failed attach returns the loans, reads the attach answer and ends the service session")
+    return 0
+
+
 SERVICE_FILTER = "zenoh_service::"
 SERVICE_TESTS = ("zenoh_service::the_service_exam",)
 
@@ -2199,7 +2278,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2222,6 +2301,8 @@ def main() -> int:
         return client_wire_main(arguments.controls_only)
     if arguments.slice == "client-io":
         return client_io_main(arguments.controls_only)
+    if arguments.slice == "client-abort":
+        return client_abort_main(arguments.controls_only)
     if arguments.slice == "service":
         return service_main(arguments.controls_only)
     if arguments.slice == "service-link":
