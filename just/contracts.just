@@ -110,6 +110,14 @@ system_test_run_inventory_check:
     python3 scripts/check/check-system-test-run.py --inventory-controls
     python3 scripts/check/check-system-test-run.py
 
+# Test-run records name their image closure instead of copying its identity (contracts/system-test-run/v2).
+# In a scratch checkout of HEAD, a closure input change must rewrite no test-run record and no negative
+# build case, and check-system-test-run.py must refuse a wrong closure name. The expectation is
+# scripts/lib/test_run_reference_exam.py. Fails until the records move to version 2.
+[group('contracts')]
+system_test_run_reference_check:
+    python3 scripts/check/check-system-test-run-references.py
+
 # One execution identity covers the declaration/closure boundary and its quality gates.
 [group('contracts')]
 system_test_run_baseline_check: system_image_closure_check system_test_run_check
