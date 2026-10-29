@@ -1,0 +1,76 @@
+-- Slime OS Zenoh service grants table, version 1.
+--
+-- The table is the form of `zenoh-service-grants/v1` that the generation carries and the root serves. The
+-- Zenoh service reads it a page of rows at a time. A row is an exact key and whether one holder may publish
+-- to it, subscribe to it, or both. A key string in a request grants nothing; only a row present in the
+-- generation's table does.
+--
+-- The grants record is text, so it has no byte layout. This contract gives the row a fixed one, because the
+-- root serves whole rows through a window of fixed size. The table holds exactly the rows the record
+-- declares. They are sorted by holder name and then by key, each compared as bytes, and each pair of holder and
+-- key appears once. The same grants therefore give the same bytes, and a reader checks for a repeated pair by
+-- comparing each row with the one before it.
+--
+-- Each bound has a source:
+--
+-- * A key is at most 129 bytes, the profile's `maxKeyBytes` (`zenoh-profile/v1`). The link cannot carry a
+--   longer key, so a longer grant could never be used. The grants record allows longer keys, and the table
+--   refuses them.
+-- * A holder name is at most 32 bytes, as in `zenoh-service-grants/v1` and `network-application/v3`.
+-- * The row count is at most 65535, the grants record's `maxCount`. The service's declared stack covers the
+--   rows, and the grants record already refuses a stack too small for them.
+
+formatVersion :: Int = 1;
+tableMagic :: Int = 20083977042349139; -- `SLIMEZG` and a zero byte, little-endian
+headerBytes :: Int = 32;
+entryBytes :: Int = 168;
+maxRows :: Int = 65535;
+holderNameBytes :: Int = 32;
+maxKeyBytes :: Int = 129;
+
+-- The rights bits of a row. A row grants at least one.
+rightPublish :: Int = 1;
+rightSubscribe :: Int = 2;
+knownRights :: Int = 3;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+-- `total_len` is the header and every row. `row_count` is the number of rows. `required_flags` is zero in
+-- this version and a nonzero value is refused.
+GrantsHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  row_count : Int;
+  total_len : Int;
+};
+
+-- A name and a key are zero-padded to their widths, and their lengths say how much is text. The padding is
+-- zero. `reserved` is zero in this version.
+GrantsEntry :: type {
+  holder_name : Int;
+  holder_name_len : Int;
+  rights : Int;
+  key_len : Int;
+  key : Int;
+  reserved : Int;
+};
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "row_count"; width = 4; signed = false; byteArray = false; };
+  { name = "total_len"; width = 4; signed = false; byteArray = false; };
+};
+
+entryLayout :: List WireField = {
+  { name = "holder_name"; width = 32; signed = false; byteArray = true; };
+  { name = "holder_name_len"; width = 1; signed = false; byteArray = false; };
+  { name = "rights"; width = 1; signed = false; byteArray = false; };
+  { name = "key_len"; width = 2; signed = false; byteArray = false; };
+  { name = "key"; width = 129; signed = false; byteArray = true; };
+  { name = "reserved"; width = 3; signed = false; byteArray = true; };
+};

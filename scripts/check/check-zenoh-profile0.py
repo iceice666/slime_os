@@ -108,6 +108,7 @@ import re
 import shutil
 import struct
 import subprocess
+import tempfile
 from collections.abc import Callable
 from typing import NoReturn
 
@@ -119,6 +120,7 @@ import zenoh_client_exam
 import zenoh_client_abort_exam
 import zenoh_client_io_exam
 import zenoh_client_wire_exam
+import zenoh_grants_table_exam
 import zenoh_service_exam
 import zenoh_service_link_exam
 import zenoh_stock_peer
@@ -2140,6 +2142,89 @@ def client_abort_main(controls_only: bool) -> int:
     return 0
 
 
+GRANTS_TABLE_TEST = "every_table_decodes_to_its_rows_or_is_refused"
+TABLE_LINE = re.compile(r"\[zenoh-exam\] (grantstable .*)$")
+
+
+def grants_table_run_is_scoped(output: str) -> bool:
+    """Whether the run was of the table test alone: it passed and nothing else in the target ran."""
+    results = re.findall(r"test result: (\w+)\. (\d+) passed; (\d+) failed", output)
+    return tests_passed(output) == {GRANTS_TABLE_TEST} and results == [("ok", "1", "0")]
+
+
+def run_grants_table(tables_text: str | None = None) -> list[str]:
+    """The proto crate's test of the table decoder, run alone with `--exact`. The slice writes the tables from the
+    Python encoder to a file and the test reads them, so the decoder never judges bytes the Rust wrote. Run twice, on
+    the tables and on the tables with one replaced, it shows the test reads the file: a test that prints constants
+    prints the same lines both times."""
+    host = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True)
+    target = next(line.split(": ", 1)[1] for line in host.stdout.splitlines() if line.startswith("host: "))
+    (ROOT / "build").mkdir(exist_ok=True)
+    scratch = _Path(tempfile.mkdtemp(prefix="zenoh-grants-table-", dir=ROOT / "build"))
+    try:
+        tables = scratch / "tables.txt"
+        tables.write_text(zenoh_grants_table_exam.input_file_text() if tables_text is None else tables_text, encoding="utf-8")
+        command = [
+            "cargo", "test", "--target", target, "-p", "slime-proto", "--test", "zenoh_service_grants_table",
+            "--", "--exact", GRANTS_TABLE_TEST, "--nocapture", "--test-threads=1",
+        ]
+        result = subprocess.run(command, cwd=ROOT / "components", capture_output=True, text=True, env={**_os.environ, "SLIME_GRANTS_TABLES": str(tables)})
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        _sys.stderr.write(output[-4000:])
+        fail(f"{' '.join(command)} exited {result.returncode}")
+    if GRANTS_TABLE_TEST not in tests_passed(output):
+        fail(f"grants-table: the exam's test did not run and pass: {GRANTS_TABLE_TEST}")
+    if not grants_table_run_is_scoped(output):
+        fail(f"grants-table: the run was not of {GRANTS_TABLE_TEST} alone, so its lines cannot be attributed to it")
+    return [match.group(1).strip() for line in result.stdout.splitlines() if (match := TABLE_LINE.search(line))]
+
+
+def grants_table_main(controls_only: bool) -> int:
+    if GRANTS_TABLE_TEST in tests_passed(""):
+        fail("control: a run with the grants table test missing was read as complete")
+    alone = f"test {GRANTS_TABLE_TEST} ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n"
+    two = f"test {GRANTS_TABLE_TEST} ... ok\ntest other ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored\n"
+    other = "test other ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n"
+    if not grants_table_run_is_scoped(alone):
+        fail("control: a run of the grants table test alone was read as not scoped")
+    if grants_table_run_is_scoped(two) or grants_table_run_is_scoped(other) or grants_table_run_is_scoped(""):
+        fail("control: a run of more than the grants table test, or of another test, was read as scoped")
+    try:
+        zenoh_grants_table_exam.honest_cases()
+        refused_controls = zenoh_grants_table_exam.all_controls()
+        item_cases, item_controls = zenoh_grants_table_exam.item_pins()
+        positive, refusals = zenoh_grants_table_exam.judge(zenoh_grants_table_exam.good_lines())
+    except (zenoh_grants_table_exam.TableExamError, zenoh_client_exam.ClientError) as error:
+        fail(str(error))
+    if positive + refusals != zenoh_grants_table_exam.PINNED_CASES:
+        fail(f"grants-table: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_grants_table_exam.PINNED_CASES}")
+    if refused_controls != zenoh_grants_table_exam.PINNED_CONTROLS:
+        fail(f"grants-table: {refused_controls} controls, the checker pins {zenoh_grants_table_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_grants_table_exam.PINNED_CASES:
+        fail(f"grants-table: the admitted item fixes {item_cases} cases, the checker pins {zenoh_grants_table_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_grants_table_exam.PINNED_CONTROLS:
+        fail(f"grants-table: the admitted item requires {item_controls} controls, the checker pins {zenoh_grants_table_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 grants-table judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        zenoh_grants_table_exam.check_generated()
+        zenoh_grants_table_exam.check_exports()
+        positive, refusals = zenoh_grants_table_exam.judge(run_grants_table())
+        # The second run replaces one honest table. A test that read the file prints the probe table's line, and a test
+        # that prints constants prints the first run's line again.
+        zenoh_grants_table_exam.judge_probe(run_grants_table(zenoh_grants_table_exam.probe_file_text()))
+    except (zenoh_grants_table_exam.TableExamError, zenoh_client_exam.ClientError) as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=grants-table cases={positive + refusals} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=positive + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 grants-table check: the encoder, the generated records and the Rust decoder agree on every table")
+    return 0
+
+
 SERVICE_FILTER = "zenoh_service::"
 SERVICE_TESTS = ("zenoh_service::the_service_exam",)
 
@@ -2278,7 +2363,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2303,6 +2388,8 @@ def main() -> int:
         return client_io_main(arguments.controls_only)
     if arguments.slice == "client-abort":
         return client_abort_main(arguments.controls_only)
+    if arguments.slice == "grants-table":
+        return grants_table_main(arguments.controls_only)
     if arguments.slice == "service":
         return service_main(arguments.controls_only)
     if arguments.slice == "service-link":
