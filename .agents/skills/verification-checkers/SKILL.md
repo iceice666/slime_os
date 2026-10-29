@@ -93,11 +93,11 @@ rebuild is seconds, the cost of a forged cache is a false pass.
 Adding or editing any recipe under `just/` or `Justfile` changes every
 closure's identity — through the `just-recipes` input for the `just/` tree
 and the separate `justfile` input for `Justfile`: regenerate the closures
-(`python3 scripts/generate/generate-system-image-closures.py`) and refresh
-the test-run records
-(`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`,
-or `just system_test_run_bless` when an execution declaration changed) in
-the same PR, in a derived commit. `scripts/check/` and
+(`python3 scripts/generate/generate-system-image-closures.py`) in the same
+PR, in a derived commit. Test-run records and negative build cases name their
+closure, so they do not change with it; re-freeze test-run records with
+`just system_test_run_bless` only when a plane gate's execution inputs
+change. `scripts/check/` and
 `scripts/lib/` are not closure inputs except the files `RELEASE_INPUTS` in
 `scripts/generate/generate-system-image-closures.py` names by path (today
 `scripts/lib/elf_delivery.py` and the builders under `scripts/build/`); a

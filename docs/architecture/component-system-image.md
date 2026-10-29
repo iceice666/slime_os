@@ -119,10 +119,16 @@ contracts, target definitions, and fixes remain in this product repository.
 
 ## System test run
 
-`contracts/system-test-run/v1/` is deliberately separate. It declares the
+`contracts/system-test-run/v2/` is deliberately separate. It declares the
 execution profile, disks, networks, devices, runtime fault controls, timeout,
 marker contract, and forbidden outcomes for one image closure. Changing an
 oracle or timeout must not change executable identity.
+
+A record names its closure in `imageClosure`, by the closure's file name. It
+does not copy the closure's identity, so a change to a closure input leaves
+every record unchanged. A negative build case names its base closure the same
+way, in `baseClosure`. `check-system-test-run.py` requires a named closure to
+exist, to compile, and to be the closure the run's plane gate builds.
 
 The committed records are frozen checker declarations, not independent execution
 requests. `compile_test_run_declaration` accepts paired empty fixture path/identity
@@ -187,10 +193,8 @@ launcher `run_plane` is imported once from `sel4_plane` by name, without an alia
 A call through another name or an import from another module is refused. A QEMU argument that reaches the launcher by a route other
 than `run_plane` is not covered.
 
-After an intended image-closure change, update only its test-run references with
-`python3 scripts/generate/generate-system-test-runs.py --refresh-identities`.
-This checks the entire batch before writing and refuses any execution-field
-drift. Review genuine checker-input changes separately before using
+An image-closure change needs no test-run change. After an intended change to a
+plane gate's execution inputs, review it and re-freeze the records with
 `just system_test_run_bless`, then run `just system_test_run_check` and
 `just system_image_closure_check`. The fixed private-memory records do not inherit
 the adaptive-only transport from the same checker module.
