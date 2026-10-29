@@ -39,12 +39,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-import component_sdk
 import test_run_reference_exam as exam
 import zutai_cli
 from harness import ROOT
 
 SUBMODULES = ("deps/rust-sel4", "deps/zutai")
+# The same exclusions as the component SDK export. Held here, because importing that module would pull
+# the closure and test-run modules this exam judges into its devloop approval pin.
+COPY_IGNORE = shutil.ignore_patterns("target", ".git", ".direnv", "__pycache__", "*.pyc", "*.rs.bk")
 ZUTAI_BINARY = Path("deps/zutai/target/release/zutai-cli")
 INPUT_EDIT = Path("components/lib/src/lib.rs")
 COMMAND_TIMEOUT_SECONDS = 3600
@@ -81,7 +83,7 @@ def scratch_checkout() -> Iterator[Path]:
             current = git("rev-parse", "HEAD", cwd=ROOT / submodule).strip()
             if pinned != current:
                 raise SystemExit(f"HEAD pins {submodule} at {pinned[:12]}, but this checkout has {current[:12]}")
-            shutil.copytree(ROOT / submodule, scratch / submodule, ignore=component_sdk.COPY_IGNORE, dirs_exist_ok=True)
+            shutil.copytree(ROOT / submodule, scratch / submodule, ignore=COPY_IGNORE, dirs_exist_ok=True)
         binary = zutai_cli.binary()
         (scratch / ZUTAI_BINARY).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(binary, scratch / ZUTAI_BINARY)
