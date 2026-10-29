@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Gate `contracts/system-test-run/v1`: execution inputs are declared, bounded, and typed.
+"""Gate `contracts/system-test-run/v2`: execution inputs are declared, bounded, and typed.
 
 CP11's boundary is that a marker oracle, a timeout, a disk fixture, or an
 injected device event cannot alter the image closure it exercises. That
@@ -13,9 +13,10 @@ What this asserts:
    names a plane gate — neither set may contain a name the other lacks;
 2. each record decodes through the generated contract binding, so the bounds and
    closed vocabularies the schema declares are enforced rather than assumed;
-3. a record naming a closure resolves it, and a record naming none corresponds
-   to an image the aggregate gate independently agrees is closure-exempt — so an
-   empty identity is a checked statement rather than a blank field;
+3. a record naming a closure names the one its plane gate builds, and that
+   closure exists and compiles; a record naming none corresponds to an image the
+   aggregate gate independently agrees is closure-exempt — so an empty name is a
+   checked statement rather than a blank field;
 4. every declared timeout is positive and within the contract's ceiling, and
    every fault kind and execution kind is from the closed vocabulary;
 5. the records agree with the checkers they were extracted from, which is what
@@ -46,8 +47,8 @@ from system_image_closure import (
     compile_test_run_declaration,
 )
 
-RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
-CONTRACT = ROOT / "contracts" / "system-test-run" / "v1"
+RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v2" / "runs"
+CONTRACT = ROOT / "contracts" / "system-test-run" / "v2"
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-test-runs.py"
 AGGREGATE = ROOT / "scripts" / "check" / "check-system-image-aggregate.py"
@@ -182,11 +183,10 @@ def contract_vocabulary() -> dict[str, set[str]]:
 def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
     """Each record is typed, bounded, closed-vocabulary, and closure-consistent."""
     exempt_images = aggregate_exempt_images()
-    closures = {}
-    for path in sorted(CLOSURE_ROOT.glob("*.zti")):
-        from system_image_closure import compile_closure
+    from system_image_closure import compile_closure
 
-        closures[compile_closure(path).identity.hex()] = path.stem
+    closures = {path.stem for path in CLOSURE_ROOT.glob("*.zti")}
+    compiled: set[str] = set()
 
     max_timeout = next(iter(vocabulary["maxTimeout"]))
     max_fixtures = next(iter(vocabulary["maxFixtures"]))
@@ -197,8 +197,8 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
         name = record["name"]
         if name != path.stem:
             fail(f"{path.stem}: declares name {name!r}, so the file and the record disagree")
-        if record["formatVersion"] != 1:
-            fail(f"{name}: declares format version {record['formatVersion']}, expected 1")
+        if record["formatVersion"] != 2:
+            fail(f"{name}: declares format version {record['formatVersion']}, expected 2")
         if record["executionKind"] not in vocabulary["execution"]:
             fail(f"{name}: execution kind {record['executionKind']!r} is not in the vocabulary")
 
@@ -220,7 +220,7 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
                 fail(f"{name}: fault kind {control['kind']!r} is not in the vocabulary")
             faults += 1
 
-        identity = record["imageClosureIdentity"]
+        named = record["imageClosure"]
         matches = [
             (checker, closure, profile, image)
             for checker in GENERATOR_MODULE.plane_checkers()
@@ -235,14 +235,20 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
                 f"{name}: execution profile {record['executionProfile']!r} differs from "
                 f"its checker's declared {expected_profile!r}"
             )
-        if identity:
-            if identity not in closures:
-                fail(f"{name}: names closure identity {identity} that resolves to no closure")
-            if closures[identity] != expected_closure:
+        if named:
+            if named not in closures:
+                fail(f"{name}: names closure {named!r}, which does not exist")
+            if named != expected_closure:
                 fail(
-                    f"{name}: names the closure for {closures[identity]!r}, but its own "
+                    f"{name}: names the closure {named!r}, but its own "
                     f"checker target declares closure {expected_closure!r}"
                 )
+            if named not in compiled:
+                try:
+                    compile_closure(CLOSURE_ROOT / f"{named}.zti")
+                except SystemImageClosureError as error:
+                    fail(f"{name}: names closure {named!r}, which does not compile: {error}")
+                compiled.add(named)
             resolved += 1
         else:
             image = expected_image
@@ -290,9 +296,14 @@ def check_controls(vocabulary: dict[str, set[str]]) -> int:
             "exceeds the contract ceiling",
         ),
         (
-            "an unresolvable closure identity",
-            {"imageClosureIdentity": "0" * 64},
-            "resolves to no closure",
+            "a closure that does not exist",
+            {"imageClosure": "sel4-no-such-closure"},
+            "which does not exist",
+        ),
+        (
+            "another plane's closure",
+            {"imageClosure": "sel4-zenoh"},
+            "checker target declares closure",
         ),
         (
             "an unadmitted fault kind",
@@ -312,7 +323,7 @@ def check_controls(vocabulary: dict[str, set[str]]) -> int:
             (scratch / "sel4-channel.zti").write_text(
                 GENERATOR_MODULE.render(
                     value["name"],
-                    value["imageClosureIdentity"],
+                    value["imageClosure"],
                     value["executionProfile"],
                     {
                         "timeoutSeconds": value["timeoutSeconds"],
@@ -347,8 +358,7 @@ def _check_scratch(scratch: _Path, vocabulary: dict[str, set[str]]) -> None:
 
 
 def check_declaration_controls() -> int:
-    """Placeholders are declarations only; refresh cannot bless execution drift."""
-    import copy
+    """Placeholders are declarations only, and a closure is named, never digested."""
     import tempfile
 
     template = json.loads(path_json(RUN_ROOT / "sel4-channel.zti"))
@@ -365,7 +375,7 @@ def check_declaration_controls() -> int:
             path.write_text(renderer(value) + "\n", encoding="utf-8")
 
         for patch in (
-            {"disks": [fixture]}, {"faultControls": [fault]}, {"imageClosureIdentity": ""},
+            {"disks": [fixture]}, {"faultControls": [fault]}, {"imageClosure": ""},
         ):
             value = template | patch
             write(value)
@@ -384,7 +394,8 @@ def check_declaration_controls() -> int:
             {"faultControls": [fault | {"target": "peer"}]},
             {"faultControls": [fault | {"value": "1"}]},
             {"disks": [fixture, fixture]},
-            {"imageClosureIdentity": "invalid"},
+            {"imageClosure": "Not A Closure"},
+            {"imageClosure": "a" * 64},
         ):
             write(template | patch)
             try:
@@ -402,27 +413,6 @@ def check_declaration_controls() -> int:
         if compile_test_run(path).identity != compile_test_run_declaration(path).identity:
             fail("bound declaration and strict input have different content identities")
 
-        original = renderer(template) + "\n"
-        expected = renderer(template | {"imageClosureIdentity": "a" * 64}) + "\n"
-        path.write_text(original, encoding="utf-8")
-        other = root / "other.zti"
-        other.write_text(original, encoding="utf-8")
-        changed = copy.deepcopy(template)
-        changed["timeoutSeconds"] += 1
-        try:
-            GENERATOR_MODULE.refresh_identities({path: expected, other: renderer(changed) + "\n"})
-        except SystemExit as error:
-            if "execution declaration drift" not in str(error):
-                raise
-            refused += 1
-        else:
-            fail("identity refresh accepted execution drift")
-        if path.read_text() != original or other.read_text() != original:
-            fail("identity refresh wrote part of a refused batch")
-        GENERATOR_MODULE.refresh_identities({path: expected})
-        GENERATOR_MODULE.refresh_identities({path: expected})
-        if path.read_text() != expected:
-            fail("identity refresh changed execution fields or was not idempotent")
         checker = root / "check-sel4-private-memory-plane.py"
         checker.write_text('TIMEOUT = 240\n', encoding="utf-8")
         try:
@@ -481,7 +471,7 @@ def check_inventory_controls() -> int:
             f"contracts/system-spec/v1/systems/{run}.zti",
             f"contracts/generation-manifest/v1/compositions/{run}.zti",
             f"contracts/system-image-closure/v2/closures/{run}.zti",
-            f"contracts/system-test-run/v1/runs/{run}.zti",
+            f"contracts/system-test-run/v2/runs/{run}.zti",
             *crates,
         }
         registry[run] = (item, checker, run, tuple(sorted(mandatory)))
@@ -510,7 +500,7 @@ def check_inventory_controls() -> int:
         root = _Path(directory)
         checkers = root / "scripts/check"
         closures = root / "contracts/system-image-closure/v2/closures"
-        runs = root / "contracts/system-test-run/v1/runs"
+        runs = root / "contracts/system-test-run/v2/runs"
         items = root / ".tasks/items"
         for path in (checkers, closures, runs, items):
             path.mkdir(parents=True)
@@ -659,7 +649,6 @@ def check_inventory_controls() -> int:
                         refused += 1
                     else:
                         fail("inventory control: checker accepted missing active declaration")
-                    refuse("refresh missing declaration", lambda: generator.refresh_identities(outputs))
                     missing.write_text(outputs[missing])
                     orphan = runs / "sel4-orphan.zti"
                     orphan.write_text(outputs[missing])
@@ -672,13 +661,9 @@ def check_inventory_controls() -> int:
                     else:
                         fail("inventory control: checker accepted orphan declaration")
                     orphan.unlink()
-                generator.refresh_identities(outputs)
-                generator.refresh_identities(outputs)
                 reclamation.write_text(changed)
-                drifted = generator.outputs()
-                refuse("identity refresh with arm execution drift", lambda: generator.refresh_identities(drifted))
-                if any(path.read_text() != content for path, content in outputs.items()):
-                    fail("inventory control: refused refresh partially wrote a declaration")
+                if generator.outputs() == outputs:
+                    fail("inventory control: an execution change to an arm left its declaration unchanged")
             finally:
                 work_items.cache_clear()
     return refused

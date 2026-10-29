@@ -46,7 +46,6 @@ GRADER_FILES = ("Justfile",)
 DERIVED_PREFIXES = (
     "contracts/system-image-closure/v2/closures/",
     "contracts/system-image-closure/v2/negative/",
-    "contracts/system-test-run/v1/runs/",
     "contracts/system-test-run/v2/runs/",
 )
 

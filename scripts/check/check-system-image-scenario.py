@@ -361,10 +361,7 @@ def check_negative_cases() -> int:
     paths = negative_case_paths()
     if not paths:
         fail("no negative build case is declared, so this arm asserts nothing")
-    closure_identities = {
-        compile_closure(path).identity.hex(): path.stem
-        for path in sorted(CLOSURE_ROOT.glob("*.zti"))
-    }
+    closure_names = {path.stem for path in CLOSURE_ROOT.glob("*.zti")}
     seen_mutations: dict[str, str] = {}
     identities: dict[str, str] = {}
     for path in paths:
@@ -380,9 +377,10 @@ def check_negative_cases() -> int:
         if identity in identities:
             fail(f"{path.stem} and {identities[identity]} compute the same case identity")
         identities[identity] = path.stem
-        base = case.value["baseClosureIdentity"]
-        if base not in closure_identities:
-            fail(f"{path.stem}: base closure identity {base} names no closure")
+        base = case.value["baseClosure"]
+        if base not in closure_names:
+            fail(f"{path.stem}: base closure {base} names no closure")
+        compile_closure(CLOSURE_ROOT / f"{base}.zti")
         if not case.value["expectedRefusal"]:
             fail(f"{path.stem}: declares no expected refusal, so failing proves nothing")
     missing = sorted(set(CONTRACT.MUTATIONS) - set(seen_mutations))
@@ -419,11 +417,9 @@ def check_negative_build(name: str) -> str:
     """
     case_path = ROOT / "contracts" / "system-image-closure" / "v2" / "negative" / f"{name}.zti"
     case = compile_negative_case(case_path)
-    base_name = next(
-        path.stem
-        for path in sorted(CLOSURE_ROOT.glob("*.zti"))
-        if compile_closure(path).identity.hex() == case.value["baseClosureIdentity"]
-    )
+    base_name = case.value["baseClosure"]
+    if not (CLOSURE_ROOT / f"{base_name}.zti").is_file():
+        fail(f"{name}: base closure {base_name} does not exist")
 
     def run(args: list[str], output: Path) -> None:
         process = subprocess.run(

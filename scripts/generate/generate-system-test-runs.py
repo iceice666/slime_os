@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Generate `contracts/system-test-run/v1` records from each plane gate's execution inputs.
+"""Generate `contracts/system-test-run/v2` records from each plane gate's execution inputs.
 
 CP11 declared that QEMU arguments, disk fixtures, injected device behavior,
 timeouts, and marker contracts belong to a versioned test-run contract rather
@@ -18,6 +18,9 @@ What this does *not* do is make the checkers read these records. That is CP15's
 migration, and claiming it here would be false: the values below are still
 executed from each checker's own constants. What the freeze buys today is that
 an execution input cannot change without a reviewed record change.
+
+A record names the closure its plane builds rather than copying the closure's
+identity, so a change to a closure input leaves every record unchanged.
 """
 
 from __future__ import annotations
@@ -34,10 +37,9 @@ from collections.abc import Iterable
 import work_items
 
 from harness import ROOT
-from system_image_closure import compile_closure
 
 CHECK_ROOT = ROOT / "scripts" / "check"
-RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v1" / "runs"
+RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v2" / "runs"
 CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 
 # The marker contract each plane's expectations are stated against. One
@@ -239,7 +241,7 @@ PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
             "contracts/system-spec/v1/systems/sel4-serial.zti",
             "contracts/generation-manifest/v1/compositions/sel4-serial.zti",
             "contracts/system-image-closure/v2/closures/sel4-serial.zti",
-            "contracts/system-test-run/v1/runs/sel4-serial.zti",
+            "contracts/system-test-run/v2/runs/sel4-serial.zti",
             "components/services/pl011-driver",
             "components/testkit/serial-probe",
         ),
@@ -415,19 +417,15 @@ def closure_name_for(path: _Path, name: str) -> str:
     return match.group(1) if match is not None else name
 
 
-def closure_identity_for(name: str) -> str:
-    """The closure this run exercises, or the empty string when none exists.
+def closure_reference_for(name: str) -> str:
+    """The name of the closure this run exercises, or the empty string when none exists.
 
-    An empty identity is a truthful statement that the plane's image is not yet
-    closure-reachable — the eight images CP15 still owns — rather than a
-    fabricated digest. `check-system-test-run.py` requires a non-empty identity
-    to resolve and an empty one to name an image the aggregate gate agrees is
-    exempt.
+    An empty name is a truthful statement that the plane's image is not yet
+    closure-reachable rather than a fabricated reference. `check-system-test-run.py`
+    requires a non-empty name to be the closure the run's plane builds and an empty
+    one to name an image the aggregate gate agrees is exempt.
     """
-    candidate = CLOSURE_ROOT / f"{name}.zti"
-    if not candidate.is_file():
-        return ""
-    return compile_closure(candidate).identity.hex()
+    return name if (CLOSURE_ROOT / f"{name}.zti").is_file() else ""
 
 
 DEVICE_NAME = re.compile(r"virtio-[a-z]+-device")
@@ -1193,9 +1191,9 @@ def render(name: str, closure: str, profile: str, facts: dict) -> str:
 
     return (
         "{\n"
-        "  formatVersion = 1;\n"
+        "  formatVersion = 2;\n"
         f'  name = "{name}";\n'
-        f'  imageClosureIdentity = "{closure}";\n'
+        f'  imageClosure = "{closure}";\n'
         '  executionKind = "emulator";\n'
         f'  executionProfile = "{profile}";\n'
         f"  disks = {disks};\n"
@@ -1215,31 +1213,11 @@ def outputs() -> dict[_Path, str]:
         for name, closure_name, profile, _image in run_variants(path):
             emitted[RUN_ROOT / f"{name}.zti"] = render(
                 name,
-                closure_identity_for(closure_name) if closure_name else "",
+                closure_reference_for(closure_name) if closure_name else "",
                 profile,
                 extract(path, name),
             )
     return emitted
-
-
-def refresh_identities(emitted: dict[_Path, str]) -> int:
-    """Refresh only image references, refusing all execution drift before writing."""
-    field = re.compile(r'^  imageClosureIdentity = "[0-9a-f]*";$', re.MULTILINE)
-    updates = {}
-    for path, expected in emitted.items():
-        if not path.is_file():
-            fail(f"{path.name}: missing declaration; identity refresh cannot create it")
-        current = path.read_text(encoding="utf-8")
-        before, after = field.findall(current), field.findall(expected)
-        if len(before) != 1 or len(after) != 1:
-            fail(f"{path.name}: expected one canonical imageClosureIdentity field")
-        if field.sub('', current) != field.sub('', expected):
-            fail(f"{path.name}: execution declaration drift; review before re-freezing")
-        updates[path] = field.sub(after[0], current)
-    for path, contents in updates.items():
-        if path.read_text(encoding="utf-8") != contents:
-            path.write_text(contents, encoding="utf-8")
-    return len(updates)
 
 
 def main() -> int:
@@ -1250,10 +1228,6 @@ def main() -> int:
     )
     mode.add_argument(
         "--bless", action="store_true", help="re-freeze records after an intended change"
-    )
-    mode.add_argument(
-        "--refresh-identities", action="store_true",
-        help="update only closure references; refuse any execution declaration drift",
     )
     arguments = parser.parse_args()
 
@@ -1272,11 +1246,6 @@ def main() -> int:
                 "re-freeze with `just system_test_run_bless` if the change is intended"
             )
         print(f"{len(emitted)} system test-run records are current")
-        return 0
-
-    if arguments.refresh_identities:
-        count = refresh_identities(emitted)
-        print(f"{count} test-run closure references checked; execution declarations unchanged")
         return 0
 
     for path, content in sorted(emitted.items()):

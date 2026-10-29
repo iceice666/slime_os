@@ -19,7 +19,7 @@ from system_spec import CompiledSystem, compile_system, derive_manifest
 from zutai_cli import ZutaiError, evaluate
 
 IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2"
-TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v1"
+TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v2"
 IMAGE_CHECKER = IMAGE_CONTRACT_ROOT / "check.zt"
 NEGATIVE_CHECKER = IMAGE_CONTRACT_ROOT / "check-negative.zt"
 NEGATIVE_ROOT = IMAGE_CONTRACT_ROOT / "negative"
@@ -67,14 +67,14 @@ _PARAMETER_FIELDS = {"name", "value"}
 _NEGATIVE_FIELDS = {
     "formatVersion",
     "name",
-    "baseClosureIdentity",
+    "baseClosure",
     "mutation",
     "expectedRefusal",
 }
 _TEST_FIELDS = {
     "formatVersion",
     "name",
-    "imageClosureIdentity",
+    "imageClosure",
     "executionKind",
     "executionProfile",
     "disks",
@@ -243,6 +243,16 @@ def _digest(value: object, label: str, contract: ModuleType = image_contract) ->
     text = _bounded_text(value, contract.MAX_DIGEST_BYTES, label)
     if _SHA256.fullmatch(text) is None:
         _fail(f"{label}: expected lowercase SHA-256")
+    return text
+
+
+def _closure_name(value: object, label: str, contract: ModuleType) -> str:
+    """A closure named by its file name without `.zti`, never by a digest of it."""
+    text = _bounded_text(value, contract.MAX_NAME_BYTES, label)
+    if _NAME.fullmatch(text) is None:
+        _fail(f"{label}: expected a closure name in canonical spelling, got {text!r}")
+    if _SHA256.fullmatch(text) is not None:
+        _fail(f"{label}: expected a closure name, got a digest")
     return text
 
 
@@ -435,8 +445,8 @@ def _compile_test_run(
     name = _bounded_text(value["name"], contract.MAX_NAME_BYTES, "name")
     if _NAME.fullmatch(name) is None or name != path.stem:
         _fail("test-run name must match its file name and use canonical spelling")
-    if not (declaration and value["imageClosureIdentity"] == ""):
-        _digest(value["imageClosureIdentity"], "imageClosureIdentity", contract)
+    if not (declaration and value["imageClosure"] == ""):
+        _closure_name(value["imageClosure"], "imageClosure", contract)
     if value["executionKind"] not in contract.EXECUTION_KINDS:
         _fail(f"unknown execution kind {value['executionKind']!r}")
     _bounded_text(value["executionProfile"], contract.MAX_NAME_BYTES, "executionProfile")
@@ -745,7 +755,7 @@ def compile_negative_case(
     name = _bounded_text(value["name"], contract.MAX_NAME_BYTES, "name")
     if _NAME.fullmatch(name) is None or name != path.stem:
         _fail("negative case name must match its file name and use canonical spelling")
-    _digest(value["baseClosureIdentity"], "baseClosureIdentity", contract)
+    _closure_name(value["baseClosure"], "baseClosure", contract)
     mutation = _bounded_text(value["mutation"], contract.MAX_NAME_BYTES, "mutation")
     if mutation not in contract.MUTATIONS:
         _fail(
