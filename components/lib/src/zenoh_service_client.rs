@@ -201,47 +201,64 @@ impl<'a> ClientIo<'a> {
         if slime_rt::send(peer, &control(wire::OP_ATTACH as u8).encode(), &[]) != ERR_SUCCESS {
             return Err(ClientError::Lost);
         }
-        let ring = Region::receive(
+        let mut ring = Region::receive(
             peer,
             provision,
             wire::LOAN_ROLE_RING as u8,
             ring_base,
             RING_BYTES,
         )?;
-        let payload = Region::receive(
+        let mut payload = Region::receive(
             peer,
             provision,
             wire::LOAN_ROLE_DATA as u8,
             data_base,
             DATA_BYTES,
         )?;
-        if ring.descriptor.buffer == payload.descriptor.buffer
-            || ring.descriptor.lease == payload.descriptor.lease
-        {
-            return Err(ClientError::Malformed);
+        // The service holds a session once both loans have arrived. A failure from here on must end it.
+        let mut answered = false;
+        let setup = (|| {
+            if ring.descriptor.buffer == payload.descriptor.buffer
+                || ring.descriptor.lease == payload.descriptor.lease
+            {
+                return Err(ClientError::Malformed);
+            }
+            // SAFETY: the trusted service allocated distinct backing objects and the caller grants these
+            // disjoint mapped regions for the lifetime.
+            let ring_bytes =
+                unsafe { core::slice::from_raw_parts_mut(ring_base as *mut u8, RING_BYTES) };
+            // SAFETY: the separate data loan has the same caller contract.
+            let data = unsafe { core::slice::from_raw_parts_mut(data_base as *mut u8, DATA_BYTES) };
+            let queue =
+                Queue::attach(ring_bytes, QUEUE_SLOTS).map_err(|_| ClientError::Malformed)?;
+            let outstanding = Outstanding::new(queue.epoch());
+            let rows = await_control(peer, wire::OP_ATTACH as u8).inspect_err(|error| {
+                answered = *error == ClientError::Malformed;
+            })?;
+            answered = true;
+            if rows == 0 || rows as usize > MAX_ROWS {
+                return Err(ClientError::Malformed);
+            }
+            Ok((queue, data, outstanding, rows))
+        })();
+        match setup {
+            Ok((queue, data, outstanding, rows)) => Ok(Self {
+                queue: Some(queue),
+                data: Some(data),
+                outstanding,
+                ring,
+                payload,
+                peer,
+                next_id: 1,
+                rows: rows as usize,
+            }),
+            Err(error) => {
+                let _ = payload.release();
+                let _ = ring.release();
+                abandon_attach(peer, answered);
+                Err(error)
+            }
         }
-        // SAFETY: the trusted service allocated distinct backing objects and the caller grants these
-        // disjoint mapped regions for the lifetime.
-        let ring_bytes =
-            unsafe { core::slice::from_raw_parts_mut(ring_base as *mut u8, RING_BYTES) };
-        // SAFETY: the separate data loan has the same caller contract.
-        let data = unsafe { core::slice::from_raw_parts_mut(data_base as *mut u8, DATA_BYTES) };
-        let queue = Queue::attach(ring_bytes, QUEUE_SLOTS).map_err(|_| ClientError::Malformed)?;
-        let outstanding = Outstanding::new(queue.epoch());
-        let rows = await_control(peer, wire::OP_ATTACH as u8)?;
-        if rows == 0 || rows as usize > MAX_ROWS {
-            return Err(ClientError::Malformed);
-        }
-        Ok(Self {
-            queue: Some(queue),
-            data: Some(data),
-            outstanding,
-            ring,
-            payload,
-            peer,
-            next_id: 1,
-            rows: rows as usize,
-        })
     }
 
     /// How many grant rows the holder has. A request names a row by an index below this.
@@ -573,6 +590,18 @@ fn valid_completion(reply: &WireServiceCompletion, op: u8) -> bool {
 
 /// Wait for the service's completion on the control endpoint. Returns its `length`, which is the number of
 /// grant rows after an attach and zero after a detach or an abort.
+/// End the service's session after an attach that the adapter could not use. The loans are already back. The
+/// attach answer is read first when it has not been, so the abort acknowledgement is not mistaken for it.
+fn abandon_attach(peer: u32, answered: bool) {
+    if slime_rt::send(peer, &control(wire::OP_ABORT as u8).encode(), &[]) != ERR_SUCCESS {
+        return;
+    }
+    if !answered {
+        let _ = await_control(peer, wire::OP_ATTACH as u8);
+    }
+    let _ = await_control(peer, wire::OP_ABORT as u8);
+}
+
 fn await_control(peer: u32, op: u8) -> Result<u32, ClientError> {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
@@ -599,6 +628,12 @@ fn await_control(peer: u32, op: u8) -> Result<u32, ClientError> {
 #[cfg(test)]
 mod tests {
     type LoanCase = (&'static str, fn(&mut WireServiceLoan));
+    type AbortCase = (
+        &'static str,
+        std::vec::Vec<std::vec::Vec<u8>>,
+        std::vec::Vec<std::vec::Vec<u8>>,
+        bool,
+    );
     type AttachCase = (
         &'static str,
         std::vec::Vec<std::vec::Vec<u8>>,
@@ -1649,6 +1684,77 @@ mod tests {
         release(data);
     }
 
+    /// A failed attach ends the service's session: both loans back, then one abort, and every answer read.
+    /// The transcript does not print this, so the assertions are the only grader.
+    fn a_failed_attach_aborts_the_service_session() {
+        slime_rt::test_script(std::vec::Vec::new(), std::vec::Vec::new());
+        let ack = |op| control_answers(op, 0).remove(0);
+        // (name, loans, answers the service gives, ring formatted)
+        let cases: [AbortCase; 4] = [
+            (
+                "unformatted-ring",
+                provisioning((11, 21), (12, 22)),
+                std::vec![ack(wire::OP_ATTACH), ack(wire::OP_ABORT)],
+                false,
+            ),
+            (
+                "one-buffer-for-both",
+                provisioning((11, 21), (11, 22)),
+                std::vec![ack(wire::OP_ATTACH), ack(wire::OP_ABORT)],
+                true,
+            ),
+            (
+                "no-rows",
+                provisioning((11, 21), (12, 22)),
+                std::vec![
+                    control_answers(wire::OP_ATTACH, 0).remove(0),
+                    ack(wire::OP_ABORT)
+                ],
+                true,
+            ),
+            (
+                "too-many-rows",
+                provisioning((11, 21), (12, 22)),
+                std::vec![
+                    control_answers(wire::OP_ATTACH, wire::MAX_ROWS as u32 + 1).remove(0),
+                    ack(wire::OP_ABORT)
+                ],
+                true,
+            ),
+        ];
+        for (name, loans, answers, formatted) in cases {
+            let (ring, data) = (if formatted { formatted_ring() } else { page() }, page());
+            slime_rt::test_script(answers, loans);
+            // SAFETY: both pages are live, aligned, distinct and unreferenced until the call returns.
+            let result = unsafe { ClientIo::attach(5, 6, ring as u64, data as u64) };
+            assert_eq!(result.err(), Some(ClientError::Malformed), "{name}");
+            let sent = slime_rt::test_sent();
+            assert_eq!(sent.len(), 2, "{name}: an attach and an abort");
+            assert_eq!(
+                WireServiceRequest::decode(&sent[0]).unwrap().op,
+                wire::OP_ATTACH as u8,
+                "{name}"
+            );
+            assert_eq!(
+                WireServiceRequest::decode(&sent[1]).unwrap().op,
+                wire::OP_ABORT as u8,
+                "{name}"
+            );
+            assert_eq!(
+                slime_rt::test_returns_at_send(),
+                std::vec![0, 2],
+                "{name}: loans back before the abort"
+            );
+            assert_eq!(
+                slime_rt::test_control_pending(),
+                0,
+                "{name}: every answer read"
+            );
+            release(ring);
+            release(data);
+        }
+    }
+
     /// Every scenario in a fixed order, so the transcript the judge reads does not depend on test names.
     #[test]
     fn the_client_exam() {
@@ -1656,6 +1762,7 @@ mod tests {
         attach_refuses_bad_endpoints_and_bases_before_it_sends_anything();
         attach_refuses_what_the_service_may_not_provide();
         attach_refuses_a_ring_the_service_did_not_format();
+        a_failed_attach_aborts_the_service_session();
         attach_takes_the_ring_then_the_data_page_and_reports_the_holders_rows();
         a_publication_travels_as_a_request_and_its_payload_in_the_data_page();
         a_take_returns_a_sample_with_its_row_header_and_payload();
