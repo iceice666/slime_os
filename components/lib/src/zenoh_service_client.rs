@@ -655,6 +655,7 @@ mod tests {
         std::vec::Vec<std::vec::Vec<u8>>,
         std::vec::Vec<std::vec::Vec<u8>>,
         bool,
+        ClientError,
     );
     type AttachCase = (
         &'static str,
@@ -672,6 +673,11 @@ mod tests {
 
     fn line(text: &str) {
         println!("[zenoh-exam] clientio {text}");
+    }
+
+    /// The failed-attach exam prints under its own marker, so the adapter exam's judge never reads these lines.
+    fn abort_line(text: &str) {
+        println!("[zenoh-abort] {text}");
     }
 
     fn hex(bytes: &[u8]) -> std::string::String {
@@ -1706,93 +1712,150 @@ mod tests {
         release(data);
     }
 
-    /// A failed attach ends the service's session: both loans back, then one abort, and every answer read.
-    /// The transcript does not print this, so the assertions are the only grader.
-    fn a_failed_attach_aborts_the_service_session() {
+    /// A failed attach ends the service's session when the service holds one. Each case prints what the adapter sent,
+    /// when the loans went back and how many scripted answers were unread at each send.
+    fn a_failed_attach_ends_the_service_session() {
         slime_rt::test_script(std::vec::Vec::new(), std::vec::Vec::new());
         let ack = |op| control_answers(op, 0).remove(0);
-        // (name, loans, answers the service gives, ring formatted)
-        let cases: [AbortCase; 4] = [
+        let refused_attach = answer(
+            wire::OP_ATTACH,
+            wire::STATUS_DENIED,
+            wire::ITEM_NONE,
+            0,
+            0,
+            0,
+        )
+        .encode()
+        .to_vec();
+        let both = || provisioning((11, 21), (12, 22));
+        // (name, loans, answers the service gives, ring formatted, the error)
+        let cases: [AbortCase; 8] = [
             (
                 "unformatted-ring",
-                provisioning((11, 21), (12, 22)),
+                both(),
                 std::vec![ack(wire::OP_ATTACH), ack(wire::OP_ABORT)],
                 false,
+                ClientError::Malformed,
             ),
             (
                 "one-buffer-for-both",
                 provisioning((11, 21), (11, 22)),
                 std::vec![ack(wire::OP_ATTACH), ack(wire::OP_ABORT)],
                 true,
+                ClientError::Malformed,
             ),
             (
                 "no-rows",
-                provisioning((11, 21), (12, 22)),
+                both(),
                 std::vec![
                     control_answers(wire::OP_ATTACH, 0).remove(0),
                     ack(wire::OP_ABORT)
                 ],
                 true,
+                ClientError::Malformed,
             ),
             (
                 "too-many-rows",
-                provisioning((11, 21), (12, 22)),
+                both(),
                 std::vec![
                     control_answers(wire::OP_ATTACH, wire::MAX_ROWS as u32 + 1).remove(0),
                     ack(wire::OP_ABORT)
                 ],
                 true,
+                ClientError::Malformed,
+            ),
+            (
+                "abort-not-acknowledged",
+                both(),
+                std::vec![ack(wire::OP_ATTACH)],
+                false,
+                ClientError::Malformed,
+            ),
+            (
+                "abort-wrongly-acknowledged",
+                both(),
+                std::vec![ack(wire::OP_ATTACH), ack(wire::OP_DETACH)],
+                false,
+                ClientError::Malformed,
+            ),
+            (
+                "no-attach-answer",
+                both(),
+                std::vec::Vec::new(),
+                true,
+                ClientError::Lost,
+            ),
+            (
+                "attach-refused-by-the-service",
+                std::vec::Vec::new(),
+                std::vec![refused_attach],
+                true,
+                ClientError::Setup,
             ),
         ];
-        for (name, loans, answers, formatted) in cases {
+        let ops = |sent: &[std::vec::Vec<u8>]| {
+            sent.iter()
+                .map(
+                    |bytes| match i64::from(WireServiceRequest::decode(bytes).unwrap().op) {
+                        wire::OP_ATTACH => "attach",
+                        wire::OP_ABORT => "abort",
+                        _ => "other",
+                    },
+                )
+                .collect::<std::vec::Vec<_>>()
+                .join(",")
+        };
+        let csv = |values: std::vec::Vec<usize>| {
+            values
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<std::vec::Vec<_>>()
+                .join(",")
+        };
+        // Sorted, so the print does not fix the order of the two returns. A slot returned twice shows twice.
+        let slots = |mut returned: std::vec::Vec<u32>| {
+            returned.sort_unstable();
+            if returned.is_empty() {
+                "none".into()
+            } else {
+                returned
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<std::vec::Vec<_>>()
+                    .join(",")
+            }
+        };
+        for (name, loans, answers, formatted, error) in cases {
             let (ring, data) = (if formatted { formatted_ring() } else { page() }, page());
             slime_rt::test_script(answers, loans);
             // SAFETY: both pages are live, aligned, distinct and unreferenced until the call returns.
             let result = unsafe { ClientIo::attach(5, 6, ring as u64, data as u64) };
-            assert_eq!(result.err(), Some(ClientError::Malformed), "{name}");
+            let failure = result.err();
+            assert_eq!(failure, Some(error), "{name}");
             let sent = slime_rt::test_sent();
-            assert_eq!(sent.len(), 2, "{name}: an attach and an abort");
-            assert_eq!(
-                WireServiceRequest::decode(&sent[0]).unwrap().op,
-                wire::OP_ATTACH as u8,
-                "{name}"
-            );
-            assert_eq!(
-                WireServiceRequest::decode(&sent[1]).unwrap().op,
-                wire::OP_ABORT as u8,
-                "{name}"
-            );
-            assert_eq!(
-                slime_rt::test_returns_at_send(),
-                std::vec![0, 2],
-                "{name}: loans back before the abort"
-            );
-            assert_eq!(
+            abort_line(&std::format!(
+                "failed-attach {name} {:?} sent {} returns-at-send {} unread-at-send {} returns {} slots {} imports {} provision-unread {} unread {} abort-request {}",
+                failure.unwrap(),
+                ops(&sent),
+                csv(slime_rt::test_returns_at_send()),
+                csv(slime_rt::test_pending_at_send()),
+                slime_rt::test_returns(),
+                slots(slime_rt::test_returned_slots()),
+                slime_rt::test_imports(),
+                slime_rt::test_provision_pending(),
                 slime_rt::test_control_pending(),
-                0,
-                "{name}: every answer read"
-            );
-            assert_eq!(
-                slime_rt::test_pending_at_send().last(),
-                Some(&1),
-                "{name}: the attach answer is read before the abort is sent"
-            );
+                sent.get(1)
+                    .map_or_else(|| "none".into(), |bytes| hex(bytes))
+            ));
             release(ring);
             release(data);
         }
-        // With no attach answer the service may be blocked sending it, so the adapter sends no abort.
-        let (ring, data) = (formatted_ring(), page());
-        slime_rt::test_script(std::vec::Vec::new(), provisioning((11, 21), (12, 22)));
-        // SAFETY: both pages are live, aligned, distinct and unreferenced until the call returns.
-        let result = unsafe { ClientIo::attach(5, 6, ring as u64, data as u64) };
-        assert_eq!(result.err(), Some(ClientError::Lost));
-        assert_eq!(
-            slime_rt::test_sent().len(),
-            1,
-            "no abort without an attach answer"
-        );
-        release(ring);
-        release(data);
+    }
+
+    #[test]
+    fn the_abort_exam() {
+        a_failed_attach_ends_the_service_session();
+        abort_line("ok a-failed-attach-ends-the-service-session");
     }
 
     /// Every scenario in a fixed order, so the transcript the judge reads does not depend on test names.
@@ -1802,7 +1865,6 @@ mod tests {
         attach_refuses_bad_endpoints_and_bases_before_it_sends_anything();
         attach_refuses_what_the_service_may_not_provide();
         attach_refuses_a_ring_the_service_did_not_format();
-        a_failed_attach_aborts_the_service_session();
         attach_takes_the_ring_then_the_data_page_and_reports_the_holders_rows();
         a_publication_travels_as_a_request_and_its_payload_in_the_data_page();
         a_take_returns_a_sample_with_its_row_header_and_payload();
