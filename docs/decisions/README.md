@@ -88,3 +88,6 @@ readable and link to the decision that replaced them.
   the one batch the stock-peer exam did not capture, an `UndeclareSubscriber` that names the
   subscriber by id alone behind the network QoS extension, taken by the session by id and
   nothing wider, with ten variants it keeps refusing by name and class.
+- [System-image closures commit sources, not in-tree digests](system-image-closures-as-derivations.md) —
+  proposed; closures record locators, each checkout computes their identities, and attestations
+  live in git notes.

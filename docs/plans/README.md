@@ -15,6 +15,11 @@ in `docs/decisions/`, with explicit status and revisit conditions. Keep
 exploratory possibilities that are not committed work in `docs/directions/`.
 Delivery chronology and historical verification results do not belong in a plan.
 
+## Designs
+
+- [System-image closures as derivations](system-image-closure-derivations.md) — closures that
+  commit sources instead of in-tree digests, and attestations of outputs in git notes.
+
 ## Qualification designs
 
 - [Console record qualification](console-record-qualification.md) — deterministic

@@ -47,6 +47,7 @@ DERIVED_PREFIXES = (
     "contracts/system-image-closure/v2/closures/",
     "contracts/system-image-closure/v2/negative/",
     "contracts/system-test-run/v1/runs/",
+    "contracts/system-test-run/v2/runs/",
 )
 
 NEW_ITEM = re.compile(r"\.tasks/items/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md\Z")
