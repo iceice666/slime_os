@@ -28,6 +28,7 @@ std::thread_local! {
     static PROVISION: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static SENT: RefCell<Vec<(Vec<u8>, usize)>> = const { RefCell::new(Vec::new()) };
     static PENDING_AT_SEND: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static RETURNED_SLOTS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static RETURNS: Cell<usize> = const { Cell::new(0) };
     static IMPORTS: Cell<u32> = const { Cell::new(0) };
 }
@@ -38,6 +39,7 @@ pub fn test_script(control: Vec<Vec<u8>>, provision: Vec<Vec<u8>>) {
     PROVISION.with(|queue| *queue.borrow_mut() = provision);
     SENT.with(|sent| sent.borrow_mut().clear());
     PENDING_AT_SEND.with(|pending| pending.borrow_mut().clear());
+    RETURNED_SLOTS.with(|slots| slots.borrow_mut().clear());
     RETURNS.with(|count| count.set(0));
     IMPORTS.with(|count| count.set(0));
 }
@@ -59,11 +61,19 @@ pub fn test_returns_at_send() -> Vec<usize> {
             .collect()
     })
 }
+/// The capability slot of every loan returned, in the order returned. A slot returned twice appears twice.
+pub fn test_returned_slots() -> Vec<u32> {
+    RETURNED_SLOTS.with(|slots| slots.borrow().clone())
+}
 /// How many scripted control answers were unread when each control request was sent. A real send blocks until
 /// the service receives, and the service sends the attach answer first, so a request sent while that answer
 /// is unread would never be received.
 pub fn test_pending_at_send() -> Vec<usize> {
     PENDING_AT_SEND.with(|pending| pending.borrow().clone())
+}
+/// How many scripted provisioning loans the adapter left unread.
+pub fn test_provision_pending() -> usize {
+    PROVISION.with(|queue| queue.borrow().len())
 }
 /// How many scripted control answers the adapter left unread.
 pub fn test_control_pending() -> usize {
@@ -113,7 +123,8 @@ pub fn capability_import() -> Result<u32, UnexpectedSyscall> {
 pub fn shared_buffer_loan_map(_: u32, _: u64, _: u64, _: u64) -> i64 {
     ERR_SUCCESS
 }
-pub fn shared_buffer_return(_: u32) -> i64 {
+pub fn shared_buffer_return(slot: u32) -> i64 {
     RETURNS.with(|count| count.set(count.get() + 1));
+    RETURNED_SLOTS.with(|slots| slots.borrow_mut().push(slot));
     ERR_SUCCESS
 }
