@@ -216,7 +216,7 @@ impl<'a> ClientIo<'a> {
             DATA_BYTES,
         )?;
         // The service holds a session once both loans have arrived. A failure from here on must end it.
-        let mut answered = false;
+        let mut answer = AttachAnswer::Unread;
         let setup = (|| {
             if ring.descriptor.buffer == payload.descriptor.buffer
                 || ring.descriptor.lease == payload.descriptor.lease
@@ -233,9 +233,13 @@ impl<'a> ClientIo<'a> {
                 Queue::attach(ring_bytes, QUEUE_SLOTS).map_err(|_| ClientError::Malformed)?;
             let outstanding = Outstanding::new(queue.epoch());
             let rows = await_control(peer, wire::OP_ATTACH as u8).inspect_err(|error| {
-                answered = *error == ClientError::Malformed;
+                answer = if *error == ClientError::Lost {
+                    AttachAnswer::Absent
+                } else {
+                    AttachAnswer::Read
+                };
             })?;
-            answered = true;
+            answer = AttachAnswer::Read;
             if rows == 0 || rows as usize > MAX_ROWS {
                 return Err(ClientError::Malformed);
             }
@@ -255,7 +259,7 @@ impl<'a> ClientIo<'a> {
             Err(error) => {
                 let _ = payload.release();
                 let _ = ring.release();
-                abandon_attach(peer, answered);
+                abandon_attach(peer, answer);
                 Err(error)
             }
         }
@@ -590,14 +594,32 @@ fn valid_completion(reply: &WireServiceCompletion, op: u8) -> bool {
 
 /// Wait for the service's completion on the control endpoint. Returns its `length`, which is the number of
 /// grant rows after an attach and zero after a detach or an abort.
-/// End the service's session after an attach that the adapter could not use. The loans are already back. The
-/// attach answer is read first when it has not been, so the abort acknowledgement is not mistaken for it.
-fn abandon_attach(peer: u32, answered: bool) {
+/// What the adapter knows of the service's attach answer when setup fails.
+#[derive(Clone, Copy, PartialEq)]
+enum AttachAnswer {
+    /// Setup failed before the adapter looked for it.
+    Unread,
+    /// The adapter consumed it.
+    Read,
+    /// The adapter waited and none came.
+    Absent,
+}
+
+/// End the service's session after an attach that the adapter could not use. The loans are already back.
+/// The service sends the attach answer with a send that blocks until it is received, so the answer is read
+/// before the abort is sent. With no answer the service is not known to be receiving, and no abort is sent.
+fn abandon_attach(peer: u32, answer: AttachAnswer) {
+    match answer {
+        AttachAnswer::Absent => return,
+        AttachAnswer::Unread => {
+            if await_control(peer, wire::OP_ATTACH as u8) == Err(ClientError::Lost) {
+                return;
+            }
+        }
+        AttachAnswer::Read => {}
+    }
     if slime_rt::send(peer, &control(wire::OP_ABORT as u8).encode(), &[]) != ERR_SUCCESS {
         return;
-    }
-    if !answered {
-        let _ = await_control(peer, wire::OP_ATTACH as u8);
     }
     let _ = await_control(peer, wire::OP_ABORT as u8);
 }
@@ -1750,9 +1772,27 @@ mod tests {
                 0,
                 "{name}: every answer read"
             );
+            assert_eq!(
+                slime_rt::test_pending_at_send().last(),
+                Some(&1),
+                "{name}: the attach answer is read before the abort is sent"
+            );
             release(ring);
             release(data);
         }
+        // With no attach answer the service may be blocked sending it, so the adapter sends no abort.
+        let (ring, data) = (formatted_ring(), page());
+        slime_rt::test_script(std::vec::Vec::new(), provisioning((11, 21), (12, 22)));
+        // SAFETY: both pages are live, aligned, distinct and unreferenced until the call returns.
+        let result = unsafe { ClientIo::attach(5, 6, ring as u64, data as u64) };
+        assert_eq!(result.err(), Some(ClientError::Lost));
+        assert_eq!(
+            slime_rt::test_sent().len(),
+            1,
+            "no abort without an attach answer"
+        );
+        release(ring);
+        release(data);
     }
 
     /// Every scenario in a fixed order, so the transcript the judge reads does not depend on test names.

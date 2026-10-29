@@ -27,6 +27,7 @@ std::thread_local! {
     static CONTROL: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static PROVISION: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     static SENT: RefCell<Vec<(Vec<u8>, usize)>> = const { RefCell::new(Vec::new()) };
+    static PENDING_AT_SEND: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     static RETURNS: Cell<usize> = const { Cell::new(0) };
     static IMPORTS: Cell<u32> = const { Cell::new(0) };
 }
@@ -36,6 +37,7 @@ pub fn test_script(control: Vec<Vec<u8>>, provision: Vec<Vec<u8>>) {
     CONTROL.with(|queue| *queue.borrow_mut() = control);
     PROVISION.with(|queue| *queue.borrow_mut() = provision);
     SENT.with(|sent| sent.borrow_mut().clear());
+    PENDING_AT_SEND.with(|pending| pending.borrow_mut().clear());
     RETURNS.with(|count| count.set(0));
     IMPORTS.with(|count| count.set(0));
 }
@@ -56,6 +58,12 @@ pub fn test_returns_at_send() -> Vec<usize> {
             .map(|(_, returned)| *returned)
             .collect()
     })
+}
+/// How many scripted control answers were unread when each control request was sent. A real send blocks until
+/// the service receives, and the service sends the attach answer first, so a request sent while that answer
+/// is unread would never be received.
+pub fn test_pending_at_send() -> Vec<usize> {
+    PENDING_AT_SEND.with(|pending| pending.borrow().clone())
 }
 /// How many scripted control answers the adapter left unread.
 pub fn test_control_pending() -> usize {
@@ -91,6 +99,8 @@ pub fn send(slot: u32, bytes: &[u8], _: &[u64]) -> i64 {
     );
     let returned = RETURNS.with(Cell::get);
     SENT.with(|sent| sent.borrow_mut().push((bytes.to_vec(), returned)));
+    let pending = CONTROL.with(|queue| queue.borrow().len());
+    PENDING_AT_SEND.with(|log| log.borrow_mut().push(pending));
     ERR_SUCCESS
 }
 pub fn yield_now() {}
