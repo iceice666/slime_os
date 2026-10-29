@@ -177,7 +177,7 @@
       artifact = {
         path = "components/lib";
         kind = "tree";
-        identity = "911e3ac26a71143b8646d5809f1ca2863475142f2ae535567e4dfb2ed45eca65";
+        identity = "d4d372e3cd204fe11e3cb28037c815f5fc7d73294e8d4d54adb3fe4433a7f754";
       };
     };
     {
@@ -185,7 +185,7 @@
       artifact = {
         path = "components/proto";
         kind = "tree";
-        identity = "a28657bfc7d9be47366f4bb34122437dc494c22d2f68432fa11b7445e29278ec";
+        identity = "508377bea80aed0038ad03614d5ab0e823e621a1dcdfec47dd1ed8a3d9db0311";
       };
     };
     {
