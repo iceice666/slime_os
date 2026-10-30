@@ -81,7 +81,7 @@
     prefix = {
       path = "contracts/system-image-closure/v2/inputs/sel4-riscv64-prefix";
       kind = "tree";
-      identity = "d761730c251508d4734a09f8df4b71c2b9a6f4ceaa687fc4f1956cfc0695f621";
+      identity = "26904b66e343af01ba15cf4d2bd35c65326c0b4f778e4860dec59b075235a213";
     };
     toolchain = "nightly-2026-04-04";
     rustSel4Commit = "14d98403c1dd95fd97109919e13466f0ecb37c01";

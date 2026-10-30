@@ -1,4 +1,4 @@
-/* generated from /Users/iceice666/code/slime_os/deps/sel4/libsel4/sel4_arch_include/riscv64/sel4/sel4_arch/types.bf */
+/* generated from /slime/sel4/libsel4/sel4_arch_include/riscv64/sel4/sel4_arch/types.bf */
 
 #pragma once
 

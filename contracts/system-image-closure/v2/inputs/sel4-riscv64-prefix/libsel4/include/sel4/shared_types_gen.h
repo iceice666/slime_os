@@ -1,4 +1,4 @@
-/* generated from /Users/iceice666/code/slime_os/deps/sel4/libsel4/mode_include/64/sel4/shared_types.bf */
+/* generated from /slime/sel4/libsel4/mode_include/64/sel4/shared_types.bf */
 
 #pragma once
 
