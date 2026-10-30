@@ -1,0 +1,34 @@
+-- Slime OS closure resolution report, version 1.
+--
+-- `python3 scripts/generate/generate-system-image-closures.py --resolve NAME --output PATH --report REPORT`
+-- resolves the committed source of closure NAME in the running checkout, writes the resolved
+-- `SystemImageClosure` to PATH, and writes one record of this shape to REPORT. A judge in another process
+-- reads it back, so it is a versioned contract and not a line either side parses by hand.
+--
+-- `derivationId` is the resolved closure's identity: lowercase SHA-256 hex. `dirty` is true when a tracked
+-- file under one of the closure's inputs is modified, or an untracked or ignored file sits under one. A
+-- dirty resolution may be built and tested, but no evidence or attestation may name it.
+
+ResolutionReport :: type {
+  formatVersion : Int;
+  name : Text;
+  derivationId : Text;
+  dirty : Bool;
+};
+
+FromData @ResolutionReport :: derive
+
+formatVersion :: Int = 1;
+maxNameBytes :: Int = 96;
+derivationIdBytes :: Int = 64;
+
+decodeResolutionReport :: Data -> Validation DecodeIssue ResolutionReport
+= data => decode data;
+
+{
+  ResolutionReport =;
+  decodeResolutionReport =;
+  formatVersion =;
+  maxNameBytes =;
+  derivationIdBytes =;
+}
