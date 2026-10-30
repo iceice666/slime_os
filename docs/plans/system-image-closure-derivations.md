@@ -4,7 +4,8 @@ This plan is unimplemented. It moves the system-image closure corpus from commit
 committed sources, so a change to an input tree stops rewriting derived records. The decision and
 its alternatives are in
 [`decisions/system-image-closures-as-derivations.md`](../decisions/system-image-closures-as-derivations.md).
-Step 1 is work item `01a18732-ad06-744a-85e5-d50c903828f9`. Steps 2 and 3 have no item yet.
+Step 1, work item `01a18732-ad06-744a-85e5-d50c903828f9`, is implemented. Step 2 is work item
+`01a18c9f-d6d7-79d0-ae90-a8766f8853b8`. Step 3 has no item yet.
 
 ## Problem
 
@@ -51,12 +52,23 @@ The rules:
 | Step | Change | Derived files no longer rewritten per input change | Gate |
 | --- | --- | --- | --- |
 | 1 | Test-run records and negative build cases name their closure (`contracts/system-test-run/v2`) | 65 + 6 | `just system_test_run_reference_check` |
-| 2 | Closure v3 holds locators only. The resolver is the closure generator, called in memory over the git-visible file set, with the dirty rule. | 103 | to be admitted |
+| 2 | Closure v3 holds locators only. The resolver is the closure generator, called in memory over the git-visible file set, with the dirty rule. | 103 | `just closure_derivation_check` |
 | 3 | Attestation contract, the notes writer workflow and its check | none; adds evidence across commits | to be admitted |
 
 Step 1 precedes step 2, because the runs must stop copying identities before the closures stop
 recording them. Step 2 precedes step 3, because an attestation names a derivation id. A scheduled
 rebuilder of attested commits is deferred.
+
+## Interfaces step 2 is judged through
+
+`scripts/check/check-closure-derivations.py` calls these as commands:
+
+| Command | Contract |
+| --- | --- |
+| `python3 scripts/generate/generate-system-image-closures.py` | write the sources under `contracts/system-image-closure/v3/closures/` |
+| `… --check` | refuse a stale source |
+| `… --resolve NAME --output PATH` | write the resolved v2 closure to `PATH`; print one JSON line with exactly `name`, `derivationId` and `dirty` |
+| `python3 scripts/build/build-system-image.py contracts/system-image-closure/v3/closures/NAME.zti OUT` | build, and write `OUT/build-result.json` with `closureIdentity` and `dirty` |
 
 ## Measured feasibility of step 2
 

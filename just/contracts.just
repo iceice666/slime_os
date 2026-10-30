@@ -138,6 +138,15 @@ system_test_run_bless:
 closure_input_host_paths_check:
     python3 scripts/check/check-system-image-closure.py --input-host-paths
 
+# Closure sources carry no in-tree digest, and each checkout derives their identities. In a scratch checkout
+# of HEAD, sampled closures resolve to identities computed independently over the files git lists, dirty
+# inputs move exactly the expected derivation ids, and the generator rewrites no committed file; then
+# sel4-channel builds clean and dirty. The expectation is scripts/lib/closure_derivation_exam.py. Fails
+# until closures move to v3 sources.
+[group('contracts')]
+closure_derivation_check:
+    python3 scripts/check/check-closure-derivations.py
+
 # Every shipped or tested image traces to exactly one closure, and every
 # closure is exercised by an owning gate. Cheap by design: a mapping only
 # checked before a release is a mapping that drifts between releases.
