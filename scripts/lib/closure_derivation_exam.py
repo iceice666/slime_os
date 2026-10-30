@@ -10,8 +10,9 @@ derivation id. This module owns what that must mean, and it imports nothing it j
 * the resolver: a resolved closure's identity, recomputed here from its JSON projection, equals the
   derivation id the resolver reports, and every in-tree and submodule artifact's identity equals the
   digest this module computes over the files git lists;
-* the report: the resolver's last stdout line is one JSON object with exactly `name`, `derivationId`
-  and `dirty`.
+* the records: the resolver's report decodes through `contracts/closure-resolution/v1` and the
+  builder's `build-result.zti` decodes through `contracts/system-image-closure/v2`'s
+  `decodeSystemImageBuildResult`, each with exactly the fields this exam reads.
 
 `scripts/check/check-closure-derivations.py` runs the resolver, the generator and the builder as
 commands. Each judge here is trusted only after it refuses the corruptions in `controls()`.
@@ -25,14 +26,16 @@ import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 SOURCE_GLOB = "contracts/system-image-closure/v3/closures/*.zti"
+REPORT_SCHEMA = "contracts/closure-resolution/v1/schema.zt"
+CLOSURE_SCHEMA = "contracts/system-image-closure/v2/schema.zt"
+REPORT_FIELDS = ("derivationId", "dirty", "formatVersion", "name")
 RESOLVED_V2_DIR = "contracts/system-image-closure/v2/closures"
 IDENTITY_DOMAIN = b"slime-system-image-closure-v2:"
 TREE_DOMAIN = b"slime-component-sdk-tree-v1\0"
-REPORT_KEYS = ("derivationId", "dirty", "name")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 
 # Every closure at the planning base, 00af4fde..80c960e5 (#893). A closure added later needs a source too,
@@ -95,19 +98,61 @@ def source_findings(sources: dict[str, str], resolved_v2: list[str]) -> list[str
     return findings
 
 
-def parse_report(stdout: str) -> dict:
-    """The resolver's last stdout line, as `{name, derivationId, dirty}`. Raises ValueError otherwise."""
-    lines = [line for line in stdout.strip().splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("the resolver printed nothing")
-    report = json.loads(lines[-1])
-    if not isinstance(report, dict) or tuple(sorted(report)) != REPORT_KEYS:
-        raise ValueError(f"the report must hold exactly {list(REPORT_KEYS)}: {lines[-1][:200]}")
-    if not isinstance(report["name"], str) or not isinstance(report["dirty"], bool):
-        raise ValueError(f"the report's name or dirty field has the wrong type: {lines[-1][:200]}")
-    if not isinstance(report["derivationId"], str) or DIGEST.fullmatch(report["derivationId"]) is None:
-        raise ValueError(f"the report's derivationId is not a lowercase SHA-256: {lines[-1][:200]}")
-    return report
+def decode_record(schema: Path, decoder: str, type_name: str, record: Path) -> dict:
+    """Decode `record` with `decoder` from a copy of `schema`. Raises ValueError unless it decodes.
+
+    Zutai imports only inside the evaluated file's directory, so the schema is copied beside a
+    generated entry point rather than imported from the checkout.
+    """
+    import zutai_cli
+
+    with tempfile.TemporaryDirectory(prefix="slime-derivation-decode-") as directory:
+        root = Path(directory)
+        (root / "schema.zt").write_text(schema.read_text(encoding="utf-8"), encoding="utf-8")
+        (root / "decode.zt").write_text(
+            's ::= import "schema.zt";\n'
+            f"main :: Load -> Validation DecodeIssue s.{type_name} ! {{ load.zti : Path -> Data; }}\n"
+            f"  = load => s.{decoder} (loadZti {json.dumps(str(record.resolve()))});\n"
+            "main\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run([str(zutai_cli.binary()), "json", str(root / "decode.zt")], cwd=root,
+                                capture_output=True, text=True,
+                                env={**os.environ, "ZUTAI_STDLIB_ROOT": str(zutai_cli.STDLIB)})
+    if result.returncode != 0:
+        raise ValueError(f"{record.name} could not be decoded: {(result.stderr or result.stdout).strip()[:300]}")
+    decoded = json.loads(result.stdout)
+    if not isinstance(decoded, dict) or decoded.get("tag") != "valid":
+        raise ValueError(f"{record.name} does not decode through {decoder}: {json.dumps(decoded)[:300]}")
+    return decoded["payload"]["value"]
+
+
+def report_findings(name: str, report: dict, raw: dict) -> list[str]:
+    """Findings for a decoded resolution report. `raw` is the record's plain projection, so a field the
+    decoder ignores is still found."""
+    findings = []
+    if tuple(sorted(raw)) != REPORT_FIELDS:
+        findings.append(f"{name}: the report's fields are {sorted(raw)}, not {list(REPORT_FIELDS)}")
+    if report.get("formatVersion") != 1:
+        findings.append(f"{name}: the report's formatVersion is {report.get('formatVersion')!r}, not 1")
+    if report.get("name") != name:
+        findings.append(f"{name}: the report names {report.get('name')!r}")
+    if not isinstance(report.get("derivationId"), str) or DIGEST.fullmatch(report["derivationId"]) is None:
+        findings.append(f"{name}: the report's derivationId is not a lowercase SHA-256")
+    if not isinstance(report.get("dirty"), bool):
+        findings.append(f"{name}: the report's dirty field is not a boolean")
+    return findings
+
+
+def build_result_findings(label: str, result: dict, derivation_id: str, dirty: bool) -> list[str]:
+    """Findings for a decoded build result against the clean derivation id and the expected dirty flag."""
+    findings = []
+    if result.get("dirty") is not dirty:
+        findings.append(f"{label}: the build result says dirty={result.get('dirty')!r}, expected {dirty}")
+    if result.get("closureIdentity") != derivation_id:
+        findings.append(f"{label}: the build result names closure {str(result.get('closureIdentity'))[:16]}, "
+                        f"the resolver reports {derivation_id[:16]}")
+    return findings
 
 
 def closure_identity(value: object) -> str:
@@ -187,14 +232,6 @@ def resolved_findings(name: str, value: object, report: dict, checkout: Path) ->
 
 # Controls: each corrupts honest evidence and requires a judge to find it.
 
-def _refused(action: Callable[[], object]) -> bool:
-    try:
-        action()
-    except ValueError:
-        return True
-    return False
-
-
 def _source_controls() -> Iterator[tuple[str, bool]]:
     honest = {name: f'{{\n  name = "{name}";\n  systemSpec = {{ path = "x.zti"; kind = "file"; }};\n}}\n' for name in PINNED_CLOSURES}
     yield "sources-honest", not source_findings(honest, [])
@@ -209,19 +246,40 @@ def _source_controls() -> Iterator[tuple[str, bool]]:
         yield label, bool(source_findings(sources, resolved))
 
 
-def _report_controls() -> Iterator[tuple[str, bool]]:
-    good = {"name": "sel4-channel", "derivationId": "a" * 64, "dirty": False}
-    yield "report-honest", not _refused(lambda: parse_report("building\n" + json.dumps(good) + "\n"))
-    for label, text in {
-        "report-empty": "",
-        "report-not-json": "done\n",
-        "report-missing-dirty": json.dumps({k: v for k, v in good.items() if k != "dirty"}),
-        "report-extra-key": json.dumps({**good, "closureIdentity": "a" * 64}),
-        "report-dirty-text": json.dumps({**good, "dirty": "false"}),
-        "report-short-id": json.dumps({**good, "derivationId": "a" * 63}),
-        "report-upper-id": json.dumps({**good, "derivationId": "A" * 64}),
+def _report_controls(root: Path) -> Iterator[tuple[str, bool]]:
+    """The report and build-result checks, with real decoding through the committed schemas."""
+    good = {"formatVersion": 1, "name": "sel4-channel", "derivationId": "a" * 64, "dirty": False}
+    yield "report-honest", not report_findings("sel4-channel", good, good)
+    for label, value in {
+        "report-extra-field": {**good, "closureIdentity": "a" * 64},
+        "report-version-2": {**good, "formatVersion": 2},
+        "report-other-name": {**good, "name": "sel4-zenoh"},
+        "report-short-id": {**good, "derivationId": "a" * 63},
+        "report-upper-id": {**good, "derivationId": "A" * 64},
+        "report-dirty-text": {**good, "dirty": "false"},
     }.items():
-        yield label, _refused(lambda text=text: parse_report(text))
+        yield label, bool(report_findings("sel4-channel", value, value))
+    schema = root / REPORT_SCHEMA
+    with tempfile.TemporaryDirectory(prefix="slime-derivation-report-") as directory:
+        record = Path(directory) / "report.zti"
+        record.write_text('{\n  formatVersion = 1;\n  name = "sel4-channel";\n  derivationId = "' + "a" * 64
+                          + '";\n  dirty = false;\n}\n', encoding="utf-8")
+        try:
+            decoded = decode_record(schema, "decodeResolutionReport", "ResolutionReport", record)
+            yield "report-decodes", decoded == good
+        except ValueError:
+            yield "report-decodes", False
+        record.write_text('{\n  formatVersion = 1;\n  name = "sel4-channel";\n  dirty = "no";\n}\n', encoding="utf-8")
+        try:
+            decode_record(schema, "decodeResolutionReport", "ResolutionReport", record)
+            yield "report-malformed-refused", False
+        except ValueError:
+            yield "report-malformed-refused", True
+    built = {"closureIdentity": "a" * 64, "dirty": False}
+    yield "build-result-honest", not build_result_findings("clean", built, "a" * 64, False)
+    yield "build-result-dirty-wrong", bool(build_result_findings("clean", built, "a" * 64, True))
+    yield "build-result-dirty-missing", bool(build_result_findings("clean", {"closureIdentity": "a" * 64}, "a" * 64, False))
+    yield "build-result-other-closure", bool(build_result_findings("clean", built, "b" * 64, False))
 
 
 def _resolved_controls() -> Iterator[tuple[str, bool]]:
@@ -263,6 +321,6 @@ def _resolved_controls() -> Iterator[tuple[str, bool]]:
         yield "resolved-ignored-file-excluded", not resolved_findings("sel4-x", honest, report, checkout)
 
 
-def controls() -> list[tuple[str, bool]]:
-    """(name, passed): the honest form accepted, or the corruption found."""
-    return [*_source_controls(), *_report_controls(), *_resolved_controls()]
+def controls(root: Path) -> list[tuple[str, bool]]:
+    """(name, passed): the honest form accepted, or the corruption found. `root` supplies the schemas."""
+    return [*_source_controls(), *_report_controls(root), *_resolved_controls()]

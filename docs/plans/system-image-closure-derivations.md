@@ -5,7 +5,7 @@ committed sources, so a change to an input tree stops rewriting derived records.
 its alternatives are in
 [`decisions/system-image-closures-as-derivations.md`](../decisions/system-image-closures-as-derivations.md).
 Step 1, work item `01a18732-ad06-744a-85e5-d50c903828f9`, is implemented. Step 2 is work item
-`01a18c9f-d6d7-79d0-ae90-a8766f8853b8`. Step 3 has no item yet.
+`01a18cca-71e6-74e8-9161-ab2736a67bc1`. Step 3 has no item yet.
 
 ## Problem
 
@@ -67,8 +67,10 @@ rebuilder of attested commits is deferred.
 | --- | --- |
 | `python3 scripts/generate/generate-system-image-closures.py` | write the sources under `contracts/system-image-closure/v3/closures/` |
 | `… --check` | refuse a stale source |
-| `… --resolve NAME --output PATH` | write the resolved v2 closure to `PATH`; print one JSON line with exactly `name`, `derivationId` and `dirty` |
-| `python3 scripts/build/build-system-image.py contracts/system-image-closure/v3/closures/NAME.zti OUT` | build, and write `OUT/build-result.json` with `closureIdentity` and `dirty` |
+| `… --resolve NAME --output PATH --report REPORT` | write the resolved v2 closure to `PATH`, and a `contracts/closure-resolution/v1` report with `name`, `derivationId` and `dirty` to `REPORT` |
+| `python3 scripts/build/build-system-image.py contracts/system-image-closure/v3/closures/NAME.zti OUT` | build, and write `OUT/build-result.zti`, a version 2 `SystemImageBuildResult` with `closureIdentity` and `dirty` that `decodeSystemImageBuildResult` accepts |
+
+The exam reads both records only through their Zutai decoders.
 
 ## Measured feasibility of step 2
 

@@ -7,11 +7,15 @@ closure generator and image builder as commands, and imports neither. They must 
 
     python3 scripts/generate/generate-system-image-closures.py            write the committed sources
     python3 scripts/generate/generate-system-image-closures.py --check    refuse a stale source
-    python3 scripts/generate/generate-system-image-closures.py --resolve NAME --output PATH
-        write the resolved v2 closure for NAME to PATH, and print as the last stdout line one JSON
-        object with exactly `name`, `derivationId` (the resolved closure's identity) and `dirty`
+    python3 scripts/generate/generate-system-image-closures.py --resolve NAME --output PATH --report REPORT
+        write the resolved v2 closure for NAME to PATH, and a `contracts/closure-resolution/v1` record to
+        REPORT with `name`, `derivationId` (the resolved closure's identity) and `dirty`
     python3 scripts/build/build-system-image.py contracts/system-image-closure/v3/closures/NAME.zti OUT
-        build NAME and write OUT/build-result.json carrying `closureIdentity` and `dirty`
+        build NAME and write OUT/build-result.zti, a `SystemImageBuildResult` that
+        `contracts/system-image-closure/v2`'s `decodeSystemImageBuildResult` accepts, carrying
+        `closureIdentity` and `dirty`
+
+Both records cross a process boundary, so this script reads them only through those decoders.
 
 Steps:
 
@@ -19,7 +23,7 @@ Steps:
 2. Every pinned closure has a source under `contracts/system-image-closure/v3/closures/`, no source
    holds a digest or an identity field, and no resolved v2 closure stays committed.
 3. In a scratch checkout of `HEAD` with its submodules cloned locally, each sampled closure resolves
-   twice to the same derivation id, reports `dirty: false`, and its resolved closure passes the
+   twice to the same derivation id, both resolutions report `dirty: false`, and its resolved closure passes the
    independent checks: its recomputed identity is the derivation id, and every artifact's identity is
    the digest of the files git lists.
 4. In the same checkout, a dirty input moves derivation ids exactly where it should:
@@ -93,16 +97,21 @@ def tail(result: subprocess.CompletedProcess[str]) -> str:
 
 @contextmanager
 def scratch_checkout() -> Iterator[Path]:
-    """A worktree of `HEAD`, its submodules cloned from this checkout at their pins, sharing the Zutai cache."""
+    """A worktree of `HEAD`, its submodules cloned from this checkout at their pins, sharing the Zutai cache.
+
+    Each submodule is a plain clone of this checkout's submodule, checked out at the gitlink's commit. No
+    `submodule.*` setting is written: a worktree shares this repository's configuration, and a URL written
+    there would outlive the scratch checkout.
+    """
     parent = Path(tempfile.mkdtemp(prefix="slime-closure-derivations-"))
     scratch = parent / "checkout"
     git("worktree", "add", "--detach", "--quiet", str(scratch), "HEAD")
     try:
         for submodule in SUBMODULES:
-            git("config", f"submodule.{submodule}.url", str(ROOT / submodule), cwd=scratch)
-        git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--quiet", "--", *SUBMODULES, cwd=scratch)
-        for submodule in SUBMODULES:
-            if git("rev-parse", "HEAD", cwd=scratch / submodule).strip() != git("rev-parse", f"HEAD:{submodule}").strip():
+            pin = git("rev-parse", f"HEAD:{submodule}").strip()
+            git("clone", "--quiet", "--shared", "--no-checkout", str(ROOT / submodule), str(scratch / submodule))
+            git("checkout", "--quiet", "--detach", pin, cwd=scratch / submodule)
+            if git("rev-parse", "HEAD", cwd=scratch / submodule).strip() != pin:
                 raise SystemExit(f"closure derivations: the scratch {submodule} is not at its pin")
         (scratch / ZUTAI_BINARY).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(zutai_cli.binary(), scratch / ZUTAI_BINARY)
@@ -127,14 +136,23 @@ def resolve(checkout: Path, name: str, findings: Findings, step: str, *, judge: 
     """Resolve one closure; with `judge`, check the resolved closure against the checkout's files."""
     with tempfile.TemporaryDirectory(prefix="slime-resolved-") as directory:
         output = Path(directory) / f"{name}.zti"
-        result = run(checkout, GENERATOR, "--resolve", name, "--output", str(output))
+        record = Path(directory) / "report.zti"
+        result = run(checkout, GENERATOR, "--resolve", name, "--output", str(output), "--report", str(record))
         if result.returncode != 0:
             findings.add(step, [f"{name}: --resolve exited {result.returncode}: {tail(result)}"])
             return None
+        if not record.is_file():
+            findings.add(step, [f"{name}: --resolve wrote no report to --report"])
+            return None
         try:
-            report = exam.parse_report(result.stdout)
+            report = exam.decode_record(checkout / exam.REPORT_SCHEMA, "decodeResolutionReport", "ResolutionReport", record)
         except ValueError as error:
             findings.add(step, [f"{name}: {error}"])
+            return None
+        raw = json.loads(zutai_cli.evaluate("json", record, input_path=record, env_var="SLIME_UNUSED"))
+        problems = exam.report_findings(name, report, raw)
+        if problems:
+            findings.add(step, problems)
             return None
         if judge:
             if not output.is_file():
@@ -154,7 +172,7 @@ def step_resolver(scratch: Path, findings: Findings) -> dict[str, dict]:
             continue
         if first["derivationId"] != second["derivationId"]:
             findings.add("resolver", [f"{name}: two resolutions gave different derivation ids"])
-        if first["dirty"]:
+        if first["dirty"] or second["dirty"]:
             findings.add("resolver", [f"{name}: a clean checkout resolved dirty"])
         clean[name] = first
     print(f"closure derivations: {len(clean)} of {len(exam.SAMPLE)} sampled closure(s) resolved and judged")
@@ -227,14 +245,17 @@ def step_sensitivity(scratch: Path, clean: dict[str, dict], findings: Findings) 
     print(f"closure derivations: {len(cases)} dirty-input case(s) resolved")
 
 
-def build(output: Path) -> dict | None:
+def build(output: Path) -> dict:
     result = run(ROOT, BUILDER, str(SOURCE_DIR / "sel4-channel.zti"), str(output))
     if result.returncode != 0:
         return {"error": f"the builder exited {result.returncode}: {tail(result)}"}
-    record = output / "build-result.json"
+    record = output / "build-result.zti"
     if not record.is_file():
-        return {"error": "the builder wrote no build-result.json"}
-    return json.loads(record.read_text(encoding="utf-8"))
+        return {"error": "the builder wrote no build-result.zti"}
+    try:
+        return exam.decode_record(ROOT / exam.CLOSURE_SCHEMA, "decodeSystemImageBuildResult", "SystemImageBuildResult", record)
+    except ValueError as error:
+        return {"error": str(error)}
 
 
 def step_builds(findings: Findings) -> None:
@@ -258,10 +279,7 @@ def step_builds(findings: Findings) -> None:
             if "error" in result:
                 findings.add("builds", [f"{label}: {result['error']}"])
                 continue
-            if result.get("dirty") is not dirty:
-                findings.add("builds", [f"{label}: build-result.json says dirty={result.get('dirty')!r}, expected {dirty}"])
-            if result.get("closureIdentity") != clean["derivationId"]:
-                findings.add("builds", [f"{label}: build-result.json names closure {str(result.get('closureIdentity'))[:16]}, the resolver reports {clean['derivationId'][:16]}"])
+            findings.add("builds", exam.build_result_findings(label, result, clean["derivationId"], dirty))
     print("closure derivations: sel4-channel built clean and with an ignored input file")
 
 
@@ -270,7 +288,7 @@ def main() -> int:
     parser.add_argument("--controls-only", action="store_true", help="run only the judges' controls")
     parser.add_argument("--skip-builds", action="store_true", help="stop before the two image builds")
     arguments = parser.parse_args()
-    results = exam.controls()
+    results = exam.controls(ROOT)
     failed = [name for name, passed in results if not passed]
     if failed:
         print(f"closure derivations: FAIL: controls did not hold: {', '.join(failed)}", file=_sys.stderr)
