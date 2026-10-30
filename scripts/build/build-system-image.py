@@ -22,7 +22,6 @@ from types import ModuleType
 import system_image_closure_contract as CLOSURE_CONTRACT
 from harness import ROOT
 from system_image_closure import (
-    compile_closure,
     compile_negative_case,
     make_build_result,
     resolve_closure,
@@ -427,22 +426,17 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
 def build_negative(case: Path, output: Path) -> Path:
     """Build one negative case: a valid base closure plus one closed mutation.
 
-    The base is found by identity rather than by path, so a case cannot name a
-    closure that does not exist and cannot drift onto a different one silently.
+    The base is named by its closure file, and that file must exist, so a case
+    cannot name a closure nobody can build.
     The result is a deliberately invalid image whose refusal its owning gate
     observes at boot; no image-identity record is written, so nothing here can
     be mistaken for a product image.
     """
     compiled = compile_negative_case(case)
-    wanted = compiled.value["baseClosureIdentity"]
-    for candidate in sorted(
-        (ROOT / "contracts" / "system-image-closure" / "v2" / "closures").glob("*.zti")
-    ):
-        if compile_closure(candidate).identity.hex() == wanted:
-            base = candidate
-            break
-    else:
-        fail(f"{case.stem}: no closure has identity {wanted}")
+    wanted = compiled.value["baseClosure"]
+    base = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / f"{wanted}.zti"
+    if not base.is_file():
+        fail(f"{case.stem}: base closure {wanted} does not exist")
     result = build(base, output, mutation=compiled.value["mutation"])
     (output / "negative-case.identity").write_text(
         compiled.identity.hex() + "\n", encoding="utf-8"

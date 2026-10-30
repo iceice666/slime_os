@@ -181,7 +181,7 @@ BINDINGS: dict[str, tuple[Run, ...]] = {
         _python("system-spec", "v1", "gen_python.zt", "system_spec_contract", "SLIME_SYSTEM_SPEC_BINDINGS_ROOT"),
     ),
     "system-test-run": (
-        _python("system-test-run", "v1", "gen_python.zt", "system_test_run_contract", "SLIME_SYSTEM_TEST_RUN_BINDINGS_ROOT"),
+        _python("system-test-run", "v2", "gen_python.zt", "system_test_run_contract", "SLIME_SYSTEM_TEST_RUN_BINDINGS_ROOT"),
     ),
 }
 

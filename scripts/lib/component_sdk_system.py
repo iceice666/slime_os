@@ -10,7 +10,7 @@ from pathlib import Path
 SYSTEM_NAME = "sel4-channel"
 ARCHIVE_PATH = f"assets/system-{SYSTEM_NAME}.tar"
 CLOSURE_PATH = f"contracts/system-image-closure/v2/closures/{SYSTEM_NAME}.zti"
-TEST_RUN_PATH = f"contracts/system-test-run/v1/runs/{SYSTEM_NAME}.zti"
+TEST_RUN_PATH = f"contracts/system-test-run/v2/runs/{SYSTEM_NAME}.zti"
 
 # A repository-shaped corpus preserves every canonical path embedded in the
 # closure and every Cargo path dependency used by the builders. Build outputs
@@ -127,15 +127,12 @@ def export_asset(
         closure_path.write_text(sdk_module.zti(closure_value) + "\n", encoding="utf-8")
         closure = compile_closure(closure_path)
         test_run_path = staging / TEST_RUN_PATH
-        test_run_value = compile_test_run(test_run_path).value
-        source_closure_identity = compile_closure(source / CLOSURE_PATH).identity.hex()
-        if test_run_value["imageClosureIdentity"] != source_closure_identity:
+        # The run names its closure, so re-identifying the closure for the SDK leaves the run unchanged.
+        test_run = compile_test_run(test_run_path)
+        if test_run.value["imageClosure"] != Path(CLOSURE_PATH).stem:
             raise sdk_module.ComponentSdkError(
                 "source test run does not reference the source closure"
             )
-        test_run_value["imageClosureIdentity"] = closure.identity.hex()
-        test_run_path.write_text(sdk_module.zti(test_run_value) + "\n", encoding="utf-8")
-        test_run = compile_test_run(test_run_path)
         archive = destination / ARCHIVE_PATH
         archive.parent.mkdir(parents=True, exist_ok=True)
         sdk_module.canonical_tar(staging, archive)

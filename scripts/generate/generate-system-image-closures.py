@@ -37,7 +37,7 @@ import system_image_closure_contract as CONTRACT
 from component_sdk import PROFILE_PLATFORMS, pins
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
-from system_image_closure import artifact_identity, compile_closure, tree_identity
+from system_image_closure import artifact_identity, tree_identity
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
@@ -275,6 +275,10 @@ ROOT_PARAMETERS: dict[str, tuple[str, ...]] = {
     # IO9: the product graph plus the serial driver and the heartbeat producer.
     "sel4-mavlink": ("qemuKeyboard",),
 }
+
+
+# The closure every negative build case perturbs.
+NEGATIVE_BASE = "sel4-boot"
 
 
 def fail(message: str) -> None:
@@ -555,18 +559,16 @@ def outputs() -> dict[Path, str]:
         emitted[CLOSURE_ROOT / f"{name}.zti"] = render(closure) + "\n"
     if not emitted:
         fail("no composition produced a closure")
-    # Negative cases refer to the canonical base closure identity, which changes
-    # with its implementation inputs just as ordinary test-run identities do.
-    with tempfile.TemporaryDirectory(prefix="slime-closure-base-") as directory:
-        base = Path(directory) / "sel4-boot.zti"
-        base.write_text(emitted[CLOSURE_ROOT / "sel4-boot.zti"], encoding="utf-8")
-        identity = compile_closure(base).identity.hex()
+    # Negative cases name their base closure, so a change to one of its inputs
+    # leaves every case unchanged.
+    if CLOSURE_ROOT / f"{NEGATIVE_BASE}.zti" not in emitted:
+        fail(f"negative cases name base closure {NEGATIVE_BASE}, which no composition produced")
     for mutation in CONTRACT.MUTATIONS:
         name = f"sel4-b40-{mutation.replace('_', '-')}"
         case = {
             "formatVersion": CONTRACT.NEGATIVE_FORMAT_VERSION,
             "name": name,
-            "baseClosureIdentity": identity,
+            "baseClosure": NEGATIVE_BASE,
             "mutation": mutation,
             "expectedRefusal": "CSpaceMismatch",
         }

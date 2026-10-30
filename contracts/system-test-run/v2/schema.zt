@@ -1,0 +1,95 @@
+-- Slime OS system test-run contract, version 2.
+--
+-- Version 2 names the image closure a run exercises by its name, not by a copy of its identity. A
+-- closure's identity changes whenever one of its input trees changes, and version 1 copied it into every
+-- run that boots the closure, so one input change rewrote every run record. The checker resolves the
+-- named closure and requires it to be the closure the run's plane gate builds.
+--
+--
+-- Execution-only inputs live here so a marker oracle, timeout, disk image, or
+-- injected runtime device event cannot alter the image closure it exercises.
+-- Frozen declarations may leave path and identity both empty until the owning
+-- checker binds a fixture. A partially bound pair is invalid; executable input
+-- admission requires both fields and a valid content digest.
+Fixture :: type {
+  name : Text;
+  path : Text;
+  identity : Text;
+  writable : Bool;
+};
+
+-- A declaration may name only the fault kind, leaving target and value both
+-- empty. Executable input admission requires both fields to be bound.
+FaultControl :: type {
+  kind : Text;
+  target : Text;
+  value : Text;
+};
+
+SystemTestRun :: type {
+  formatVersion : Int;
+  name : Text;
+  -- The name of a closure under contracts/system-image-closure: the file name without `.zti`. Empty only
+  -- for a declaration whose checker is explicitly closure-exempt. It never holds a digest.
+  imageClosure : Text;
+  executionKind : Text;
+  executionProfile : Text;
+  disks : List Fixture;
+  networks : List Fixture;
+  devices : List Fixture;
+  faultControls : List FaultControl;
+  timeoutSeconds : Int;
+  markerContractIdentity : Text;
+  forbiddenOutcomes : List Text;
+};
+
+FromData @Fixture :: derive
+FromData @FaultControl :: derive
+FromData @SystemTestRun :: derive
+
+formatVersion :: Int = 2;
+identityDomain :: Text = "slime-system-test-run-v2:";
+executionEmulator :: Text = "emulator";
+executionBoard :: Text = "board";
+faultPeerDeath :: Text = "peer-death";
+faultDevice :: Text = "device";
+faultCorruption :: Text = "corruption";
+faultDelay :: Text = "delay";
+
+maxSourceBytes :: Int = 131072;
+maxNormalizedBytes :: Int = 131072;
+maxNameBytes :: Int = 96;
+maxPathBytes :: Int = 256;
+maxTextBytes :: Int = 256;
+maxDigestBytes :: Int = 64;
+maxFixtures :: Int = 16;
+maxFaultControls :: Int = 16;
+maxForbiddenOutcomes :: Int = 32;
+maxTimeoutSeconds :: Int = 3600;
+
+decodeSystemTestRun :: Data -> Validation DecodeIssue SystemTestRun
+= data => decode data;
+{
+  Fixture =;
+  FaultControl =;
+  SystemTestRun =;
+  decodeSystemTestRun =;
+  formatVersion =;
+  identityDomain =;
+  executionEmulator =;
+  executionBoard =;
+  faultPeerDeath =;
+  faultDevice =;
+  faultCorruption =;
+  faultDelay =;
+  maxSourceBytes =;
+  maxNormalizedBytes =;
+  maxNameBytes =;
+  maxPathBytes =;
+  maxTextBytes =;
+  maxDigestBytes =;
+  maxFixtures =;
+  maxFaultControls =;
+  maxForbiddenOutcomes =;
+  maxTimeoutSeconds =;
+}

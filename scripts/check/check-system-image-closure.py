@@ -27,7 +27,7 @@ from system_image_closure import (
 )
 
 CLOSURE = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / "sel4-channel.zti"
-TEST_RUN = ROOT / "contracts" / "system-test-run" / "v1" / "runs" / "sel4-channel.zti"
+TEST_RUN = ROOT / "contracts" / "system-test-run" / "v2" / "runs" / "sel4-channel.zti"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 
 
@@ -345,7 +345,7 @@ def check_builds(temporary: Path) -> None:
 def main() -> None:
     resolved = resolve_closure(CLOSURE)
     run = compile_test_run(TEST_RUN)
-    if run.value["imageClosureIdentity"] != resolved.compiled.identity.hex():
+    if run.value["imageClosure"] != CLOSURE.stem:
         fail("test run does not name the resolved image closure")
     if resolved.artifacts["prefix"].resolve().is_relative_to(ROOT / "build"):
         fail("closure resolved its prefix through ambient build output")
