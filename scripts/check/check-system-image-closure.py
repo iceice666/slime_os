@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import system_spec
@@ -401,42 +402,69 @@ def input_host_path_findings(root: Path, checkout: Path = ROOT) -> list[str]:
 
 
 def input_host_path_controls() -> int:
-    """Each corruption of an honest input tree must be found; the honest tree must pass."""
+    """Each corruption of an honest input tree must produce its own diagnostic; the honest tree must pass.
+
+    The path corruptions go into an unpinned prefix fixture, so the pinned-header digest check cannot
+    stand in for the host-path scan or the logical-prefix check. Only the digest control edits a pinned
+    header.
+    """
     with tempfile.TemporaryDirectory(prefix="slime-closure-input-paths-") as directory:
         root = Path(directory) / "inputs"
         for relative in PINNED_INPUTS:
-            source = INPUT_ROOT / relative
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(source.read_bytes())
-        for relative in PINNED_INPUTS:
-            path = root / relative
-            path.write_bytes(re.sub(rb"/(?:Users|home)/[^ ]*?/deps/sel4/", LOGICAL_SEL4_SOURCE, path.read_bytes(), count=1))
-        checkout = Path("/nonexistent/checkout")
+            canonical = re.sub(rb"/(?:Users|home)/[^ ]*?/deps/sel4/", LOGICAL_SEL4_SOURCE,
+                               (INPUT_ROOT / relative).read_bytes(), count=1)
+            target.write_bytes(canonical)
+        fixture = root / "sel4-fixture-prefix"
+        for header in GENERATED_HEADERS:
+            path = fixture / header
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"/* generated from /slime/sel4/libsel4/fixture.bf */\n#define FIXTURE 1\n")
+        notes = fixture / "notes.txt"
+        notes.write_bytes(b"fixture\n")
+        checkout = Path(directory) / "checkout"
         honest = input_host_path_findings(root, checkout)
         if honest:
             fail(f"input host-path control: the canonicalized tree was refused: {honest}")
-        header = root / next(iter(PINNED_INPUTS))
-        original = header.read_bytes()
-        cases = {
-            "a macOS home path": original + b"/* /Users/someone/src */\n",
-            "a Linux home path": original + b"/* /home/runner/work/x */\n",
-            "the checkout's own path": original + b"/* " + str(ROOT).encode() + b" */\n",
-            "the logical prefix missing": original.replace(LOGICAL_SEL4_SOURCE, b"/elsewhere/sel4/", 1),
-            "one changed byte elsewhere": original.replace(b"\n", b"\n ", 1),
-        }
+        fixture_header = fixture / GENERATED_HEADERS[0]
+        pinned_header = root / next(iter(PINNED_INPUTS))
+
+        def edit(path: Path, data: bytes | None) -> Callable[[], None]:
+            def apply() -> None:
+                if data is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(data)
+            return apply
+
+        cases = (
+            ("a macOS home path in an unpinned file", edit(notes, b"/* /Users/someone/src */\n"),
+             "sel4-fixture-prefix/notes.txt names the host path /Users/someone/"),
+            ("a Linux home path in an unpinned file", edit(notes, b"/* /home/runner/work/x */\n"),
+             "sel4-fixture-prefix/notes.txt names the host path /home/runner/"),
+            ("the checkout's own path in an unpinned file", edit(notes, b"/* " + str(checkout.resolve()).encode() + b" */\n"),
+             "sel4-fixture-prefix/notes.txt names this checkout's path"),
+            ("the logical prefix missing from an unpinned header",
+             edit(fixture_header, fixture_header.read_bytes().replace(LOGICAL_SEL4_SOURCE, b"/elsewhere/sel4/")),
+             f"sel4-fixture-prefix/{GENERATED_HEADERS[0]} does not name its input under /slime/sel4"),
+            ("an unpinned generated header missing", edit(fixture / GENERATED_HEADERS[1], None),
+             f"sel4-fixture-prefix/{GENERATED_HEADERS[1]} does not name its input under /slime/sel4"),
+            ("one changed byte in a pinned header", edit(pinned_header, pinned_header.read_bytes().replace(b"\n", b"\n ", 1)),
+             f"{next(iter(PINNED_INPUTS))} is "),
+        )
         refused = 0
-        for label, data in cases.items():
-            header.write_bytes(data)
-            checkout_for_case = ROOT if label == "the checkout's own path" else checkout
-            if not input_host_path_findings(root, checkout_for_case):
-                fail(f"input host-path control: {label} was not found")
+        for label, apply, expected in cases:
+            saved = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            apply()
+            findings = input_host_path_findings(root, checkout)
+            for path, data in saved.items():
+                path.write_bytes(data)
+            if not any(expected in finding for finding in findings):
+                fail(f"input host-path control: {label} did not produce {expected!r}; it produced {findings}")
             refused += 1
-        header.write_bytes(original)
-        header.unlink()
-        if not input_host_path_findings(root, checkout):
-            fail("input host-path control: a missing header was not found")
-        refused += 1
+        if input_host_path_findings(root, checkout):
+            fail("input host-path control: restoring the honest tree did not clear every finding")
     return refused
 
 
