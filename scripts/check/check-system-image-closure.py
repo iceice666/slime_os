@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 
-"""CP11 canonical image-closure and test-run gate."""
+"""CP11 canonical image-closure and test-run gate.
+
+`--input-host-paths` runs only the committed-input scan: no file under
+`contracts/system-image-closure/v2/inputs/` names an absolute host path, each
+committed seL4 prefix names its libsel4 generator inputs under the logical
+`/slime/sel4` prefix, and the riscv64 prefix headers hold the pinned bytes.
+"""
 
 from __future__ import annotations
 import sys as _sys
@@ -8,12 +14,16 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import argparse
 import copy
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import system_spec
@@ -342,7 +352,141 @@ def check_builds(temporary: Path) -> None:
             fail(f"undeclared environment changed {relative}")
 
 
+INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "inputs"
+# The two libsel4 headers seL4's generators write with their `.bf` input in a leading comment. An
+# installed prefix names that input by the checkout's absolute path until `canonicalize_prefix` in
+# `scripts/lib/component_sdk.py` rewrites it to the logical source below.
+LOGICAL_SEL4_SOURCE = b"/slime/sel4/"
+GENERATED_HEADERS = (
+    "libsel4/include/sel4/shared_types_gen.h",
+    "libsel4/include/sel4/sel4_arch/types_gen.h",
+)
+# The riscv64 headers as canonicalization writes them: the committed bytes with only the checkout path
+# in the first comment replaced by `/slime/sel4`.
+PINNED_INPUTS = {
+    "sel4-riscv64-prefix/libsel4/include/sel4/shared_types_gen.h":
+        "e772d1c961a13b0be439ac7479eac04e07cfbabf704f141cc0c3d31f315ed842",
+    "sel4-riscv64-prefix/libsel4/include/sel4/sel4_arch/types_gen.h":
+        "8a4480f4b93a5992b825de7dbc214636ab59c5754985efae821c7bf32da81321",
+}
+HOST_PATH = re.compile(rb"/(?:Users|home)/[^/\s\"'*]+/")
+
+
+def input_host_path_findings(root: Path, checkout: Path = ROOT) -> list[str]:
+    """Findings for committed closure inputs that would not be byte-identical in another checkout."""
+    findings = []
+    own = str(checkout.resolve()).encode("utf-8")
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix()
+        data = path.read_bytes()
+        match = HOST_PATH.search(data)
+        if match is not None:
+            findings.append(f"{relative} names the host path {match.group(0).decode(errors='replace')}")
+        elif own in data:
+            findings.append(f"{relative} names this checkout's path")
+    prefixes = sorted(item for item in root.glob("sel4*-prefix") if item.is_dir())
+    if not prefixes:
+        findings.append("no committed seL4 prefix to scan")
+    for prefix in prefixes:
+        for header in GENERATED_HEADERS:
+            path = prefix / header
+            first = path.read_bytes().split(b"\n", 1)[0] if path.is_file() else b""
+            if not first.startswith(b"/* generated from " + LOGICAL_SEL4_SOURCE):
+                findings.append(f"{prefix.name}/{header} does not name its input under /slime/sel4")
+    for relative, digest in PINNED_INPUTS.items():
+        path = root / relative
+        found = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
+        if found != digest:
+            findings.append(f"{relative} is {found[:16]}, not the canonicalized bytes {digest[:16]}")
+    return findings
+
+
+def input_host_path_controls() -> int:
+    """Each corruption of an honest input tree must produce its own diagnostic; the honest tree must pass.
+
+    The path corruptions go into an unpinned prefix fixture, so the pinned-header digest check cannot
+    stand in for the host-path scan or the logical-prefix check. Only the digest control edits a pinned
+    header.
+    """
+    with tempfile.TemporaryDirectory(prefix="slime-closure-input-paths-") as directory:
+        root = Path(directory) / "inputs"
+        for relative in PINNED_INPUTS:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            canonical = re.sub(rb"/(?:Users|home)/[^ ]*?/deps/sel4/", LOGICAL_SEL4_SOURCE,
+                               (INPUT_ROOT / relative).read_bytes(), count=1)
+            target.write_bytes(canonical)
+        fixture = root / "sel4-fixture-prefix"
+        for header in GENERATED_HEADERS:
+            path = fixture / header
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"/* generated from /slime/sel4/libsel4/fixture.bf */\n#define FIXTURE 1\n")
+        notes = fixture / "notes.txt"
+        notes.write_bytes(b"fixture\n")
+        checkout = Path(directory) / "checkout"
+        honest = input_host_path_findings(root, checkout)
+        if honest:
+            fail(f"input host-path control: the canonicalized tree was refused: {honest}")
+        fixture_header = fixture / GENERATED_HEADERS[0]
+        pinned_header = root / next(iter(PINNED_INPUTS))
+
+        def edit(path: Path, data: bytes | None) -> Callable[[], None]:
+            def apply() -> None:
+                if data is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(data)
+            return apply
+
+        cases = (
+            ("a macOS home path in an unpinned file", edit(notes, b"/* /Users/someone/src */\n"),
+             "sel4-fixture-prefix/notes.txt names the host path /Users/someone/"),
+            ("a Linux home path in an unpinned file", edit(notes, b"/* /home/runner/work/x */\n"),
+             "sel4-fixture-prefix/notes.txt names the host path /home/runner/"),
+            ("the checkout's own path in an unpinned file", edit(notes, b"/* " + str(checkout.resolve()).encode() + b" */\n"),
+             "sel4-fixture-prefix/notes.txt names this checkout's path"),
+            ("the logical prefix missing from an unpinned header",
+             edit(fixture_header, fixture_header.read_bytes().replace(LOGICAL_SEL4_SOURCE, b"/elsewhere/sel4/")),
+             f"sel4-fixture-prefix/{GENERATED_HEADERS[0]} does not name its input under /slime/sel4"),
+            ("an unpinned generated header missing", edit(fixture / GENERATED_HEADERS[1], None),
+             f"sel4-fixture-prefix/{GENERATED_HEADERS[1]} does not name its input under /slime/sel4"),
+            ("one changed byte in a pinned header", edit(pinned_header, pinned_header.read_bytes().replace(b"\n", b"\n ", 1)),
+             f"{next(iter(PINNED_INPUTS))} is "),
+        )
+        refused = 0
+        for label, apply, expected in cases:
+            saved = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            apply()
+            findings = input_host_path_findings(root, checkout)
+            for path, data in saved.items():
+                path.write_bytes(data)
+            if not any(expected in finding for finding in findings):
+                fail(f"input host-path control: {label} did not produce {expected!r}; it produced {findings}")
+            refused += 1
+        if input_host_path_findings(root, checkout):
+            fail("input host-path control: restoring the honest tree did not clear every finding")
+    return refused
+
+
+def check_input_host_paths() -> None:
+    controls = input_host_path_controls()
+    findings = input_host_path_findings(INPUT_ROOT)
+    if findings:
+        fail("committed closure inputs name host paths: " + "; ".join(findings))
+    print(
+        f"system image closure check: {sum(1 for item in INPUT_ROOT.rglob('*') if item.is_file())} committed "
+        f"input file(s) name no host path, {len(PINNED_INPUTS)} pinned header(s) hold canonicalized bytes, "
+        f"and {controls} control(s) refused"
+    )
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser.add_argument("--input-host-paths", action="store_true", help="scan committed closure inputs only")
+    arguments = parser.parse_args()
+    if arguments.input_host_paths:
+        check_input_host_paths()
+        return
     resolved = resolve_closure(CLOSURE)
     run = compile_test_run(TEST_RUN)
     if run.value["imageClosure"] != CLOSURE.stem:

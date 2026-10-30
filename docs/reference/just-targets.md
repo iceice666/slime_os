@@ -152,6 +152,7 @@ For how the planes work and how to add one, read
 | `just system_spec_check` | Validate every system spec and refuse a derived composition manifest that drifted from it. |
 | `just system_test_run_baseline_check` | One execution identity covers the declaration/closure boundary and its quality gates. |
 | `just system_test_run_bless` | Generate `contracts/system-test-run/v2` records from each plane gate's execution inputs. |
+| `just closure_input_host_paths_check` | Committed closure inputs carry no host path. No file under `contracts/system-image-closure/v2/inputs/` names a home directory or this checkout. Each committed seL4 prefix names its libsel4 generator inputs under `/slime/sel4`. The two riscv64 prefix headers hold their pinned canonicalized bytes. Explicit. |
 | `just system_test_run_reference_check` | Test-run records name their image closure (`contracts/system-test-run/v2`). The exam pins which closure each of 70 runs boots. In a scratch checkout of `HEAD`, it appends one line to `components/lib/src/lib.rs` and regenerates the closures. No test-run record and no negative build case may change, and `check-system-test-run.py` must refuse three wrong closure references. |
 | `just system_test_run_inventory_check` | Run discovery and per-arm extraction controls, then the complete frozen-record gate. |
 | `just system_test_run_check` | Execution-only inputs — disks, devices, injected faults, timeouts, marker contracts — are declared per plane and frozen, so a timeout or a disk cannot change without a reviewed record change. |
