@@ -158,6 +158,11 @@ BINDINGS: dict[str, tuple[Run, ...]] = {
     "component-spec": (
         _python("component-spec", "v1", "gen_python.zt", "component_spec_contract", "SLIME_COMPONENT_SPEC_BINDINGS_ROOT"),
     ),
+    "closure-resolution": (
+        _python(
+            "closure-resolution", "v1", "gen_python.zt", "closure_resolution_contract", "SLIME_CLOSURE_RESOLUTION_BINDINGS_ROOT"
+        ),
+    ),
     "composition-inventory": (
         _python(
             "composition-inventory",
@@ -175,6 +180,15 @@ BINDINGS: dict[str, tuple[Run, ...]] = {
     "system-image-closure": (
         _python(
             "system-image-closure", "v2", "gen_python.zt", "system_image_closure_contract", "SLIME_SYSTEM_IMAGE_CLOSURE_BINDINGS_ROOT"
+        ),
+    ),
+    "system-image-closure-source": (
+        _python(
+            "system-image-closure",
+            "v3",
+            "gen_python.zt",
+            "system_image_closure_source_contract",
+            "SLIME_SYSTEM_IMAGE_CLOSURE_SOURCE_BINDINGS_ROOT",
         ),
     ),
     "system-spec": (
