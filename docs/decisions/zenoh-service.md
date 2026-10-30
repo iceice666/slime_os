@@ -1,7 +1,7 @@
 # A shared Zenoh service component
 
 **Status:** Proposed
-**Related work items:** `01a15d1f-1f52-7d62-806f-90ef3c119b59` (a session that holds several subscriptions of its own) and `01a15d1f-26d2-7653-924b-a3f113a718e6` (the grants contract). `01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8` is the service core, which depends on both. `01a17dad-f158-7efd-bea7-dfdf0288432b` is the core over a link. `01a17dad-fa21-739d-a55e-ef59fa3ce0ea` is the client protocol. `01a18328-71de-7291-922f-87adc0b3a8cc` is the client wire records. `01a18328-7a0d-7507-9850-cbbb0baae9ca` is the client adapter. `01a186d0-03db-7232-a90f-70f0750a5793` is the judge of its failed-attach abort. Zenoh Profile 0 epic: `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
+**Related work items:** `01a15d1f-1f52-7d62-806f-90ef3c119b59` (a session that holds several subscriptions of its own) and `01a15d1f-26d2-7653-924b-a3f113a718e6` (the grants contract). `01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8` is the service core, which depends on both. `01a17dad-f158-7efd-bea7-dfdf0288432b` is the core over a link. `01a17dad-fa21-739d-a55e-ef59fa3ce0ea` is the client protocol. `01a18328-71de-7291-922f-87adc0b3a8cc` is the client wire records. `01a18328-7a0d-7507-9850-cbbb0baae9ca` is the client adapter. `01a186d0-03db-7232-a90f-70f0750a5793` is the judge of its failed-attach abort. `01a18804-02b0-73f3-a2c8-1200b39844f1` is the grants table. Zenoh Profile 0 epic: `01a0f5fa-f2c4-71cf-962b-c62cbea2ef68`.
 
 ## Context
 
@@ -56,9 +56,11 @@ The planning PR that adds this record also adds items 1 to 3. Each item has an e
 6. **The wire records** (`01a18328-71de-7291-922f-87adc0b3a8cc`). A generator script renders the request, completion, sample header and loan descriptor as Rust structs with `encode` and `decode`, from the layouts of `contracts/zenoh-service-client/v1`. It is a script and not a `gen_rust.zt` renderer, because that file is product code and a planning PR cannot carry it. The grants and client constants are rendered the same way. The slice `--slice client-wire` pins 17 cases and 76 controls. See [The wire records](#the-wire-records).
 7. **The client adapter** (`01a18328-7a0d-7507-9850-cbbb0baae9ca`). A synchronous adapter in `components/lib` that owns one outstanding request, bounds every request, checks every answer and poisons the session when a completion is missing. It follows `network_io.rs` and needs step 6, because it cannot hand-write field offsets. The slice `--slice client-io` pins 73 cases and 170 controls. See [The client adapter](#the-client-adapter).
 
-A third planning PR is proposed for the steps below. Each needs a `slime-root` change and a booted composition, so none can be measured on the host alone.
+8. **The grants table** (`01a18804-02b0-73f3-a2c8-1200b39844f1`). A new contract, `contracts/zenoh-service-grants-table/v1`, gives the grants a fixed byte layout. A script encodes the rows, a script renders the Rust records, and a validating decoder in `slime-proto` reads a table. The slice `--slice grants-table` pins 40 cases and 367 controls. See [The grants table](#the-grants-table).
 
-8. **The grants path.** A resource kind and a read label in `slime-root` and `boot-contracts`, so the grants reach the service from the system spec.
+A later planning PR is proposed for the steps below. Each needs a `slime-root` change or a booted composition, so none can be measured on the host alone.
+
+8b. **The grants path.** It adds a read label, the manifest and system spec fields, and the builder's use of the encoder. It adds the `slime-root` reader and the runtime wrapper. Together they carry the table from the system spec to the service.
 9. **The service component.** It wraps the core over a link and serves the control and provisioning endpoints and the loans.
 10. **A booted composition.** Two clients under QEMU.
 
@@ -123,6 +125,24 @@ I ran seven mutations of the abort path against the slice, applied one at a time
 
 The ordering is graded against a stand-in for the runtime. No test runs the real service, so the deadlock that review described is read from the code and not reproduced end to end. I did not check what the real service does with an attach that has received only one loan.
 
+## The grants table
+
+The grants contract is a text record, so it has no byte layout. The root serves a table to a component in whole rows through a window of 1024 bytes. A row therefore has a fixed size, and the table form fixes it.
+
+A row holds a holder name, a rights byte and a key. It is 168 bytes, so a read returns 6 rows. A key is at most 129 bytes, the profile's limit, because the link cannot carry a longer one. The grants record allows longer keys, and the table refuses them. A holder name is at most 32 bytes. The table holds 1 to 65535 rows, the grants record's bound.
+
+- **The table is sorted.** Rows are in strictly ascending order of holder name and then key, so a repeated pair is impossible. A reader checks for one by comparing each row with the one before it. The same grants always give the same bytes.
+- **A row has no identity hash.** The entropy table's rows carry a hash of the holder name. The root's reader gates by the caller's instance name and serves the whole table to one instance, so a grants row needs only the name. I have not checked whether the service needs more to match a row to the endpoint a request arrives on.
+- **The row bound is the contract's.** I first proposed 24 rows from a 4096-byte object size. I found no code that ties a table to that size, so the bound is the grants record's 65535. The service's stack must cover the rows, and the grants record already refuses a stack that is too small. I have not checked whether `slime-root` compares an object's declared size with its payload.
+
+The encoder, the judge and the Zutai contract are scripts and a new schema. The generated Rust records, the decoder and its test are product code, so the implementation PR owns them. The slice requires them, and it fails until they land. It writes the tables from the Python encoder to a file and runs the Rust test on that file alone. The decoder therefore never judges bytes it wrote. The judge writes every table again with `struct`. The encoder, the generated records and the decoder are then compared with a layout none of them produced.
+
+The first Rust decoder left four of 28 mutations accepted. Two were refused for the wrong reason, because the decoder printed a line the judge did not expect. I added isolating corruptions for the zero-length guards and the zero-row guard, and two of the four are now refused. Two are still accepted. The row-count bound is reachable only by a buffer of 11 megabytes, because the total-length check refuses a header that claims more rows. The key-length guard is covered by the empty-segment check, because an empty key splits into one empty segment. Both guards stay in the decoder. Removing either changes no verdict a table can show.
+
+A review of the planning PR then found four gaps. The uniqueness check covered four of nine families of controls, and three labels were shared between the schema edits and the generated-file edits. The encoder ignored a field outside the closed grants record. The comparison with the struct writer was never run. The encoder copied the whole table for every row, which took 2.3 seconds for 8000 rows. Each is fixed. The check now covers every family. A second review found that two families editing the same schema were compared apart. A schema edit and an encoder edit that gave the same text counted twice. Controls are now compared by what they corrupt, and I replaced the encoder edit. Two controls cover the closed record. The comparison runs on every path that builds the transcript. The encoder takes 0.8 seconds for 65535 rows.
+
+A third review found that the check on the Rust test was a text predicate. A test could mention the variable in a comment, keep the import and print the 40 lines from constants. I ran such a test through the slice and it passed. The decision was that the slice proves the test reads its file. It runs the test a second time on a file in which one honest table is replaced by another. A test that read the file prints the new table's line, and a test that prints constants prints the first run's line again. The judge refuses eleven wrong second runs, and the same test now fails the slice. This costs a second run of the test. The text checks stay. What the second run does not show is which of the other 39 tables the test reads.
+
 ## Out of scope
 
 - Calls and operations. The fabric provides them. The Zenoh equivalent is the queryable, which Profile 0 refuses and no stock-peer capture shows.
@@ -133,7 +153,7 @@ The ordering is graded against a stand-in for the runtime. No test runs the real
 
 ## Still open
 
-1. **How the grants reach the service.** The system spec lists network authority. The generation derives it, and a root-served table delivers it. A grants list needs a new resource kind and a read label in `slime-root` and `boot-contracts`. A planning PR cannot carry them. I did not find where resource kinds are registered. Step 8 owns the work.
+1. **How the grants reach the service.** The system spec lists network authority. The generation derives it, and a root-served table delivers it. The table form is step 8. The rest is step 8b, and a planning PR cannot carry it, because it changes existing schemas and `slime-root`. There is no registry of resource kinds. A resource is a generation object with an 8-byte magic, and a read label is a number in `contracts/syscall-abi/v1/schema.zt`. The closest model is the entropy authority table.
 2. **Large samples.** A ring slot has a fixed size equal to the session's payload bound. The record declares the sample size. A larger sample needs a receiver-bound loan, and the `heap` link configuration fragments it. The component owns both. This record's exams do not judge them.
 3. **Several subscriptions on one key.** The session delivers a sample once when any subscription on its key matches. With two subscriptions on one key, the event names one of them. Each declared key must therefore be subscribed once. The grants contract's count of distinct keys already guarantees it.
 4. **Unequal sessions.** A probe gave the sender three subscriptions and the peer room for two of the sender's. The peer refused the third declaration as `subscriber-limit`, and the sender still counted three. The subscribers exam does not judge this divergence. I did not measure the sender's later frames. A refused frame is rolled back on the peer, so its sequence number is not consumed there, while the sender has spent it. I expect later frames to fail as a sequence mismatch. That is an inference from reading the session. The implementation decides whether the sender learns of the refusal.

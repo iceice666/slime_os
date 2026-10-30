@@ -118,6 +118,14 @@ zenoh_service_client_check:
 zenoh_service_client_wire_check:
     python3 scripts/check/check-zenoh-profile0.py --slice client-wire
 
+# Judges the Zenoh service grants table, the form of the grants that the generation carries and the root serves. The
+# judge writes each table again with Python's struct from the schema's layout, requires the encoder, the generated wire
+# records and the Rust decoder to agree with it, and refuses each corruption of a table. The expectation is
+# scripts/lib/zenoh_grants_table_exam.py. The recipe fails until the generated file, the decoder and the test land.
+[group('hardware')]
+zenoh_service_grants_table_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice grants-table
+
 # Judges the Zenoh service client adapter, which speaks the client protocol over one IO0 ring. The judge reads what
 # the Rust test prints from a scripted service and requires every request, every refusal and every returned loan to
 # be the ones it lists. The expectation is scripts/lib/zenoh_client_io_exam.py. The wire records run beside it. The
