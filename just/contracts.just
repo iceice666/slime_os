@@ -130,6 +130,14 @@ system_test_run_baseline_check: system_image_closure_check system_test_run_check
 system_test_run_bless:
     python3 scripts/generate/generate-system-test-runs.py --bless
 
+# Committed closure inputs carry no host path: no file under contracts/system-image-closure/v2/inputs/
+# names a home directory or this checkout, each committed seL4 prefix names its libsel4 generator inputs
+# under /slime/sel4, and the riscv64 prefix headers hold their pinned canonicalized bytes. Explicit, so it
+# can land before the riscv64 snapshot is fixed.
+[group('contracts')]
+closure_input_host_paths_check:
+    python3 scripts/check/check-system-image-closure.py --input-host-paths
+
 # Every shipped or tested image traces to exactly one closure, and every
 # closure is exercised by an owning gate. Cheap by design: a mapping only
 # checked before a release is a mapping that drifts between releases.

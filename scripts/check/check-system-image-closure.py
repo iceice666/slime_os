@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 
-"""CP11 canonical image-closure and test-run gate."""
+"""CP11 canonical image-closure and test-run gate.
+
+`--input-host-paths` runs only the committed-input scan: no file under
+`contracts/system-image-closure/v2/inputs/` names an absolute host path, each
+committed seL4 prefix names its libsel4 generator inputs under the logical
+`/slime/sel4` prefix, and the riscv64 prefix headers hold the pinned bytes.
+"""
 
 from __future__ import annotations
 import sys as _sys
@@ -8,9 +14,12 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import argparse
 import copy
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -342,7 +351,114 @@ def check_builds(temporary: Path) -> None:
             fail(f"undeclared environment changed {relative}")
 
 
+INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "inputs"
+# The two libsel4 headers seL4's generators write with their `.bf` input in a leading comment. An
+# installed prefix names that input by the checkout's absolute path until `canonicalize_prefix` in
+# `scripts/lib/component_sdk.py` rewrites it to the logical source below.
+LOGICAL_SEL4_SOURCE = b"/slime/sel4/"
+GENERATED_HEADERS = (
+    "libsel4/include/sel4/shared_types_gen.h",
+    "libsel4/include/sel4/sel4_arch/types_gen.h",
+)
+# The riscv64 headers as canonicalization writes them: the committed bytes with only the checkout path
+# in the first comment replaced by `/slime/sel4`.
+PINNED_INPUTS = {
+    "sel4-riscv64-prefix/libsel4/include/sel4/shared_types_gen.h":
+        "e772d1c961a13b0be439ac7479eac04e07cfbabf704f141cc0c3d31f315ed842",
+    "sel4-riscv64-prefix/libsel4/include/sel4/sel4_arch/types_gen.h":
+        "8a4480f4b93a5992b825de7dbc214636ab59c5754985efae821c7bf32da81321",
+}
+HOST_PATH = re.compile(rb"/(?:Users|home)/[^/\s\"'*]+/")
+
+
+def input_host_path_findings(root: Path, checkout: Path = ROOT) -> list[str]:
+    """Findings for committed closure inputs that would not be byte-identical in another checkout."""
+    findings = []
+    own = str(checkout.resolve()).encode("utf-8")
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix()
+        data = path.read_bytes()
+        match = HOST_PATH.search(data)
+        if match is not None:
+            findings.append(f"{relative} names the host path {match.group(0).decode(errors='replace')}")
+        elif own in data:
+            findings.append(f"{relative} names this checkout's path")
+    prefixes = sorted(item for item in root.glob("sel4*-prefix") if item.is_dir())
+    if not prefixes:
+        findings.append("no committed seL4 prefix to scan")
+    for prefix in prefixes:
+        for header in GENERATED_HEADERS:
+            path = prefix / header
+            first = path.read_bytes().split(b"\n", 1)[0] if path.is_file() else b""
+            if not first.startswith(b"/* generated from " + LOGICAL_SEL4_SOURCE):
+                findings.append(f"{prefix.name}/{header} does not name its input under /slime/sel4")
+    for relative, digest in PINNED_INPUTS.items():
+        path = root / relative
+        found = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "missing"
+        if found != digest:
+            findings.append(f"{relative} is {found[:16]}, not the canonicalized bytes {digest[:16]}")
+    return findings
+
+
+def input_host_path_controls() -> int:
+    """Each corruption of an honest input tree must be found; the honest tree must pass."""
+    with tempfile.TemporaryDirectory(prefix="slime-closure-input-paths-") as directory:
+        root = Path(directory) / "inputs"
+        for relative in PINNED_INPUTS:
+            source = INPUT_ROOT / relative
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        for relative in PINNED_INPUTS:
+            path = root / relative
+            path.write_bytes(re.sub(rb"/(?:Users|home)/[^ ]*?/deps/sel4/", LOGICAL_SEL4_SOURCE, path.read_bytes(), count=1))
+        checkout = Path("/nonexistent/checkout")
+        honest = input_host_path_findings(root, checkout)
+        if honest:
+            fail(f"input host-path control: the canonicalized tree was refused: {honest}")
+        header = root / next(iter(PINNED_INPUTS))
+        original = header.read_bytes()
+        cases = {
+            "a macOS home path": original + b"/* /Users/someone/src */\n",
+            "a Linux home path": original + b"/* /home/runner/work/x */\n",
+            "the checkout's own path": original + b"/* " + str(ROOT).encode() + b" */\n",
+            "the logical prefix missing": original.replace(LOGICAL_SEL4_SOURCE, b"/elsewhere/sel4/", 1),
+            "one changed byte elsewhere": original.replace(b"\n", b"\n ", 1),
+        }
+        refused = 0
+        for label, data in cases.items():
+            header.write_bytes(data)
+            checkout_for_case = ROOT if label == "the checkout's own path" else checkout
+            if not input_host_path_findings(root, checkout_for_case):
+                fail(f"input host-path control: {label} was not found")
+            refused += 1
+        header.write_bytes(original)
+        header.unlink()
+        if not input_host_path_findings(root, checkout):
+            fail("input host-path control: a missing header was not found")
+        refused += 1
+    return refused
+
+
+def check_input_host_paths() -> None:
+    controls = input_host_path_controls()
+    findings = input_host_path_findings(INPUT_ROOT)
+    if findings:
+        fail("committed closure inputs name host paths: " + "; ".join(findings))
+    print(
+        f"system image closure check: {sum(1 for item in INPUT_ROOT.rglob('*') if item.is_file())} committed "
+        f"input file(s) name no host path, {len(PINNED_INPUTS)} pinned header(s) hold canonicalized bytes, "
+        f"and {controls} control(s) refused"
+    )
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser.add_argument("--input-host-paths", action="store_true", help="scan committed closure inputs only")
+    arguments = parser.parse_args()
+    if arguments.input_host_paths:
+        check_input_host_paths()
+        return
     resolved = resolve_closure(CLOSURE)
     run = compile_test_run(TEST_RUN)
     if run.value["imageClosure"] != CLOSURE.stem:
