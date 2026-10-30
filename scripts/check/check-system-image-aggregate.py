@@ -47,7 +47,7 @@ from system_image_closure import negative_case_paths
 from system_spec import DERIVED_GENERATION_FIXTURES
 
 CHECK_ROOT = ROOT / "scripts" / "check"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v3" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 

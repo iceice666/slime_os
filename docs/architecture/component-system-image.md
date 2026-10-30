@@ -100,20 +100,42 @@ does not eliminate that footprint.
 
 ## System-image closure
 
-`contracts/system-image-closure/v2/` names every identity-bearing input to a
-reproducible bootable-image build: system spec, selected implementations, target
-and platform prefix, root and loader roles, release inputs, build parameters,
-and expected outputs. Paths are locators; their recorded identities are what the
-resolver trusts.
-The release inputs also bind the generation builder, image builder and ELF
-delivery helper, so a packaging change cannot reuse an old closure-cache image.
+A closure source in `contracts/system-image-closure/v3/closures/` names every
+input to a reproducible bootable-image build: system spec, selected
+implementations, target and platform prefix, root and loader roles, release
+inputs, build parameters, and expected outputs. A source records paths only. It
+records no digest, so an edit to an input changes no committed closure.
+
+The resolver turns a source into a version 2 `SystemImageClosure` in the
+checkout. It hashes each tree from the files git lists, tracked and untracked
+but not ignored, through every submodule. Outside git, as in an exported SDK, it
+walks the tree. It adds each component spec's and the system spec's compiled
+identity. The resolved closure's identity is the build's derivation id.
+`generate-system-image-closures.py --resolve NAME --output PATH --report REPORT`
+writes that closure and a `contracts/closure-resolution/v1` report naming the
+derivation id and whether an input was dirty.
+
+An input is dirty when it holds a modified tracked file or an untracked or
+ignored file, or when a submodule is checked out away from its pin. A dirty
+resolution still builds, and its build result records `dirty = true`. No
+evidence may name a dirty build.
+
+The release inputs bind the generation builder, image builder and ELF delivery
+helper, so a packaging change cannot reuse an old closure-cache image. They no
+longer include the `just/` tree or `Justfile`, so a recipe change leaves every
+derivation id unchanged.
 
 An executable-changing scenario is part of the selected implementation or root
 role. A deliberately invalid build is a separate `NegativeBuildCase`, never a
 valid image closure. The generic resolver verifies declared inputs before build
-and emits a build-result record binding the generation, root, loader, packaged
-image, and identity manifest to the closure identity.
+and emits a version 2 `SystemImageBuildResult`, in `build-result.json` and
+`build-result.zti`, binding the generation, root, loader, packaged image,
+identity manifest and dirty flag to the derivation id.
 
+The component SDK publishes its closure resolved: the export resolves the
+source in the staged corpus and writes the version 2 closure under
+`contracts/system-image-closure/v2/closures/`, which an SDK consumer builds
+without git.
 The component SDK is a generated, one-way release mirror. Authoritative source,
 contracts, target definitions, and fixes remain in this product repository.
 

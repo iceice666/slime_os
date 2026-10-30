@@ -90,11 +90,11 @@ rebuild is seconds, the cost of a forged cache is a false pass.
 
 ## Closures and recipes
 
-Adding or editing any recipe under `just/` or `Justfile` changes every
-closure's identity — through the `just-recipes` input for the `just/` tree
-and the separate `justfile` input for `Justfile`: regenerate the closures
-(`python3 scripts/generate/generate-system-image-closures.py`) in the same
-PR, in a derived commit. Test-run records and negative build cases name their
+A recipe under `just/` or `Justfile` is not a closure input, so adding or
+editing one changes no derivation id. A closure source records paths only;
+regenerate the sources
+(`python3 scripts/generate/generate-system-image-closures.py`) only when a
+closure's input set changes, in the same PR, in a derived commit. Test-run records and negative build cases name their
 closure, so they do not change with it; re-freeze test-run records with
 `just system_test_run_bless` only when a plane gate's execution inputs
 change. `scripts/check/` and

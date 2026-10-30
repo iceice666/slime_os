@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
 import system_image_closure_contract as image_contract
+import system_image_closure_source_contract as source_contract
 import system_test_run_contract as test_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
-from component_sdk import PROFILE_PLATFORMS, pins, tree_digest
+from component_sdk import PROFILE_PLATFORMS, TREE_DOMAIN, pins, tree_digest, zti
 from harness import ROOT
 from system_spec import CompiledSystem, compile_system, derive_manifest
 from zutai_cli import ZutaiError, evaluate
@@ -21,6 +24,11 @@ from zutai_cli import ZutaiError, evaluate
 IMAGE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2"
 TEST_CONTRACT_ROOT = ROOT / "contracts" / "system-test-run" / "v2"
 IMAGE_CHECKER = IMAGE_CONTRACT_ROOT / "check.zt"
+SOURCE_CONTRACT_ROOT = ROOT / "contracts" / "system-image-closure" / "v3"
+SOURCE_ROOT = SOURCE_CONTRACT_ROOT / "closures"
+SOURCE_CHECKER = SOURCE_CONTRACT_ROOT / "check.zt"
+# Where a checkout's resolved closures are written. Ignored by git and named by no closure input.
+RESOLVED_ROOT = ROOT / "build" / "closure-resolved"
 NEGATIVE_CHECKER = IMAGE_CONTRACT_ROOT / "check-negative.zt"
 NEGATIVE_ROOT = IMAGE_CONTRACT_ROOT / "negative"
 TEST_CHECKER = TEST_CONTRACT_ROOT / "check.zt"
@@ -205,11 +213,129 @@ def normalize(value: object) -> bytes:
 REPOSITORY_METADATA: tuple[str, ...] = (".git",)
 
 
+def _git(path: Path, *arguments: str) -> subprocess.CompletedProcess[str] | None:
+    """`git -C path ...`, or None when git is not installed."""
+    try:
+        return subprocess.run(["git", "-C", str(path), *arguments], capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+
+
+def _toplevel(path: Path) -> Path | None:
+    """The working tree of the innermost git repository holding `path`, or None outside git."""
+    directory = path if path.is_dir() else path.parent
+    result = _git(directory, "rev-parse", "--show-toplevel")
+    if result is None or result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve()
+
+
+def _listed_files(repository: Path, sub: str) -> list[str]:
+    """Files git lists under `sub` of `repository` (tracked and present, plus untracked not
+    ignored), relative to `repository`, recursing into submodules."""
+    staged = _git(repository, "ls-files", "-z", "--stage", "--", sub or ".")
+    listed = _git(repository, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", sub or ".")
+    if staged is None or listed is None or staged.returncode != 0 or listed.returncode != 0:
+        _fail(f"cannot list the files git sees under {repository / sub}")
+    gitlinks = {entry.split("\t", 1)[1] for entry in staged.stdout.split("\0") if entry.startswith("160000 ")}
+    found: list[str] = []
+    for raw in sorted({item for item in listed.stdout.split("\0") if item}):
+        full = repository / raw
+        if raw in gitlinks:
+            found.extend(f"{raw}/{inner}" for inner in _listed_files(full, ""))
+        elif full.is_symlink():
+            _fail(f"tree contains a symlink: {full}")
+        elif full.is_file():
+            found.append(raw)
+    return found
+
+
+def _visible_tree_digest(path: Path) -> str | None:
+    """`tree_digest`'s encoding over the files git lists under `path`, or None when git cannot say.
+
+    The file set is git's rather than the directory's, so an ignored file -- a build output, a cache
+    -- is not part of a tree's identity. It marks the resolution dirty instead. Outside a git
+    checkout, or for a tree git itself ignores, the caller falls back to the directory walk.
+    """
+    top = _toplevel(path)
+    if top is None:
+        return None
+    resolved = path.resolve()
+    relative = "" if resolved == top else resolved.relative_to(top).as_posix()
+    if relative:
+        ignored = _git(top, "check-ignore", "--quiet", "--", relative)
+        if ignored is None or ignored.returncode == 0:
+            return None
+    prefix = f"{relative}/" if relative else ""
+    files = sorted(entry[len(prefix):] for entry in _listed_files(top, relative) if entry.startswith(prefix))
+    files = [entry for entry in files if entry not in REPOSITORY_METADATA and not entry.startswith(".git/")]
+    digest = hashlib.sha256()
+    digest.update(TREE_DOMAIN)
+    digest.update(len(files).to_bytes(8, "little"))
+    for entry in files:
+        full = resolved / entry
+        encoded = entry.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "little"))
+        digest.update(encoded)
+        digest.update(b"\1" if os.access(full, os.X_OK) else b"\0")
+        inner = hashlib.sha256(full.read_bytes()).digest()
+        digest.update(len(inner).to_bytes(8, "little"))
+        digest.update(inner)
+    return digest.hexdigest()
+
+
 def tree_identity(path: Path) -> str:
-    """A tree input's identity: the bytes a clone reproduces, never how it was checked out."""
+    """A tree input's identity: the bytes a clone reproduces, never how it was checked out.
+
+    Inside a git checkout that is the files git lists; elsewhere, as in an exported SDK, the walk.
+    The two agree on a tree that holds no ignored file.
+    """
     if not path.is_dir():
         _fail(f"missing tree artifact: {path}")
-    return tree_digest(path, exclude=REPOSITORY_METADATA)
+    visible = _visible_tree_digest(path)
+    return visible if visible is not None else tree_digest(path, exclude=REPOSITORY_METADATA)
+
+
+def inputs_dirty(paths: list[Path]) -> bool:
+    """Whether any input path holds a modified tracked file or an untracked or ignored file.
+
+    Each path is asked of its own repository, and a submodule's root is asked of the superproject as
+    well, so a submodule checked out away from its pin is dirty too. Outside git nothing is dirty.
+    """
+    groups: dict[Path, set[str]] = {}
+    for path in paths:
+        top = _toplevel(path)
+        if top is None:
+            continue
+        resolved = path.resolve()
+        groups.setdefault(top, set()).add("." if resolved == top else resolved.relative_to(top).as_posix())
+        if resolved == top:
+            outer = _toplevel(top.parent)
+            if outer is not None:
+                groups.setdefault(outer, set()).add(top.relative_to(outer).as_posix())
+    for top, specs in groups.items():
+        status = _git(
+            top, "status", "-z", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--", *sorted(specs)
+        )
+        if status is None or status.returncode != 0:
+            _fail(f"cannot read git status under {top}")
+        for entry in status.stdout.split("\0"):
+            if not entry:
+                continue
+            # Git names an ignored directory once, even when it holds no file. An empty directory adds
+            # no byte to any tree digest, so only an ignored directory that holds an entry is dirty.
+            if entry.startswith("!! ") and entry.endswith("/") and not _holds_entry(top / entry[3:]):
+                continue
+            return True
+    return False
+
+
+def _holds_entry(directory: Path) -> bool:
+    """Whether `directory` holds anything other than real directories, at any depth."""
+    for root, directories, files in os.walk(directory):
+        if files or any(os.path.islink(os.path.join(root, name)) for name in directories):
+            return True
+    return False
 
 
 def artifact_identity(path: Path, kind: str) -> str:
@@ -498,6 +624,121 @@ def _compile_test_run(
     )
 
 
+_LOCATOR_FIELDS = {"path", "kind"}
+_SOURCE_FIELDS = _IMAGE_FIELDS - {"systemIdentity"}
+_SOURCE_IMPLEMENTATION_FIELDS = _IMPLEMENTATION_FIELDS - {"identity"}
+
+
+@dataclass(frozen=True)
+class MaterializedClosure:
+    """A source resolved in this checkout: the v2 closure written to `path`, and whether it is dirty."""
+
+    path: Path
+    compiled: CompiledClosure
+    dirty: bool
+
+
+def source_path(name: str, root: Path = ROOT) -> Path:
+    return root / SOURCE_ROOT.relative_to(ROOT) / f"{name}.zti"
+
+
+def source_names(root: Path = ROOT) -> list[str]:
+    return sorted(path.stem for path in (root / SOURCE_ROOT.relative_to(ROOT)).glob("*.zti"))
+
+
+def _locator(raw: object, label: str) -> dict:
+    value = _exact(raw, _LOCATOR_FIELDS, label)
+    path_text = _bounded_text(value["path"], image_contract.MAX_PATH_BYTES, f"{label}.path")
+    relative = Path(path_text)
+    if relative.is_absolute() or ".." in relative.parts:
+        _fail(f"{label}.path: path must be normalized and closure-relative")
+    if value["kind"] not in image_contract.ARTIFACT_KINDS:
+        _fail(f"{label}.kind: unknown artifact kind {value['kind']!r}")
+    return value
+
+
+def compile_source(path: Path) -> dict:
+    """One closure source: the v2 shape with every identity left out. The rest is checked on its
+    resolution by `compile_closure` and `resolve_closure`."""
+    value = _exact(
+        _run_zutai(path.resolve(), SOURCE_CHECKER, "SLIME_SYSTEM_IMAGE_CLOSURE_SOURCE_PATH", source_contract.MAX_SOURCE_BYTES),
+        _SOURCE_FIELDS,
+        str(path),
+    )
+    if value["formatVersion"] != source_contract.FORMAT_VERSION:
+        _fail(f"unsupported closure source version {value['formatVersion']}")
+    name = _bounded_text(value["name"], image_contract.MAX_NAME_BYTES, "name")
+    if _NAME.fullmatch(name) is None or name != path.stem:
+        _fail("closure source name must match its file name and use canonical spelling")
+    _locator(value["systemSpec"], "systemSpec")
+    for index, raw in enumerate(_list(value["implementations"], image_contract.MAX_IMPLEMENTATIONS, "implementations")):
+        _locator(_exact(raw, _SOURCE_IMPLEMENTATION_FIELDS, f"implementations[{index}]")["artifact"], f"implementations[{index}].artifact")
+    _locator(_exact(value["target"], _TARGET_FIELDS, "target")["prefix"], "target.prefix")
+    for role in ("root", "loader"):
+        _locator(_exact(value[role], _ROLE_FIELDS, role)["implementation"], f"{role}.implementation")
+    for index, raw in enumerate(_list(value["releaseInputs"], image_contract.MAX_RELEASE_INPUTS, "releaseInputs")):
+        _locator(_exact(raw, _NAMED_INPUT_FIELDS, f"releaseInputs[{index}]")["artifact"], f"releaseInputs[{index}].artifact")
+    return value
+
+
+def resolve_source(
+    name: str,
+    *,
+    source_root: Path = ROOT,
+    output_root: Path | None = None,
+    cache: ResolutionCache | None = None,
+) -> MaterializedClosure:
+    """Resolve one closure source in the checkout at `source_root` and write the v2 closure.
+
+    Each locator gains the identity of its bytes, the system spec and each component spec their
+    compiled identities. The written closure's identity is the build's derivation id.
+    """
+    base = source_root.resolve()
+    value = compile_source(source_path(name, base))
+    reads = ResolutionCache() if cache is None else cache
+    inputs: list[Path] = []
+
+    def reference(locator: dict) -> dict:
+        path = base / locator["path"]
+        inputs.append(path)
+        return {"path": locator["path"], "kind": locator["kind"], "identity": reads.identity(path, locator["kind"])}
+
+    specs = reads.compiled_specs()
+    system = reads.compiled_system(base / value["systemSpec"]["path"])
+    implementations = []
+    for entry in value["implementations"]:
+        spec = specs.get(entry["component"])
+        if spec is None:
+            _fail(f"implementations[{entry['component']}]: no admitted component spec")
+        implementations.append({
+            "component": entry["component"],
+            "provider": entry["provider"],
+            "artifact": reference(entry["artifact"]),
+            "identity": spec.identity.hex(),
+            "buildProfile": entry["buildProfile"],
+        })
+    resolved = {
+        "formatVersion": image_contract.FORMAT_VERSION,
+        "name": name,
+        "systemSpec": reference(value["systemSpec"]),
+        "systemIdentity": system.identity.hex(),
+        "implementations": implementations,
+        "target": {**value["target"], "prefix": reference(value["target"]["prefix"])},
+        "root": {**value["root"], "implementation": reference(value["root"]["implementation"])},
+        "loader": {**value["loader"], "implementation": reference(value["loader"]["implementation"])},
+        "releaseInputs": [{"name": entry["name"], "artifact": reference(entry["artifact"])} for entry in value["releaseInputs"]],
+        "buildParameters": value["buildParameters"],
+        "expectedOutputs": value["expectedOutputs"],
+    }
+    directory = (base / RESOLVED_ROOT.relative_to(ROOT)) if output_root is None else output_root
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{name}.zti"
+    staged = directory / f".{name}.{os.getpid()}.zti"
+    staged.write_text(zti(resolved) + "\n", encoding="utf-8")
+    os.replace(staged, target)
+    return MaterializedClosure(target, compile_closure(target), inputs_dirty(inputs))
+
+
 def resolve_closure(
     path: Path,
     *,
@@ -606,8 +847,6 @@ def resolve_closure(
         "component-runtime",
         "component-spec-contract",
         "interface-schema-contract",
-        "just-recipes",
-        "justfile",
         "root-child",
         "root-target",
         "target-spec",
@@ -691,6 +930,7 @@ def resolve_closure(
 def make_build_result(
     resolved: ResolvedClosure,
     *,
+    dirty: bool,
     output_root: Path,
     generation: Path,
     root: Path,
@@ -719,6 +959,7 @@ def make_build_result(
         "loader": record(loader),
         "image": record(image),
         "identityManifest": record(identity_manifest),
+        "dirty": dirty,
     }
     normalized = normalize(value)
     return (

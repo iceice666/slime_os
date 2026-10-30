@@ -79,7 +79,7 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_RETAINED,
     FABRIC_TRACE_RESOURCE_RETRIES,
 )
-from system_image_closure import compile_closure  # noqa: E402
+from system_image_closure import compile_source, source_path  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -93,10 +93,9 @@ BOOT_TIMEOUT_SECONDS = 240
 # B62: read the ceilings from the closure that names the build inputs, so the
 # number the image was built with and the number this gate asserts against cannot drift.
 def _variant_limit_overrides() -> dict[str, int]:
-    closure = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / f"{CLOSURE}.zti"
     parameters = {
         entry["name"]: entry["value"]
-        for entry in compile_closure(closure).value["buildParameters"]
+        for entry in compile_source(source_path(CLOSURE))["buildParameters"]
     }
     spec = parameters.get("fabricLimitOverride")
     if not spec:

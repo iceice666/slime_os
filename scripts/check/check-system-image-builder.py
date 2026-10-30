@@ -55,6 +55,8 @@ from system_image_closure import (
     ResolutionCache,
     SystemImageClosureError,
     resolve_closure,
+    resolve_source,
+    source_names,
 )
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
@@ -65,7 +67,6 @@ from system_spec import (
 )
 from component_spec import admit_specs, interface_catalogue
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 SEL4_BUILDER = ROOT / "scripts" / "build" / "build-sel4.py"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
@@ -109,7 +110,9 @@ GENERATOR_ROOT_ROLES = _GENERATOR.ROOT_ROLE_CLOSURES
 
 
 def closure_paths() -> dict[str, Path]:
-    return {path.stem: path for path in sorted(CLOSURE_ROOT.glob("*.zti"))}
+    """Every committed closure source, resolved in this checkout; the resolved v2 closure's path."""
+    reads = ResolutionCache()
+    return {name: resolve_source(name, cache=reads).path for name in source_names()}
 
 
 def check_coverage(closures: dict[str, Path]) -> tuple[set[str], set[str]]:

@@ -32,11 +32,14 @@ from system_image_closure import (
     SystemImageClosureError,
     compile_closure,
     compile_test_run,
+    RESOLVED_ROOT,
     resolve_closure,
+    resolve_source,
     tree_identity,
 )
 
-CLOSURE = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / "sel4-channel.zti"
+# The resolved closure every check below works from. `main` resolves its committed source first.
+CLOSURE = RESOLVED_ROOT / "sel4-channel.zti"
 TEST_RUN = ROOT / "contracts" / "system-test-run" / "v2" / "runs" / "sel4-channel.zti"
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 
@@ -252,7 +255,7 @@ def check_computed_source_drift() -> None:
     is substituted rather than the file edited, so no repository byte changes.
     """
     name = "sel4-call"
-    closure = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / f"{name}.zti"
+    closure = resolve_source(name).path
     if name not in system_spec.COMPUTED_SYSTEM_SOURCES:
         fail(f"{name} is no longer a computed system; choose another control subject")
     committed = (system_spec.SYSTEM_ROOT / f"{name}.zti").read_text(encoding="utf-8")
@@ -487,6 +490,8 @@ def main() -> None:
     if arguments.input_host_paths:
         check_input_host_paths()
         return
+    if resolve_source(CLOSURE.stem).path != CLOSURE:
+        fail(f"the resolved closure is not at {CLOSURE}")
     resolved = resolve_closure(CLOSURE)
     run = compile_test_run(TEST_RUN)
     if run.value["imageClosure"] != CLOSURE.stem:

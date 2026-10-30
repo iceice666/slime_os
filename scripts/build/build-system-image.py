@@ -21,10 +21,15 @@ from types import ModuleType
 
 import system_image_closure_contract as CLOSURE_CONTRACT
 from harness import ROOT
+from component_sdk import zti
 from system_image_closure import (
+    SOURCE_ROOT,
     compile_negative_case,
+    inputs_dirty,
     make_build_result,
     resolve_closure,
+    resolve_source,
+    source_path,
 )
 
 
@@ -203,12 +208,21 @@ def profile_environment(profiles: dict[str, str]) -> dict[str, str]:
 def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
     """Build one closure into `output`.
 
+    `closure` is a v3 closure source, which is resolved in this checkout first, or an already
+    resolved v2 closure. Either way the build result records whether an input was dirty.
+
     `mutation` builds a *negative* case: the same closure with one child-CSpace
     perturbation compiled into the root. The output is not a product image and
     is never presented as one — `build_negative` below is the only caller, and
     it writes no image-identity record.
     """
-    resolved = resolve_closure(closure)
+    if closure.resolve().parent == SOURCE_ROOT.resolve():
+        materialized = resolve_source(closure.stem)
+        closure, dirty = materialized.path, materialized.dirty
+        resolved = resolve_closure(closure)
+    else:
+        resolved = resolve_closure(closure)
+        dirty = inputs_dirty(list(resolved.artifacts.values()))
     value = resolved.compiled.value
     output = output.resolve()
     if output.exists() and any(output.iterdir()):
@@ -409,6 +423,7 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
     write_json(identity_manifest, image_identity)
     result, normalized, identity = make_build_result(
         resolved,
+        dirty=dirty,
         output_root=output,
         generation=generation,
         root=root_output,
@@ -417,9 +432,10 @@ def build(closure: Path, output: Path, *, mutation: str | None = None) -> Path:
         identity_manifest=identity_manifest,
     )
     write_json(output / "build-result.json", result)
+    (output / "build-result.zti").write_text(zti(result) + "\n", encoding="utf-8")
     (output / "build-result.normalized.json").write_bytes(normalized)
     (output / "build-result.identity").write_text(identity + "\n", encoding="utf-8")
-    print(f"system image build: wrote closure {resolved.compiled.identity.hex()} to {output}")
+    print(f"system image build: wrote closure {resolved.compiled.identity.hex()}{' (dirty)' if dirty else ''} to {output}")
     return output
 
 
@@ -434,9 +450,9 @@ def build_negative(case: Path, output: Path) -> Path:
     """
     compiled = compile_negative_case(case)
     wanted = compiled.value["baseClosure"]
-    base = ROOT / "contracts" / "system-image-closure" / "v2" / "closures" / f"{wanted}.zti"
-    if not base.is_file():
+    if not source_path(wanted).is_file():
         fail(f"{case.stem}: base closure {wanted} does not exist")
+    base = resolve_source(wanted).path
     result = build(base, output, mutation=compiled.value["mutation"])
     (output / "negative-case.identity").write_text(
         compiled.identity.hex() + "\n", encoding="utf-8"

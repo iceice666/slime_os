@@ -40,7 +40,7 @@ from harness import ROOT
 
 CHECK_ROOT = ROOT / "scripts" / "check"
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v2" / "runs"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v3" / "closures"
 
 # The marker contract each plane's expectations are stated against. One
 # identity for the seL4 serial marker vocabulary: the planes assert different
@@ -240,7 +240,7 @@ PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
         (
             "contracts/system-spec/v1/systems/sel4-serial.zti",
             "contracts/generation-manifest/v1/compositions/sel4-serial.zti",
-            "contracts/system-image-closure/v2/closures/sel4-serial.zti",
+            "contracts/system-image-closure/v3/closures/sel4-serial.zti",
             "contracts/system-test-run/v2/runs/sel4-serial.zti",
             "components/services/pl011-driver",
             "components/testkit/serial-probe",
