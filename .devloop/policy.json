@@ -180,6 +180,7 @@
     "scripts/lib/fabric_graph_limits.py",
     "scripts/lib/fabric_trace_contract.py",
     "scripts/lib/fabric_visibility_contract.py",
+    "scripts/lib/frame_store_contract.py",
     "scripts/lib/frame_store_exam.py",
     "scripts/lib/framework_media.py",
     "scripts/lib/fs_contracts.py",

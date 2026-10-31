@@ -12,6 +12,7 @@ pub mod fabric_matrix;
 pub mod fabric_self_view;
 #[cfg(feature = "component-runtime")]
 pub mod fabric_visibility;
+pub mod frame_store;
 #[cfg(feature = "component-runtime")]
 pub mod generation_composition;
 pub mod hmac_drbg;

@@ -47,6 +47,11 @@
 -- zero is allowed. The message encoding is always CDR and the schema encoding is always ros2msg, so the
 -- store names neither.
 
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
 formatVersion :: Int = 1;
 frameStoreMagic :: Int = 1397115987; -- `SLFS`
 hashVersionRihs01 :: Int = 1;
@@ -130,3 +135,36 @@ indexEntryLayout :: List WireField = {
 
 headerSchema ::= schema FrameStoreHeader;
 indexEntrySchema ::= schema FrameIndexEntry;
+
+format ::= {
+  formatVersion =;
+  frameStoreMagic =;
+  hashVersionRihs01 =;
+  headerBytes =;
+  indexEntryBytes =;
+  typeHashBytes =;
+  alignment =;
+  maxFrames =;
+  maxPayloadBytes =;
+  maxStoreBytes =;
+  maxTopicBytes =;
+  maxTypeNameBytes =;
+  maxSchemaBytes =;
+  refusalClasses =;
+  headerFields = headerSchema.fields ?? {;};
+  headerLayout =;
+  indexEntryFields = indexEntrySchema.fields ?? {;};
+  indexEntryLayout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_FRAME_STORE_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    rustPath := t.join "" { root; "/components/proto/src/frame_store.rs"; };
+    pythonPath := t.join "" { root; "/scripts/lib/frame_store_contract.py"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write pythonPath bindings.python
+  ];
+
+main
