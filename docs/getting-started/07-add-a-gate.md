@@ -18,8 +18,8 @@ Every `just sel4_*_check` and `just io_*_check` is the same four-part machine:
 
 | Part | Owner | What it does |
 | --- | --- | --- |
-| **Closure** | `contracts/system-image-closure/v2/closures/<name>.zti` (generated) | Names every input the image is built from — the system spec, each component spec, each implementation tree, the root, the kernel prefix — by digest. Re-resolved against the working tree before every build; a stale digest is `closure does not resolve`. |
-| **Image build** | [`scripts/lib/closure_image.py`](../../scripts/lib/closure_image.py) → `scripts/build/build-system-image.py` | Builds `build/closure/<name>/image.elf` (plus `root.elf`, `loader.elf`, `generation/`, `build-result.json`) and reuses it while the closure identity matches. |
+| **Closure** | `contracts/system-image-closure/v3/closures/<name>.zti` (generated) | Names every input the image is built from — the system spec, each component spec, each implementation tree, the root, the kernel prefix — by path. Resolved in the checkout before every build into `build/closure-resolved/<name>.zti`, whose identity is the derivation id. |
+| **Image build** | [`scripts/lib/closure_image.py`](../../scripts/lib/closure_image.py) → `scripts/build/build-system-image.py` | Builds `build/closure/<name>/image.elf` (plus `root.elf`, `loader.elf`, `generation/`, `build-result.json`, `build-result.zti`) and reuses it while the derivation id and dirty flag match. |
 | **QEMU run** | [`scripts/lib/sel4_plane.py`](../../scripts/lib/sel4_plane.py) `run_plane` | Boots the image on the pinned machine from `sel4/pins.toml`, collects serial until a terminal regex matches, a failure marker matches, QEMU exits, or the timeout fires. Optionally feeds one line of input after a readiness marker. |
 | **Marker contract** | [`scripts/lib/sel4_gate_markers.py`](../../scripts/lib/sel4_gate_markers.py) `match_marker_contract` | Rejects any failure marker anywhere in the transcript, then requires each chain's markers in order. |
 
@@ -136,7 +136,7 @@ Pick a `generation` number no other spec uses; the checker will pin it.
 python3 scripts/generate/generate-system-image-closures.py
 ```
 
-emits `contracts/system-image-closure/v2/closures/sel4-widget.zti` from the
+emits `contracts/system-image-closure/v3/closures/sel4-widget.zti` from the
 derivation map. Commit it. `just system_image_builder_check` refuses drift.
 
 ### 4. Checker

@@ -141,8 +141,7 @@ closure_input_host_paths_check:
 # Closure sources carry no in-tree digest, and each checkout derives their identities. In a scratch checkout
 # of HEAD, sampled closures resolve to identities computed independently over the files git lists, dirty
 # inputs move exactly the expected derivation ids, and the generator rewrites no committed file; then
-# sel4-channel builds clean and dirty. The expectation is scripts/lib/closure_derivation_exam.py. Fails
-# until closures move to v3 sources.
+# sel4-channel builds clean and dirty. The expectation is scripts/lib/closure_derivation_exam.py.
 [group('contracts')]
 closure_derivation_check:
     python3 scripts/check/check-closure-derivations.py
@@ -167,9 +166,7 @@ system_image_closure_check: system_spec_check
 
 # Every gate that consumes the committed closure corpus, on one tree: freshness,
 # resolution and its controls, the frozen test-run records and their inventory
-# controls, the scenario and root-role arms, and image/closure ownership. A
-# recipe change here changes the `just-recipes` closure input, so regenerate
-# the closures with it.
+# controls, the scenario and root-role arms, and image/closure ownership.
 [group('contracts')]
 system_image_closure_gates_check: system_image_closure_check system_test_run_inventory_check system_image_scenario_check system_image_closure_aggregate_check
     python3 scripts/generate/generate-system-image-closures.py --check

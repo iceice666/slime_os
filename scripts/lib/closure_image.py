@@ -32,9 +32,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness import ROOT
-from system_image_closure import compile_closure, resolve_closure
+from system_image_closure import SOURCE_ROOT, resolve_closure, resolve_source
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+CLOSURE_ROOT = SOURCE_ROOT
 BUILDER = ROOT / "scripts" / "build" / "build-system-image.py"
 BUILD_ROOT = ROOT / "build" / "closure"
 
@@ -65,6 +65,7 @@ class BuiltImage:
 
 
 def closure_path(name: str) -> Path:
+    """The committed closure source for `name`."""
     path = CLOSURE_ROOT / f"{name}.zti"
     if not path.is_file():
         raise ClosureImageError(
@@ -74,25 +75,24 @@ def closure_path(name: str) -> Path:
 
 
 def closure_identity(name: str) -> str:
-    """The identity of a closure, compiled from its committed bytes."""
-    return compile_closure(closure_path(name)).identity.hex()
+    """The derivation id of a closure: its source resolved in this checkout."""
+    return resolve_source(closure_path(name).stem).compiled.identity.hex()
 
 
-def verify_resolves(name: str) -> str:
-    """Re-resolve a closure from repository state and return its identity.
+def verify_resolves(name: str) -> tuple[str, bool]:
+    """Resolve a closure's source in this checkout; return its derivation id and whether it is dirty.
 
-    The generator writes identities from repository state and the resolver
-    independently re-reads every named path, so a closure emitted from a dirty
-    tree fails here rather than producing an image nobody can reproduce. This is
-    what keeps a generated closure from being a circular claim, so it runs
-    before every build rather than being trusted from the record.
+    The resolved closure is then re-read by the independent resolver, which re-checks every path,
+    pin and spec it names. A dirty resolution still builds; its build result says so, and no evidence
+    may name it.
     """
-    path = closure_path(name)
+    closure_path(name)
     try:
-        resolve_closure(path)
+        materialized = resolve_source(name)
+        resolve_closure(materialized.path)
     except Exception as error:  # noqa: BLE001 - re-raised with the closure named
         raise ClosureImageError(f"{name}: closure does not resolve: {error}") from error
-    return compile_closure(path).identity.hex()
+    return materialized.compiled.identity.hex(), materialized.dirty
 
 
 def build(name: str, *, output: Path | None = None, reuse: bool = True) -> BuiltImage:
@@ -104,12 +104,12 @@ def build(name: str, *, output: Path | None = None, reuse: bool = True) -> Built
     would have booted silently, so a mismatch rebuilds instead of being
     accepted.
     """
-    identity = verify_resolves(name)
+    identity, dirty = verify_resolves(name)
     destination = output if output is not None else BUILD_ROOT / name
 
     if reuse and destination.is_dir():
         existing = _read_result(destination)
-        if existing is not None and existing.get("closureIdentity") == identity:
+        if existing is not None and existing.get("closureIdentity") == identity and existing.get("dirty") is dirty:
             return _built(name, identity, destination, existing)
 
     # The builder refuses a non-empty output directory, which is what stops a
@@ -122,7 +122,7 @@ def build(name: str, *, output: Path | None = None, reuse: bool = True) -> Built
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
     command = [sys.executable, str(BUILDER), str(closure_path(name)), str(destination)]
-    print(f"[closure build] {name} {identity[:12]}", flush=True)
+    print(f"[closure build] {name} {identity[:12]}{' (dirty)' if dirty else ''}", flush=True)
     process = subprocess.run(
         command,
         cwd=ROOT,

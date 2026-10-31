@@ -1,0 +1,90 @@
+-- Slime OS system-image closure source, version 3.
+--
+-- A closure source names the composition, implementations, roles, build parameters and input locators
+-- of one bootable image build, and no digest. Version 2 recorded the SHA-256 identity of every input,
+-- including the repository's own trees, so every change to an input tree rewrote the committed
+-- closures. Those identities repeat what the commit already fixes.
+--
+-- Each checkout resolves a source into a `contracts/system-image-closure/v2` `SystemImageClosure`: every
+-- locator gains the identity of its bytes, computed over the files git lists (tracked and untracked, not
+-- ignored), and the system spec and each component spec gain their compiled identities. The resolved
+-- closure's identity is the build's derivation id, so on a clean tree it equals the identity a v2
+-- closure recorded. A resolution is dirty if a tracked file under an input is modified or an untracked
+-- or ignored file sits under one.
+--
+-- The vocabularies (artifact kinds, providers, build profiles, roles, parameters, outputs) are v2's.
+Locator :: type {
+  path : Text;
+  kind : Text;
+};
+
+ImplementationSource :: type {
+  component : Text;
+  provider : Text;
+  artifact : Locator;
+  buildProfile : Text;
+};
+
+TargetSource :: type {
+  profile : Text;
+  platform : Text;
+  prefix : Locator;
+  toolchain : Text;
+  rustSel4Commit : Text;
+};
+
+RoleSource :: type {
+  role : Text;
+  implementation : Locator;
+  parameters : List Text;
+};
+
+NamedInputSource :: type {
+  name : Text;
+  artifact : Locator;
+};
+
+BuildParameterSource :: type {
+  name : Text;
+  value : Text;
+};
+
+SystemImageClosureSource :: type {
+  formatVersion : Int;
+  name : Text;
+  systemSpec : Locator;
+  implementations : List ImplementationSource;
+  target : TargetSource;
+  root : RoleSource;
+  loader : RoleSource;
+  releaseInputs : List NamedInputSource;
+  buildParameters : List BuildParameterSource;
+  expectedOutputs : List Text;
+};
+
+FromData @Locator :: derive
+FromData @ImplementationSource :: derive
+FromData @TargetSource :: derive
+FromData @RoleSource :: derive
+FromData @NamedInputSource :: derive
+FromData @BuildParameterSource :: derive
+FromData @SystemImageClosureSource :: derive
+
+formatVersion :: Int = 3;
+maxSourceBytes :: Int = 262144;
+
+decodeSystemImageClosureSource :: Data -> Validation DecodeIssue SystemImageClosureSource
+  = data => decode data;
+
+{
+  Locator =;
+  ImplementationSource =;
+  TargetSource =;
+  RoleSource =;
+  NamedInputSource =;
+  BuildParameterSource =;
+  SystemImageClosureSource =;
+  decodeSystemImageClosureSource =;
+  formatVersion =;
+  maxSourceBytes =;
+}

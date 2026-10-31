@@ -1,20 +1,20 @@
 # System-image closures as derivations
 
-This plan is unimplemented. It moves the system-image closure corpus from committed input digests to
+Steps 1 and 2 of this plan are implemented; step 3 is not. It moves the system-image closure corpus from committed input digests to
 committed sources, so a change to an input tree stops rewriting derived records. The decision and
 its alternatives are in
 [`decisions/system-image-closures-as-derivations.md`](../decisions/system-image-closures-as-derivations.md).
-Step 1, work item `01a18732-ad06-744a-85e5-d50c903828f9`, is implemented. Step 2 is work item
-`01a18cca-71e6-74e8-9161-ab2736a67bc1`. Step 3 has no item yet.
+Step 1, work item `01a18732-ad06-744a-85e5-d50c903828f9`, is implemented. Step 2, work item
+`01a18cca-71e6-74e8-9161-ab2736a67bc1`, is implemented. Step 3 has no item yet.
 
 ## Problem
 
-A closure under `contracts/system-image-closure/v2/closures/` records a SHA-256 identity for every
+Before step 2, a closure under `contracts/system-image-closure/v2/closures/` recorded a SHA-256 identity for every
 input tree, including the repository's own trees such as `components/lib`. Each test-run record and
 each negative build case copies a closure identity. A change to any input tree therefore rewrites
 174 files: 103 closures, 6 negative build cases and 65 test-run records. Two open pull requests that
-touch an input tree conflict on those files, whatever their content. At `00af4fde`, 86 of the last
-224 commits on `main` touch the closures.
+touch an input tree conflict on those files, whatever their content. On 2026-10-29, 15 of the latest
+40 merged pull requests changed system-image closure paths.
 
 The committed digests of in-tree inputs add no pin. The commit already fixes those bytes. Only inputs
 outside the repository need a recorded pin: `sel4/pins.toml`, the submodule gitlinks, `flake.lock`

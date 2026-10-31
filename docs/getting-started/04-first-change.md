@@ -34,18 +34,15 @@ This demonstrates the marker contract from the
    `[spawn-service] ready` debug line, and change the text — even one
    character.
 
-3. Run the gate again. It refuses before booting:
-   `closure does not resolve: implementations[spawn-service].artifact:
-   identity mismatch for components/services/spawn-service`. Every seL4 gate
-   first resolves a system-image closure — a recorded digest of each source
-   tree the image is built from (`contracts/system-image-closure/v2/closures/`)
-   — and your edit changed one of those trees. Regenerate the closures:
+3. Run the gate again. Every seL4 gate first resolves a system-image closure:
+   it reads the closure source under `contracts/system-image-closure/v3/closures/`,
+   which names each input tree by path, and computes each tree's digest from your
+   checkout. Your edit changes that digest, so the gate builds a new image and logs
+   `[closure build] sel4 <derivation id> (dirty)`. The build result records
+   `dirty = true` because a closure input holds an uncommitted change. Such a
+   build runs, but no evidence may name it.
 
-   ```sh
-   python3 scripts/generate/generate-system-image-closures.py
-   ```
-
-4. Run the gate a third time. Now it boots and fails on the marker:
+4. The gate boots and fails on the marker:
    `missing unordered marker: \[spawn-service\] ready`, with the transcript
    tail and exactly which expectation broke
    (`scripts/check/check-sel4-component-graph.py` holds the table; the
@@ -53,21 +50,23 @@ This demonstrates the marker contract from the
    `contracts/component-spec/v1/components/spawn-service.zti` names that
    literal as its pass/fail criterion).
 
-5. Revert your edit, regenerate the closures again, and run the gate green.
+5. Revert your edit and run the gate green. The resolution returns to the
+   committed derivation id and reports the build clean.
 
-What you just observed, twice: component output is contract surface, and so
-is the identity of the source that produced it. A real change to a marker
-updates the emitting code, the gate's marker table, *and* the regenerated
-closures in the same commit; the gate diff is the evidence the change was
-intended — never a reason to loosen the assertion.
+What you just observed: component output is contract surface, and a build
+records the identity of the source that produced it. A real change to a marker
+updates the emitting code and the gate's marker table in the same commit; the
+gate diff is the evidence the change was intended — never a reason to loosen
+the assertion.
 
 ## The real workflow, by change kind
 
 **Behavior in the root or a component** — edit the owning module (per the
-index), regenerate the closures, run the narrowest `sel4_*` plane gate that
+index), run the narrowest `sel4_*` plane gate that
 exercises the path, and for root logic also `just test_sel4_root` (its test
 count is asserted; raise it deliberately when you add tests). Commit the
-closures with the change.
+change and rerun the gate on the clean tree, so its build result records
+`dirty = false`.
 
 **Anything with a wire format** — schema first, always:
 edit `contracts/<name>/vN/schema.zt`, regenerate with the matching

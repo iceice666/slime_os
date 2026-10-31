@@ -213,6 +213,8 @@
     "scripts/lib/smoltcp_matrix.py",
     "scripts/lib/system_image_closure.py",
     "scripts/lib/system_image_closure_contract.py",
+    "scripts/lib/system_image_closure_source_contract.py",
+    "scripts/lib/closure_resolution_contract.py",
     "scripts/lib/system_spec.py",
     "scripts/lib/system_spec_contract.py",
     "scripts/lib/system_test_run_contract.py",

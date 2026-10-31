@@ -45,6 +45,7 @@ GRADER_FILES = ("Justfile",)
 # would refuse the exam landing with its item.
 DERIVED_PREFIXES = (
     "contracts/system-image-closure/v2/closures/",
+    "contracts/system-image-closure/v3/closures/",
     "contracts/system-image-closure/v2/negative/",
     "contracts/system-test-run/v2/runs/",
 )

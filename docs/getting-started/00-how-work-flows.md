@@ -123,13 +123,14 @@ owning source. Two things catch most newcomers:
   system-image closures are outputs of a `schema.zt`, a system spec, or a
   generator. Change the source and rerun the generator
   ([AGENTS.md](../../AGENTS.md#generated-code-rule) lists them).
-- **Closures record source identity.** Every seL4 gate first checks that the
-  source trees it will build match the recorded digests under
-  `contracts/system-image-closure/v2/closures/`. After editing root or
-  component code, run
-  `python3 scripts/generate/generate-system-image-closures.py`, then the
-  narrowest gate that exercises the change. [Your first change](04-first-change.md)
-  makes you collide with this on purpose.
+- **Closures name their inputs; the checkout supplies the digests.** A closure
+  source under `contracts/system-image-closure/v3/closures/` names each input
+  tree by path only. Every seL4 gate resolves it in your checkout, so an edit to
+  root or component code needs no regeneration. Rerun
+  `python3 scripts/generate/generate-system-image-closures.py` only when a
+  closure's input set changes, then run the narrowest gate that exercises the
+  change. [Your first change](04-first-change.md) shows what a resolved build
+  records.
 
 Finish with the repository-wide checks that apply: `just fmt_check_all` and
 `just lint_all` for Rust, `just docs_check` and `just typos` for

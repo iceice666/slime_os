@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 
-"""Emit one `contracts/system-image-closure/v2` closure per derived composition.
+"""Emit one `contracts/system-image-closure/v3` closure source per derived composition.
 
-CP11 authored one closure by hand to prove the contract. CP13 needs one per
-composition, and hand-authoring 40 records whose every field is a digest of
-repository state would be a corpus nobody could keep current: each closure
-names the system spec's identity, every component spec's identity, every
-implementation tree's identity, and shared workspace and packaging inputs.
+A source names the system spec, the implementation of each component, the target and its prefix, the
+root and loader roles, the release inputs, the build parameters and the expected outputs, each input by
+its path and kind. It records no identity. A v2 closure recorded the SHA-256 identity of every input,
+including the repository's own trees, so every change to an input tree rewrote the corpus.
 
-So the closures are generated. What makes that sound rather than circular is
-that generation and *resolution* are separate: this script reads repository
-state and writes the identities down, while `scripts/lib/system_image_closure.py`
-independently re-reads every path and refuses any digest that disagrees. A
-closure this script emits from a dirty tree fails to resolve; one it emits from
-a clean tree resolves and is the reproducible build key CP11 defined.
+`--resolve NAME --output PATH --report REPORT` resolves one committed source in this checkout through
+`scripts/lib/system_image_closure.py`: every input gains the identity of the files git lists, the
+system and component specs their compiled identities, and the resulting v2 `SystemImageClosure` is
+written to PATH. REPORT receives a `contracts/closure-resolution/v1` record of its name, its identity
+(the derivation id) and whether an input was dirty.
 
-`--check` fails on drift, so a closure edited by hand instead of regenerated is
-a gate failure, the same discipline `generate-generation-from-spec.py` applies
-to the composition corpus.
+`--check` fails on a source that differs from what this script writes, or on any file left in the
+retired `contracts/system-image-closure/v2/closures/`, the same discipline
+`generate-generation-from-spec.py` applies to the composition corpus.
 """
 
 from __future__ import annotations
@@ -28,16 +26,16 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import argparse
 import json
-import subprocess
 import tempfile
-from functools import lru_cache
 from pathlib import Path
 
+import closure_resolution_contract as REPORT_CONTRACT
 import system_image_closure_contract as CONTRACT
+import system_image_closure_source_contract as SOURCE_CONTRACT
 from component_sdk import PROFILE_PLATFORMS, pins
 from component_spec import admit_specs, interface_catalogue
 from harness import ROOT
-from system_image_closure import artifact_identity, tree_identity
+from system_image_closure import resolve_source, source_names
 from system_spec import (
     DERIVED_GENERATION_FIXTURES,
     SYSTEM_ROOT,
@@ -45,8 +43,10 @@ from system_spec import (
     prefetch_systems,
 )
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
-NEGATIVE_ROOT = CLOSURE_ROOT.parent / "negative"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v3" / "closures"
+# Resolved v2 closures used to be committed here. Nothing is; a file left behind is an orphan.
+LEGACY_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+NEGATIVE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "negative"
 INPUT_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "inputs"
 PREFIXES = {
     "qemu-arm-virt": INPUT_ROOT / "sel4-prefix",
@@ -69,8 +69,6 @@ RELEASE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("image-builder", "scripts/build/build-sel4.py", "file"),
     ("elf-delivery", "scripts/lib/elf_delivery.py", "file"),
     ("interface-schema-contract", "contracts/interface-schema/v1", "tree"),
-    ("just-recipes", "just", "tree"),
-    ("justfile", "Justfile", "file"),
     ("root-child", "slime-root/child", "tree"),
     ("workspace-manifest", "Cargo.toml", "file"),
 )
@@ -285,61 +283,12 @@ def fail(message: str) -> None:
     raise SystemExit(f"system image closure generation: {message}")
 
 
-def ignored_files(path: Path) -> list[str]:
-    """Gitignored files below `path`, which `tree_identity` would hash anyway.
-
-    A tree identity is a raw filesystem walk excluding only `.git`, so a
-    `target/` or `__pycache__/` that git ignores still enters the digest. Such
-    a closure records bytes no clone reproduces, and every consumer refuses it
-    with `identity mismatch`. Querying git from inside the tree covers both a
-    submodule root and a subdirectory of this repository.
-    """
-    status = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(path),
-            "status",
-            "--porcelain",
-            "--ignored",
-            "--untracked-files=all",
-            "--",
-            ".",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if status.returncode != 0:
-        fail(f"cannot query git status below {path.relative_to(ROOT)}: {status.stderr.strip()}")
-    return sorted(line[3:] for line in status.stdout.splitlines() if line.startswith("!! "))
-
-
-# Every closure names the same workspace trees, and this script reads the
-# repository exactly once per run: the memo is what keeps a hundred closures
-# from being a hundred walks of the loader submodule.
-@lru_cache(maxsize=None)
-def identity_of(relative: str, kind: str) -> str:
-    path = ROOT / relative
-    if kind == "tree":
-        if not path.is_dir():
-            fail(f"missing tree input: {relative}")
-        ignored = ignored_files(path)
-        if ignored:
-            fail(
-                f"{relative} contains gitignored files that would enter its identity "
-                f"but no clone reproduces: {', '.join(ignored[:5])}"
-                + (f" (+{len(ignored) - 5} more)" if len(ignored) > 5 else "")
-                + "; remove them and regenerate"
-            )
-        return tree_identity(path)
-    if not path.is_file():
-        fail(f"missing file input: {relative}")
-    return artifact_identity(path, "file")
-
-
 def artifact(relative: str, kind: str) -> dict:
-    return {"path": relative, "kind": kind, "identity": identity_of(relative, kind)}
+    """A locator: a source names a path and its kind. Each checkout computes the identity."""
+    path = ROOT / relative
+    if not (path.is_dir() if kind == "tree" else path.is_file()):
+        fail(f"missing {kind} input: {relative}")
+    return {"path": relative, "kind": kind}
 
 
 def implementation_path(spec: dict) -> tuple[str, str]:
@@ -391,7 +340,7 @@ def render(value: object, indent: int = 0) -> str:
 
 
 # One compile, and so one computed-source render, per system spec per run; the
-# same once-per-run reading of the repository `identity_of` relies on.
+# same once-per-run reading of the repository the resolver's cache gives a corpus.
 _SYSTEMS: dict[str, object] = {}
 
 
@@ -448,7 +397,6 @@ def closure_for(
                 "component": component,
                 "provider": spec.spec["implementation"]["provider"],
                 "artifact": artifact(relative, kind),
-                "identity": spec.identity.hex(),
                 "buildProfile": (profiles or {}).get(component, "default"),
             }
         )
@@ -473,10 +421,9 @@ def closure_for(
         Path("deps") / "rust-sel4" / "support" / "targets" / Path(str(binding["cargo_target"])).name
     ).as_posix()
     return {
-        "formatVersion": CONTRACT.FORMAT_VERSION,
+        "formatVersion": SOURCE_CONTRACT.FORMAT_VERSION,
         "name": name,
         "systemSpec": artifact(str((SYSTEM_ROOT / f"{source}.zti").relative_to(ROOT)), "file"),
-        "systemIdentity": system.identity.hex(),
         "implementations": implementations,
         "target": {
             "profile": profile_name,
@@ -576,10 +523,38 @@ def outputs() -> dict[Path, str]:
     return emitted
 
 
+def resolve_one(name: str, output: Path, report: Path) -> None:
+    """Resolve one committed source in this checkout; write the v2 closure and the report."""
+    if name not in source_names():
+        fail(f"no closure source named {name!r} under {CLOSURE_ROOT.relative_to(ROOT)}")
+    materialized = resolve_source(name)
+    if output.name != f"{name}.zti":
+        fail(f"--output must be named {name}.zti, because a closure's name is its file name")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(materialized.path.read_bytes())
+    value = {
+        "formatVersion": REPORT_CONTRACT.FORMAT_VERSION,
+        "name": name,
+        "derivationId": materialized.compiled.identity.hex(),
+        "dirty": materialized.dirty,
+    }
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(render(value) + "\n", encoding="utf-8")
+    print(f"resolved {name} to {value['derivationId']}{' (dirty)' if materialized.dirty else ''}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="fail if a closure is stale")
+    parser.add_argument("--check", action="store_true", help="fail if a closure source is stale")
+    parser.add_argument("--resolve", metavar="NAME", help="resolve one source in this checkout")
+    parser.add_argument("--output", type=Path, help="with --resolve: where to write the resolved closure")
+    parser.add_argument("--report", type=Path, help="with --resolve: where to write the resolution report")
     arguments = parser.parse_args()
+    if arguments.resolve is not None:
+        if arguments.output is None or arguments.report is None or arguments.check:
+            parser.error("--resolve needs --output and --report, and excludes --check")
+        resolve_one(arguments.resolve, arguments.output, arguments.report)
+        return
     emitted = outputs()
     if arguments.check:
         stale = [
@@ -589,7 +564,7 @@ def main() -> None:
         ]
         orphaned = sorted(
             str(path.relative_to(ROOT))
-            for directory in (CLOSURE_ROOT, NEGATIVE_ROOT)
+            for directory in (CLOSURE_ROOT, LEGACY_ROOT, NEGATIVE_ROOT)
             for path in directory.glob("*.zti")
             if path not in emitted
         )
@@ -600,14 +575,18 @@ def main() -> None:
                 + ("; orphaned: " + ", ".join(orphaned) if orphaned else "")
                 + "; run python3 scripts/generate/generate-system-image-closures.py"
             )
-        print(f"{len(emitted)} system-image closures are current")
+        print(f"{len(emitted)} system-image closure sources are current")
         return
-    for directory in (CLOSURE_ROOT, NEGATIVE_ROOT):
+    for directory in (CLOSURE_ROOT, LEGACY_ROOT, NEGATIVE_ROOT):
+        if directory == LEGACY_ROOT and not directory.is_dir():
+            continue
         directory.mkdir(parents=True, exist_ok=True)
         for path in directory.glob("*.zti"):
             if path not in emitted:
                 path.unlink()
                 print(f"Removed {path.relative_to(ROOT)}")
+    if LEGACY_ROOT.is_dir() and not any(LEGACY_ROOT.iterdir()):
+        LEGACY_ROOT.rmdir()
     for path, contents in emitted.items():
         handle = tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=path.parent, delete=False, suffix=".tmp"

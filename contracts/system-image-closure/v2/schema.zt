@@ -161,6 +161,9 @@ SystemImageBuildResult :: type {
   loader : ResultArtifact;
   image : ResultArtifact;
   identityManifest : ResultArtifact;
+  -- True when an input of the resolved closure was dirty: a tracked file modified, or an untracked or
+  -- ignored file under an input. No evidence or attestation may name a dirty build.
+  dirty : Bool;
 };
 
 FromData @ArtifactReference :: derive
@@ -224,16 +227,14 @@ mutationWrongRights :: Text = "wrong_rights";
 -- A version and an identity domain describe the same shape, so they move
 -- together or not at all. `SystemImageClosure` lost `target.sdkRelease` in v2,
 -- and a v1 record with that field dropped must not hash to the same key as a
--- v2 record that never had it. `SystemImageBuildResult` did not change shape,
--- so it keeps both its v1 version and its v1 domain: stamping it v2 under a v1
--- domain would declare a change that did not happen and leave every persisted
--- v1 record undecodable. `NegativeBuildCase` replaced `baseClosureIdentity` with
--- `baseClosure` in its version 2, so its version and domain both moved.
+-- v2 record that never had it. `SystemImageBuildResult` gained `dirty` in its
+-- version 2, and `NegativeBuildCase` replaced `baseClosureIdentity` with
+-- `baseClosure` in its version 2, so the version and domain of each moved.
 formatVersion :: Int = 2;
-buildResultFormatVersion :: Int = 1;
+buildResultFormatVersion :: Int = 2;
 negativeFormatVersion :: Int = 2;
 identityDomain :: Text = "slime-system-image-closure-v2:";
-buildResultIdentityDomain :: Text = "slime-system-image-build-result-v1:";
+buildResultIdentityDomain :: Text = "slime-system-image-build-result-v2:";
 
 artifactKindFile :: Text = "file";
 artifactKindTree :: Text = "tree";

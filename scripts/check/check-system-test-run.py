@@ -49,7 +49,7 @@ from system_image_closure import (
 
 RUN_ROOT = ROOT / "contracts" / "system-test-run" / "v2" / "runs"
 CONTRACT = ROOT / "contracts" / "system-test-run" / "v2"
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v3" / "closures"
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-test-runs.py"
 AGGREGATE = ROOT / "scripts" / "check" / "check-system-image-aggregate.py"
 
@@ -183,7 +183,7 @@ def contract_vocabulary() -> dict[str, set[str]]:
 def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
     """Each record is typed, bounded, closed-vocabulary, and closure-consistent."""
     exempt_images = aggregate_exempt_images()
-    from system_image_closure import compile_closure
+    from system_image_closure import compile_source
 
     closures = {path.stem for path in CLOSURE_ROOT.glob("*.zti")}
     compiled: set[str] = set()
@@ -245,7 +245,7 @@ def check_records(vocabulary: dict[str, set[str]]) -> tuple[int, int, int]:
                 )
             if named not in compiled:
                 try:
-                    compile_closure(CLOSURE_ROOT / f"{named}.zti")
+                    compile_source(CLOSURE_ROOT / f"{named}.zti")
                 except SystemImageClosureError as error:
                     fail(f"{name}: names closure {named!r}, which does not compile: {error}")
                 compiled.add(named)
@@ -470,7 +470,7 @@ def check_inventory_controls() -> int:
         mandatory = {
             f"contracts/system-spec/v1/systems/{run}.zti",
             f"contracts/generation-manifest/v1/compositions/{run}.zti",
-            f"contracts/system-image-closure/v2/closures/{run}.zti",
+            f"contracts/system-image-closure/v3/closures/{run}.zti",
             f"contracts/system-test-run/v2/runs/{run}.zti",
             *crates,
         }
@@ -499,7 +499,7 @@ def check_inventory_controls() -> int:
     with tempfile.TemporaryDirectory(prefix="slime-run-inventory-") as directory:
         root = _Path(directory)
         checkers = root / "scripts/check"
-        closures = root / "contracts/system-image-closure/v2/closures"
+        closures = root / "contracts/system-image-closure/v3/closures"
         runs = root / "contracts/system-test-run/v2/runs"
         items = root / ".tasks/items"
         for path in (checkers, closures, runs, items):

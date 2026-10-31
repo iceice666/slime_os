@@ -9,6 +9,7 @@ from pathlib import Path
 
 SYSTEM_NAME = "sel4-channel"
 ARCHIVE_PATH = f"assets/system-{SYSTEM_NAME}.tar"
+# The corpus publishes the closure resolved, at the v2 path, beside the v3 source it came from.
 CLOSURE_PATH = f"contracts/system-image-closure/v2/closures/{SYSTEM_NAME}.zti"
 TEST_RUN_PATH = f"contracts/system-test-run/v2/runs/{SYSTEM_NAME}.zti"
 
@@ -40,9 +41,9 @@ def required_profile(source: Path) -> str:
     profile. An SDK release that does not export that profile cannot carry a
     corpus whose prefix provenance resolves, so the caller must not stage one.
     """
-    from system_image_closure import compile_closure
+    from system_image_closure import compile_source, source_path
 
-    return compile_closure(source / CLOSURE_PATH).value["target"]["profile"]
+    return compile_source(source_path(SYSTEM_NAME, source))["target"]["profile"]
 
 
 def export_asset(
@@ -84,29 +85,14 @@ def export_asset(
                     f"{path.relative_to(staging)}: system corpus names its source checkout"
                 )
 
-        # Canonicalizing the prefix changes a declared closure input, so the
-        # exported closure and test run are re-identified together. The source
-        # closure stays untouched; the SDK record identifies this published key.
-        from system_image_closure import compile_closure, compile_test_run
+        # The closure source is resolved in the staged corpus, after its prefix was canonicalized, so the
+        # published closure identifies the bytes the corpus carries. The source checkout is untouched.
+        from system_image_closure import compile_test_run, resolve_source
 
-        closure_path = staging / CLOSURE_PATH
-        closure_value = compile_closure(closure_path).value
-
-        def rebind(reference: dict) -> None:
-            artifact = staging / reference["path"]
-            if reference["kind"] == "tree":
-                reference["identity"] = sdk_module.tree_digest(artifact)
-            else:
-                reference["identity"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
-
-        rebind(closure_value["systemSpec"])
-        for implementation in closure_value["implementations"]:
-            rebind(implementation["artifact"])
-        rebind(closure_value["target"]["prefix"])
-        rebind(closure_value["root"]["implementation"])
-        rebind(closure_value["loader"]["implementation"])
-        for release_input in closure_value["releaseInputs"]:
-            rebind(release_input["artifact"])
+        closure = resolve_source(
+            SYSTEM_NAME, source_root=staging, output_root=staging / Path(CLOSURE_PATH).parent
+        ).compiled
+        closure_value = closure.value
 
         # The outer SDK release record is the sole authority for exported
         # profile provenance. Its selected prefix must be the exact
@@ -124,8 +110,6 @@ def export_asset(
             raise sdk_module.ComponentSdkError(
                 "canonicalized prefix does not match the selected exported profile"
             )
-        closure_path.write_text(sdk_module.zti(closure_value) + "\n", encoding="utf-8")
-        closure = compile_closure(closure_path)
         test_run_path = staging / TEST_RUN_PATH
         # The run names its closure, so re-identifying the closure for the SDK leaves the run unchanged.
         test_run = compile_test_run(test_run_path)

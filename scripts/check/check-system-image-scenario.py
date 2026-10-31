@@ -38,6 +38,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,16 +51,24 @@ from system_image_closure import (
     SystemImageClosureError,
     compile_closure,
     compile_negative_case,
+    RESOLVED_ROOT,
     negative_case_paths,
     resolve_closure,
+    resolve_source,
+    source_names,
 )
 from system_spec import prefetch_systems, system_paths
 
-CLOSURE_ROOT = ROOT / "contracts" / "system-image-closure" / "v2" / "closures"
+# Every committed closure source, resolved in this checkout into a directory of its own, so a resolved
+# closure another run left behind cannot join the corpus this checker reads.
+CLOSURE_ROOT = RESOLVED_ROOT / "scenario-check"
 # Shared by every resolution of a *committed* closure: this checker writes only
 # into temporary directories, so the trees those closures name never change
 # while it runs. A control that resolves a closure it wrote does not use it.
 READS = ResolutionCache()
+shutil.rmtree(CLOSURE_ROOT, ignore_errors=True)
+for _name in source_names():
+    resolve_source(_name, output_root=CLOSURE_ROOT, cache=READS)
 
 GENERATOR = ROOT / "scripts" / "generate" / "generate-system-image-closures.py"
 BUILDER_SCRIPT = ROOT / "scripts" / "build" / "build-system-image.py"
