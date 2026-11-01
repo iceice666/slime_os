@@ -200,6 +200,10 @@ def workflow_findings(text: str) -> list[str]:
     concurrency = document.get("concurrency")
     if not isinstance(concurrency, dict) or not isinstance(concurrency.get("group"), str) or not concurrency["group"]:
         findings.append("the workflow sets no concurrency group")
+    elif "${{" in concurrency["group"]:
+        # Every run must land in one group. An expression can name a per-run value, so only a literal
+        # group is admitted.
+        findings.append(f"the workflow's concurrency group {concurrency['group']!r} is not a literal name")
     elif concurrency.get("cancel-in-progress") is not False:
         findings.append("the workflow's concurrency does not set cancel-in-progress: false")
     if document.get("permissions") != {"contents": "write"}:
@@ -210,6 +214,9 @@ def workflow_findings(text: str) -> list[str]:
         return findings
     if "permissions" in job:
         findings.append("the job overrides the workflow's permissions")
+    for key in ("if", "continue-on-error"):
+        if key in job:
+            findings.append(f"the job sets {key}, so the writer may not run or may fail unseen")
     if job.get("runs-on") != RUNNER_LABEL:
         findings.append(f"the job runs on {job.get('runs-on')!r}, not {RUNNER_LABEL}")
     if not isinstance(job.get("timeout-minutes"), int):
@@ -222,16 +229,24 @@ def workflow_findings(text: str) -> list[str]:
     if len(writers) != 1:
         findings.append(f"{len(writers)} steps run {WRITER}, not one")
         return findings
-    words = str(writers[0]["run"]).replace("\\\n", " ").split()
-    try:
-        start = words.index("nix")
-    except ValueError:
-        start = -1
-    prefix = ["nix", "develop", "--command", "python3", WRITER]
-    if start < 0 or words[start:start + len(prefix)] != prefix:
-        findings.append(f"the writer step does not run `{' '.join(prefix)}`")
+    step = writers[0]
+    for key in ("if", "continue-on-error"):
+        if key in step:
+            findings.append(f"the writer step sets {key}, so the writer may not run or may fail unseen")
+    if step.get("shell", "bash") != "bash":
+        findings.append(f"the writer step runs in shell {step.get('shell')!r}, not bash")
+    command = str(step["run"]).replace("\\\n", " ").strip()
+    # The step must be exactly one writer invocation: nothing before it, no second command, no operator
+    # that could skip it or hide its exit status.
+    if "\n" in command or any(token in command for token in (";", "&", "|", "<", ">", "#", "`", "$(")):
+        findings.append("the writer step is not exactly one command")
         return findings
-    arguments = words[start + len(prefix):]
+    words = command.split()
+    prefix = ["nix", "develop", "--command", "python3", WRITER]
+    if words[:len(prefix)] != prefix:
+        findings.append(f"the writer step does not start with `{' '.join(prefix)}`")
+        return findings
+    arguments = words[len(prefix):]
     options: dict[str, str] = {}
     names: list[str] = []
     index = 0
@@ -422,6 +437,20 @@ def _workflow_controls() -> Iterator[tuple[str, bool]]:
         "workflow-missing-closure": lambda d: writer(d).update(run=writer(d)["run"].replace(" sel4-zenoh", "")),
         "workflow-extra-closure": lambda d: writer(d).update(run=writer(d)["run"].rstrip() + " sel4-boot\n"),
         "workflow-repeated-closure": lambda d: writer(d).update(run=writer(d)["run"].replace("sel4-zenoh", "sel4-channel")),
+        "workflow-run-id-group": lambda d: d["concurrency"].update(group="image-attestations-${{ github.run_id }}"),
+        "workflow-expression-group": lambda d: d["concurrency"].update(group="${{ github.workflow }}"),
+        "workflow-echo": lambda d: writer(d).update(run="echo " + writer(d)["run"]),
+        "workflow-prefixed-command": lambda d: writer(d).update(run="true && " + writer(d)["run"]),
+        "workflow-or-true": lambda d: writer(d).update(run=writer(d)["run"].rstrip() + " || true\n"),
+        "workflow-second-command": lambda d: writer(d).update(run=writer(d)["run"].rstrip() + "; exit 0\n"),
+        "workflow-second-line": lambda d: writer(d).update(run=writer(d)["run"].rstrip() + "\nexit 0\n"),
+        "workflow-comment": lambda d: writer(d).update(run="# " + writer(d)["run"]),
+        "workflow-pipe": lambda d: writer(d).update(run=writer(d)["run"].rstrip() + " | tee log\n"),
+        "workflow-step-if": lambda d: writer(d).update({"if": False}),
+        "workflow-step-continue": lambda d: writer(d).update({"continue-on-error": True}),
+        "workflow-step-shell": lambda d: writer(d).update(shell="sh -c 'exit 0' {0}"),
+        "workflow-job-if": lambda d: job(d).update({"if": False}),
+        "workflow-job-continue": lambda d: job(d).update({"continue-on-error": True}),
     }
     for label, change in cases.items():
         yield label, bool(workflow_findings(variant(change)))

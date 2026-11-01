@@ -33,7 +33,9 @@ Steps:
       nothing. The writer then attests the new commit with the same digests, and ignores a note of
       another host class that shares the derivation id with different digests.
    d. After another such commit, a prior note of the same host class and derivation id with a different
-      image digest is refused as `mismatch`. So is one a concurrent writer adds during the push.
+      image digest is refused as `mismatch`. So is one a concurrent writer adds during the push, after the
+      checkout's notes are made equal to the remote's: the writer must push, see the push rejected, fetch
+      the concurrent note and compare again.
    e. `--check` accepts the remote's honest notes, and refuses a conflicting pair as `conflict` and a
       malformed note or a note naming another commit as `malformed`.
 3. `.github/workflows/image-attestations.yml` runs the writer nightly and on demand, one run at a time,
@@ -376,10 +378,24 @@ def step_writer(state: Scratch, findings: Findings) -> None:
     result, _ = state.writer(CLOSURE)
     expect_refused(result, "mismatch", findings, "mismatch")
     state.drop_note(parents[2])
-    state.arm_race(parents[2], foreign(first, parents[2], root="9" * 64))
+    # The checkout's notes now equal the remote's, which hold no conflict: only the note the concurrent
+    # writer adds during the push can make this run refuse.
+    git("fetch", "--quiet", REMOTE, f"+{REF}:{REF}", cwd=state.checkout)
+    if parents[2] in git("notes", f"--ref={REF}", "list", cwd=state.checkout):
+        findings.add("mismatch during push", ["the checkout still holds the earlier conflicting note"])
+    marker = state.arm_race(parents[2], foreign(first, parents[2], root="9" * 64))
     result, _ = state.writer(CLOSURE)
     state.disarm()
     expect_refused(result, "mismatch", findings, "mismatch during push")
+    if not marker.exists():
+        findings.add("mismatch during push", ["the writer refused without pushing, so the concurrent note was never offered"])
+    injected = state.remote_notes().get(parents[2])
+    if injected is None:
+        findings.add("mismatch during push", ["the concurrent writer's note is not on the remote"])
+    else:
+        record, _ = exam.decode_note(injected, state.parent)
+        if record["images"][0]["root"] != "9" * 64:
+            findings.add("mismatch during push", ["the note on the remote is not the concurrent writer's"])
     if third in state.remote_notes():
         findings.add("mismatch", ["a refused run left a note on the remote"])
     if parents[2] in state.remote_notes():
