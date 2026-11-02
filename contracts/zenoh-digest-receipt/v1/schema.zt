@@ -47,70 +47,54 @@ maxRemotePeers :: Int = 8;
 
 d ::= import stdlib.data;
 l ::= import stdlib.list;
-n ::= import stdlib.num;
 r ::= import stdlib.result;
 t ::= import stdlib.text;
 
 -- The record is closed. `decode` reads the fields it knows and ignores the rest, so a field the
--- contract does not name would pass unseen; this refuses it at the top level and in every sample.
+-- contract does not name would pass unseen. `onlyFields` refuses one at the top level and in every
+-- sample; a value that is not a record or a list is left to `decode`, which refuses it with its type.
 receiptFields :: List Text = { "formatVersion"; "peerVersion"; "listen"; "maxRemotePeers"; "samples"; };
 sampleFields :: List Text = { "key"; "payloadBytes"; "payloadSha256"; "attachmentHex"; };
 
-member :: Text -> List Text -> Bool
-  = name names => match names { | {;} => false; | {head; ...tail} => if head == name then true else member name tail; };
+named :: List Text -> d.DataField -> Bool
+  = names field => l.any (\name. name == field.name) names;
 
-allMembers :: List Text -> List Text -> Bool
-  = names found => match found { | {;} => true; | {head; ...tail} => member head names && allMembers names tail; };
-
-nameOf :: d.DataField -> Text
-  = field => field.name;
-
-closedRecord :: List Text -> Data -> Bool
+onlyFields :: List Text -> Data -> Bool
   = names data => match d.asRecord data {
-    | #ok { value = fields; } => allMembers names (l.map nameOf fields);
+    | #ok { value = fields; } => l.all (named names) fields;
     | #err { error = _; } => true;
   };
 
-allClosed :: List Data -> Bool
-  = items => match items { | {;} => true; | {head; ...tail} => closedRecord sampleFields head && allClosed tail; };
-
-closedSamples :: Data -> Bool
+samplesClosed :: Data -> Bool
   = data => match d.field "samples" data {
-    | #ok { value = value; } => match d.asList value { | #ok { value = items; } => allClosed items; | #err { error = _; } => true; };
+    | #ok { value = value; } => match d.asList value {
+      | #ok { value = items; } => l.all (onlyFields sampleFields) items;
+      | #err { error = _; } => true;
+    };
     | #err { error = _; } => true;
   };
 
-closedReceipt :: Data -> Bool
-  = data => closedRecord receiptFields data && closedSamples data;
+closed :: Data -> Bool
+  = data => onlyFields receiptFields data && samplesClosed data;
 
--- A hex string is lowercase digit pairs: once every lowercase digit is removed nothing may remain.
-hexDigits :: List Text = { "0"; "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9"; "a"; "b"; "c"; "d"; "e"; "f"; };
+-- Lowercase hexadecimal of `bytes` bytes: twice that many characters, none outside 0-9 and a-f.
+-- Removing each permitted digit in turn must leave nothing.
+lowerHexDigits :: List Text = { "0"; "1"; "2"; "3"; "4"; "5"; "6"; "7"; "8"; "9"; "a"; "b"; "c"; "d"; "e"; "f"; };
 
-stripHex :: List Text -> Text -> Text
-  = digits value => match digits {
-    | {;} => value;
-    | { head; ...tail } => stripHex tail (t.replace head "" value);
-  };
-
-isHex :: Text -> Bool
-  = value => t.length (stripHex hexDigits value) == 0 && n.rem (t.length value) 2 == 0;
-
-count :: List Sample -> Int
-  = items => match items { | {;} => 0; | { _; ...rest } => 1 + count rest; };
+hexOf :: Int -> Text -> Bool
+  = bytes value => t.length value == bytes * 2
+    && t.length (l.fold (\rest digit. t.replace digit "" rest) value lowerHexDigits) == 0;
 
 sampleOk :: Sample -> Bool
   = s => t.length s.key >= 1 && t.length s.key <= maxKeyBytes
     && s.payloadBytes >= 0 && s.payloadBytes <= maxPayloadBytes
-    && isHex s.payloadSha256 && t.length s.payloadSha256 == sha256Bytes * 2
-    && isHex s.attachmentHex && t.length s.attachmentHex == attachmentBytes * 2;
-
-allSamplesOk :: List Sample -> Bool
-  = items => match items { | {;} => true; | { head; ...rest } => sampleOk head && allSamplesOk rest; };
+    && hexOf sha256Bytes s.payloadSha256
+    && hexOf attachmentBytes s.attachmentHex;
 
 receiptOk :: Receipt -> Bool
   = rec => rec.formatVersion == formatVersion && rec.peerVersion == peerVersion
     && rec.maxRemotePeers >= minRemotePeers && rec.maxRemotePeers <= maxRemotePeers
-    && count rec.samples <= maxSamples && allSamplesOk rec.samples;
+    && l.length rec.samples <= maxSamples && l.all sampleOk rec.samples;
 
 unknownField :: DecodeIssue
   = { path = {;}; error = #custom { message = "a field the contract does not name"; }; };
@@ -125,7 +109,7 @@ bounded :: Validation DecodeIssue Receipt -> Validation DecodeIssue Receipt
   };
 
 decodeReceipt :: Data -> Validation DecodeIssue Receipt
-  = data => if closedReceipt data then bounded (decode data) else r.invalidOne unknownField;
+  = data => if closed data then bounded (decode data) else r.invalidOne unknownField;
 
 {
   Sample =;
