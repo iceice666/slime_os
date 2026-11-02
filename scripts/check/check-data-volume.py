@@ -36,9 +36,9 @@ Steps:
    fixture, and refuses an unknown kind, a payload that is not a frame store, and an existing output,
    leaving the output untouched.
 3. `sel4-data-volume` builds, and boots on aarch64 QEMU once with the builder's honest disk and once with
-   each of thirteen disks, each built to fail one of the contract's checks first: every refusal class has
-   a disk, and the classes with several checks have one disk per check. The probe's lines must be
-   exactly the expected ones.
+   each of fifty disks, one per check of the exam's decoder, each built so that only that check refuses
+   it. A boot is read for five seconds past its terminal line, so a line printed after a refusal is judged.
+   The probe's lines must be exactly the expected ones.
 
 `--controls-only` runs step 1; `--skip-boots` stops after step 2.
 """
@@ -57,6 +57,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import tomllib
 from pathlib import Path
 
@@ -67,6 +68,8 @@ from harness import ROOT
 IMAGE_BUILDER = "scripts/build/build-system-image.py"
 SOURCE = f"contracts/system-image-closure/v3/closures/{exam.CLOSURE}.zti"
 BOOT_TIMEOUT_SECONDS = 240
+# How long a boot is read past its terminal or failure line, so a line printed after a refusal is judged.
+POST_TERMINAL_SECONDS = 5
 FAILURES = re.compile(r"panic|PANIC|\] fail: |SLIME_GRAPH exhausted|SLIME_ROOT .*refused launch")
 TERMINAL = re.compile(rf"\[{exam.PROBE}\] (complete|refused [a-z-]+)\s*$")
 
@@ -126,30 +129,69 @@ def step_builder(directory: Path, data: exam.Corpus, findings: Findings) -> Path
     return honest
 
 
+def collect(command: list[str], timeout: float = BOOT_TIMEOUT_SECONDS) -> str:
+    """Everything `command` prints until `POST_TERMINAL_SECONDS` after its first terminal or failure line, until
+    it exits, or until `timeout`. Reading on past the terminal line is what lets a judge see a line printed
+    after a refusal."""
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, bufsize=1)
+    lines: list[str] = []
+    finished = threading.Event()
+
+    def read() -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            lines.append(line.rstrip("\r\n"))
+        finished.set()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + timeout
+    stop_at = None
+    seen = 0
+    try:
+        while time.monotonic() < deadline and not finished.is_set():
+            current = len(lines)
+            if stop_at is None and any(FAILURES.search(line) or TERMINAL.search(line) for line in lines[seen:current]):
+                stop_at = time.monotonic() + POST_TERMINAL_SECONDS
+            seen = current
+            if stop_at is not None and time.monotonic() >= stop_at:
+                break
+            time.sleep(0.05)
+    finally:
+        process.kill()
+        process.wait()
+        reader.join(timeout=5)
+    return "\n".join(lines)
+
+
 def boot(image: Path, disk: Path) -> str:
     profile = tomllib.loads((ROOT / "sel4" / "pins.toml").read_text(encoding="utf-8"))["qemu_arm_virt"]
-    command = [
+    return collect([
         "qemu-system-aarch64", "-machine", profile["machine"], "-cpu", profile["cpu"], "-smp", str(profile["cpus"]),
         "-m", f"size={profile['memory_mib']}M", "-nographic", "-serial", "mon:stdio", "-kernel", str(image),
         "-drive", f"if=none,id=slimedata,format=raw,readonly=on,file={disk}",
         "-device", "virtio-blk-device,drive=slimedata",
+    ])
+
+
+def collector_controls(store: bytes) -> list[tuple[str, bool]]:
+    """The transcript collector, run on stand-in processes: a line printed after a refusal must reach the judge."""
+    def emit(*steps: tuple[float, str]) -> list[str]:
+        script = "import sys, time\n" + "".join(
+            f"time.sleep({delay})\nprint({line!r}, flush=True)\n" for delay, line in steps) + "time.sleep(30)\n"
+        return [_sys.executable, "-c", script]
+
+    tag = f"[{exam.PROBE}] "
+    refused = collect(emit((0, f"{tag}refused hash")), timeout=20)
+    after = collect(emit((0, f"{tag}refused hash"), (1.0, f"{tag}complete")), timeout=20)
+    failing = collect(emit((0, f"{tag}refused hash"), (1.0, f"[{exam.PROBE}] fail: late")), timeout=20)
+    return [
+        ("collector-refusal", not exam.refusal_findings(exam.probe_lines(refused), "hash", store)
+         and FAILURES.search(refused) is None),
+        ("collector-line-after-refusal", bool(exam.refusal_findings(exam.probe_lines(after), "hash", store))),
+        ("collector-failure-after-refusal", FAILURES.search(failing) is not None),
     ]
-    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, bufsize=1)
-    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
-    watchdog.start()
-    lines = []
-    try:
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line.rstrip("\r\n"))
-            if FAILURES.search(line) or TERMINAL.search(line):
-                break
-    finally:
-        watchdog.cancel()
-        process.kill()
-        process.wait()
-    return "\n".join(lines)
 
 
 def step_boots(directory: Path, honest: Path, data: exam.Corpus, findings: Findings) -> None:
@@ -168,7 +210,8 @@ def step_boots(directory: Path, honest: Path, data: exam.Corpus, findings: Findi
         findings.add("honest boot", [f"the boot failed: {failure.group(0)!r}"])
     findings.add("honest boot", exam.honest_findings(exam.probe_lines(transcript), data.store))
     findings.add("honest boot", exam.driver_findings(transcript))
-    for name, (kind, disk_bytes) in data.broken.items():
+    for name, disk_bytes in data.broken.items():
+        kind = exam.check_class(name)
         disk = directory / f"broken-{name}.img"
         disk.write_bytes(disk_bytes)
         transcript = boot(image, disk)
@@ -184,7 +227,7 @@ def main() -> int:
     parser.add_argument("--controls-only", action="store_true", help="run the judges' controls only")
     parser.add_argument("--skip-boots", action="store_true", help="stop after judging the builder")
     arguments = parser.parse_args()
-    results = exam.controls()
+    results = exam.controls() + collector_controls(exam.payload())
     failed = [label for label, held in results if not held]
     schema = exam.schema_findings((ROOT / exam.SCHEMA).read_text(encoding="utf-8"))
     if failed or schema:

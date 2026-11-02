@@ -57,12 +57,15 @@ GPT_ENTRY = struct.Struct("<16s16sQQQ72s")
 
 
 class Refused(Exception):
-    """The decoder refuses a disk; `kind` is one of `REFUSAL_CLASSES`."""
+    """The decoder refuses a disk. `check` names the one check that failed; `kind` is its refusal class, the
+    part of `check` before its first hyphen for every class but `frame-store`."""
 
-    def __init__(self, kind: str, detail: str):
-        super().__init__(f"{kind}: {detail}")
-        assert kind in REFUSAL_CLASSES, kind
+    def __init__(self, check: str, detail: str):
+        kind = "frame-store" if check == "frame-store" else check.split("-", 1)[0]
+        super().__init__(f"{check}: {detail}")
+        assert kind in REFUSAL_CLASSES, check
         self.kind = kind
+        self.check = check
 
 
 def schema_findings(text: str) -> list[str]:
@@ -147,68 +150,82 @@ def encode(payload: bytes, *, kind: int = KIND_FRAME_STORE) -> bytes:
     return bytes(out)
 
 
-def _header(disk: bytes, lba: int) -> tuple:
-    if len(disk) < (lba + 1) * SECTOR:
-        raise Refused("gpt", f"the disk ends before LBA {lba}")
+def _header(disk: bytes, lba: int, which: str) -> tuple:
     sector = disk[lba * SECTOR:(lba + 1) * SECTOR]
     fields = list(GPT_HEADER.unpack_from(sector))
+    _require(fields[0] == b"EFI PART", f"gpt-{which}-signature", f"the {which} GPT header's signature")
+    _require(fields[1] == 0x00010000, f"gpt-{which}-revision", f"the {which} GPT header's revision")
+    _require(fields[2] == 92, f"gpt-{which}-header-size", f"the {which} GPT header's size")
+    _require(fields[4] == 0, f"gpt-{which}-header-reserved", f"the {which} GPT header's reserved field")
     stored = fields[3]
     fields[3] = 0
-    if fields[0] != b"EFI PART" or fields[1] != 0x00010000 or fields[2] != 92 or fields[4] != 0:
-        raise Refused("gpt", f"the GPT header at LBA {lba} is not a revision 1.0 header")
-    if zlib.crc32(GPT_HEADER.pack(*fields)) != stored or any(sector[GPT_HEADER.size:]):
-        raise Refused("gpt", f"the GPT header at LBA {lba} fails its CRC32 or holds trailing bytes")
+    _require(zlib.crc32(GPT_HEADER.pack(*fields)) == stored, f"gpt-{which}-header-crc",
+             f"the {which} GPT header fails its CRC32")
+    _require(not any(sector[GPT_HEADER.size:]), f"gpt-{which}-header-trailing",
+             f"the {which} GPT header has bytes after its 92")
     fields[3] = stored
     return tuple(fields)
 
 
+def _require(held: bool, check: str, detail: str) -> None:
+    if not held:
+        raise Refused(check, detail)
+
+
 def decode(disk: bytes) -> bytes:
-    """Validate a disk in the contract's order and return its payload. Raises Refused with the first class."""
-    if len(disk) % SECTOR or len(disk) < (FIRST_LBA + 2 + ENTRY_SECTORS + 1) * SECTOR:
-        raise Refused("gpt", f"{len(disk)} bytes is not a whole disk of the minimum size")
+    """Validate a disk in the contract's order and return its payload. Raises Refused naming the first check
+    that fails; each check is its own statement, so each has a disk that fails it alone."""
+    _require(len(disk) % SECTOR == 0 and len(disk) >= (FIRST_LBA + 2 + ENTRY_SECTORS + 1) * SECTOR,
+             "gpt-size", f"{len(disk)} bytes is not a whole disk of the minimum size")
     total = len(disk) // SECTOR
     mbr = disk[:SECTOR]
-    if mbr[510:512] != b"\x55\xaa" or mbr[450] != 0xEE or struct.unpack_from("<II", mbr, 454) != (
-            1, min(total - 1, 0xFFFFFFFF)):
-        raise Refused("gpt", "the protective MBR is not one 0xEE partition from LBA 1 over the disk")
-    primary = _header(disk, 1)
-    backup = _header(disk, total - 1)
-    if primary[5:7] != (1, total - 1) or backup[5:7] != (total - 1, 1):
-        raise Refused("gpt", "the headers do not name their own and each other's LBAs")
-    if primary[10] != 2 or backup[10] != total - 1 - ENTRY_SECTORS:
-        raise Refused("gpt", "an entry array is not where the layout puts it")
-    if primary[7:10] != backup[7:10] or primary[11:] != backup[11:] or primary[11:13] != (ENTRY_COUNT, ENTRY_BYTES):
-        raise Refused("gpt", "the two GPT headers disagree or name another entry geometry")
-    if primary[7] != ENTRY_SECTORS + 2 or primary[8] >= total - 1 - ENTRY_SECTORS:
-        raise Refused("gpt", "the usable LBA range does not fit the disk")
+    _require(mbr[510:512] == b"\x55\xaa", "gpt-mbr-signature", "the MBR signature")
+    _require(mbr[450] == 0xEE, "gpt-mbr-type", "the MBR partition type is not 0xEE")
+    _require(struct.unpack_from("<II", mbr, 454) == (1, min(total - 1, 0xFFFFFFFF)), "gpt-mbr-range",
+             "the protective partition does not run from LBA 1 over the disk")
+    primary = _header(disk, 1, "primary")
+    backup = _header(disk, total - 1, "backup")
+    _require(primary[5] == 1, "gpt-primary-own-lba", "the primary header does not name LBA 1")
+    _require(primary[6] == total - 1, "gpt-primary-alternate-lba", "the primary header does not name the last LBA")
+    _require(backup[5] == total - 1, "gpt-backup-own-lba", "the backup header does not name the last LBA")
+    _require(backup[6] == 1, "gpt-backup-alternate-lba", "the backup header does not name LBA 1")
+    _require(primary[10] == 2, "gpt-primary-entries-lba", "the primary entry array is not at LBA 2")
+    _require(backup[10] == total - 1 - ENTRY_SECTORS, "gpt-backup-entries-lba",
+             "the backup entry array is not before the backup header")
+    for index, field in ((7, "first-usable"), (8, "last-usable"), (9, "disk-guid"), (11, "entry-count"),
+                         (12, "entry-size"), (13, "entries-crc-field")):
+        _require(primary[index] == backup[index], f"gpt-headers-differ-{field}", f"the two headers' {field} differ")
+    _require(primary[11] == ENTRY_COUNT, "gpt-entry-count", f"the headers name {primary[11]} entries")
+    _require(primary[12] == ENTRY_BYTES, "gpt-entry-size", f"the headers name {primary[12]}-byte entries")
+    _require(primary[7] == ENTRY_SECTORS + 2, "gpt-first-usable", f"the first usable LBA is {primary[7]}")
+    _require(primary[8] < total - 1 - ENTRY_SECTORS, "gpt-last-usable", f"the last usable LBA is {primary[8]}")
     arrays = []
-    for header in (primary, backup):
+    for which, header in (("primary", primary), ("backup", backup)):
         start = header[10] * SECTOR
         array = disk[start:start + ENTRY_COUNT * ENTRY_BYTES]
-        if zlib.crc32(array) != header[13]:
-            raise Refused("gpt", f"the entry array at LBA {header[10]} fails its CRC32")
+        _require(zlib.crc32(array) == header[13], f"gpt-{which}-entries-crc", f"the {which} entry array's CRC32")
         arrays.append(array)
-    if arrays[0] != arrays[1]:
-        raise Refused("gpt", "the two entry arrays differ")
     type_guid, _, first, last, attributes, name = GPT_ENTRY.unpack_from(arrays[0])
-    if type_guid != guid(TYPE_GUID):
-        raise Refused("partition", "entry 0 is not a data volume")
-    if any(arrays[0][ENTRY_BYTES:]):
-        raise Refused("partition", "an entry after entry 0 is not all zero")
-    if first != FIRST_LBA or last != primary[8] or attributes or name != PARTITION_NAME.encode("utf-16-le").ljust(72, b"\0"):
-        raise Refused("partition", "the volume does not span firstLba to the last usable LBA as named")
+    _require(type_guid == guid(TYPE_GUID), "partition-type", "entry 0 is not a data volume")
+    _require(not any(arrays[0][ENTRY_BYTES:]), "partition-other-entry", "an entry after entry 0 is not zero")
+    _require(first == FIRST_LBA, "partition-first-lba", f"the volume starts at {first}")
+    _require(last == primary[8], "partition-last-lba", f"the volume ends at {last}, not the last usable LBA")
+    _require(attributes == 0, "partition-attributes", "the volume's attributes are not zero")
+    _require(name == PARTITION_NAME.encode("utf-16-le").ljust(72, b"\0"), "partition-name", "the volume's name")
     header = disk[FIRST_LBA * SECTOR:(FIRST_LBA + 1) * SECTOR]
     magic, version, kind, size, digest = VOLUME_HEADER.unpack_from(header)
-    if magic != VOLUME_MAGIC or version != FORMAT_VERSION or kind != KIND_FRAME_STORE or any(header[VOLUME_HEADER.size:]):
-        raise Refused("header", "the volume header's magic, version, kind or a reserved byte")
-    if not 1 <= size <= MAX_PAYLOAD_BYTES or payload_sectors(size) != last - FIRST_LBA:
-        raise Refused("length", f"payload length {size} does not fill the partition's {last - FIRST_LBA} sectors")
+    _require(magic == VOLUME_MAGIC, "header-magic", "the volume magic")
+    _require(version == FORMAT_VERSION, "header-version", f"volume version {version}")
+    _require(kind == KIND_FRAME_STORE, "header-kind", f"payload kind {kind}")
+    _require(not any(header[VOLUME_HEADER.size:]), "header-reserved", "a reserved header byte is not zero")
+    _require(size != 0, "length-zero", "the payload length is zero")
+    _require(size <= MAX_PAYLOAD_BYTES, "length-bound", f"payload length {size} is above {MAX_PAYLOAD_BYTES}")
+    _require(payload_sectors(size) == last - FIRST_LBA, "length-sectors",
+             f"payload length {size} does not fill the partition's {last - FIRST_LBA} sectors")
     start = (FIRST_LBA + 1) * SECTOR
     payload = disk[start:start + size]
-    if any(disk[start + size:(last + 1) * SECTOR]):
-        raise Refused("padding", "a byte after the payload in its last sector is not zero")
-    if hashlib.sha256(payload).digest() != digest:
-        raise Refused("hash", "the payload's SHA-256 is not the header's")
+    _require(not any(disk[start + size:(last + 1) * SECTOR]), "padding", "a byte after the payload is not zero")
+    _require(hashlib.sha256(payload).digest() == digest, "hash", "the payload's SHA-256 is not the header's")
     try:
         frames.decode(payload)
     except frames.Refused as error:
@@ -246,11 +263,30 @@ def _sector(disk: bytes, lba: int, change) -> bytes:
     return bytes(data)
 
 
-def _entries(disk: bytes, offset: int, value: bytes, *, fix_crc: bool = True) -> bytes:
-    """The same disk with `value` written at `offset` of both entry arrays, their CRC32s recomputed or not."""
+def _gpt(disk: bytes, which: str, index: int, value, *, fix_crc: bool = True) -> bytes:
+    """The same disk with header field `index` set to `value` in the `primary`, `backup` or `both` headers,
+    each edited header's CRC32 recomputed unless `fix_crc` is false."""
     total = len(disk) // SECTOR
     data = bytearray(disk)
-    for header_lba, entries_lba in ((1, 2), (total - 1, total - 1 - ENTRY_SECTORS)):
+    lbas = {"primary": (1,), "backup": (total - 1,), "both": (1, total - 1)}[which]
+    for lba in lbas:
+        fields = list(GPT_HEADER.unpack_from(data, lba * SECTOR))
+        fields[index] = value(fields[index]) if callable(value) else value
+        if fix_crc and index != 3:
+            fields[3] = 0
+            fields[3] = zlib.crc32(GPT_HEADER.pack(*fields))
+        data[lba * SECTOR:lba * SECTOR + GPT_HEADER.size] = GPT_HEADER.pack(*fields)
+    return bytes(data)
+
+
+def _entries(disk: bytes, offset: int, value: bytes, *, which: str = "both", fix_crc: bool = True) -> bytes:
+    """The same disk with `value` written at `offset` of the `primary`, `backup` or `both` entry arrays, the
+    arrays' CRC32 fields (and the headers' CRC32s) recomputed unless `fix_crc` is false."""
+    total = len(disk) // SECTOR
+    data = bytearray(disk)
+    pairs = {"primary": ((1, 2),), "backup": ((total - 1, total - 1 - ENTRY_SECTORS),)}
+    pairs["both"] = pairs["primary"] + pairs["backup"]
+    for header_lba, entries_lba in pairs[which]:
         base = entries_lba * SECTOR
         data[base + offset:base + offset + len(value)] = value
         if not fix_crc:
@@ -270,32 +306,85 @@ def not_a_store(store: bytes) -> bytes:
     return bytes(broken)
 
 
-def corrupted(honest: bytes, store: bytes) -> dict[str, tuple[str, bytes]]:
-    """Disks named by the check each is built to fail first, with that check's refusal class. A class has a
-    disk for each of its distinct checks, so a reader that skipped one check is caught by its disk."""
+def corrupted(honest: bytes, store: bytes) -> dict[str, bytes]:
+    """One disk per check of the decoder, keyed by the check it is built to fail first and alone. A semantic
+    edit recomputes every CRC32 it disturbs, so only the named check can refuse it."""
     start = (FIRST_LBA + 1) * SECTOR
     size = len(store)
-    last = len(honest) // SECTOR - 1
+    total = len(honest) // SECTOR
+    last_usable = FIRST_LBA + payload_sectors(size)
 
-    def flip(offset: int):
-        return lambda sector: sector.__setitem__(offset, sector[offset] ^ 0x01)
+    def at(lba: int, offset: int, value: bytes) -> bytes:
+        data = bytearray(honest)
+        data[lba * SECTOR + offset:lba * SECTOR + offset + len(value)] = value
+        return bytes(data)
 
-    return {
-        "gpt-header-field": ("gpt", _sector(honest, 1, flip(40))),
-        "gpt-header-crc": ("gpt", _sector(honest, 1, flip(16))),
-        "gpt-entries-crc": ("gpt", _entries(honest, ENTRY_BYTES + 3, b"\x01", fix_crc=False)),
-        "gpt-backup-header": ("gpt", _sector(honest, last, flip(56))),
-        "gpt-mbr": ("gpt", _sector(honest, 0, lambda sector: sector.__setitem__(450, 0x83))),
-        "partition-type": ("partition", _entries(honest, 0, guid("0fc63daf-8483-4772-8e79-3d69d8477de4"))),
-        "partition-second-entry": ("partition", _entries(honest, ENTRY_BYTES + 3, b"\x01")),
-        "header-magic": ("header", _sector(honest, FIRST_LBA, flip(0))),
-        "header-reserved": ("header", _sector(honest, FIRST_LBA, lambda sector: sector.__setitem__(100, 1))),
-        "length": ("length", _sector(honest, FIRST_LBA, lambda sector: sector.__setitem__(
-            slice(8, 16), struct.pack("<Q", size + SECTOR)))),
-        "padding": ("padding", bytes(bytearray(honest[:start + size]) + b"\x01" + honest[start + size + 1:])),
-        "hash": ("hash", bytes(bytearray(honest[:start + 7]) + bytes([honest[start + 7] ^ 0x01]) + honest[start + 8:])),
-        "frame-store": ("frame-store", encode(not_a_store(store))),
+    def volume(offset: int, value: bytes) -> bytes:
+        return at(FIRST_LBA, offset, value)
+
+    def entry(offset: int, value: bytes) -> bytes:
+        return _entries(honest, offset, value)
+
+    disks = {
+        # Below the minimum size, which a guest sees in the device capacity. A disk that is not a whole number
+        # of sectors cannot be booted as one: the block device rounds it, so that half of the check stays
+        # this decoder's input check.
+        "gpt-size": honest[:(FIRST_LBA + 2 + ENTRY_SECTORS) * SECTOR],
+        "gpt-mbr-signature": at(0, 510, b"\x00"),
+        "gpt-mbr-type": at(0, 450, b"\x83"),
+        "gpt-mbr-range": at(0, 454, struct.pack("<I", 2)),
+        "gpt-primary-signature": _gpt(honest, "primary", 0, b"EFI PARU"),
+        "gpt-primary-revision": _gpt(honest, "primary", 1, 0x00010001),
+        "gpt-primary-header-size": _gpt(honest, "primary", 2, 96),
+        "gpt-primary-header-reserved": _gpt(honest, "primary", 4, 1),
+        "gpt-primary-header-crc": _gpt(honest, "primary", 3, lambda crc: crc ^ 1),
+        "gpt-primary-header-trailing": at(1, 200, b"\x01"),
+        "gpt-backup-signature": _gpt(honest, "backup", 0, b"EFI PARU"),
+        "gpt-backup-revision": _gpt(honest, "backup", 1, 0x00010001),
+        "gpt-backup-header-size": _gpt(honest, "backup", 2, 96),
+        "gpt-backup-header-reserved": _gpt(honest, "backup", 4, 1),
+        "gpt-backup-header-crc": _gpt(honest, "backup", 3, lambda crc: crc ^ 1),
+        "gpt-backup-header-trailing": at(total - 1, 200, b"\x01"),
+        "gpt-primary-own-lba": _gpt(honest, "primary", 5, 5),
+        "gpt-primary-alternate-lba": _gpt(honest, "primary", 6, total - 2),
+        "gpt-backup-own-lba": _gpt(honest, "backup", 5, total - 2),
+        "gpt-backup-alternate-lba": _gpt(honest, "backup", 6, 2),
+        "gpt-primary-entries-lba": _gpt(honest, "primary", 10, 3),
+        "gpt-backup-entries-lba": _gpt(honest, "backup", 10, total - 2 - ENTRY_SECTORS),
+        "gpt-headers-differ-first-usable": _gpt(honest, "primary", 7, ENTRY_SECTORS + 3),
+        "gpt-headers-differ-last-usable": _gpt(honest, "primary", 8, last_usable - 1),
+        "gpt-headers-differ-disk-guid": _gpt(honest, "primary", 9, lambda value: bytes([value[0] ^ 1]) + value[1:]),
+        "gpt-headers-differ-entry-count": _gpt(honest, "primary", 11, ENTRY_COUNT - 1),
+        "gpt-headers-differ-entry-size": _gpt(honest, "primary", 12, ENTRY_BYTES * 2),
+        "gpt-headers-differ-entries-crc-field": _gpt(honest, "primary", 13, lambda crc: crc ^ 1),
+        "gpt-entry-count": _gpt(honest, "both", 11, ENTRY_COUNT - 1),
+        "gpt-entry-size": _gpt(honest, "both", 12, ENTRY_BYTES * 2),
+        "gpt-first-usable": _gpt(honest, "both", 7, 0),
+        "gpt-last-usable": _gpt(honest, "both", 8, total - 1 - ENTRY_SECTORS),
+        "gpt-primary-entries-crc": _entries(honest, ENTRY_BYTES + 3, b"\x01", fix_crc=False),
+        "gpt-backup-entries-crc": _entries(honest, ENTRY_BYTES + 3, b"\x01", which="backup", fix_crc=False),
+        "partition-type": entry(0, guid("0fc63daf-8483-4772-8e79-3d69d8477de4")),
+        "partition-other-entry": entry(ENTRY_BYTES + 3, b"\x01"),
+        "partition-first-lba": entry(32, struct.pack("<Q", FIRST_LBA - 1)),
+        "partition-last-lba": entry(40, struct.pack("<Q", last_usable - 1)),
+        "partition-attributes": entry(48, struct.pack("<Q", 1)),
+        "partition-name": entry(56, "S".encode("utf-16-le")),
+        "header-magic": volume(0, struct.pack("<I", VOLUME_MAGIC ^ 1)),
+        "header-version": volume(4, struct.pack("<H", FORMAT_VERSION + 1)),
+        "header-kind": volume(6, struct.pack("<H", KIND_FRAME_STORE + 1)),
+        "header-reserved": volume(100, b"\x01"),
+        "length-zero": volume(8, struct.pack("<Q", 0)),
+        "length-bound": volume(8, struct.pack("<Q", MAX_PAYLOAD_BYTES + 1)),
+        "length-sectors": volume(8, struct.pack("<Q", size + SECTOR)),
+        "padding": at(0, start + size, b"\x01"),
+        "hash": at(0, start + 7, bytes([honest[start + 7] ^ 0x01])),
+        "frame-store": encode(not_a_store(store)),
     }
+    return disks
+
+
+def check_class(check: str) -> str:
+    return "frame-store" if check == "frame-store" else check.split("-", 1)[0]
 
 
 # What the probe prints.
@@ -369,6 +458,8 @@ def driver_findings(transcript: str) -> list[str]:
         findings.append(f"the driver reported {refused and refused[1]!r}, not one {DRIVER_REFUSAL!r}")
     elif probe_refusal is None or refused[0] > probe_refusal:
         findings.append("the driver's refusal does not precede the probe's")
+    if authority is not None and (probe_refusal is None or authority[0] > probe_refusal):
+        findings.append("the driver's authority report does not precede the probe's refusal")
     return findings
 
 
@@ -387,7 +478,7 @@ def builder_refusal(stderr: str) -> str | None:
 class Corpus:
     store: bytes
     honest: bytes
-    broken: dict[str, tuple[str, bytes]]
+    broken: dict[str, bytes]
 
 
 def corpus() -> Corpus:
@@ -404,14 +495,23 @@ def _verdict(disk: bytes) -> str:
     return "accepted"
 
 
+def _check(disk: bytes) -> str:
+    try:
+        decode(disk)
+    except Refused as refusal:
+        return refusal.check
+    return "accepted"
+
+
 def _decoder_controls(data: Corpus) -> Iterator[tuple[str, bool]]:
     yield "decode-honest", _verdict(data.honest) == "accepted" and decode(data.honest) == data.store
-    for name, (kind, disk) in data.broken.items():
-        yield f"decode-{name}", _verdict(disk) == kind
-    yield "decode-every-class-covered", {kind for kind, _ in data.broken.values()} == set(REFUSAL_CLASSES)
+    for check, disk in data.broken.items():
+        yield f"decode-{check}", _check(disk) == check
+    yield "decode-every-class-covered", {check_class(check) for check in data.broken} == set(REFUSAL_CLASSES)
     small = frames.encode(frames.BASE)
     yield "decode-small-store", decode(encode(small)) == small
     yield "decode-truncated-disk", _verdict(data.honest[:-SECTOR]) == "gpt"
+    yield "decode-partial-sector", _check(data.honest[:-1]) == "gpt-size"
     yield "decode-backup-header", _verdict(_sector(data.honest, len(data.honest) // SECTOR - 1,
                                                    lambda s: s.__setitem__(24, s[24] ^ 1))) == "gpt"
     yield "decode-mbr", _verdict(_sector(data.honest, 0, lambda s: s.__setitem__(450, 0x83))) == "gpt"
@@ -461,6 +561,7 @@ def _transcript_controls(data: Corpus) -> Iterator[tuple[str, bool]]:
         "driver-after-probe": f"{DRIVER_TAG}{DRIVER_AUTHORITY}\n{TAG}write refused\n{DRIVER_TAG}{DRIVER_REFUSAL}\n",
         "driver-probe-only": f"{TAG}write refused\n",
         "driver-other-ring": good.replace("ring=0 rights=read\n", "ring=1 rights=read\n"),
+        "driver-authority-after-probe": f"{DRIVER_TAG}{DRIVER_REFUSAL}\n{TAG}write refused\n{DRIVER_TAG}{DRIVER_AUTHORITY}\n",
     }.items():
         yield label, bool(driver_findings(text))
     yield "builder-refusal-honest", builder_refusal("x\nbuild-data-volume: refused payload\n") == "payload"

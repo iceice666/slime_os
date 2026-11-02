@@ -170,8 +170,8 @@ frame_store_check:
 
 # Judges contracts/data-volume/v1: scripts/build/build-data-volume.py must write exactly the exam's disk for a
 # frame store and refuse three bad inputs; the sel4-data-volume image must boot on aarch64 QEMU with that disk
-# attached read-only and report what data-volume-probe read, then refuse thirteen disks the exam corrupted,
-# each with its check's class. The expectation is scripts/lib/data_volume_exam.py. Explicit, in no aggregate.
+# attached read-only and report what data-volume-probe read, then refuse fifty disks the exam corrupted, one
+# per check of its decoder, each with its check's class. The expectation is scripts/lib/data_volume_exam.py. Explicit, in no aggregate.
 [group('hardware')]
 data_volume_check:
     python3 scripts/check/check-data-volume.py
