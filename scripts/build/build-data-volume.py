@@ -40,7 +40,6 @@ ENTRY_ARRAY_BYTES = contract.GPT_ENTRY_COUNT * contract.GPT_ENTRY_BYTES
 ENTRY_SECTORS = ENTRY_ARRAY_BYTES // SECTOR
 GPT_HEADER = struct.Struct("<8sIIIIQQQQ16sQIII")
 GPT_ENTRY = struct.Struct("<16s16sQQQ72s")
-VOLUME_HEADER = struct.Struct("<IHHQ32s")
 KINDS = {"frame-store": contract.KIND_FRAME_STORE}
 
 
@@ -79,8 +78,9 @@ def disk_image(payload: bytes, kind: int) -> bytes:
     image[510:512] = b"\x55\xaa"
     image[SECTOR:2 * SECTOR] = _gpt_header(1, total - 1, 2, last_usable, disk_guid, entries_crc)
     image[2 * SECTOR:(2 + ENTRY_SECTORS) * SECTOR] = entries
-    header = VOLUME_HEADER.pack(contract.VOLUME_MAGIC, contract.FORMAT_VERSION, kind, len(payload), digest)
-    assert VOLUME_HEADER.size == contract.VOLUME_HEADER_BYTES
+    # The header's struct is rendered from the contract's `volumeHeaderLayout`; only the GPT structures,
+    # which the UEFI specification owns, are spelled here.
+    header = contract.VOLUME_HEADER.pack(contract.VOLUME_MAGIC, contract.FORMAT_VERSION, kind, len(payload), digest)
     image[contract.FIRST_LBA * SECTOR:contract.FIRST_LBA * SECTOR + len(header)] = header
     start = (contract.FIRST_LBA + 1) * SECTOR
     image[start:start + len(payload)] = payload
@@ -94,7 +94,8 @@ def build(kind_name: str, payload_path: Path, output: Path) -> None:
     kind = KINDS.get(kind_name)
     if kind is None:
         raise Refused("kind", f"{kind_name!r} is not one of {sorted(KINDS)}")
-    if output.exists():
+    # `exists()` follows a symlink, so a dangling one would read as absent and be replaced.
+    if output.is_symlink() or output.exists():
         raise Refused("output", f"{output} already exists")
     try:
         payload = payload_path.read_bytes()
