@@ -2,9 +2,9 @@
 schema: work-item/v2
 id: 01a19add-bddf-77a3-ab9c-ca12ecb6512f
 kind: task
-state: open
+state: active
 created: 2026-11-02T14:06:25+08:00
-updated: 2026-11-02T14:06:32+08:00
+updated: 2026-11-02T22:27:24+08:00
 tags:
   - ros2
 supersedes:
@@ -16,7 +16,7 @@ devloop:
   helper: devloop-helpers/v1:93745c5aa610e8859ed5f5d937e47d55d36ac612cc60b3a22141fa6763fe1c23
   requirementsDigest: b51960c172938f47c2ae6ebb265227ce3ac0a61c18b74cc96b0ed1d3463d7a22
   admission: slime-data-volume-20261102
-  epoch: unstarted
+  epoch: 2bed3a7d-9a41-4fd4-baae-b8c4e332f8b4
   evidence: []
 ---
 
