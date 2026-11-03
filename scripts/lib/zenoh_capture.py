@@ -166,12 +166,14 @@ def _record_times(data: bytes) -> list[int]:
     return times
 
 
-def segments(data: bytes) -> tuple[list[Segment], int]:
-    """Every TCP segment in the capture, and the number of ARP frames. Anything else is refused."""
+def segments(data: bytes, max_capture: int = http_capture.MAX_CAPTURE, max_frames: int = http_capture.MAX_FRAMES) -> tuple[list[Segment], int]:
+    """Every TCP segment in the capture, and the number of ARP frames. Anything else is refused.
+
+    A capture over `max_capture` bytes or `max_frames` frames is refused."""
     found: list[Segment] = []
     arp = 0
     try:
-        frames = list(http_capture._frames(data))
+        frames = list(http_capture._frames(data, max_bytes=max_capture, max_frames=max_frames))
         times = _record_times(data)
     except ValueError as error:
         raise CaptureError(str(error)) from error
@@ -325,11 +327,14 @@ def _check_established(segs: list[Segment], peer_isn: int) -> None:
                   f"a {'guest' if s.outgoing else 'peer'} payload recorded before the peer's SYN was acknowledged")
 
 
-def streams(data: bytes, max_stream: int = MAX_STREAM) -> tuple[bytes, bytes, int, _Timing, _Timing]:
+def streams(
+    data: bytes, max_stream: int = MAX_STREAM, max_capture: int = http_capture.MAX_CAPTURE, max_frames: int = http_capture.MAX_FRAMES,
+) -> tuple[bytes, bytes, int, _Timing, _Timing]:
     """The two streams of the capture's one connection, its ARP count, and where each was carried.
 
-    Each direction is refused past `max_stream` bytes."""
-    segs, arp = segments(data)
+    Each direction is refused past `max_stream` bytes, and the capture past `max_capture` bytes or
+    `max_frames` frames."""
+    segs, arp = segments(data, max_capture, max_frames)
     syns = [s for s in segs if s.outgoing and s.flags & TCP_SYN and not s.flags & TCP_ACK]
     _need(len(syns) >= 1, "no connection attempt: the capture holds no guest SYN")
     _need(len({s.source_port for s in syns}) == 1, f"{len({s.source_port for s in syns})} connections, exactly one is admitted")

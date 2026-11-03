@@ -71,6 +71,10 @@ BATCH_BYTES = 4096
 DEFAULT_CEILING = 131072
 # A store is at most 128 MiB; each 4096-byte batch adds a length, a header and a sequence number.
 MAX_STREAM = 160 * 1024 * 1024
+# The capture holds both directions with their headers. 4096-byte operations become about three
+# segments each, about 73,000 for the store, and the peer may acknowledge each one.
+MAX_CAPTURE = 256 * 1024 * 1024
+MAX_PACKETS = 1_000_000
 
 FAILURES = re.compile(r"panic|PANIC|\] fail: |SLIME_GRAPH FAIL|SLIME_GRAPH exhausted|SLIME_ROOT .*refused launch")
 CEILING_LINE = re.compile(r"SLIME_GRAPH arrival-ceiling=(\d+)")
@@ -419,7 +423,7 @@ ID_KEEP_ALIVE = zenoh_capture.ID_KEEP_ALIVE
 def judge_capture(data: bytes, want: Expected) -> dict:
     """The one connection's guest stream: handshake, every Put as a run of fragments, then a CLOSE."""
     try:
-        guest, _peer, arp, guest_time, _peer_time = zenoh_capture.streams(data, MAX_STREAM)
+        guest, _peer, arp, guest_time, _peer_time = zenoh_capture.streams(data, MAX_STREAM, MAX_CAPTURE, MAX_PACKETS)
         batches, spans = zenoh_capture.split(guest, "guest stream", BATCH_BYTES - zenoh_fragment.STREAM_LENGTH_BYTES)
         _need(len(batches) >= 3, "the guest sent fewer than an INIT_SYN, an OPEN_SYN and a CLOSE")
         init, opened = batches[0], batches[1]
@@ -450,7 +454,8 @@ def judge_capture(data: bytes, want: Expected) -> dict:
                     # decoder refuses any byte after the payload, so the FRAME carries it alone.
                     puts.append((index, batch[at:]))
                 else:
-                    zenoh_capture._frame_messages(batch, "a guest FRAME")
+                    _sequence, kinds = zenoh_capture._frame_messages(batch, "a guest FRAME")
+                    _need("push" not in kinds, "a guest FRAME carries a Put after another message")
             elif kind == ID_FRAGMENT:
                 part = zenoh_fragment.decode_fragment(batch, BATCH_BYTES)
                 _need(part.sn == sn, f"a FRAGMENT with sequence number {part.sn}, the session's next is {sn}")
@@ -538,10 +543,9 @@ def session(want: Expected, *, order: tuple[int, ...] | None = None, gaps_us: tu
 
 GUEST, GUEST_PORT = zenoh_capture.GUEST, zenoh_capture.GUEST_PORT
 TCP_SYN, TCP_ACK, TCP_FIN, TCP_RST = zenoh_capture.TCP_SYN, zenoh_capture.TCP_ACK, zenoh_capture.TCP_FIN, zenoh_capture.TCP_RST
-SEGMENT = 1400
 
 
-def capture(wire: Wire) -> bytes:
+def capture(wire: Wire, segment: int = 1400) -> bytes:
     """A PCAP of `wire` on one connection: the handshake, the INIT and OPEN exchange with the peer's
     declaration after its OPEN_ACK, the guest's batches at their times, the peer's CLOSE and both FINs."""
     tcp, eth = zenoh_capture._tcp, zenoh_capture._ethernet
@@ -562,8 +566,8 @@ def capture(wire: Wire) -> bytes:
 
     def send(outgoing: bool, start: int, end: int, time_us: int) -> None:
         data = guest_stream if outgoing else peer_stream
-        for at in range(start, end, SEGMENT):
-            chunk = data[at : min(at + SEGMENT, end)]
+        for at in range(start, end, segment):
+            chunk = data[at : min(at + segment, end)]
             if outgoing:
                 frame = tcp(GUEST, PEER, GUEST_PORT, PORT, gisn + 1 + at, pisn + 1 + sent[False], TCP_ACK, chunk)
             else:
@@ -612,6 +616,14 @@ def control_store() -> bytes:
     return frames.encode(store)
 
 
+def large_control_store() -> bytes:
+    """Three frames of 11.25 MiB: a session past the default capture bounds, built in seconds."""
+    payloads = tuple(bytes(range(k, 256)) + bytes(range(k)) for k in (1, 2, 3))
+    store = replace(frames.BASE, topic=frames.BAG_CHANNEL, period_ns=frames.BAG_PERIOD_NS,
+                    frames=tuple((1_700_000_000_000_000_000 + i * frames.BAG_PERIOD_NS, p * 46080) for i, p in enumerate(payloads)))
+    return frames.encode(store)
+
+
 def _edit(wire: Wire, change: Callable[[list[tuple[int, bytes]]], list[tuple[int, bytes]]]) -> Wire:
     return replace(wire, guest=tuple(change(list(wire.guest))))
 
@@ -654,6 +666,7 @@ def capture_mutations(want: Expected) -> list[tuple[str, Callable[[], Wire]]]:
         ("a last fragment that says more follows", lambda: _edit(honest, lambda g: [*g[:-2], _with_header(g[-2], g[-2][1][0] | zenoh_fragment.FLAG_M), g[-1]])),
         ("an unreliable fragment", lambda: _edit(honest, lambda g: [*g[:2], _with_header(g[2], g[2][1][0] & ~zenoh_fragment.FLAG_R), *g[3:]])),
         ("an extra Put in a whole FRAME", lambda: _edit(honest, lambda g: [*g[:2], (g[2][0], whole), *[_with_sn(item, zenoh_fragment.next_sn(INITIAL_SN, i + 1)) for i, item in enumerate(g[2:-1])], g[-1]])),
+        ("a declaration and a Put on another key in one FRAME", lambda: _edit(honest, lambda g: [*g[:2], (g[2][0], zenoh_wire.frame(INITIAL_SN, zenoh_wire.declare_subscriber(1, "x", True), zenoh_wire.push_put("other", attachment_for(0, log), b"\x00", True))), *[_with_sn(item, zenoh_fragment.next_sn(INITIAL_SN, i + 1)) for i, item in enumerate(g[2:-1])], g[-1]])),
         ("the first Put twice in one whole FRAME", lambda: _edit(honest, lambda g: [*g[:2], (g[2][0], zenoh_wire.frame(INITIAL_SN, put_message(want, 0), put_message(want, 0))), *g[3:]])),
         ("no CLOSE", lambda: _edit(honest, lambda g: g[:-1])),
         ("a batch after the CLOSE", lambda: _edit(honest, lambda g: [*g, (g[-1][0], bytes([ID_KEEP_ALIVE]))])),
@@ -680,6 +693,17 @@ def capture_controls(want: Expected) -> tuple[int, int]:
             judge_capture(capture(wire), want)
         except ExamError as error:
             raise ExamError(f"control: the capture judge refused {label}: {error}") from error
+    # The run's capture is about 110 MB in some 150,000 frames, past the HTTP capture defaults
+    # of 32 MiB and 100,000 frames that `zenoh_capture` inherits. An honest capture past both must pass.
+    large = expected(large_control_store())
+    data = capture(session(large), segment=320)
+    _need(len(data) > zenoh_capture.http_capture.MAX_CAPTURE, "control: the large capture is not over the default byte bound")
+    records = sum(1 for _ in zenoh_capture.http_capture._frames(data, max_bytes=MAX_CAPTURE, max_frames=MAX_PACKETS))
+    _need(records > zenoh_capture.http_capture.MAX_FRAMES, "control: the large capture is not over the default frame bound")
+    try:
+        judge_capture(data, large)
+    except ExamError as error:
+        raise ExamError(f"control: the capture judge refused an honest capture over the default bounds: {error}") from error
     refused = 0
     for label, build in capture_mutations(want):
         try:
@@ -688,7 +712,7 @@ def capture_controls(want: Expected) -> tuple[int, int]:
             refused += 1
             continue
         raise ExamError(f"control: the capture judge accepted {label}")
-    return len(honest), refused
+    return len(honest) + 1, refused
 
 
 # -------------------------------------------------------------------------------------- receipt
@@ -821,8 +845,8 @@ def receipt_controls(want: Expected) -> tuple[int, int]:
 
 # The counts the controls produce, pinned so a judge that quietly loses a case is seen: a judge that
 # refuses fewer corruptions, or accepts fewer honest variants, fails the pin before it judges a run.
-PINNED_ACCEPTED = 10
-PINNED_REFUSED = 119
+PINNED_ACCEPTED = 11
+PINNED_REFUSED = 120
 
 
 def controls() -> tuple[int, int]:
