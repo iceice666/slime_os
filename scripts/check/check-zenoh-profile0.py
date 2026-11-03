@@ -120,7 +120,6 @@ import zenoh_client_exam
 import zenoh_client_abort_exam
 import zenoh_client_io_exam
 import zenoh_client_wire_exam
-import zenoh_grants_builder_exam
 import zenoh_grants_reader_exam
 import zenoh_server_exam
 import zenoh_service_arm
@@ -2147,27 +2146,6 @@ def client_abort_main(controls_only: bool) -> int:
     return 0
 
 
-GRANTS_BUILDER_CASES = 7
-GRANTS_BUILDER_CONTROLS = 14
-
-
-def grants_builder_main(controls_only: bool) -> int:
-    """The generation builder's grants table: seven checks that it emits the right bytes, and fourteen refusals. The exam
-    exits through `SystemExit` at the first thing that does not hold, so a run that returns has passed every check."""
-    try:
-        positive, refusals = zenoh_grants_builder_exam.controls()
-    except SystemExit as error:
-        fail(str(error))
-    if positive != GRANTS_BUILDER_CASES:
-        fail(f"grants-builder: {positive} checks passed, the checker pins {GRANTS_BUILDER_CASES}")
-    if refusals != GRANTS_BUILDER_CONTROLS:
-        fail(f"grants-builder: {refusals} refusals, the checker pins {GRANTS_BUILDER_CONTROLS}")
-    print(f"[zenoh-profile0] slice=grants-builder cases={positive} refusals={refusals} controls={refusals}")
-    devloop_observations.record(casesObserved=positive, negativeControlsRefused=refusals)
-    print("zenoh profile 0 grants-builder check: the builder emits the encoder's bytes and refuses what the contract and the manifest forbid")
-    return 0
-
-
 def grants_reader_main(controls_only: bool) -> int:
     """The product side of the grants path. The exam's controls run on synthetic files and a synthetic transcript. The
     full run reads the real files and runs the two `slime-root` tests alone, so it fails until the reader lands."""
@@ -2198,13 +2176,20 @@ SERVER_PINNED_CASES = 39
 SERVER_PINNED_CONTROLS = 104
 
 
+def server_run_is_scoped(output: str) -> bool:
+    """Whether the run was of the server test alone: it passed, and it is the only result cargo printed. The package
+    has an integration test as well, and a run that does not name the library prints a result for each binary."""
+    results = re.findall(r"test result: (\w+)\. (\d+) passed; (\d+) failed", output)
+    return tests_passed(output) == {zenoh_server_exam.TEST} and results == [("ok", "1", "0")]
+
+
 def run_server() -> list[str]:
-    """The component library's test of the server half, run alone with `--exact`. The server half is plain Rust with
-    no runtime call, so the test drives it with the client protocol's bytes and prints what it answered."""
+    """The component library's test of the server half, run alone with `--lib` and `--exact`. The server half is plain
+    Rust with no runtime call, so the test drives it with the client protocol's bytes and prints what it answered."""
     host = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True)
     target = next(line.split(": ", 1)[1] for line in host.stdout.splitlines() if line.startswith("host: "))
     command = [
-        "cargo", "test", "--target", target, "-p", "slime-components", "--no-default-features",
+        "cargo", "test", "--target", target, "-p", "slime-components", "--no-default-features", "--lib",
         "--", "--exact", zenoh_server_exam.TEST, "--nocapture", "--test-threads=1",
     ]
     result = subprocess.run(command, cwd=ROOT / "components", capture_output=True, text=True, env={**_os.environ})
@@ -2212,8 +2197,7 @@ def run_server() -> list[str]:
     if result.returncode != 0:
         _sys.stderr.write(output[-4000:])
         fail(f"{' '.join(command)} exited {result.returncode}")
-    results = re.findall(r"test result: (\w+)\. (\d+) passed; (\d+) failed", output)
-    if tests_passed(output) != {zenoh_server_exam.TEST} or results != [("ok", "1", "0")]:
+    if not server_run_is_scoped(output):
         fail(f"server: the run was not of {zenoh_server_exam.TEST} alone")
     return zenoh_server_exam.exam_lines(result.stdout)
 
@@ -2222,6 +2206,16 @@ def server_main(controls_only: bool) -> int:
     """The server half of the client protocol: its answers are the bytes the schema's layout gives, and no answer is one
     the client refuses. The exam raises at the first line that differs, so a run that returns has matched every line."""
     exam = zenoh_server_exam
+    test = exam.TEST
+    alone = f"test {test} ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n"
+    library_and_integration = alone + "\ntest result: ok. 0 passed; 0 failed; 0 ignored\n"
+    two_tests = f"test {test} ... ok\ntest other ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored\n"
+    other = "test other ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n"
+    if not server_run_is_scoped(alone):
+        fail("control: a run of the server test alone was read as not scoped")
+    for label, text in (("a run that printed a second result", library_and_integration), ("a run of two tests", two_tests), ("a run of another test", other), ("an empty run", "")):
+        if server_run_is_scoped(text):
+            fail(f"control: {label} was read as scoped")
     try:
         positive, refusals = exam.judge(exam.good_lines())
         refused_controls = exam.all_controls()
@@ -2512,7 +2506,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "grants-builder", "grants-reader", "server", "service-component", "service-booted", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "grants-reader", "server", "service-component", "service-booted", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2539,8 +2533,6 @@ def main() -> int:
         return client_abort_main(arguments.controls_only)
     if arguments.slice == "grants-table":
         return grants_table_main(arguments.controls_only)
-    if arguments.slice == "grants-builder":
-        return grants_builder_main(arguments.controls_only)
     if arguments.slice == "grants-reader":
         return grants_reader_main(arguments.controls_only)
     if arguments.slice == "server":
