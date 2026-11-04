@@ -8,8 +8,8 @@ WebSocket library; the client is `foxglove_ws`. The exam owns five judgements:
   client subscribes, exactly one Message Data per frame, in order, with the frame's payload and log time;
 * the bridge's lines: one ready line naming both endpoints, one drop line for the replayer's other-key
   sample, and one stop line with the counts;
-* the refusal: started with one wheel's hash changed, the bridge exits nonzero with its refusal line and
-  never listens;
+* the refusal: started with one wheel's hash changed while the checker holds both of its ports, the bridge
+  exits nonzero with its refusal line;
 * the client itself, against a local stand-in server that sends an honest stream in every frame form a
   server may use, and a corrupted one.
 
@@ -284,12 +284,14 @@ def line_mutations(z: int, w: int, n: int) -> list[tuple[str, Callable[[str], st
 # ----------------------------------------------------------------------------------------- refusal
 
 
-def judge_refusal(returncode: int | None, stderr: str, listened: list[str]) -> None:
+def judge_refusal(returncode: int | None, stderr: str, unheld: list[str]) -> None:
+    """A refused start. `unheld` names the ports the checker could not hold for the bridge's whole life: a
+    listener of the bridge's could then have existed there unseen."""
+    _need(not unheld, f"the checker could not hold the bridge's {unheld} port, so a listener there was not ruled out")
     _need(returncode is not None, "the bridge with a changed pin did not exit")
     _need(returncode != 0, "the bridge with a changed pin exited 0")
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
     _need(bool(lines) and lines[-1] == REFUSED, f"the refused bridge's last stderr line is {lines[-1][:120] if lines else ''!r}, not {REFUSED!r}")
-    _need(not listened, f"the refused bridge accepted a connection on {listened}")
 
 
 REFUSAL_CASES = (
@@ -299,8 +301,8 @@ REFUSAL_CASES = (
     ("no exit", (None, REFUSED + "\n", []), False),
     ("no refusal line", (1, "pip: hash mismatch\n", []), False),
     ("the refusal line not last", (1, REFUSED + "\nTraceback\n", []), False),
-    ("a listening zenoh port", (1, REFUSED + "\n", ["zenoh"]), False),
-    ("a listening websocket port", (1, REFUSED + "\n", ["websocket"]), False),
+    ("an unheld zenoh port", (1, REFUSED + "\n", ["zenoh"]), False),
+    ("an unheld websocket port", (1, REFUSED + "\n", ["websocket"]), False),
 )
 
 
