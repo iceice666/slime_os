@@ -12,15 +12,16 @@ Steps:
 
 1. The exam's judges hold their controls, and the bridge's committed pin file names exactly the exam's wheels.
 2. The bridge, started with a pin file whose eclipse-zenoh hash for this host is changed, refuses as a
-   dependency. The checker holds both ports' 127.0.0.1 listeners for the bridge's whole life, so no listener
-   of the bridge can exist on them; one it tries to open fails, and a bridge that does not then refuse fails
-   the step. Two stand-in processes hold the step to its claim: one that refuses, and one that listens before
-   it refuses.
+   dependency and calls listen() on no socket. Both runs of the bridge load `scripts/lib/listen_log.c`,
+   built with the host's cc, which records every listen() its process tree calls without changing it; the
+   ports stay free. Three stand-ins hold the step to its claim: one that refuses, one that listens for 50 ms
+   before it refuses, and one that tries to listen, ignores the outcome and refuses.
 3. The frame store is encoded by the exam from the bag `SLIME_LIDAR_BAG` names, pinned by size and SHA-256.
    The bridge starts on it. A client connects and subscribes the channel the bridge advertises.
 4. A stock eclipse-zenoh 1.0.0 peer, from the external Zenoh checks' pinned wheel, puts one sample on
    another key under domain 0 and every frame on the store's key.
-5. The session the client saw and the bridge's own lines are judged against the store.
+5. The session the client saw and the bridge's own lines are judged against the store, and the shim must
+   have recorded the bridge listening on both ports, so the refusal's empty record is an observation.
 
 Runs entirely on the host and needs no QEMU. The bag and a registry are needed, so the recipe is explicit and
 in no aggregate. `--controls-only` runs step 1's controls.
@@ -36,6 +37,7 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 import argparse
 import os
 import platform
+import shutil
 import signal
 import socket
 import subprocess
@@ -53,6 +55,7 @@ import zenoh_listener_peer
 from harness import ROOT
 
 REPLAYER = ROOT / "scripts" / "lib" / "zenoh_replayer.py"
+SHIM_SOURCE = ROOT / "scripts" / "lib" / "listen_log.c"
 REFUSAL_SECONDS = 600
 STOP_SECONDS = 30
 
@@ -67,30 +70,47 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def held(port: int) -> socket.socket | None:
-    """The checker's own listener on 127.0.0.1:`port`, or None if the port could not be taken.
+class Shim:
+    """`listen_log.c` built for this host, and the environment that loads it into a process tree."""
 
-    No address-reuse option is set, so while it is open no other socket can bind the same address and port.
-    """
-    holder = socket.socket()
-    try:
-        holder.bind(("127.0.0.1", port))
-        holder.listen()
-    except OSError:
-        holder.close()
-        return None
-    return holder
+    def __init__(self, directory: Path) -> None:
+        compiler = shutil.which("cc")
+        if compiler is None:
+            fail("no cc on PATH to build scripts/lib/listen_log.c")
+        if _sys.platform == "darwin":
+            self.library, flags, self.variable = directory / "listen_log.dylib", ["-dynamiclib"], "DYLD_INSERT_LIBRARIES"
+        elif _sys.platform == "linux":
+            self.library, flags, self.variable = directory / "listen_log.so", ["-shared", "-fPIC", "-ldl"], "LD_PRELOAD"
+        else:
+            fail(f"no listen shim is defined for {_sys.platform}")
+        built = subprocess.run([compiler, *flags, "-o", str(self.library), str(SHIM_SOURCE)], capture_output=True, text=True, check=False)
+        if built.returncode != 0 or not self.library.is_file():
+            fail(f"cc could not build scripts/lib/listen_log.c: {built.stderr.strip()[-300:]}")
+        self.directory = directory
+        self.runs = 0
+
+    def environment(self) -> tuple[dict[str, str], Path]:
+        """The variables that load the shim, and the fresh log it writes to."""
+        self.runs += 1
+        log = self.directory / f"listen-{self.runs}.log"
+        log.unlink(missing_ok=True)
+        return {self.variable: str(self.library), "SLIME_LISTEN_LOG": str(log)}, log
+
+
+def records(log: Path) -> list[tuple[int, int, bool]]:
+    return exam.parse_listen_log(log.read_text(encoding="utf-8") if log.is_file() else "")
 
 
 class Bridge:
     """The bridge as a child process, its stdout read on a thread so a chatty child never blocks."""
 
-    def __init__(self, store: Path, zenoh_port: int, websocket_port: int, pins: Path | None = None, program: Path | None = None) -> None:
+    def __init__(self, store: Path, zenoh_port: int, websocket_port: int, pins: Path | None = None, program: Path | None = None,
+                 shim: dict[str, str] | None = None) -> None:
         command = [_sys.executable, str(program or exam.BRIDGE), "--store", str(store), "--zenoh-port", str(zenoh_port), "--websocket-port", str(websocket_port)]
         if pins is not None:
             command += ["--pins", str(pins)]
         self.process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(shim or {})})
         self.stdout: list[str] = []
         self.stderr: list[str] = []
         self.ready = threading.Event()
@@ -128,17 +148,16 @@ def controls() -> int:
     except exam.ExamError as error:
         fail(str(error))
     with tempfile.TemporaryDirectory(prefix="slime-foxglove-refusal-") as name:
-        refused += refusal_controls(Path(name))
+        refused += refusal_controls(Path(name), Shim(Path(name)))
     print(f"[foxglove-bridge] controls accepted={accepted + 1} refused={refused}")
     return refused
 
 
-def refusal(store: Path, pins: Path, program: Path | None = None) -> None:
-    """Start `program` (the bridge) with `pins` while the checker holds both ports, and judge its refusal."""
+def refusal(shim: Shim, store: Path, pins: Path, program: Path | None = None) -> None:
+    """Start `program` (the bridge) with `pins` under the shim, on free ports, and judge its refusal."""
     zenoh_port, websocket_port = free_port(), free_port()
-    holders = {name: held(port) for name, port in (("zenoh", zenoh_port), ("websocket", websocket_port))}
-    unheld = [name for name, holder in holders.items() if holder is None]
-    bridge = Bridge(store, zenoh_port, websocket_port, pins, program)
+    variables, log = shim.environment()
+    bridge = Bridge(store, zenoh_port, websocket_port, pins, program, variables)
     try:
         bridge.process.wait(timeout=REFUSAL_SECONDS)
     except subprocess.TimeoutExpired:
@@ -148,10 +167,7 @@ def refusal(store: Path, pins: Path, program: Path | None = None) -> None:
         bridge.stop()
     for thread in bridge.threads:
         thread.join(5)
-    for holder in holders.values():
-        if holder is not None:
-            holder.close()
-    exam.judge_refusal(returncode, "".join(bridge.stderr), unheld)
+    exam.judge_refusal(returncode, "".join(bridge.stderr), records(log))
 
 
 STAND_IN_REFUSES = """import sys
@@ -170,40 +186,56 @@ time.sleep(0.05)
 print("foxglove-bridge: refused dependency", file=sys.stderr, flush=True)
 sys.exit(1)
 """
+STAND_IN_TRIES = """import socket, sys
+ports = [int(sys.argv[sys.argv.index(flag) + 1]) for flag in ("--zenoh-port", "--websocket-port")]
+for port in ports:
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", port))
+        s.listen()
+    except OSError:
+        pass
+print("foxglove-bridge: refused dependency", file=sys.stderr, flush=True)
+sys.exit(1)
+"""
 
 
-def refusal_controls(directory: Path) -> int:
-    """The refusal step on stand-ins: a refusal is accepted, and a refusal after listening is not."""
+def refusal_controls(directory: Path, shim: Shim) -> int:
+    """The refusal step on stand-ins: a refusal is accepted, and a refusal after listening, or after trying
+    to listen whatever the outcome, is not."""
     store, pins = directory / "control.store", directory / "control-pins.txt"
     store.write_bytes(b"")
     pins.write_text(exam.pin_text(), encoding="utf-8")
-    for name, source, honest in (("refuses", STAND_IN_REFUSES, True), ("listens-then-refuses", STAND_IN_LISTENS, False)):
+    cases = (("refuses", STAND_IN_REFUSES, True), ("listens-then-refuses", STAND_IN_LISTENS, False),
+             ("tries-to-listen-then-refuses", STAND_IN_TRIES, False))
+    for name, source, honest in cases:
         program = directory / f"stand-in-{name}.py"
         program.write_text(source, encoding="utf-8")
         try:
-            refusal(store, pins, program)
+            refusal(shim, store, pins, program)
             took = True
         except exam.ExamError:
             took = False
         if took != honest:
             fail(f"control: the refusal step {'refused' if honest else 'accepted'} the stand-in that {name}")
-    return 1
+    return len(cases) - 1
 
 
-def step_refusal(directory: Path, store: Path) -> None:
+def step_refusal(directory: Path, store: Path, shim: Shim) -> None:
     marker = exam.host_marker(_sys.platform, platform.machine())
     pins = directory / "altered-pins.txt"
     pins.write_text(exam.altered_pins(exam.PINS.read_text(encoding="utf-8"), marker), encoding="utf-8")
     try:
-        refusal(store, pins)
+        refusal(shim, store, pins)
     except exam.ExamError as error:
         fail(f"refusal: {error}")
-    print("[foxglove-bridge] a changed pin is refused as a dependency while the checker holds both ports")
+    print("[foxglove-bridge] a changed pin is refused as a dependency, and the bridge called listen() on no socket")
 
 
-def step_run(store_path: Path, want: exam.Store) -> int:
+def step_run(store_path: Path, want: exam.Store, shim: Shim) -> int:
     zenoh_port, websocket_port = free_port(), free_port()
-    bridge = Bridge(store_path, zenoh_port, websocket_port)
+    variables, log = shim.environment()
+    bridge = Bridge(store_path, zenoh_port, websocket_port, shim=variables)
     client: ws.Client | None = None
     # Whatever ends the session, the client is closed and the bridge stopped before the step returns or fails,
     # so a failed run leaves no bridge or listener behind.
@@ -246,6 +278,7 @@ def step_run(store_path: Path, want: exam.Store) -> int:
         fail(f"the bridge did not stop within {STOP_SECONDS} s of SIGTERM")
     try:
         exam.judge_lines("".join(bridge.stdout), returncode, zenoh_port, websocket_port, len(want.frames))
+        exam.judge_listeners(records(log), zenoh_port, websocket_port)
     except exam.ExamError as error:
         fail(f"bridge lines: {error}")
     print(f"[foxglove-bridge] messages={len(after)} bytes={sum(len(p) for _, p in want.frames)} channel={channel} dropped=1")
@@ -274,8 +307,9 @@ def main() -> None:
         directory = Path(name)
         store = directory / "lidar.store"
         store.write_bytes(data)
-        step_refusal(directory, store)
-        messages = step_run(store, want)
+        shim = Shim(directory)
+        step_refusal(directory, store, shim)
+        messages = step_run(store, want, shim)
     devloop_observations.record(casesObserved=messages, bytesObserved=sum(len(p) for _, p in want.frames), negativeControlsRefused=refused)
     print("foxglove bridge check: a stock Zenoh replayer's every frame reached an independent Foxglove client through the bridge, byte for byte and in order, and the bridge refused a changed pin and a sample on another key")
 

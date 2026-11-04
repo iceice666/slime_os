@@ -8,8 +8,10 @@ WebSocket library; the client is `foxglove_ws`. The exam owns five judgements:
   client subscribes, exactly one Message Data per frame, in order, with the frame's payload and log time;
 * the bridge's lines: one ready line naming both endpoints, one drop line for the replayer's other-key
   sample, and one stop line with the counts;
-* the refusal: started with one wheel's hash changed while the checker holds both of its ports, the bridge
-  exits nonzero with its refusal line;
+* the refusal: started with one wheel's hash changed, the bridge exits nonzero with its refusal line and
+  calls listen() on no socket, as the checker's `listen_log` shim records over its whole process tree;
+* the listeners: on an honest run the shim records the bridge listening on both of its ports, so the
+  refusal's empty record is the shim's observation and not its absence;
 * the client itself, against a local stand-in server that sends an honest stream in every frame form a
   server may use, and a corrupted one.
 
@@ -284,10 +286,32 @@ def line_mutations(z: int, w: int, n: int) -> list[tuple[str, Callable[[str], st
 # ----------------------------------------------------------------------------------------- refusal
 
 
-def judge_refusal(returncode: int | None, stderr: str, unheld: list[str]) -> None:
-    """A refused start. `unheld` names the ports the checker could not hold for the bridge's whole life: a
-    listener of the bridge's could then have existed there unseen."""
-    _need(not unheld, f"the checker could not hold the bridge's {unheld} port, so a listener there was not ruled out")
+LISTEN_LINE = re.compile(r"listen pid=(\d+) port=(-1|\d+) ok=([01])")
+
+
+def parse_listen_log(text: str) -> list[tuple[int, int, bool]]:
+    """Every listen() the shim recorded, as (pid, port, succeeded). A line of any other shape is refused."""
+    records = []
+    for line in text.splitlines():
+        match = LISTEN_LINE.fullmatch(line)
+        _need(match is not None, f"a listen record the exam does not read: {line[:80]!r}")
+        pid, port, ok = int(match.group(1)), int(match.group(2)), match.group(3) == "1"
+        _need(port <= 65535, f"a listen record on port {port}")
+        records.append((pid, port, ok))
+    return records
+
+
+def judge_listeners(records: list[tuple[int, int, bool]], zenoh_port: int, websocket_port: int) -> None:
+    """An honest run: the shim saw the bridge listen on both of its ports, so it reaches the bridge's servers."""
+    listened = {port for _pid, port, ok in records if ok}
+    for name, port in (("zenoh", zenoh_port), ("websocket", websocket_port)):
+        _need(port in listened, f"the shim recorded no listener on the {name} port {port}, so it does not observe the bridge")
+
+
+def judge_refusal(returncode: int | None, stderr: str, records: list[tuple[int, int, bool]]) -> None:
+    """A refused start. `records` are the listen() calls the shim saw over the bridge's whole process tree;
+    a refusal opens no server, so any call, failed or not, on any port, refuses the start."""
+    _need(not records, f"the refused bridge called listen() {len(records)} time(s), on port(s) {sorted({port for _pid, port, _ok in records})}")
     _need(returncode is not None, "the bridge with a changed pin did not exit")
     _need(returncode != 0, "the bridge with a changed pin exited 0")
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
@@ -301,8 +325,20 @@ REFUSAL_CASES = (
     ("no exit", (None, REFUSED + "\n", []), False),
     ("no refusal line", (1, "pip: hash mismatch\n", []), False),
     ("the refusal line not last", (1, REFUSED + "\nTraceback\n", []), False),
-    ("an unheld zenoh port", (1, REFUSED + "\n", ["zenoh"]), False),
-    ("an unheld websocket port", (1, REFUSED + "\n", ["websocket"]), False),
+    ("a listener on the zenoh port", (1, REFUSED + "\n", [(10, 17448, True)]), False),
+    ("a failed listen on the websocket port", (1, REFUSED + "\n", [(10, 18765, False)]), False),
+    ("a listener on another port", (1, REFUSED + "\n", [(11, 40000, True)]), False),
+)
+
+LISTENER_CASES = (
+    ("both ports, from two processes", "listen pid=3 port=17448 ok=1\nlisten pid=4 port=18765 ok=1\n", True),
+    ("both ports and an unrelated listener", "listen pid=3 port=17448 ok=1\nlisten pid=3 port=-1 ok=1\nlisten pid=3 port=18765 ok=1\n", True),
+    ("no records", "", False),
+    ("only the zenoh port", "listen pid=3 port=17448 ok=1\n", False),
+    ("only the websocket port", "listen pid=3 port=18765 ok=1\n", False),
+    ("the zenoh listen failed", "listen pid=3 port=17448 ok=0\nlisten pid=3 port=18765 ok=1\n", False),
+    ("a record of another shape", "listen pid=3 port=17448 ok=1\nlisten pid=3 port=18765 ok=yes\n", False),
+    ("a port above 65535", "listen pid=3 port=17448 ok=1\nlisten pid=3 port=18765 ok=1\nlisten pid=3 port=70000 ok=1\n", False),
 )
 
 
@@ -425,8 +461,8 @@ def control_store() -> Store:
 
 
 # The counts the controls produce, pinned so a judge that quietly loses a case is seen.
-PINNED_ACCEPTED = 10
-PINNED_REFUSED = 71
+PINNED_ACCEPTED = 12
+PINNED_REFUSED = 78
 
 
 def controls() -> tuple[int, int]:
@@ -474,6 +510,8 @@ def controls() -> tuple[int, int]:
 
     for label, args, honest in REFUSAL_CASES:
         (accept if honest else refuse)(label, lambda args=args: judge_refusal(*args))
+    for label, text, honest in LISTENER_CASES:
+        (accept if honest else refuse)(label, lambda text=text: judge_listeners(parse_listen_log(text), 17448, 18765))
 
     # The client against a stand-in server: every honest frame form yields the same messages, and each
     # corruption of the frames or the handshake is refused.
