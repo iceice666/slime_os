@@ -5,12 +5,9 @@
  * DYLD_INSERT_LIBRARIES on macOS or LD_PRELOAD on Linux. Every process that inherits the environment
  * loads it too, so a listener opened by Python's socket module or by a native library such as zenoh's
  * is recorded. It changes no call's behaviour: each listen() runs as it would, and its outcome is
- * appended, as one line, to the file SLIME_LISTEN_LOG names:
- *
- *     listen pid=PID port=PORT ok=OK
- *
- * PORT is the socket's bound port, or -1 if it has no IPv4 or IPv6 address; OK is 1 if listen()
- * succeeded and 0 if it failed. One write() per line with O_APPEND keeps lines from two processes whole.
+ * written, after it returns, as one contracts/listen-record/v1 record in a new file
+ * listen-PID-N.zti in the directory SLIME_LISTEN_RECORDS names. N counts the process's calls, and
+ * the file is created with O_EXCL, so two calls never share or overwrite a record.
  * A program that calls the system directly, or that clears the environment before it starts a child,
  * is not seen; the checker requires the bridge's own servers to be seen on every honest run.
  */
@@ -28,8 +25,9 @@
 #include <unistd.h>
 
 static void note(int fd, int ok) {
-    const char *path = getenv("SLIME_LISTEN_LOG");
-    if (path == NULL) {
+    static int calls;
+    const char *directory = getenv("SLIME_LISTEN_RECORDS");
+    if (directory == NULL) {
         return;
     }
     struct sockaddr_storage address;
@@ -42,11 +40,18 @@ static void note(int fd, int ok) {
             port = ntohs(((struct sockaddr_in6 *)&address)->sin6_port);
         }
     }
-    char line[96];
-    int length = snprintf(line, sizeof line, "listen pid=%d port=%d ok=%d\n", (int)getpid(), port, ok);
-    int out = open(path, O_WRONLY | O_APPEND | O_CREAT, 0600);
+    char path[4096];
+    int named = snprintf(path, sizeof path, "%s/listen-%d-%d.zti", directory, (int)getpid(), ++calls);
+    if (named < 0 || (size_t)named >= sizeof path) {
+        return;
+    }
+    char record[160];
+    int length = snprintf(record, sizeof record,
+                          "{\n  formatVersion = 1;\n  pid = %d;\n  port = %d;\n  succeeded = %s;\n}\n",
+                          (int)getpid(), port, ok ? "true" : "false");
+    int out = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (out >= 0) {
-        (void)write(out, line, (size_t)length);
+        (void)write(out, record, (size_t)length);
         close(out);
     }
 }

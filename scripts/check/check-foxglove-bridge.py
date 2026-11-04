@@ -13,9 +13,11 @@ Steps:
 1. The exam's judges hold their controls, and the bridge's committed pin file names exactly the exam's wheels.
 2. The bridge, started with a pin file whose eclipse-zenoh hash for this host is changed, refuses as a
    dependency and calls listen() on no socket. Both runs of the bridge load `scripts/lib/listen_log.c`,
-   built with the host's cc, which records every listen() its process tree calls without changing it; the
-   ports stay free. Three stand-ins hold the step to its claim: one that refuses, one that listens for 50 ms
-   before it refuses, and one that tries to listen, ignores the outcome and refuses.
+   built with the host's cc, which records every listen() its process tree calls without changing it, as
+   `contracts/listen-record/v1` records the exam reads through that contract's decoder; the ports stay free.
+   Three stand-ins hold the step to its claim: one that refuses, one that listens for 50 ms before it
+   refuses, and one that tries to listen, ignores the outcome and refuses. A fourth listens on both ports,
+   and its records must decode and show both listeners, so the shim's writer and the contract agree.
 3. The frame store is encoded by the exam from the bag `SLIME_LIDAR_BAG` names, pinned by size and SHA-256.
    The bridge starts on it. A client connects and subscribes the channel the bridge advertises.
 4. A stock eclipse-zenoh 1.0.0 peer, from the external Zenoh checks' pinned wheel, puts one sample on
@@ -90,15 +92,16 @@ class Shim:
         self.runs = 0
 
     def environment(self) -> tuple[dict[str, str], Path]:
-        """The variables that load the shim, and the fresh log it writes to."""
+        """The variables that load the shim, and the fresh, empty directory it writes its records to."""
         self.runs += 1
-        log = self.directory / f"listen-{self.runs}.log"
-        log.unlink(missing_ok=True)
-        return {self.variable: str(self.library), "SLIME_LISTEN_LOG": str(log)}, log
+        records = self.directory / f"listen-records-{self.runs}"
+        shutil.rmtree(records, ignore_errors=True)
+        records.mkdir()
+        return {self.variable: str(self.library), "SLIME_LISTEN_RECORDS": str(records)}, records
 
 
-def records(log: Path) -> list[tuple[int, int, bool]]:
-    return exam.parse_listen_log(log.read_text(encoding="utf-8") if log.is_file() else "")
+def records(directory: Path) -> list[tuple[int, int, bool]]:
+    return exam.read_records(directory)
 
 
 class Bridge:
@@ -148,8 +151,10 @@ def controls() -> int:
     except exam.ExamError as error:
         fail(str(error))
     with tempfile.TemporaryDirectory(prefix="slime-foxglove-refusal-") as name:
-        refused += refusal_controls(Path(name), Shim(Path(name)))
-    print(f"[foxglove-bridge] controls accepted={accepted + 1} refused={refused}")
+        shim = Shim(Path(name))
+        refused += refusal_controls(Path(name), shim)
+        writer_control(Path(name), shim)
+    print(f"[foxglove-bridge] controls accepted={accepted + 2} refused={refused}")
     return refused
 
 
@@ -168,6 +173,33 @@ def refusal(shim: Shim, store: Path, pins: Path, program: Path | None = None) ->
     for thread in bridge.threads:
         thread.join(5)
     exam.judge_refusal(returncode, "".join(bridge.stderr), records(log))
+
+
+STAND_IN_SERVES = """import socket, sys, time
+ports = [int(sys.argv[sys.argv.index(flag) + 1]) for flag in ("--zenoh-port", "--websocket-port")]
+sockets = []
+for port in ports:
+    s = socket.socket()
+    s.bind(("127.0.0.1", port))
+    s.listen()
+    sockets.append(s)
+"""
+
+
+def writer_control(directory: Path, shim: Shim) -> None:
+    """A process that listens on both ports under the shim: its records decode and show both listeners."""
+    program = directory / "stand-in-serves.py"
+    program.write_text(STAND_IN_SERVES, encoding="utf-8")
+    zenoh_port, websocket_port = free_port(), free_port()
+    variables, log = shim.environment()
+    done = subprocess.run([_sys.executable, str(program), "--zenoh-port", str(zenoh_port), "--websocket-port", str(websocket_port)],
+                          env={**os.environ, **variables}, capture_output=True, text=True, timeout=60, check=False)
+    if done.returncode != 0:
+        fail(f"control: the listening stand-in exited {done.returncode}: {done.stderr[-300:]}")
+    try:
+        exam.judge_listeners(records(log), zenoh_port, websocket_port)
+    except exam.ExamError as error:
+        fail(f"control: the shim's records of a listening process do not hold: {error}")
 
 
 STAND_IN_REFUSES = """import sys

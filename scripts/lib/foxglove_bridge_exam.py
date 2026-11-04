@@ -9,7 +9,8 @@ WebSocket library; the client is `foxglove_ws`. The exam owns five judgements:
 * the bridge's lines: one ready line naming both endpoints, one drop line for the replayer's other-key
   sample, and one stop line with the counts;
 * the refusal: started with one wheel's hash changed, the bridge exits nonzero with its refusal line and
-  calls listen() on no socket, as the checker's `listen_log` shim records over its whole process tree;
+  calls listen() on no socket, as the checker's `listen_log` shim records over its whole process tree in
+  `contracts/listen-record/v1` records, read only through that contract's decoder;
 * the listeners: on an honest run the shim records the bridge listening on both of its ports, so the
   refusal's empty record is the shim's observation and not its absence;
 * the client itself, against a local stand-in server that sends an honest stream in every frame form a
@@ -36,13 +37,20 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+
+import shutil
 
 import foxglove_ws as ws
+import zutai_cli
 from harness import ROOT
 
 ITEM = "01a1a43b-cb66-7d19-8b91-12240b7e1e74"
 BRIDGE = ROOT / "tools" / "foxglove-bridge" / "bridge.py"
 PINS = ROOT / "tools" / "foxglove-bridge" / "pins.txt"
+RECORD_SCHEMA = ROOT / "contracts" / "listen-record" / "v1" / "schema.zt"
+SCRATCH = ROOT / "build" / "foxglove-bridge-exam"
+RECORD_FILE = re.compile(r"listen-\d+-\d+\.zti")
 DOMAIN_KEYS = "0/**"
 OTHER_KEY = "0/slime_exam/other/std_msgs::msg::dds_::String_/RIHS01_" + "0" * 64
 LINUX = 'sys_platform == "linux" and platform_machine == "x86_64"'
@@ -286,18 +294,35 @@ def line_mutations(z: int, w: int, n: int) -> list[tuple[str, Callable[[str], st
 # ----------------------------------------------------------------------------------------- refusal
 
 
-LISTEN_LINE = re.compile(r"listen pid=(\d+) port=(-1|\d+) ok=([01])")
+def read_record(path: Path) -> tuple[int, int, bool]:
+    """Decode one listen record through contracts/listen-record/v1, then read its values."""
+    scratch = SCRATCH / "decoder"
+    scratch.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(RECORD_SCHEMA, scratch / "schema.zt")
+    (scratch / "decode.zt").write_text(
+        's ::= import "schema.zt"; env ::= import stdlib.env; load ::= import stdlib.load; '
+        "main :: { env : Env; load : Load; } -> Validation DecodeIssue s.Record ! { * env.GetEffects; * load.ZtiEffects; } "
+        '= caps => [ path := env.get caps.env "SLIME_RECORD_PATH" ?? ""; s.decodeRecord (load.zti caps.load path) ]; main\n',
+        encoding="utf-8",
+    )
+    try:
+        decoded = zutai_cli.evaluate("run", scratch / "decode.zt", input_path=path, env_var="SLIME_RECORD_PATH")
+    except zutai_cli.ZutaiError as error:
+        raise ExamError(f"a listen record does not decode: {error}") from error
+    _need(decoded.startswith("#valid"), f"a listen record is refused by its contract: {decoded[:160]}")
+    pid = re.search(r"\bpid = (\d+)", decoded)
+    port = re.search(r"\bport = (-?\d+)", decoded)
+    succeeded = re.search(r"\bsucceeded = (true|false)", decoded)
+    _need(pid is not None and port is not None and succeeded is not None, "the decoded listen record has no pid, port or succeeded")
+    return int(pid.group(1)), int(port.group(1)), succeeded.group(1) == "true"
 
 
-def parse_listen_log(text: str) -> list[tuple[int, int, bool]]:
-    """Every listen() the shim recorded, as (pid, port, succeeded). A line of any other shape is refused."""
+def read_records(directory: Path) -> list[tuple[int, int, bool]]:
+    """Every record the shim wrote in `directory`. A file the shim does not name is refused."""
     records = []
-    for line in text.splitlines():
-        match = LISTEN_LINE.fullmatch(line)
-        _need(match is not None, f"a listen record the exam does not read: {line[:80]!r}")
-        pid, port, ok = int(match.group(1)), int(match.group(2)), match.group(3) == "1"
-        _need(port <= 65535, f"a listen record on port {port}")
-        records.append((pid, port, ok))
+    for path in sorted(directory.iterdir()) if directory.is_dir() else []:
+        _need(path.is_file() and RECORD_FILE.fullmatch(path.name) is not None, f"a file the listen shim does not write: {path.name!r}")
+        records.append(read_record(path))
     return records
 
 
@@ -330,16 +355,38 @@ REFUSAL_CASES = (
     ("a listener on another port", (1, REFUSED + "\n", [(11, 40000, True)]), False),
 )
 
+def record_text(pid: int, port: int, succeeded: bool, version: int = 1, extra: str = "", succeeded_text: str | None = None) -> str:
+    """A listen record as the shim writes it."""
+    value = succeeded_text if succeeded_text is not None else ("true" if succeeded else "false")
+    return f"{{\n  formatVersion = {version};\n  pid = {pid};\n  port = {port};\n  succeeded = {value};\n{extra}}}\n"
+
+
+Z, W = 17448, 18765
+# (label, the files the shim's directory holds, accepted as an honest run's listeners).
 LISTENER_CASES = (
-    ("both ports, from two processes", "listen pid=3 port=17448 ok=1\nlisten pid=4 port=18765 ok=1\n", True),
-    ("both ports and an unrelated listener", "listen pid=3 port=17448 ok=1\nlisten pid=3 port=-1 ok=1\nlisten pid=3 port=18765 ok=1\n", True),
-    ("no records", "", False),
-    ("only the zenoh port", "listen pid=3 port=17448 ok=1\n", False),
-    ("only the websocket port", "listen pid=3 port=18765 ok=1\n", False),
-    ("the zenoh listen failed", "listen pid=3 port=17448 ok=0\nlisten pid=3 port=18765 ok=1\n", False),
-    ("a record of another shape", "listen pid=3 port=17448 ok=1\nlisten pid=3 port=18765 ok=yes\n", False),
-    ("a port above 65535", "listen pid=3 port=17448 ok=1\nlisten pid=3 port=18765 ok=1\nlisten pid=3 port=70000 ok=1\n", False),
+    ("both ports, from two processes", {"listen-3-1.zti": record_text(3, Z, True), "listen-4-1.zti": record_text(4, W, True)}, True),
+    ("both ports and a socket with no address", {"listen-3-1.zti": record_text(3, Z, True), "listen-3-2.zti": record_text(3, -1, True), "listen-3-3.zti": record_text(3, W, True)}, True),
+    ("no records", {}, False),
+    ("only the zenoh port", {"listen-3-1.zti": record_text(3, Z, True)}, False),
+    ("only the websocket port", {"listen-3-1.zti": record_text(3, W, True)}, False),
+    ("the zenoh listen failed", {"listen-3-1.zti": record_text(3, Z, False), "listen-3-2.zti": record_text(3, W, True)}, False),
+    ("a file the shim does not name", {"listen-3-1.zti": record_text(3, Z, True), "listen-3-2.zti": record_text(3, W, True), "notes.txt": "x"}, False),
+    ("format version 2", {"listen-3-1.zti": record_text(3, Z, True, version=2), "listen-3-2.zti": record_text(3, W, True)}, False),
+    ("a port above 65535", {"listen-3-1.zti": record_text(3, 70000, True), "listen-3-2.zti": record_text(3, W, True)}, False),
+    ("a port below -1", {"listen-3-1.zti": record_text(3, -2, True), "listen-3-2.zti": record_text(3, Z, True), "listen-3-3.zti": record_text(3, W, True)}, False),
+    ("pid 0", {"listen-0-1.zti": record_text(0, Z, True), "listen-3-2.zti": record_text(3, W, True)}, False),
+    ("succeeded as an integer", {"listen-3-1.zti": record_text(3, Z, True, succeeded_text="1"), "listen-3-2.zti": record_text(3, W, True)}, False),
+    ("a field the contract does not name", {"listen-3-1.zti": record_text(3, Z, True, extra="  note = \"x\";\n"), "listen-3-2.zti": record_text(3, W, True)}, False),
+    ("a record that is not one", {"listen-3-1.zti": "listen pid=3 port=17448 ok=1\n", "listen-3-2.zti": record_text(3, W, True)}, False),
 )
+
+
+def write_records(directory: Path, files: dict[str, str]) -> Path:
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir(parents=True)
+    for name, text in files.items():
+        (directory / name).write_text(text, encoding="utf-8")
+    return directory
 
 
 # ------------------------------------------------------------------------------------------ client
@@ -462,7 +509,7 @@ def control_store() -> Store:
 
 # The counts the controls produce, pinned so a judge that quietly loses a case is seen.
 PINNED_ACCEPTED = 12
-PINNED_REFUSED = 78
+PINNED_REFUSED = 84
 
 
 def controls() -> tuple[int, int]:
@@ -510,8 +557,9 @@ def controls() -> tuple[int, int]:
 
     for label, args, honest in REFUSAL_CASES:
         (accept if honest else refuse)(label, lambda args=args: judge_refusal(*args))
-    for label, text, honest in LISTENER_CASES:
-        (accept if honest else refuse)(label, lambda text=text: judge_listeners(parse_listen_log(text), 17448, 18765))
+    for index, (label, files, honest) in enumerate(LISTENER_CASES):
+        directory = write_records(SCRATCH / "listener-controls" / str(index), files)
+        (accept if honest else refuse)(label, lambda directory=directory: judge_listeners(read_records(directory), Z, W))
 
     # The client against a stand-in server: every honest frame form yields the same messages, and each
     # corruption of the frames or the handshake is refused.
