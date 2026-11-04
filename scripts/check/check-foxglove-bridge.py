@@ -105,18 +105,21 @@ class Bridge:
             if exam.READY.fullmatch(line.strip()):
                 self.ready.set()
 
-    def stop(self) -> int:
+    def stop(self) -> tuple[int, bool]:
+        """Stop the bridge whatever state the run is in, and return its exit status and whether it stopped
+        within `STOP_SECONDS` of SIGTERM. It never raises, so a failing step can call it on its way out."""
+        timely = True
         if self.process.poll() is None:
             self.process.send_signal(signal.SIGTERM)
         try:
             self.process.wait(timeout=STOP_SECONDS)
         except subprocess.TimeoutExpired:
+            timely = False
             self.process.kill()
             self.process.wait()
-            fail("the bridge did not stop within 30 s of SIGTERM")
         for thread in self.threads:
             thread.join(5)
-        return self.process.returncode
+        return self.process.returncode, timely
 
 
 def controls() -> int:
@@ -201,40 +204,46 @@ def step_refusal(directory: Path, store: Path) -> None:
 def step_run(store_path: Path, want: exam.Store) -> int:
     zenoh_port, websocket_port = free_port(), free_port()
     bridge = Bridge(store_path, zenoh_port, websocket_port)
-    if not bridge.ready.wait(exam.READY_SECONDS):
-        bridge.stop()
-        fail(f"the bridge printed no ready line within {exam.READY_SECONDS} s: {''.join(bridge.stderr)[-400:]}")
+    client: ws.Client | None = None
+    # Whatever ends the session, the client is closed and the bridge stopped before the step returns or fails,
+    # so a failed run leaves no bridge or listener behind.
     try:
-        client = ws.Client("127.0.0.1", websocket_port, timeout=10)
-        before: list[ws.Message] = []
-        deadline = time.monotonic() + 5
-        while (message := client.receive(deadline)) is not None:
-            before.append(message)
-        advertised = [m.json() for m in before if m.text is not None and m.json().get("op") == "advertise"]
-        if len(advertised) != 1 or len(advertised[0].get("channels", [])) != 1:
-            exam.judge_session(before, [], want)
-        channel = advertised[0]["channels"][0]["id"]
-        client.send_json({"op": "subscribe", "subscriptions": [{"id": exam.SUBSCRIPTION, "channelId": channel}]})
-        interpreter = zenoh_listener_peer.ensure_venv()
-        replay = subprocess.run(
-            [str(interpreter), "-E", str(REPLAYER), str(zenoh_port), str(store_path), lidar_publish_exam.KEY,
-             exam.OTHER_KEY, str(exam.REPLAY_PERIOD_MS)],
-            capture_output=True, text=True, timeout=len(want.frames) * exam.REPLAY_PERIOD_MS / 1000 + 300,
-            env={k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "PIP_"))},
-        )
-        if replay.returncode != 0:
-            fail(f"the replayer exited {replay.returncode}: {(replay.stdout + replay.stderr)[-400:]}")
-        after: list[ws.Message] = []
-        deadline = time.monotonic() + exam.SETTLE_SECONDS
-        while (message := client.receive(deadline)) is not None:
-            after.append(message)
+        if not bridge.ready.wait(exam.READY_SECONDS):
+            fail(f"the bridge printed no ready line within {exam.READY_SECONDS} s: {''.join(bridge.stderr)[-400:]}")
+        try:
+            client = ws.Client("127.0.0.1", websocket_port, timeout=10)
+            before: list[ws.Message] = []
+            deadline = time.monotonic() + 5
+            while (message := client.receive(deadline)) is not None:
+                before.append(message)
+            advertised = [m.json() for m in before if m.text is not None and m.json().get("op") == "advertise"]
+            if len(advertised) != 1 or len(advertised[0].get("channels", [])) != 1:
+                exam.judge_session(before, [], want)
+            channel = advertised[0]["channels"][0]["id"]
+            client.send_json({"op": "subscribe", "subscriptions": [{"id": exam.SUBSCRIPTION, "channelId": channel}]})
+            interpreter = zenoh_listener_peer.ensure_venv()
+            replay = subprocess.run(
+                [str(interpreter), "-E", str(REPLAYER), str(zenoh_port), str(store_path), lidar_publish_exam.KEY,
+                 exam.OTHER_KEY, str(exam.REPLAY_PERIOD_MS)],
+                capture_output=True, text=True, timeout=len(want.frames) * exam.REPLAY_PERIOD_MS / 1000 + 300,
+                env={k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "PIP_"))},
+            )
+            if replay.returncode != 0:
+                raise exam.ExamError(f"the replayer exited {replay.returncode}: {(replay.stdout + replay.stderr)[-400:]}")
+            after: list[ws.Message] = []
             deadline = time.monotonic() + exam.SETTLE_SECONDS
-        client.close()
-        exam.judge_session(before, after, want)
-    except (exam.ExamError, ws.ProtocolError, OSError) as error:
-        bridge.stop()
-        fail(f"session: {error}; bridge said {''.join(bridge.stdout)[-300:]!r}")
-    returncode = bridge.stop()
+            while (message := client.receive(deadline)) is not None:
+                after.append(message)
+                deadline = time.monotonic() + exam.SETTLE_SECONDS
+            exam.judge_session(before, after, want)
+        except (exam.ExamError, ws.ProtocolError, OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            fail(f"session: {error}; bridge said {''.join(bridge.stdout)[-300:]!r}")
+    finally:
+        if client is not None:
+            client.close()
+        returncode, timely = bridge.stop()
+    if not timely:
+        fail(f"the bridge did not stop within {STOP_SECONDS} s of SIGTERM")
     try:
         exam.judge_lines("".join(bridge.stdout), returncode, zenoh_port, websocket_port, len(want.frames))
     except exam.ExamError as error:
