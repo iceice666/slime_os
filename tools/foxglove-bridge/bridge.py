@@ -40,6 +40,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The bridge imports modules from the checkout, and a bytecode cache written there would change the tree
+# a gate is grading while it runs. Neither process writes one.
+sys.dont_write_bytecode = True
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "frame-store"))
@@ -201,7 +205,7 @@ def main() -> int:
     # The servers run in the pinned environment, as a child that inherits this process's output, so the
     # signal that stops the bridge is passed on to it and its exit status is the bridge's.
     child = subprocess.Popen(
-        [str(python), "-E", str(Path(__file__).resolve()), "--serve", "--store", str(arguments.store),
+        [str(python), "-E", "-B", str(Path(__file__).resolve()), "--serve", "--store", str(arguments.store),
          "--zenoh-port", str(arguments.zenoh_port), "--websocket-port", str(arguments.websocket_port)],
         env={key: value for key, value in os.environ.items() if not key.startswith(("PYTHON", "PIP_"))},
     )
