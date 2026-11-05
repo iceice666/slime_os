@@ -51,7 +51,9 @@ PUBLISH = load_script("lidar_publish_check", "check/check-lidar-publish.py")
 BRIDGE = load_script("foxglove_bridge_check", "check/check-foxglove-bridge.py")
 # The host peer the composition grants the publisher: QEMU's 10.0.2.2:17447 is the host's loopback.
 ZENOH_PORT = zenoh_capture.PORT
-# How long the client waits for a message once the guest's boot has ended.
+# How long the client reads before it subscribes, and how long it reads on once the guest's boot has ended:
+# collection stops only after this long with no message, whatever the count, so a late extra message is seen.
+BEFORE_SECONDS = 5
 SETTLE_SECONDS = 5
 
 
@@ -65,11 +67,61 @@ def controls() -> int:
         _accepted, bridge_refused = bridge_exam.controls()
     except (publish_exam.ExamError, bridge_exam.ExamError) as error:
         fail(str(error))
-    print(f"[lidar-foxglove-demo] controls refused publish={publish_refused} bridge={bridge_refused}")
-    return publish_refused + bridge_refused
+    collector_refused = collector_controls()
+    print(f"[lidar-foxglove-demo] controls refused publish={publish_refused} bridge={bridge_refused} collector={collector_refused}")
+    return publish_refused + bridge_refused + collector_refused
 
 
-CONTROLS_LINE = re.compile(r"\[lidar-foxglove-demo\] controls refused publish=(\d+) bridge=(\d+)")
+def collector_controls() -> int:
+    """This script's own collection, against stand-in servers: an honest session is accepted, and one with a
+    duplicate of the last frame after the expected count, or a frame missing, is refused."""
+    want = bridge_exam.control_store()
+    before, after = bridge_exam.honest_session(want)
+    # The frames follow the advertisement after the client's pre-subscription read has ended, as the guest's do.
+    pause = BEFORE_SECONDS_CONTROL * 2
+    frames = (pause, bridge_exam.stream([], after))
+    duplicate = (SETTLE_SECONDS_CONTROL / 2, bridge_exam.stream([], after[-1:]))
+    cases = (
+        ("honest", (frames,), True),
+        ("a duplicate of the last frame after the count", (frames, duplicate), False),
+        ("the last frame missing", ((pause, bridge_exam.stream([], after[:-1])),), False),
+    )
+    refused = 0
+    for label, later, honest in cases:
+        port, thread = bridge_exam.stand_in(bridge_exam.stream(before, []), later=later)
+        client = ws.Client("127.0.0.1", port, timeout=5)
+        try:
+            got_before = read_before(client, BEFORE_SECONDS_CONTROL)
+            got_after = Reader(client, SETTLE_SECONDS_CONTROL).finish()
+            bridge_exam.judge_session(got_before, got_after, want)
+            took = True
+        except (bridge_exam.ExamError, ws.ProtocolError):
+            took = False
+        finally:
+            client.close()
+            thread.join(5)
+        if took != honest:
+            fail(f"control: the client's collection {'refused' if honest else 'accepted'} {label}")
+        refused += not took
+    return refused
+
+
+# The collector controls' timings: shorter than the run's, and in the same proportions.
+BEFORE_SECONDS_CONTROL = 0.5
+SETTLE_SECONDS_CONTROL = 1.5
+
+
+def read_before(client: ws.Client, seconds: float) -> list[ws.Message]:
+    """Every message before the client subscribes: until `seconds` pass with none."""
+    before: list[ws.Message] = []
+    deadline = time.monotonic() + seconds
+    while (message := client.receive(deadline)) is not None:
+        before.append(message)
+        deadline = time.monotonic() + seconds
+    return before
+
+
+CONTROLS_LINE = re.compile(r"\[lidar-foxglove-demo\] controls refused publish=(\d+) bridge=(\d+) collector=(\d+)")
 
 
 def controls_in_child() -> int:
@@ -84,14 +136,15 @@ def controls_in_child() -> int:
     if done.returncode != 0 or match is None:
         fail(f"the controls did not hold: {(done.stdout + done.stderr).strip()[-400:]}")
     print(match.group(0))
-    return int(match.group(1)) + int(match.group(2))
+    return int(match.group(1)) + int(match.group(2)) + int(match.group(3))
 
 
 class Reader:
     """Reads the client's messages on a thread, so the server never holds a backlog for it."""
 
-    def __init__(self, client: ws.Client) -> None:
+    def __init__(self, client: ws.Client, settle: float = SETTLE_SECONDS) -> None:
         self.client = client
+        self.settle = settle
         self.messages: list[ws.Message] = []
         self.error: Exception | None = None
         self.stop = threading.Event()
@@ -111,9 +164,10 @@ class Reader:
         except (ws.ProtocolError, OSError) as error:
             self.error = error
 
-    def finish(self, count: int) -> list[ws.Message]:
-        """The messages read once `count` have arrived or none has for `SETTLE_SECONDS`."""
-        while len(self.messages) < count and time.monotonic() - self.last < SETTLE_SECONDS and self.error is None:
+    def finish(self) -> list[ws.Message]:
+        """Every message read until none has arrived for the settle time. The count is never a reason to
+        stop: a message after the expected last one is collected, and the judge refuses it."""
+        while time.monotonic() - self.last < self.settle and self.error is None and not self.client.frames.closed:
             time.sleep(0.1)
         self.stop.set()
         self.thread.join(5)
@@ -153,10 +207,7 @@ def run(transcript_path: Path | None) -> None:
                 fail(f"the bridge printed no ready line within {bridge_exam.READY_SECONDS} s: {''.join(bridge.stderr)[-400:]}")
             try:
                 client = ws.Client("127.0.0.1", websocket_port, timeout=10)
-                before: list[ws.Message] = []
-                deadline = time.monotonic() + 5
-                while (message := client.receive(deadline)) is not None:
-                    before.append(message)
+                before = read_before(client, BEFORE_SECONDS)
                 advertised = [m.json() for m in before if m.text is not None and m.json().get("op") == "advertise"]
                 if len(advertised) != 1 or len(advertised[0].get("channels", [])) != 1:
                     bridge_exam.judge_session(before, [], viewed)
@@ -183,7 +234,7 @@ def run(transcript_path: Path | None) -> None:
                     fail(f"the guest printed a failure line: {failure.group(0)!r}")
                 if not capture.is_file():
                     fail("QEMU did not produce the demo's packet observation")
-                after = reader.finish(len(viewed.frames))
+                after = reader.finish()
                 observed = publish_exam.judge_transcript(transcript, published, ceiling, generation)
                 wire = publish_exam.judge_capture(capture.read_bytes(), published)
                 bridge_exam.judge_session(before, after, viewed)

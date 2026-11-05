@@ -456,8 +456,10 @@ def _response(key: str) -> str:
     )
 
 
-def stand_in(body: bytes, handshake: Callable[[str], str] = lambda r: r) -> tuple[int, threading.Thread]:
-    """A one-connection server on the loopback that answers the handshake and then sends `body`."""
+def stand_in(body: bytes, handshake: Callable[[str], str] = lambda r: r,
+             later: tuple[tuple[float, bytes], ...] = ()) -> tuple[int, threading.Thread]:
+    """A one-connection server on the loopback that answers the handshake and then sends `body`, then each
+    of `later`'s bytes after its delay in seconds."""
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -471,6 +473,9 @@ def stand_in(body: bytes, handshake: Callable[[str], str] = lambda r: r) -> tupl
                 data += connection.recv(4096)
             key = re.search(rb"Sec-WebSocket-Key: (\S+)\r\n", data).group(1).decode()
             connection.sendall(handshake(_response(key)).encode() + body)
+            for delay, data in later:
+                time.sleep(delay)
+                connection.sendall(data)
             time.sleep(0.3)
         listener.close()
 
