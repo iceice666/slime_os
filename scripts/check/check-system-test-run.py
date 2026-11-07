@@ -724,8 +724,8 @@ def check_arm_controls() -> int:
                 fail(f"arm control: {name} is planned and already has a run record")
         elif not (RUN_ROOT / f"{name}.zti").is_file():
             fail(f"arm control: {name} has no run record")
-    if sum(1 for devices in declared.values() if devices) != 10 or sum(1 for devices in declared.values() if not devices) != 5:
-        fail("arm control: the network checker no longer has ten NIC arms and five arms with no device")
+    if sum(1 for devices in declared.values() if devices) != 10 or sum(1 for devices in declared.values() if not devices) != 6:
+        fail("arm control: the network checker no longer has ten NIC arms and six arms with no device")
 
     source = checker.read_text(encoding="utf-8")
 
@@ -1143,19 +1143,53 @@ def check_arm_controls() -> int:
 
         # An arm whose closure has not landed is planned. Its registration stays in PLANNED_RUNS until the closure
         # and the record exist. Without it the arm is a run with a missing closure, and its tables are still read.
+        # No network arm is planned on main, so the controls stage one: the buffers arm's closure and record are
+        # hidden behind copies of the two roots under build/, and a registration names it with a planned
+        # requirement that exists in specs/.
+        import shutil
+
+        import work_items
+
         buffers = "sel4-io-tcp-buffers"
-        without_plan = {key: value for key, value in generator.PLANNED_RUNS.items() if key != buffers}
-        with patch.dict(generator.PLANNED_RUNS, without_plan, clear=True):
-            refuse("a built closure with no record and no planning registration", lambda: generator.run_variants(checker))
-        with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, buffers: ()}}):
-            refuse("a planned arm that declares no device but attaches one", lambda: generator.extract(checker, buffers))
-        with patch.dict(generator.ARM_CHOICES, {NETWORK_CHECKER: {**generator.ARM_CHOICES[NETWORK_CHECKER], buffers: "tcp"}}):
-            refuse("a planned arm read from the branch of another arm", lambda: generator.extract(checker, buffers))
+        planned_identity = next(
+            (row["id"] for row in work_items.items() if work_items.planned(str(row["id"]))), None
+        )
+        if planned_identity is None:
+            fail("arm control: no planned requirement in specs/ to stage a planned arm with")
         buffers_call = "run_buffers_arm(build_image(BUFFERS_CLOSURE)"
-        refused_edit("a planned arm that builds the closure of another arm", mutated(buffers_call, "run_buffers_arm(build_image(TCP_CLOSURE)"), buffers)
-        stale = {**generator.PLANNED_RUNS, buffers: (*generator.PLANNED_RUNS[buffers][:3], (*generator.PLANNED_RUNS[buffers][3], "scripts/check/check-system-test-run.py"))}
-        with patch.dict(generator.PLANNED_RUNS, stale, clear=True):
-            refuse("a planning registration whose artifact already exists", lambda: generator.run_variants(checker))
+        staged_root = ROOT / "build"
+        staged_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=staged_root, prefix="system-test-run-planned-") as staged:
+            closures = _Path(staged) / "closures"
+            runs = _Path(staged) / "runs"
+            shutil.copytree(generator.CLOSURE_ROOT, closures)
+            shutil.copytree(generator.RUN_ROOT, runs)
+            (closures / f"{buffers}.zti").unlink()
+            (runs / f"{buffers}.zti").unlink()
+            registration = (
+                str(planned_identity),
+                NETWORK_CHECKER,
+                buffers,
+                (
+                    str((closures / f"{buffers}.zti").relative_to(ROOT)),
+                    str((runs / f"{buffers}.zti").relative_to(ROOT)),
+                ),
+            )
+            # The real registrations name the real roots, so the staged roots see only the staged arm.
+            with patch.object(generator, "CLOSURE_ROOT", closures), patch.object(generator, "RUN_ROOT", runs):
+                with patch.dict(generator.PLANNED_RUNS, {}, clear=True):
+                    refuse("a built closure with no record and no planning registration", lambda: generator.run_variants(checker))
+                with patch.dict(generator.PLANNED_RUNS, {buffers: registration}, clear=True):
+                    if buffers in {name for name, *_ in generator.run_variants(checker)}:
+                        fail("arm control: a planned arm was listed as an active run")
+                    with patch.dict(generator.ARM_DEVICES, {NETWORK_CHECKER: {**declared, buffers: ()}}):
+                        refuse("a planned arm that declares no device but attaches one", lambda: generator.extract(checker, buffers))
+                    with patch.dict(generator.ARM_CHOICES, {NETWORK_CHECKER: {**generator.ARM_CHOICES[NETWORK_CHECKER], buffers: "tcp"}}):
+                        refuse("a planned arm read from the branch of another arm", lambda: generator.extract(checker, buffers))
+                    refused_edit("a planned arm that builds the closure of another arm", mutated(buffers_call, "run_buffers_arm(build_image(TCP_CLOSURE)"), buffers)
+                    stale = (*registration[:3], (*registration[3], "scripts/check/check-system-test-run.py"))
+                    with patch.dict(generator.PLANNED_RUNS, {buffers: stale}, clear=True):
+                        refuse("a planning registration whose artifact already exists", lambda: generator.run_variants(checker))
 
         # A run record for a declared arm cannot go missing.
         runs = _Path(directory) / "runs"
