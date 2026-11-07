@@ -31,37 +31,26 @@ jobs:
       - uses: ./.github/actions/slime-env
       - name: Fetch the evidence branch
         run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
-      - name: Claimed targets at this closure
-        id: claimed
-        run: |
-          targets="$(nix develop --command python3 scripts/spec/status --claimed | tr '\n' ' ')"
-          echo "targets=$targets" >> "$GITHUB_OUTPUT"
-          echo "claimed: ${targets:-none}"
       - name: Signing key
-        if: steps.claimed.outputs.targets != '' && env.EVIDENCE_SIGNING_KEY != ''
+        if: env.EVIDENCE_SIGNING_KEY != ''
         env:
           EVIDENCE_SIGNING_KEY: ${{ secrets.EVIDENCE_SIGNING_KEY }}
         run: |
           install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
           printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
           echo "SPEC_SIGN=--signer ci --key $RUNNER_TEMP/evidence-key" >> "$GITHUB_ENV"
-      - name: Record each claimed target
-        if: steps.claimed.outputs.targets != ''
+      - name: Record claimed targets and publish
+        run: nix develop --command python3 scripts/spec/ci --runner ci $SPEC_SIGN
+      - name: Push the evidence branch
         run: |
-          status=0
-          for target in ${{ steps.claimed.outputs.targets }}; do
-            nix develop --command python3 scripts/spec/record "$target" --runner ci $SPEC_SIGN || status=1
-          done
-          echo "one or more targets failed: $status (their failing records are still published)"
-      - name: Publish
-        if: steps.claimed.outputs.targets != ''
-        run: |
-          nix develop --command python3 scripts/spec/publish
+          git rev-parse -q --verify refs/heads/evidence >/dev/null || { echo "nothing to push"; exit 0; }
           for attempt in 1 2; do
-            git push origin refs/heads/evidence:refs/heads/evidence && break
+            git push origin refs/heads/evidence:refs/heads/evidence && exit 0
             git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence
-            git update-ref refs/heads/evidence refs/remotes/origin/evidence
+            git update-ref -d refs/heads/evidence
             nix develop --command python3 scripts/spec/publish
           done
+          exit 1
       - name: Status
+        if: always()
         run: nix develop --command python3 scripts/spec/status --unenforced

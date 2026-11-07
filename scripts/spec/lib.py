@@ -61,9 +61,22 @@ def zutai() -> str:
     return binary
 
 
+def stdlib_root() -> str:
+    """$ZUTAI_STDLIB_ROOT, else the submodule's stdlib, else the one packaged beside zutai-cli."""
+    configured = os.environ.get("ZUTAI_STDLIB_ROOT")
+    if configured:
+        return configured
+    if (STDLIB / "zutai.zti").is_file():
+        return str(STDLIB)
+    packaged = Path(zutai()).resolve().parent.parent / "share" / "zutai" / "stdlib"
+    if (packaged / "zutai.zti").is_file():
+        return str(packaged)
+    raise SpecError("no Zutai stdlib: set ZUTAI_STDLIB_ROOT, check out deps/zutai, or enter the dev shell")
+
+
 def zutai_json(path: Path) -> object:
     """The final value of `path` as JSON, as `zutai-cli json` prints it."""
-    environment = os.environ | {"ZUTAI_STDLIB_ROOT": os.environ.get("ZUTAI_STDLIB_ROOT", str(STDLIB))}
+    environment = os.environ | {"ZUTAI_STDLIB_ROOT": stdlib_root()}
     process = subprocess.run(
         [zutai(), "json", str(path)],
         cwd=ROOT,
