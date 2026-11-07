@@ -117,3 +117,16 @@
 | 8 | `owns`：1713 個產品檔中 405 個無人擁有 → 0；CI `check --base` 加 `--enforce-owns`；`check` rule 1 把「刪掉一個 invariants 為空的 area」誤判為 invariants 改動，修正。rationale 不重寫（F5） |
 
 仍開著：4（rpi5 板子）、7（第二個真實功能）、`link_wake_check` 的真實缺陷、Phase 4 的基線對照。
+
+### F1–F6 推上 main 後（run 42390857496）
+
+`0f400a30..dfc55b5f` 推上 main。CI（run 42390857491）綠。Evidence 8 個 shard 全綠，shard 0（含 `system_image_closure_gates_check`）1 小時 12 分，其餘約 9 分，publish 22 分。**313/399 enforced**，failing 歸零。
+
+| 狀態 | 數量 | 內容 |
+| --- | --- | --- |
+| enforced | 313 | `zenoh_service_grants_reader_check`、`system_test_run_inventory_check`、`system_image_closure_gates_check` 都有通過 record |
+| failing | 0 | |
+| claimed | 3 | `rpi5_ros2_zenoh_check`，digest `787c972709f7` 無 record |
+| advisory | 83 | planned（含 `link_wake_check` 5 條）+ LiDAR human gate 1 條 |
+
+總數 406 → 399：F1 刪了 7 條。
