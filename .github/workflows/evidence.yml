@@ -55,6 +55,10 @@ jobs:
     needs: [plan]
     if: needs.plan.outputs.shards != '[]'
     runs-on: ubuntu-24.04-arm
+    # The signing key lives in this environment, whose deployment branch
+    # policy admits main only (decision E4): a workflow edited on a branch
+    # cannot reach it.
+    environment: evidence
     # sel4_large_image_check alone takes 131 minutes after a 10-minute setup.
     timeout-minutes: 240
     strategy:
@@ -71,7 +75,7 @@ jobs:
         with:
           build-save: 'false'
       - name: Signing key
-        if: env.EVIDENCE_SIGNING_KEY != ''
+        if: ${{ secrets.EVIDENCE_SIGNING_KEY != '' }}
         env:
           EVIDENCE_SIGNING_KEY: ${{ secrets.EVIDENCE_SIGNING_KEY }}
         run: |
