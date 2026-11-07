@@ -43,7 +43,7 @@
 | 條件 | 結果 |
 | --- | --- |
 | 刪除清單 Phase 3 每一列不在 tree 上 | 是（`grep -rn "\.tasks\|\.devloop\|myque"` 只剩 proposal 與 history 文字） |
-| CI 綠 | push 後待確認 |
+| CI 綠 | 是，第二次 push（第一次：`docs_gates` job 沒有 zutai → `work_items` 改純 regex 淺讀；`--plan` stdout 又被 shellHook 污染 → 寫檔） |
 | 第一次全跑後 `status --unenforced` 被人看過 | 待 Evidence run 完成（8 shard，估 1–2 小時） |
 | 第二個真實功能走完 | 未做 |
 
