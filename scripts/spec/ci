@@ -1,25 +1,36 @@
 #!/usr/bin/env python3
-"""Run every claimed target and commit the records: the evidence job's body.
+"""The evidence job's body: run claimed targets, publish their records.
 
-    scripts/spec/ci [--runner ci] [--signer PRINCIPAL --key PATH]
+    scripts/spec/ci                       # claimed -> record each -> publish
+    scripts/spec/ci --plan N              # JSON shards of claimed targets
+    scripts/spec/ci --targets a b ...     # record these only, no publish
+    scripts/spec/ci --publish             # publish build/observations only
 
 Host-neutral: the workflow fetches the evidence ref before and pushes
-`refs/heads/evidence` after. A failing target still yields a record (it
-publishes as failing); the exit status is non-zero only when publish
-itself refused something or no record could be written.
+`refs/heads/evidence` after. `--plan` balances claimed targets over at
+most N shards by their recorded wall time (`specs/wall-time.toml`, else
+600 s each) and prints `[{"shard": "0", "targets": "a b"}, ...]`; an
+empty list means nothing to run. A failing target still yields a record
+(it publishes as failing); the exit status is non-zero only when publish
+refused something or a record could not be written. `--signer PRINCIPAL
+--key PATH` signs every record (decision E4).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
+TARGETS = lib.SPECS / "targets.toml"
+DEFAULT_SECONDS = 600
 
 
 def claimed() -> list[str]:
@@ -35,27 +46,58 @@ def claimed() -> list[str]:
     return sorted(targets)
 
 
+def plan(targets: list[str], shards: int) -> list[dict[str, str]]:
+    """Greedy longest-first bin packing over at most `shards` bins."""
+    facts = tomllib.loads(TARGETS.read_text()) if TARGETS.is_file() else {}
+    seconds = facts.get("wall_time", {})
+    operator = set(facts.get("operator", []))
+    targets = [t for t in targets if t not in operator]
+    weighted = sorted(targets, key=lambda t: (-int(seconds.get(t, DEFAULT_SECONDS)), t))
+    bins: list[tuple[int, list[str]]] = [(0, []) for _ in range(max(1, min(shards, len(targets))))]
+    for target in weighted:
+        load, members = min(bins, key=lambda b: b[0])
+        members.append(target)
+        bins[bins.index((load, members))] = (load + int(seconds.get(target, DEFAULT_SECONDS)), members)
+    return [{"shard": str(i), "targets": " ".join(members)} for i, (_, members) in enumerate(bins) if members]
+
+
+def record(targets: list[str], runner: str, signer: str | None, key: str | None) -> dict[str, int]:
+    outcomes = {}
+    for target in targets:
+        command = [sys.executable, str(HERE / "record"), target, "--runner", runner]
+        if signer and key:
+            command += ["--signer", signer, "--key", key]
+        outcomes[target] = subprocess.run(command, cwd=lib.ROOT, check=False).returncode
+    for target, code in outcomes.items():
+        print(f"[ci] {target}: {'passed' if code == 0 else f'failed ({code})'}", flush=True)
+    return outcomes
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--plan", type=int, metavar="N")
+    parser.add_argument("--targets", nargs="*")
+    parser.add_argument("--publish", action="store_true")
     parser.add_argument("--runner", default="ci")
     parser.add_argument("--signer")
     parser.add_argument("--key")
     args = parser.parse_args()
 
+    if args.publish:
+        return subprocess.run([sys.executable, str(HERE / "publish")], cwd=lib.ROOT, check=False).returncode
+    if args.targets is not None:
+        record(args.targets, args.runner, args.signer, args.key)
+        return 0
     targets = claimed()
+    if args.plan:
+        json.dump(plan(targets, args.plan), sys.stdout)
+        print()
+        return 0
     print(f"[ci] claimed: {' '.join(targets) or 'none'}", flush=True)
     if not targets:
         return 0
-    outcomes = {}
-    for target in targets:
-        command = [sys.executable, str(HERE / "record"), target, "--runner", args.runner]
-        if args.signer and args.key:
-            command += ["--signer", args.signer, "--key", args.key]
-        outcomes[target] = subprocess.run(command, cwd=lib.ROOT, check=False).returncode
-    for target, code in outcomes.items():
-        print(f"[ci] {target}: {'passed' if code == 0 else f'failed ({code})'}", flush=True)
-    published = subprocess.run([sys.executable, str(HERE / "publish")], cwd=lib.ROOT, check=False).returncode
-    return published
+    record(targets, args.runner, args.signer, args.key)
+    return subprocess.run([sys.executable, str(HERE / "publish")], cwd=lib.ROOT, check=False).returncode
 
 
 if __name__ == "__main__":

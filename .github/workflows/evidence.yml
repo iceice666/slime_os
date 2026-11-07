@@ -1,8 +1,13 @@
 # After every push to main: run each bound target that has no record at its
 # current closure digest, write the records, and commit them to the
 # `evidence` branch (proposal/devloop-redesign/, decision E4). No commit
-# ever lands on main from here. Pushes are serialised by the concurrency
-# group; a non-fast-forward push is retried once after a fetch.
+# ever lands on main from here.
+#
+# `plan` resolves every bound target's closure and balances the claimed ones
+# over at most 8 shards by observed wall time (specs/wall-time.toml). Each
+# shard records its targets and uploads the records; `publish` gathers them
+# and pushes once, serialised by the concurrency group, retrying once after
+# a non-fast-forward.
 name: Evidence
 
 on:
@@ -18,19 +23,44 @@ permissions:
   contents: write
 
 jobs:
-  evidence:
-    name: Run claimed targets and publish records
+  plan:
+    name: Claimed targets
     runs-on: ubuntu-24.04-arm
-    # Every bound target today is an AArch64 QEMU plane; a plane takes minutes.
-    timeout-minutes: 180
+    timeout-minutes: 30
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
       - uses: ./.github/actions/slime-env
-      - name: Fetch the evidence branch
-        run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+        with:
+          build-save: 'false'
+      - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - id: plan
+        run: |
+          nix develop --command python3 scripts/spec/ci --plan 8 > "$RUNNER_TEMP/shards.json"
+          cat "$RUNNER_TEMP/shards.json"
+          echo "shards=$(cat "$RUNNER_TEMP/shards.json")" >> "$GITHUB_OUTPUT"
+
+  record:
+    name: Record shard ${{ matrix.shard }}
+    needs: [plan]
+    if: needs.plan.outputs.shards != '[]'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
       - name: Signing key
         if: env.EVIDENCE_SIGNING_KEY != ''
         env:
@@ -39,11 +69,38 @@ jobs:
           install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
           printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
           echo "SPEC_SIGN=--signer ci --key $RUNNER_TEMP/evidence-key" >> "$GITHUB_ENV"
-      # Produces build/sel4-prefix, which test_sel4_root and every plane
-      # expect to exist; the other CI jobs run it first for the same reason.
+      # Produces build/sel4-prefix, which test_sel4_root and every plane expect.
       - run: nix develop --command just sel4_qemu_image_check
-      - name: Record claimed targets and publish
-        run: nix develop --command python3 scripts/spec/ci --runner ci $SPEC_SIGN
+      - run: nix develop --command python3 scripts/spec/ci --runner ci $SPEC_SIGN --targets ${{ matrix.targets }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: observations-${{ matrix.shard }}
+          path: build/observations/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish records
+    needs: [plan, record]
+    if: always() && needs.plan.outputs.shards != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: observations-*
+          path: build/observations/
+          merge-multiple: true
+      - run: nix develop --command python3 scripts/spec/ci --publish
       - name: Push the evidence branch
         run: |
           git rev-parse -q --verify refs/heads/evidence >/dev/null || { echo "nothing to push"; exit 0; }
@@ -51,9 +108,7 @@ jobs:
             git push origin refs/heads/evidence:refs/heads/evidence && exit 0
             git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence
             git update-ref -d refs/heads/evidence
-            nix develop --command python3 scripts/spec/publish
+            nix develop --command python3 scripts/spec/ci --publish
           done
           exit 1
-      - name: Status
-        if: always()
-        run: nix develop --command python3 scripts/spec/status --unenforced
+      - run: nix develop --command python3 scripts/spec/status --unenforced
