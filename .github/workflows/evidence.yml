@@ -1,0 +1,67 @@
+# After every push to main: run each bound target that has no record at its
+# current closure digest, write the records, and commit them to the
+# `evidence` branch (proposal/devloop-redesign/, decision E4). No commit
+# ever lands on main from here. Pushes are serialised by the concurrency
+# group; a non-fast-forward push is retried once after a fetch.
+name: Evidence
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: evidence
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  evidence:
+    name: Run claimed targets and publish records
+    runs-on: ubuntu-24.04-arm
+    # Every bound target today is an AArch64 QEMU plane; a plane takes minutes.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+      - name: Fetch the evidence branch
+        run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - name: Claimed targets at this closure
+        id: claimed
+        run: |
+          targets="$(nix develop --command python3 scripts/spec/status --claimed | tr '\n' ' ')"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "claimed: ${targets:-none}"
+      - name: Signing key
+        if: steps.claimed.outputs.targets != '' && env.EVIDENCE_SIGNING_KEY != ''
+        env:
+          EVIDENCE_SIGNING_KEY: ${{ secrets.EVIDENCE_SIGNING_KEY }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
+          printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
+          echo "SPEC_SIGN=--signer ci --key $RUNNER_TEMP/evidence-key" >> "$GITHUB_ENV"
+      - name: Record each claimed target
+        if: steps.claimed.outputs.targets != ''
+        run: |
+          status=0
+          for target in ${{ steps.claimed.outputs.targets }}; do
+            nix develop --command python3 scripts/spec/record "$target" --runner ci $SPEC_SIGN || status=1
+          done
+          echo "one or more targets failed: $status (their failing records are still published)"
+      - name: Publish
+        if: steps.claimed.outputs.targets != ''
+        run: |
+          nix develop --command python3 scripts/spec/publish
+          for attempt in 1 2; do
+            git push origin refs/heads/evidence:refs/heads/evidence && break
+            git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence
+            git update-ref refs/heads/evidence refs/remotes/origin/evidence
+            nix develop --command python3 scripts/spec/publish
+          done
+      - name: Status
+        run: nix develop --command python3 scripts/spec/status --unenforced

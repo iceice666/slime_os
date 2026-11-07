@@ -286,6 +286,52 @@ jobs:
           nix develop .#projection --command
           python3 scripts/lib/work_item_retirement_publish.py --check-pr
 
+  # The living specs (proposal/devloop-redesign/): schema, bound targets,
+  # reverse marks, the CLI's own end-to-end run, and on a pull request the
+  # grader-independence judgement against the base with the reviews that
+  # approved the head. Runs beside `work_items` until Phase 3 retires it.
+  spec:
+    name: Living specs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            }}
+          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+      - run: nix develop .#projection --command just spec_check
+      - run: nix develop .#projection --command python3 scripts/spec/e2e
+      - name: Approvals from HUMAN_OWNERS
+        if: github.event_name == 'pull_request'
+        id: approvers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          approvers="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(",")')"
+          echo "logins=$approvers" >> "$GITHUB_OUTPUT"
+      - name: Grader independence against the base
+        if: github.event_name == 'pull_request'
+        run: >-
+          nix develop .#projection --command
+          python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}"
+          --approvers "${{ steps.approvers.outputs.logins }}"
+
   kani_proofs:
     name: Kani IO wire and device-boundary proofs
     # An ordinary x64 runner, not the arm64 seL4 pool: nothing here builds for
