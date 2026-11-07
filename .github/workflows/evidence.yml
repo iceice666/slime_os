@@ -39,6 +39,9 @@ jobs:
           install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
           printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
           echo "SPEC_SIGN=--signer ci --key $RUNNER_TEMP/evidence-key" >> "$GITHUB_ENV"
+      # Produces build/sel4-prefix, which test_sel4_root and every plane
+      # expect to exist; the other CI jobs run it first for the same reason.
+      - run: nix develop --command just sel4_qemu_image_check
       - name: Record claimed targets and publish
         run: nix develop --command python3 scripts/spec/ci --runner ci $SPEC_SIGN
       - name: Push the evidence branch
