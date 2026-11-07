@@ -75,10 +75,10 @@ jobs:
         with:
           build-save: 'false'
       - name: Signing key
-        if: ${{ secrets.EVIDENCE_SIGNING_KEY != '' }}
         env:
           EVIDENCE_SIGNING_KEY: ${{ secrets.EVIDENCE_SIGNING_KEY }}
         run: |
+          if [ -z "$EVIDENCE_SIGNING_KEY" ]; then echo "no signing key in this environment; records stay unsigned"; exit 0; fi
           install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
           printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
           echo "SPEC_SIGN=--signer ci --key $RUNNER_TEMP/evidence-key" >> "$GITHUB_ENV"
