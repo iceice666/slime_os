@@ -1,0 +1,56 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "product" "Product image and release" {
+    "scripts/build/**";
+    "sel4/**";
+    "contracts/release/**";
+    "contracts/system-image-closure/**";
+  } {
+    -- legacy 01a10778-adf1-7d64-a4e8-851e425c03e9 (open): Second serial port: a component writes and reads bytes on QEMU virt's second PL011
+    -- The serial path only transmits: serial-device v1 has one operation, the only serial driver answers
+    -- no-device on QEMU, and the root's QEMU inventory holds only virtio transports, so no serial port
+    -- page reaches a component. A bus servo, a GPS or a radio needs both directions, and QEMU virt offers
+    -- a second PL011 when a second -serial backend is given.
+    (h.planned "01a1b49c-ab84-75c9-86f4-b1e30664a13c"
+      "In a QEMU composition with a second serial port attached, a testkit probe holding that port writes a known byte sequence and the checker reads exactly those bytes on the host end of the port, while the first port stays the console and answers (+ 1 1) with => 2 in the same boot."
+      "Second serial port: a component writes and reads bytes on QEMU virt's second PL011"
+      "rehomed from a open item"
+      {
+        h.observedWhere "serial-write-observed" "sel4_serial_graph_check" h.noPredicates "The arm reads 16 bytes from the host end of the second port and compares them with the probe's two writes byte for byte; the console chain requires (+ 1 1) then => 2 in the same transcript; a missing or mutated byte and a missing marker each fail the arm.";
+      }) with { supersedes = { "01a10778-adf1-7d64-a4e8-851e425c03e9"; }; };
+    (h.planned "01a1b49c-ab84-75c9-86f4-b1e4e16a72bc"
+      "The checker sends a known burst of 24 bytes at once into the host end of the port; the probe prints what it read on the console, and the checker sees the whole burst in order whether it took one read or several."
+      "Second serial port: a component writes and reads bytes on QEMU virt's second PL011"
+      "rehomed from a open item"
+      {
+        h.observedWhere "serial-read-observed" "sel4_serial_graph_check" h.noPredicates "The arm sends 24 bytes at once after the probe's awaiting marker and requires the probe's read line with all 24 bytes in order; the burst exceeds the 16-deep receive FIFO, so the line is reached only if several reads were concatenated correctly.";
+      }) with { supersedes = { "01a10778-adf1-7d64-a4e8-851e425c03e9"; }; };
+    (h.planned "01a1b49c-ab84-75c9-86f4-b1e54f21e7d4"
+      "The probe asks for bytes before the checker has sent any, reports an empty read with status ok and zero bytes on the console, and the run continues to its terminal marker."
+      "Second serial port: a component writes and reads bytes on QEMU virt's second PL011"
+      "rehomed from a open item"
+      {
+        h.observedWhere "serial-empty-read-observed" "sel4_serial_graph_check" h.noPredicates "The probe's empty-read line is required before the arm sends anything, and the terminal marker is required after it; a read that blocked would stop the chain before the terminal.";
+      }) with { supersedes = { "01a10778-adf1-7d64-a4e8-851e425c03e9"; }; };
+    (h.planned "01a1b49c-ab84-75c9-86f4-b1e617638fed"
+      "A serial driver bound to a device ordinal the platform did not inventory refuses the probe's read and write with no-device, and the probe reports both on the console."
+      "Second serial port: a component writes and reads bytes on QEMU virt's second PL011"
+      "rehomed from a open item"
+      {
+        h.observedWhere "serial-no-port-observed" "sel4_serial_graph_check" h.noPredicates "The second driver's device-absent line and the probe's no-port write and no-port read lines with status no-device are required markers of the arm; a missing or out-of-order one fails the arm.";
+      }) with { supersedes = { "01a10778-adf1-7d64-a4e8-851e425c03e9"; }; };
+    (h.planned "01a1b49c-ab84-75c9-86f4-b1e73c732af2"
+      "A request with an unknown operation, a bad length or a non-zero reserved field is refused with bad-op, bad-length or malformed respectively, for the read operation as for the write, and the driver answers the next well-formed write with ok."
+      "Second serial port: a component writes and reads bytes on QEMU virt's second PL011"
+      "rehomed from a open item"
+      {
+        h.observedWhere "serial-refusals-counted" "sel4_serial_graph_check" { h.count "negativeControlsRefused" 5; h.count "bytesObserved" 40; } "The arm counts five refused requests (bad-op, bad-length, malformed, no-port write, no-port read) and forty bytes verified on both ends (16 host-read, 24 guest-read), reports them as negativeControlsRefused and bytesObserved, and requires the write-after-refusals ok line after the three malformed cases.";
+      }) with { supersedes = { "01a10778-adf1-7d64-a4e8-851e425c03e9"; }; };
+  }) with {
+    nonGoals = {
+      "Board bring-up or any board register model; line configuration chosen by the client; interrupt-driven receive; framing above raw bytes; the console itself; a Slisp serial form; receive buffering beyond one reply per read.";
+    };
+  };
+
+area

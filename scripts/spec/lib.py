@@ -122,7 +122,7 @@ class Area:
 
 
 def area_files() -> list[Path]:
-    return sorted(p for p in SPECS.glob("*.zt") if p.name not in {"schema.zt", "helpers.zt"})
+    return sorted(p for p in SPECS.glob("*.zt") if p.name not in {"schema.zt", "helpers.zt", "legacy.zt"})
 
 
 def load_area(path: Path) -> Area:

@@ -1,0 +1,244 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "contracts" "Contract corpus and generated bindings" {
+    "contracts/**";
+    "scripts/generate/**";
+  } {
+    -- legacy 01a0fcbe-6eb7-7eda-a979-d0796e72f303 (done): Keep test-run inventory explicit and arm-qualified
+    -- The system-test-run generator unconditionally inventories every seL4 plane checker, so the
+    -- deliberately planning-only entropy grader blocks unrelated identity refresh because its
+    -- implementation closure has not landed. The generator also extracts execution facts from an entire
+    -- checker file rather than one invocation: the large-image arm's failure markers contaminate the
+    -- existing reclamation-unwind record, its 1800-second timeout is missed, and its separate run is not
+    -- inventoried. Blessing this output would freeze inaccurate execution declarations.
+    (h.req "01a1b49c-ab6f-700d-a9fd-611a57dd4eb0"
+      "Only an explicitly registered planning-only run may be omitted while its declared implementation artifacts are absent. Each registration names a real nonterminal canonical UUID, existing checker, matching invocation/closure and a nonempty set of root-relative artifact paths including the expected closure and run declaration. Unknown, malformed, cancelled or completed identities; orphan or conflicting registrations; absolute or escaping paths; and undeclared missing active closures are refused. Work-item state alone never derives an omission. A checker may retain an active default arm while one registered future arm is omitted."
+      "Keep test-run inventory explicit and arm-qualified"
+      {
+        h.observedWhere "inventory-qualified" "system_test_run_inventory_check" h.noPredicates "The landed recipe runs independent controls against the real generator over temporary checker, work-item, artifact and declaration files, then the complete repository system-test-run gate. Positive controls prevent blanket refusal; missing active artifacts, stale planning registrations, cross-arm contamination and partial writes must fail. These are host inventory observations, never evidence of an unimplemented product boot.";
+      }) with { supersedes = { "01a0fcbe-6eb7-7eda-a979-d0796e72f303"; }; };
+    (h.req "01a1b49c-ab6f-700d-a9fd-611b89d7c761"
+      "The first appearance of any registered implementation artifact invalidates the planning-only exclusion rather than silently hiding partial implementation. Removing the exclusion subjects the run to ordinary inventory checks: missing closure or declaration is refused; a complete closure and declaration restores runnable inventory. Generator and checker use the same discovery and continue to reject missing active records and orphan records. Existing literal-image exemptions remain independently checked rather than inherited by planning-only runs."
+      "Keep test-run inventory explicit and arm-qualified"
+      {
+        h.observedWhere "inventory-qualified" "system_test_run_inventory_check" h.noPredicates "The landed recipe runs independent controls against the real generator over temporary checker, work-item, artifact and declaration files, then the complete repository system-test-run gate. Positive controls prevent blanket refusal; missing active artifacts, stale planning registrations, cross-arm contamination and partial writes must fail. These are host inventory observations, never evidence of an unimplemented product boot.";
+      }) with { supersedes = { "01a0fcbe-6eb7-7eda-a979-d0796e72f303"; }; };
+    (h.req "01a1b49c-ab6f-700d-a9fd-611cf5eb1839"
+      "Execution extraction is invocation-qualified: reclamation-unwind continues to declare its own 180-second timeout and original execution fields, while large-image declares its actual 1800-second timeout and failure outcomes. Mutating a large-image-only timeout or failure declaration changes only that arm's extracted facts. Explicit unsupported invocation selection fails rather than borrowing another arm's facts; existing default invocation selection remains compatible. Registering the large-image variant does not replace or omit unwind. Existing private-memory controls continue to show that adaptive-only transport does not change fixed-arm declarations."
+      "Keep test-run inventory explicit and arm-qualified"
+      {
+        h.observedWhere "inventory-qualified" "system_test_run_inventory_check" h.noPredicates "The landed recipe runs independent controls against the real generator over temporary checker, work-item, artifact and declaration files, then the complete repository system-test-run gate. Positive controls prevent blanket refusal; missing active artifacts, stale planning registrations, cross-arm contamination and partial writes must fail. These are host inventory observations, never evidence of an unimplemented product boot.";
+      }) with { supersedes = { "01a0fcbe-6eb7-7eda-a979-d0796e72f303"; }; };
+    (h.req "01a1b49c-ab6f-700d-a9fd-611d90bae99d"
+      "Identity refresh preserves every execution field, refuses missing declarations and genuine execution drift before any write, and remains idempotent. A batch with a valid identity-only update followed by an invalid execution change leaves every file byte-identical. The controls exercise both absent planned implementations and the completed transition after removing a planning registration. After the corrected inventory and reviewed declarations land, the complete existing system-test-run gate passes against the repository's actual implementation inventory."
+      "Keep test-run inventory explicit and arm-qualified"
+      {
+        h.observedWhere "inventory-qualified" "system_test_run_inventory_check" h.noPredicates "The landed recipe runs independent controls against the real generator over temporary checker, work-item, artifact and declaration files, then the complete repository system-test-run gate. Positive controls prevent blanket refusal; missing active artifacts, stale planning registrations, cross-arm contamination and partial writes must fail. These are host inventory observations, never evidence of an unimplemented product boot.";
+      }) with { supersedes = { "01a0fcbe-6eb7-7eda-a979-d0796e72f303"; }; };
+    -- legacy 01a1309c-1505-7fac-bcac-c35a70066d64 (done): Closure gates refuse main: stale test-run identities and checker pins
+    -- Three closure-consuming gates refuse the tree on main without any product defect. Every closure
+    -- identity moved with its implementation inputs, but 51 frozen system-test-run records still name the
+    -- old identities, so check-system-test-run.py and check-system-image-closure.py both report that a run
+    -- names a closure that resolves to nothing. check-system-image-scenario.py pins the closed root-role
+    -- vocabulary at the six roles CP14 declared, while the closure contract has since admitted eight
+    -- private-memory roles, so it refuses the current contract before it inspects a closure. check-system-
+    -- image-aggregate.py classifies build knobs from a fixed table that predates the networkFaultInFlight
+    -- and networkDriverResetInFlight build profiles, so it refuses SLIME_NETWORK_FAULT_IN_FLIGHT and
+    -- SLIME_NETWORK_DRIVER_RESET_IN_FLIGHT as unclassified even though build-system-image.py sets each
+    -- only from a closure-declared build profile.
+    (h.req "01a1b49c-abfd-7564-8419-b91c6daf6373"
+      "Every committed system-test-run record that names an image closure names the identity that closure currently resolves to, and no record's execution declaration differs from what its plane checker declares; generate-system-test-runs.py --check and check-system-test-run.py both pass."
+      "Closure gates refuse main: stale test-run identities and checker pins"
+      {
+        h.observedWhere "closure-gates-pass" "system_image_closure_gates_check" h.noPredicates "system_image_closure_gates_check runs every closure-consuming gate in one recipe, so a pass means none of them refuses the tree; the gate adapter, not a checker, reports the recipe's exit status.";
+      }) with { supersedes = { "01a1309c-1505-7fac-bcac-c35a70066d64"; }; };
+    (h.req "01a1b49c-abfd-7564-8419-b91de95920af"
+      "The scenario checker's closed root-role vocabulary equals the closure contract's, so a role added to or removed from the contract without a reviewed checker change is still refused, and every non-default role resolves through its own closure with an identity distinct from its base."
+      "Closure gates refuse main: stale test-run identities and checker pins"
+      {
+        h.observedWhere "closure-gates-pass" "system_image_closure_gates_check" h.noPredicates "system_image_closure_gates_check runs every closure-consuming gate in one recipe, so a pass means none of them refuses the tree; the gate adapter, not a checker, reports the recipe's exit status.";
+      }) with { supersedes = { "01a1309c-1505-7fac-bcac-c35a70066d64"; }; };
+    (h.req "01a1b49c-abfd-7564-8419-b91e6bcb258a"
+      "Every SLIME_* knob a build script reads is in exactly one of the aggregate checker's classes, the two network fault-injection knobs among the closure-declared ones, and a knob outside every class or a classified knob no build script reads is still refused."
+      "Closure gates refuse main: stale test-run identities and checker pins"
+      {
+        h.observedWhere "closure-gates-pass" "system_image_closure_gates_check" h.noPredicates "system_image_closure_gates_check runs every closure-consuming gate in one recipe, so a pass means none of them refuses the tree; the gate adapter, not a checker, reports the recipe's exit status.";
+      }) with { supersedes = { "01a1309c-1505-7fac-bcac-c35a70066d64"; }; };
+    (h.req "01a1b49c-abfd-7564-8419-b91ff915d722"
+      "Every gate that consumes the committed closure corpus passes on the same tree: closure freshness, closure resolution with its refusal and isolation controls, the test-run records, the scenario and root-role arms, and image/closure ownership."
+      "Closure gates refuse main: stale test-run identities and checker pins"
+      {
+        h.observedWhere "closure-gates-pass" "system_image_closure_gates_check" h.noPredicates "system_image_closure_gates_check runs every closure-consuming gate in one recipe, so a pass means none of them refuses the tree; the gate adapter, not a checker, reports the recipe's exit status.";
+      }) with { supersedes = { "01a1309c-1505-7fac-bcac-c35a70066d64"; }; };
+    -- legacy 01a18732-ad06-744a-85e5-d50c903828f9 (done): Test-run records name their image closure
+    -- Every system-test-run/v1 record copies the identity of the image closure it boots, and every
+    -- negative build case copies the identity of its base closure. A closure's identity changes whenever
+    -- one of its input trees changes, so a change to components/, boot-contracts/, just/ or any other
+    -- closure input rewrites 65 test-run records and 6 negative cases along with the 103 closures. Any two
+    -- open pull requests that touch an input tree then conflict on those files and must regenerate after
+    -- each rebase; 86 of the last 224 commits on main touch the closures, and one implementation pull
+    -- request was rebuilt three times in two days for this alone. The records gain nothing from the copy:
+    -- check-system-test-run.py already resolves each run's closure from its plane, so a record can name
+    -- the closure instead. This is step 1 of docs/plans/system-image-closure-derivations.md and part of
+    -- issue #848.
+    (h.req "01a1b49c-adc8-7550-989e-731ec0fa3e1a"
+      "Every test-run record is a v2 record whose fields are the schema's: each of the 70 runs pinned in the exam names the closure it boots at the planning base (60 by their own name, 5 by another closure's name, 5 closure-exempt with an empty name), a run added later names an existing closure, and no v1 record remains."
+      "Test-run records name their image closure"
+      {
+        h.observedWhere "test-run-references-observed" "system_test_run_reference_check" h.noPredicates "system_test_run_reference_check judges the records against a run-to-closure table pinned from the v1 identities, then changes a closure input in a scratch checkout of HEAD and runs the repository's own closure generator, test-run generator and checker as commands. The exam imports none of them, so the code under change cannot grade itself.";
+      }) with { supersedes = { "01a18732-ad06-744a-85e5-d50c903828f9"; }; };
+    (h.req "01a1b49c-adc8-7550-989e-731f86546ada"
+      "In a clean checkout, appending one line to components/lib/src/lib.rs and regenerating the closures changes no file under contracts/system-test-run/ and no negative build case, and afterwards generate-system-test-runs.py --check and check-system-test-run.py both pass."
+      "Test-run records name their image closure"
+      {
+        h.observedWhere "test-run-references-observed" "system_test_run_reference_check" h.noPredicates "system_test_run_reference_check judges the records against a run-to-closure table pinned from the v1 identities, then changes a closure input in a scratch checkout of HEAD and runs the repository's own closure generator, test-run generator and checker as commands. The exam imports none of them, so the code under change cannot grade itself.";
+      }) with { supersedes = { "01a18732-ad06-744a-85e5-d50c903828f9"; }; };
+    (h.req "01a1b49c-adc8-7550-989e-7320faf32789"
+      "check-system-test-run.py passes on the unmodified records and refuses a record that names a closure that does not exist, a record that names another plane's closure, and a record that carries imageClosureIdentity again."
+      "Test-run records name their image closure"
+      {
+        h.observedWhere "test-run-references-observed" "system_test_run_reference_check" h.noPredicates "system_test_run_reference_check judges the records against a run-to-closure table pinned from the v1 identities, then changes a closure input in a scratch checkout of HEAD and runs the repository's own closure generator, test-run generator and checker as commands. The exam imports none of them, so the code under change cannot grade itself.";
+      }) with { supersedes = { "01a18732-ad06-744a-85e5-d50c903828f9"; }; };
+    -- legacy 01a18c73-bd5b-74e1-b925-3a0aeff00114 (done): The riscv64 prefix snapshot names a host path
+    -- The committed riscv64 seL4 prefix snapshot, contracts/system-image-
+    -- closure/v2/inputs/sel4-riscv64-prefix from #114, holds two libsel4 headers
+    -- (libsel4/include/sel4/shared_types_gen.h and libsel4/include/sel4/sel4_arch/types_gen.h) whose first
+    -- comment names its .bf generator input by the absolute path of the checkout that built it,
+    -- /Users/iceice666/code/slime_os/deps/sel4. The aarch64 snapshot names the same inputs under the
+    -- logical prefix /slime/sel4 that canonicalize_prefix in scripts/lib/component_sdk.py writes. The
+    -- riscv64 snapshot therefore records a host path no clone reproduces, and
+    -- component_sdk_system_image_check and component_sdk_out_of_tree_check refuse the corpus as naming its
+    -- source checkout when they run from a checkout at that path.
+    (h.req "01a1b49c-ade1-7209-a537-932cc40652a1"
+      "No file under contracts/system-image-closure/v2/inputs/ names a /Users/ or /home/ directory or the checkout's own path, and every committed seL4 prefix names its two generated libsel4 headers' inputs under /slime/sel4."
+      "The riscv64 prefix snapshot names a host path"
+      {
+        h.observedWhere "input-host-paths-observed" "closure_input_host_paths_check" h.noPredicates "closure_input_host_paths_check scans every committed closure input for home-directory paths and the checkout's own path, checks each prefix's generated headers for the logical prefix, and compares the two riscv64 headers with digests pinned from the canonicalized bytes. Its six controls each corrupt a canonicalized copy and must be found.";
+      }) with { supersedes = { "01a18c73-bd5b-74e1-b925-3a0aeff00114"; }; };
+    (h.req "01a1b49c-ade1-7209-a537-932d7d14d2a8"
+      "The two riscv64 headers equal their committed bytes with only the checkout path in the first comment replaced by /slime/sel4, as pinned by SHA-256 in the exam."
+      "The riscv64 prefix snapshot names a host path"
+      {
+        h.observedWhere "input-host-paths-observed" "closure_input_host_paths_check" h.noPredicates "closure_input_host_paths_check scans every committed closure input for home-directory paths and the checkout's own path, checks each prefix's generated headers for the logical prefix, and compares the two riscv64 headers with digests pinned from the canonicalized bytes. Its six controls each corrupt a canonicalized copy and must be found.";
+      }) with { supersedes = { "01a18c73-bd5b-74e1-b925-3a0aeff00114"; }; };
+    -- legacy 01a18cca-71e6-74e8-9161-ab2736a67bc1 (done): Closure sources carry no in-tree digest
+    -- Each committed closure under contracts/system-image-closure/v2/closures/ records the SHA-256
+    -- identity of every input tree, including the repository's own trees such as components/lib and just/.
+    -- Those digests repeat what the commit already fixes, and they change whenever an input tree changes:
+    -- every pull request that touches components/, boot-contracts/, slime-root/ or just/ rewrites 103
+    -- closures, and any two such open pull requests conflict on them. Step 1
+    -- (01a18732-ad06-744a-85e5-d50c903828f9) stopped test-run records and negative build cases from
+    -- copying identities; the closures still do. This is step 2 of docs/plans/system-image-closure-
+    -- derivations.md.
+    (h.req "01a1b49c-aded-73b8-bbb5-03d7aa0ae8fa"
+      "Every closure pinned in the exam has a source under contracts/system-image-closure/v3/closures/, no source holds a 64-character hex digest or an identity field, and no resolved closure remains under contracts/system-image-closure/v2/closures/."
+      "Closure sources carry no in-tree digest"
+      {
+        h.observedWhere "closure-derivations-observed" "closure_derivation_check" h.noPredicates "closure_derivation_check reads the committed sources, then runs the repository's generator and builder as commands in a scratch checkout and in place, imports neither, and reads their reports only through their Zutai decoders. It recomputes each resolved closure's identity and every artifact digest itself, so the resolver cannot grade its own output.";
+      }) with { supersedes = { "01a18cca-71e6-74e8-9161-ab2736a67bc1"; }; };
+    (h.req "01a1b49c-aded-73b8-bbb5-03d84df73eb2"
+      "In a clean checkout, each of the six sampled closures resolves twice to one derivation id, both reports decode through contracts/closure-resolution/v1 with exactly their four fields and dirty false; its resolved closure's identity, recomputed from the closure's JSON projection, is the derivation id; and every artifact identity in it is the tree or file digest of the files git lists at that path."
+      "Closure sources carry no in-tree digest"
+      {
+        h.observedWhere "closure-derivations-observed" "closure_derivation_check" h.noPredicates "closure_derivation_check reads the committed sources, then runs the repository's generator and builder as commands in a scratch checkout and in place, imports neither, and reads their reports only through their Zutai decoders. It recomputes each resolved closure's identity and every artifact digest itself, so the resolver cannot grade its own output.";
+      }) with { supersedes = { "01a18cca-71e6-74e8-9161-ab2736a67bc1"; }; };
+    (h.req "01a1b49c-aded-73b8-bbb5-03d940ebc130"
+      "A tracked edit under components/applications/ros2-demo-publisher moves sel4-zenoh and marks it dirty and leaves sel4-channel unchanged and clean; an untracked file under components/lib moves both and marks both dirty; an ignored file under components/lib moves neither and marks both dirty; a comment appended to a recipe under just/ moves neither and marks neither dirty; and after the tracked edit and the recipe edit the generator rewrites no file under contracts/system-image-closure/ or contracts/system-test-run/ and --check passes."
+      "Closure sources carry no in-tree digest"
+      {
+        h.observedWhere "closure-derivations-observed" "closure_derivation_check" h.noPredicates "closure_derivation_check reads the committed sources, then runs the repository's generator and builder as commands in a scratch checkout and in place, imports neither, and reads their reports only through their Zutai decoders. It recomputes each resolved closure's identity and every artifact digest itself, so the resolver cannot grade its own output.";
+      }) with { supersedes = { "01a18cca-71e6-74e8-9161-ab2736a67bc1"; }; };
+    (h.req "01a1b49c-aded-73b8-bbb5-03da0264a5fb"
+      "build-system-image.py builds sel4-channel from its v3 source, and its build-result.zti decodes through decodeSystemImageBuildResult with dirty false, and with dirty true when an ignored file sits under components/lib; both build results carry the derivation id the resolver reports for the clean tree as closureIdentity."
+      "Closure sources carry no in-tree digest"
+      {
+        h.observedWhere "closure-derivations-observed" "closure_derivation_check" h.noPredicates "closure_derivation_check reads the committed sources, then runs the repository's generator and builder as commands in a scratch checkout and in place, imports neither, and reads their reports only through their Zutai decoders. It recomputes each resolved closure's identity and every artifact digest itself, so the resolver cannot grade its own output.";
+      }) with { supersedes = { "01a18cca-71e6-74e8-9161-ab2736a67bc1"; }; };
+    -- legacy 01a19619-7518-7e31-b7d0-e7c8a9edcce3 (done): Image attestations record what a derivation builds to
+    -- Steps 1 and 2 of docs/plans/system-image-closure-derivations.md stopped committing in-tree digests:
+    -- a build resolves its closure in the checkout, and its derivation id names its inputs. PR CI builds
+    -- sel4-channel twice at one commit and compares the outputs, but nothing records what a closure built
+    -- to at an earlier commit. A build that reads a file its closure does not declare keeps its derivation
+    -- id while its bytes change, and no check sees it. This is step 3: record the outputs of each attested
+    -- build after merge, outside any pull request diff, and refuse a later build whose derivation id and
+    -- host class match an earlier one but whose bytes differ.
+    (h.req "01a1b49c-ae0a-7351-94b8-f59b8d314656"
+      "In a scratch clone of HEAD with a bare remote, the writer attests sel4-channel at HEAD while a concurrent writer adds an unrelated note to the remote during the first push; afterwards the remote holds both notes, and the writer's note decodes through decodeImageAttestation, names HEAD, the host class the judge computes, the derivation id the resolver reports, and the SHA-256 of the five files the build left in DIR, which its build-result.zti also records with dirty false."
+      "Image attestations record what a derivation builds to"
+      {
+        h.observedWhere "image-attestations-observed" "image_attestation_check" h.noPredicates "image_attestation_check runs the writer and the resolver as commands in a scratch clone against a bare remote whose pre-receive hook plays the concurrent writer, reads every note and build result only through their Zutai decoders, hashes the build outputs itself, computes the host class itself, and judges the workflow file from HEAD. It imports no part of the writer, so the writer cannot grade its own notes.";
+      }) with { supersedes = { "01a19619-7518-7e31-b7d0-e7c8a9edcce3"; }; };
+    (h.req "01a1b49c-ae0a-7351-94b8-f59c85f24f56"
+      "A second run at an attested commit is refused as already-attested; at an unattested commit an unknown or repeated closure name is refused as closure and an untracked file under components/lib as dirty, the dirty run building nothing; no refused run changes the remote's notes."
+      "Image attestations record what a derivation builds to"
+      {
+        h.observedWhere "image-attestations-observed" "image_attestation_check" h.noPredicates "image_attestation_check runs the writer and the resolver as commands in a scratch clone against a bare remote whose pre-receive hook plays the concurrent writer, reads every note and build result only through their Zutai decoders, hashes the build outputs itself, computes the host class itself, and judges the workflow file from HEAD. It imports no part of the writer, so the writer cannot grade its own notes.";
+      }) with { supersedes = { "01a19619-7518-7e31-b7d0-e7c8a9edcce3"; }; };
+    (h.req "01a1b49c-ae0a-7351-94b8-f59d424e01c4"
+      "After a commit that changes no input of sel4-channel, its derivation id is unchanged, and the writer attests the new commit with the same five digests as the first commit while a note of another devShell sharing the derivation id with different digests is on the remote."
+      "Image attestations record what a derivation builds to"
+      {
+        h.observedWhere "image-attestations-observed" "image_attestation_check" h.noPredicates "image_attestation_check runs the writer and the resolver as commands in a scratch clone against a bare remote whose pre-receive hook plays the concurrent writer, reads every note and build result only through their Zutai decoders, hashes the build outputs itself, computes the host class itself, and judges the workflow file from HEAD. It imports no part of the writer, so the writer cannot grade its own notes.";
+      }) with { supersedes = { "01a19619-7518-7e31-b7d0-e7c8a9edcce3"; }; };
+    (h.req "01a1b49c-ae0a-7351-94b8-f59e4d5f9772"
+      "A note of the same derivation id and host class with a different image digest on the remote before the run, and one with a different root digest that a concurrent writer adds during the push, are each refused as mismatch, leaving no note on the commit being attested."
+      "Image attestations record what a derivation builds to"
+      {
+        h.observedWhere "image-attestations-observed" "image_attestation_check" h.noPredicates "image_attestation_check runs the writer and the resolver as commands in a scratch clone against a bare remote whose pre-receive hook plays the concurrent writer, reads every note and build result only through their Zutai decoders, hashes the build outputs itself, computes the host class itself, and judges the workflow file from HEAD. It imports no part of the writer, so the writer cannot grade its own notes.";
+      }) with { supersedes = { "01a19619-7518-7e31-b7d0-e7c8a9edcce3"; }; };
+    (h.req "01a1b49c-ae0a-7351-94b8-f59f3270f4cc"
+      "--check accepts the remote's honest notes, and refuses a pair sharing a derivation id and host class with different loader digests as conflict, and a note that is not an attestation or names another commit as malformed."
+      "Image attestations record what a derivation builds to"
+      {
+        h.observedWhere "image-attestations-observed" "image_attestation_check" h.noPredicates "image_attestation_check runs the writer and the resolver as commands in a scratch clone against a bare remote whose pre-receive hook plays the concurrent writer, reads every note and build result only through their Zutai decoders, hashes the build outputs itself, computes the host class itself, and judges the workflow file from HEAD. It imports no part of the writer, so the writer cannot grade its own notes.";
+      }) with { supersedes = { "01a19619-7518-7e31-b7d0-e7c8a9edcce3"; }; };
+    (h.req "01a1b49c-ae0a-7351-94b8-f5a0f7b242a3"
+      ".github/workflows/image-attestations.yml at HEAD is triggered by schedule and workflow_dispatch only, sets a concurrency group with cancel-in-progress false and contents: write as its only permission, and has one job on ubuntu-24.04-arm with a timeout that checks out once with submodules recursive and runs the writer once through nix develop with --notes-ref refs/notes/image-attestations, --remote origin, --output and exactly the six named closures."
+      "Image attestations record what a derivation builds to"
+      {
+        h.observedWhere "image-attestations-observed" "image_attestation_check" h.noPredicates "image_attestation_check runs the writer and the resolver as commands in a scratch clone against a bare remote whose pre-receive hook plays the concurrent writer, reads every note and build result only through their Zutai decoders, hashes the build outputs itself, computes the host class itself, and judges the workflow file from HEAD. It imports no part of the writer, so the writer cannot grade its own notes.";
+      }) with { supersedes = { "01a19619-7518-7e31-b7d0-e7c8a9edcce3"; }; };
+    -- legacy 01a19c71-04b0-7355-960e-66fd1877c1a6 (done): The image aggregate check refuses the attestation writer's report variables
+    -- scripts/build/attest-system-images.py, added by #911 for 01a19619-7518-7e31-b7d0-e7c8a9edcce3, reads
+    -- SLIME_ATTESTATION_RUNNER for the runner name an attestation note records and passes SLIME_UNUSED as
+    -- the unused input variable of a Zutai evaluation. check-system-image-aggregate.py reads every quoted
+    -- SLIME_* name under scripts/build as a build knob and requires each to be closure-declared, a closure
+    -- parameter, non-keying or legacy. Neither name is classified, so just
+    -- system_image_closure_aggregate_check and system_image_closure_gates_check fail on main. Neither
+    -- changes image bytes.
+    (h.req "01a1b49c-ae5c-7249-848f-97a52ad0f0a9"
+      "just system_image_closure_aggregate_check passes: every quoted SLIME_* name under scripts/build is in exactly one class, and its negative controls, including an unclassified invented knob and a knob classified twice, still refuse."
+      "The image aggregate check refuses the attestation writer's report variables"
+      {
+        h.observedWhere "aggregate-observed" "system_image_closure_aggregate_check" h.noPredicates "system_image_closure_aggregate_check scans every build script for SLIME_* names and runs its negative controls, so a pass shows both new names classified and an unclassified knob still refused.";
+      }) with { supersedes = { "01a19c71-04b0-7355-960e-66fd1877c1a6"; }; };
+  }) with {
+    nonGoals = {
+      "Implementing entropy, large component loading, or any userspace/runtime mechanism; no QEMU or physical-machine support claim.";
+      "Making plane checkers execute from frozen system-test-run records, or redesigning all checker arms and transport discovery.";
+      "Skipping arbitrary missing closures, classifying a real QEMU checker as NOT_A_PLANE, inventing placeholder closure identities, or weakening execution-drift refusal.";
+      "Changing existing large-image acceptance predicates, recording its completion, or mixing its product implementation into this repair.";
+      "Blessing execution declarations: any change to disks, devices, timeouts, faults or marker contracts is out of scope and must still be refused.";
+      "Changing the closure contract or the closure generator, or changing a closure record beyond the regeneration that a release-input change forces.";
+      "Making the closure gates faster; that is separate work.";
+      "Any runtime, QEMU-plane or physical-machine claim.";
+      "Removing input identities from the closures themselves, attestations, or a resolver over the working tree; those are steps 2 and 3 of the plan.";
+      "Changing any execution field of a run: profile, fixtures, devices, fault controls, timeout, marker contract or forbidden outcomes.";
+      "Any QEMU plane behavior or any plane gate's expectations.";
+      "Rebuilding either seL4 prefix, or changing canonicalize_prefix or the SDK host-path scans.";
+      "Adding the input scan to system_image_closure_check or to CI; that is a separate change once the snapshot is clean.";
+      "Attestations of build outputs and the notes workflow; that is step 3.";
+      "Changing the tree-digest encoding, what an image contains, or any QEMU plane's expectations.";
+      "Making the system-spec evaluator faster.";
+      "Attesting more closures than the six named; widening the set follows measured run times.";
+      "Comparing builds across host classes, or a hermetic builder that would make them comparable.";
+      "Reading attestations in PR CI, in devloop evidence or in the component SDK.";
+      "Booting an attested image; an attestation proves bytes, not behavior.";
+      "Opening a defect automatically when a run refuses a mismatch; the failed run is the signal.";
+      "Changing attest-system-images.py or what an attestation records.";
+      "Changing the knob classes, the scan, or the checker's negative controls.";
+    };
+  };
+
+area

@@ -86,9 +86,21 @@ Area :: type {
   requirements : List Requirement;
 };
 
+--| One row of `specs/legacy.zt`: a work item of the retired `.tasks/`
+--| store. `requirements` are the ids it was rehomed into (empty when only
+--| indexed); `frozenAt` is the last main commit that carried its full text.
+Legacy :: type {
+  id : Text;
+  state : Text;
+  kind : Text;
+  title : Text;
+  frozenAt : Text;
+  requirements : List Text;
+};
+
 schemaVersion :: Text = "spec/v1";
 
 {
   DecidedBy =; Predicate =; Observed =; Human =; Acceptance =; Requirement =;
-  Invariant =; Decision =; Area =; schemaVersion =;
+  Invariant =; Decision =; Area =; Legacy =; schemaVersion =;
 }

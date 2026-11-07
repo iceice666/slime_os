@@ -1,0 +1,577 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "backlog" "Promises not yet bound to a plane (open items rehomed without an exam)" {
+    "components/**";
+    "slime-root/**";
+    "contracts/**";
+  } {
+    -- legacy 01a0ddaa-8676-7d7e-8faf-47285166731f (open): Broad smoltcp coverage within explicit network authority
+    -- Slime OS currently enables a small IPv4/Ethernet smoltcp configuration and lacks usable TCP/UDP
+    -- payload services. After the short-term ROS 2 Zenoh network facilities, the long-term goal is the
+    -- widest supported smoltcp surface consistent with explicit capability authority, not an ambient BSD-
+    -- socket personality or an unbounded promise to follow every future upstream feature.
+    (h.planned "01a1b49c-a9ec-7379-8976-90872f328a43"
+      "Maintain a version-bound exhaustive support matrix with an upstream feature/source reference, applicable target/backend, dependency slice, authority mapping, quantitative bounds and verification for each facility. Classify each as supported, planned, excluded for a documented authority-model conflict, or not applicable/not provided by that pinned version. Resource/profile options are not individually new network services. Unsupported because unfinished must remain planned, not excluded."
+      "Broad smoltcp coverage within explicit network authority"
+      "rehomed from a open item; unbound acceptance: inventory-observed"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908810d62254"
+      "Provide bounded UDP local bind and per-peer datagrams with message boundaries, source identity, size/truncation semantics, receive queues and independent send/receive rights. Support static DDS participant endpoints without making remote locators or discovered participant ports into grants. Leave RTPS reliability and discovery policy to middleware."
+      "Broad smoltcp coverage within explicit network authority"
+      "rehomed from a open item; unbound acceptance: udp-observed"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-90890b155243"
+      "Implement the authority-compatible pinned TCP options, DNS, IPv6/NDP, ICMP/control traffic, routes, supported address configuration and fragmentation/reassembly facilities. Treat a DNS answer, DHCP lease, route advertisement or discovered address as untrusted configuration data, never newly granted client authority. Tie names to bounded resolution/use policy and prevent alternate-address or rebinding bypass. Refuse features whose service/control-plane authority cannot be bounded and represented."
+      "Broad smoltcp coverage within explicit network authority"
+      "rehomed from a open item; unbound acceptance: network-families-observed"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908aee0e6a98"
+      "Admit multicast only with explicit group, interface, port, direction, membership lifetime and bounded sender policy; implement supported group maintenance such as IPv4 IGMP behind that authority. Discovery/scouting remains opt-in userspace policy, and received advertisements cannot authorize unlisted locators. If a required behavior cannot satisfy this boundary, exclude that behavior rather than broaden ambient access."
+      "Broad smoltcp coverage within explicit network authority"
+      "rehomed from a open item; unbound acceptance: multicast-observed"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908bb0a712d6"
+      "Assess every pinned medium and backend separately. Keep Ethernet/raw-IP/other framing inside explicitly authorized services, never as raw packet authority for ordinary applications. Implement applicable compatible adapters without assuming virtio-net qualifies another backend or board. Bound neighbor/route/reassembly/socket caches, fairness, timers and state under malformed or saturated traffic."
+      "Broad smoltcp coverage within explicit network authority"
+      "rehomed from a open item; unbound acceptance: media-isolation-observed"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908c99e68aab"
+      "Admit implementation children through the canonical workflow before their code, ordered after short-term Zenoh networking. Publish narrow qualification recipes using the existing network/I/O verification mechanism unless a genuinely distinct boundary requires another owner. Completion requires all admitted facilities and children observed, with maintained exclusions; inventory or TCP/UDP echo alone does not complete broad coverage."
+      "Broad smoltcp coverage within explicit network authority"
+      "rehomed from a open item; unbound acceptance: completion-observed"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    -- legacy 01a0e239-b54c-7782-8dd6-b403038fa3dd (open): Application UDP endpoints: exact bind, per-peer datagrams and message boundaries
+    -- The network service contract enumerates a UdpEndpoint capability, but only the service's resolver
+    -- uses UDP. No component can bind a local UDP endpoint or exchange datagrams, so DDS-style transports
+    -- have no substrate.
+    (h.planned "01a1b49c-aa1e-7072-8f8f-c56d0a3d5ba7"
+      "A UDP endpoint is an exact local address and port bound to one holder with explicit admitted-peer sets per direction and independent send and receive rights. A datagram to or from an unlisted peer, port or transport is refused before egress or delivery; loopback confers no implicit authority; no wildcard or range grant exists."
+      "Application UDP endpoints: exact bind, per-peer datagrams and message boundaries"
+      "rehomed from a open item; unbound acceptance: udp-authority-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-b54c-7782-8dd6-b403038fa3dd"; }; };
+    (h.planned "01a1b49c-aa1e-7072-8f8f-c56ec046e920"
+      "Send and receive preserve message boundaries. Each received datagram carries source address, port and exact length; each sent datagram appears on the wire as one UDP packet with the declared source. The external frame peer exchanges exact datagrams in both directions over LinkDevice, and two separately authorized local endpoints exchange datagrams over loopback without external egress."
+      "Application UDP endpoints: exact bind, per-peer datagrams and message boundaries"
+      "rehomed from a open item; unbound acceptance: udp-datagrams-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-b54c-7782-8dd6-b403038fa3dd"; }; };
+    -- legacy 01a0e239-b927-7d7d-bb54-16c2bc465faa (open): UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile
+    -- Once application UDP exists, queue depth, datagram size, truncation, drop behavior and lifetime
+    -- settlement are unbounded claims, and the static DDS participant endpoint shape the epic requires has
+    -- no declared form.
+    (h.planned "01a1b49c-aa28-77a7-b73f-1a9b0bb923c9"
+      "Receive queue depth, per-datagram size, oversize policy and per-endpoint bytes are declared per binding. An oversized datagram is truncated or rejected according to the declared policy with the outcome reported to the holder; a full queue drops deterministically with a counter; malformed, reordered, duplicated and lost datagrams leave state within bounds and other endpoints progressing."
+      "UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile"
+      "rehomed from a open item; unbound acceptance: udp-bounds-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-b927-7d7d-bb54-16c2bc465faa"; }; };
+    (h.planned "01a1b49c-aa28-77a7-b73f-1a9ccdca3b95"
+      "Two static DDS-style endpoint pairs (user and metatraffic unicast ports) can be declared for one component and exchanged with a fixed external peer without a remote locator or discovered port ever becoming a grant. Discovery, reliability and CDR remain middleware policy and are not implemented."
+      "UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile"
+      "rehomed from a open item; unbound acceptance: dds-profile-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-b927-7d7d-bb54-16c2bc465faa"; }; };
+    (h.planned "01a1b49c-aa28-77a7-b73f-1a9ded8a7d52"
+      "Client death, service restart and driver reset settle or invalidate pending datagram requests exactly once, reclaim queues, buffers and charges, and refuse predecessor handles under fresh epochs."
+      "UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile"
+      "rehomed from a open item; unbound acceptance: udp-lifetime-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-b927-7d7d-bb54-16c2bc465faa"; }; };
+    -- legacy 01a0e239-bd70-75e4-90d5-0645363f6fbd (open): DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision
+    -- Bounded DNS exists only for the native HTTP slice's holder, name, TCP and port grant with a single
+    -- retained record. UDP destinations cannot be named, expiry and re-resolution are unspecified, and the
+    -- pinned socket-dns facility is unclassified.
+    (h.planned "01a1b49c-aa33-743e-9ddc-c2747684c270"
+      "Any exact-name destination grant, TCP or UDP, resolves through the service's resolver authority. Results stay inside the service and are never returned as numeric addresses; CNAME chain depth, record count and name length are bounded by declared limits and excess is refused."
+      "DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision"
+      "rehomed from a open item; unbound acceptance: name-grants-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-bd70-75e4-90d5-0645363f6fbd"; }; };
+    (h.planned "01a1b49c-aa33-743e-9ddc-c27540dc7dab"
+      "TTL expiry triggers re-resolution before reuse within bounded retries and backoff. A changed answer never authorizes a destination outside the original grant; resolver replies with a wrong id, port or name and rebinding attempts to another address family or host are refused."
+      "DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision"
+      "rehomed from a open item; unbound acceptance: expiry-retry-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-bd70-75e4-90d5-0645363f6fbd"; }; };
+    (h.planned "01a1b49c-aa33-743e-9ddc-c2762423e35f"
+      "Record whether the pinned socket-dns facility replaces or supplements the service resolver, with its selected bounds. Whichever path is retained is the only resolver path; the other is not compiled in."
+      "DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision"
+      "rehomed from a open item; unbound acceptance: resolver-choice-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-bd70-75e4-90d5-0645363f6fbd"; }; };
+    -- legacy 01a0e239-c1db-736d-a7a3-7ab4dd179e93 (open): ICMP: service-held echo probes and ICMP error mapping
+    -- The stack answers ICMP echo automatically, but no component can issue a bounded echo probe, ICMP
+    -- errors received for admitted sockets are not surfaced, and the socket-icmp facility is unclassified.
+    (h.planned "01a1b49c-aa3d-749e-954d-810eebc54121"
+      "An explicit ICMP echo grant lets a component issue echo requests to its exact destination and observe replies with round-trip identity. No grant, a wrong destination, an oversized payload or rate excess refuses before egress; ordinary clients receive no raw ICMP and cannot observe replies to other holders."
+      "ICMP: service-held echo probes and ICMP error mapping"
+      "rehomed from a open item; unbound acceptance: icmp-probe-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-c1db-736d-a7a3-7ab4dd179e93"; }; };
+    (h.planned "01a1b49c-aa3d-749e-954d-810fe90bea76"
+      "Received ICMP destination-unreachable and time-exceeded messages that match an admitted socket map to typed errors visible to that holder. Messages that match no admitted socket, or whose embedded header does not match, are ignored and counted within bounds."
+      "ICMP: service-held echo probes and ICMP error mapping"
+      "rehomed from a open item; unbound acceptance: icmp-errors-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-c1db-736d-a7a3-7ab4dd179e93"; }; };
+    (h.planned "01a1b49c-aa3d-749e-954d-8110ff774db4"
+      "The socket-icmp and auto-icmp-echo-reply rows in the matrix record the outcome: supported behind the grant above or excluded with the violated invariant, and the automatic echo reply is recorded as service policy with its rate bound."
+      "ICMP: service-held echo probes and ICMP error mapping"
+      "rehomed from a open item; unbound acceptance: classification-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-c1db-736d-a7a3-7ab4dd179e93"; }; };
+    -- legacy 01a0e239-c630-71d3-8c0c-85ab4d366bd4 (open): IPv4 fragmentation and reassembly: bounded support or executable exclusion
+    -- The pinned release offers IPv4 fragmentation and reassembly with selectable buffer counts and sizes.
+    -- The service neither enables it nor records why, so datagrams above the MTU have undefined fate.
+    (h.planned "01a1b49c-aa47-7575-ab3b-aaad44e44028"
+      "Decide whether proto-ipv4-fragmentation is enabled with declared reassembly and fragmentation buffer bounds or excluded, and record the decision, rationale and bounds in the matrix."
+      "IPv4 fragmentation and reassembly: bounded support or executable exclusion"
+      "rehomed from a open item; unbound acceptance: decision-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-c630-71d3-8c0c-85ab4d366bd4"; }; };
+    (h.planned "01a1b49c-aa47-7575-ab3b-aaaeb2ca0045"
+      "If enabled: fragmented datagrams up to the declared size reassemble with exact bytes; overlapping, incomplete and excess concurrent assemblies expire within bounded time and memory, and malformed fragments are dropped and counted. If excluded: incoming fragments are dropped and counted, outgoing datagrams above the MTU are refused with a typed error, and no partial state is retained."
+      "IPv4 fragmentation and reassembly: bounded support or executable exclusion"
+      "rehomed from a open item; unbound acceptance: bounded-or-denied-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-c630-71d3-8c0c-85ab4d366bd4"; }; };
+    -- legacy 01a0e239-ca2d-78c4-b9e1-689e6db39e9f (open): Static IPv6 interface, NDP and ICMPv6
+    -- The destination contract enumerates IPv6 addresses but the interface contract and the stack carry no
+    -- IPv6: no address, no neighbor discovery and no ICMPv6, so IPv6 destinations cannot exist.
+    (h.planned "01a1b49c-aa52-71f5-a8be-724fecb54f1b"
+      "The network interface contract gains versioned IPv6 address, prefix and gateway declarations. The interface holds the declared link-local and global addresses with address count bounded by the selected feature, remains generation data, and an interface without IPv6 declarations runs exactly as today."
+      "Static IPv6 interface, NDP and ICMPv6"
+      "rehomed from a open item; unbound acceptance: ipv6-interface-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-ca2d-78c4-b9e1-689e6db39e9f"; }; };
+    (h.planned "01a1b49c-aa52-71f5-a8be-72505048d72b"
+      "Neighbor solicitation and advertisement and static default routing work against the external frame peer; the neighbor cache is bounded; unsolicited or ungranted control traffic is dropped and counted; ICMPv6 echo reply follows the same policy and rate bound as IPv4."
+      "Static IPv6 interface, NDP and ICMPv6"
+      "rehomed from a open item; unbound acceptance: ndp-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-ca2d-78c4-b9e1-689e6db39e9f"; }; };
+    -- legacy 01a0e239-ce56-7d42-9e8a-3b4aa5dce585 (open): TCP and UDP over IPv6 destinations and listeners
+    -- After a static IPv6 interface exists, exact IPv6 destination and listener grants still carry no
+    -- stream or datagram path, and the authority split between an address family pair of one host is
+    -- unstated.
+    (h.planned "01a1b49c-aa5d-7586-9ee7-9e08a86f499f"
+      "Exact IPv6 destination, listener and UDP endpoint grants carry the same authority semantics as IPv4. An IPv4 grant never authorizes the IPv6 address of the same host and vice versa; a mismatched family is refused before egress."
+      "TCP and UDP over IPv6 destinations and listeners"
+      "rehomed from a open item; unbound acceptance: ipv6-destinations-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-ce56-7d42-9e8a-3b4aa5dce585"; }; };
+    (h.planned "01a1b49c-aa5d-7586-9ee7-9e09bd74a6e7"
+      "The external frame peer exchanges exact TCP stream bytes and UDP datagrams over IPv6 in both directions, and the refusal, timeout and lifetime cases of the IPv4 qualification hold over IPv6."
+      "TCP and UDP over IPv6 destinations and listeners"
+      "rehomed from a open item; unbound acceptance: ipv6-streams-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-ce56-7d42-9e8a-3b4aa5dce585"; }; };
+    -- legacy 01a0e239-d236-753f-ad60-f56c378eb2fe (open): DHCPv4 address configuration for an authorized interface
+    -- Interface addressing is static generation data. The pinned release offers a DHCPv4 client; whether a
+    -- lease may configure an authorized interface without minting client authority is undecided and
+    -- unimplemented.
+    (h.planned "01a1b49c-aa67-7692-aa9e-641dd9b4c515"
+      "The interface contract declares static or DHCPv4 mode. In DHCPv4 mode the service performs discover, offer, request and acknowledge on the declared interface and applies address, mask, gateway and resolver only to it. Lease contents are untrusted configuration: they never add, widen or redirect a client grant, and an exact numeric grant remains bound to its declared address."
+      "DHCPv4 address configuration for an authorized interface"
+      "rehomed from a open item; unbound acceptance: dhcp-mode-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-d236-753f-ad60-f56c378eb2fe"; }; };
+    (h.planned "01a1b49c-aa67-7692-aa9e-641ecc0b6baa"
+      "Renewal, rebinding, expiry, NAK and server disappearance are handled within bounded retries and timers. On expiry the interface drops the address and admitted sockets fail with a typed error; restart re-acquires a lease under a fresh epoch and refuses predecessor handles."
+      "DHCPv4 address configuration for an authorized interface"
+      "rehomed from a open item; unbound acceptance: lease-lifetime-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-d236-753f-ad60-f56c378eb2fe"; }; };
+    -- legacy 01a0e239-d614-767b-95d0-9c7261951e72 (open): IPv6 SLAAC and router advertisement handling
+    -- With a static IPv6 interface in place, the pinned release's stateless address autoconfiguration and
+    -- router advertisement handling remain unclassified; a rogue advertisement must not reconfigure an
+    -- authorized interface or redirect admitted traffic.
+    (h.planned "01a1b49c-aa71-731a-91fe-6880e71a3d21"
+      "With the SLAAC feature enabled and a declared router, advertisements configure a prefix-derived address and default route with prefix count and lifetimes bounded by declaration. Advertisements from an undeclared router are ignored and counted; lifetime expiry removes the address and admitted sockets on it fail with a typed error."
+      "IPv6 SLAAC and router advertisement handling"
+      "rehomed from a open item; unbound acceptance: slaac-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-d614-767b-95d0-9c7261951e72"; }; };
+    (h.planned "01a1b49c-aa71-731a-91fe-688197fc6b2e"
+      "Advertisement options such as recursive DNS, MTU and route information are untrusted data. None creates or widens client authority, and a rogue advertisement cannot redirect an admitted destination's egress to another next hop."
+      "IPv6 SLAAC and router advertisement handling"
+      "rehomed from a open item; unbound acceptance: untrusted-ra-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-d614-767b-95d0-9c7261951e72"; }; };
+    -- legacy 01a0e239-daa7-7fb9-b1c7-8c7e9336d95a (open): Multicast-capable peer backend for the network plane checker
+    -- The network plane qualification uses QEMU user-mode networking and a frame peer that cannot deliver
+    -- Ethernet multicast in both directions. Multicast and IGMP claims need a backend that does, before
+    -- any group behavior can be qualified.
+    (h.planned "01a1b49c-aa7b-778d-94c8-0911d5e9f7be"
+      "The network plane verification gains a backend that delivers Ethernet multicast to and from a host-side controlled peer, reusing the shared plane library for QEMU invocation, transcript collection and marker chains. User-mode networking is not used for any multicast claim, and the backend is selectable per case."
+      "Multicast-capable peer backend for the network plane checker"
+      "rehomed from a open item; unbound acceptance: peer-backend-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-daa7-7fb9-b1c7-8c7e9336d95a"; }; };
+    (h.planned "01a1b49c-aa7b-778d-94c8-09126e18f085"
+      "The backend has missing-evidence, reordered-marker and forged-marker controls in the existing gate control mechanism, and every existing unicast gate keeps its current backend and result."
+      "Multicast-capable peer backend for the network plane checker"
+      "rehomed from a open item; unbound acceptance: controls-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-daa7-7fb9-b1c7-8c7e9336d95a"; }; };
+    -- legacy 01a0e239-de7f-7bb7-ae5c-756b8cbfe637 (open): Multicast group grants, IGMP membership and mDNS classification
+    -- Multicast is absent from the stack and the authority model. The epic admits it only behind an
+    -- explicit group, interface, port, direction, lifetime and sender policy, with received advertisements
+    -- never creating authority.
+    (h.planned "01a1b49c-aa86-73ad-b612-1484b7bc9e39"
+      "A multicast grant names holder, group, interface, local port, direction, membership lifetime and sender policy. Join and leave emit IGMP membership report and leave on the wire; datagrams for ungranted groups, ports, senders or directions are refused; the group count is bounded by declaration; memberships are reclaimed on client death and restart with the leave observed."
+      "Multicast group grants, IGMP membership and mDNS classification"
+      "rehomed from a open item; unbound acceptance: group-grant-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-de7f-7bb7-ae5c-756b8cbfe637"; }; };
+    (h.planned "01a1b49c-aa86-73ad-b612-148539370160"
+      "A received multicast advertisement is data: it never authorizes a unicast destination, port or sender it names. The pinned mDNS facility is classified as supported behind a service-owned exact-name grant or excluded with the violated invariant and executable denial."
+      "Multicast group grants, IGMP membership and mDNS classification"
+      "rehomed from a open item; unbound acceptance: discovery-boundary-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-de7f-7bb7-ae5c-756b8cbfe637"; }; };
+    -- legacy 01a0e239-e2a7-7844-abbc-833a5820dfe0 (open): Media and backend classification with build-time exclusions
+    -- The pinned release advertises media, PHY backends, raw sockets and protocol features that Slime OS
+    -- does not enable and has not classified. Without a recorded reason and an executable exclusion, the
+    -- boundary between an authorized stack and ordinary-client raw-packet authority is asserted rather
+    -- than enforced.
+    (h.planned "01a1b49c-aa90-73a5-99be-dbe99a15a979"
+      "Each pinned feature outside the admitted set is classified in the matrix as planned, excluded with the violated invariant and considered bounded alternative, or not applicable with the reason. A client-facing raw-packet or raw-IP facility is excluded; raw-IP framing inside the authorized service, if ever needed, is recorded separately from client authority. The loopback medium implemented in the service is recorded as a medium row with its bounds."
+      "Media and backend classification with build-time exclusions"
+      "rehomed from a open item; unbound acceptance: classification-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-e2a7-7844-abbc-833a5820dfe0"; }; };
+    (h.planned "01a1b49c-aa90-73a5-99be-dbea56a9f653"
+      "Each excluded feature is not enabled and the delta check refuses enabling it without a matrix change. Where a client request could name an excluded facility, such as a raw transport or medium selector, the service refuses it with a typed denial before any state is allocated."
+      "Media and backend classification with build-time exclusions"
+      "rehomed from a open item; unbound acceptance: executable-exclusion-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-e2a7-7844-abbc-833a5820dfe0"; }; };
+    -- legacy 01a0e239-e6af-7561-92fc-334aa2ba28df (open): Resource bounds under malformed and saturating traffic
+    -- Neighbor cache, route, socket, reassembly and timer bounds are declared per slice but never
+    -- exercised together under hostile input. The epic requires bounded state and fairness under malformed
+    -- or saturated traffic before any backend is considered isolated.
+    (h.planned "01a1b49c-aa9a-72a8-826e-f09a0b426ff6"
+      "Under ARP and neighbor floods, SYN floods, fragment floods, malformed frames, oversized packets and datagram bursts from the frame peer, the neighbor cache, routes, sockets, listeners, reassembly and timer state stay within declared bounds, service memory does not grow, and an admitted client's stream and datagram exchange continue to progress with exact bytes."
+      "Resource bounds under malformed and saturating traffic"
+      "rehomed from a open item; unbound acceptance: saturation-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-e6af-7561-92fc-334aa2ba28df"; }; };
+    (h.planned "01a1b49c-aa9a-72a8-826e-f09bee2a4cb4"
+      "After the flood stops, caches converge to the legitimate peers, drop counters report the discarded input, and service restart returns every bound to zero under a fresh epoch."
+      "Resource bounds under malformed and saturating traffic"
+      "rehomed from a open item; unbound acceptance: recovery-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-e6af-7561-92fc-334aa2ba28df"; }; };
+    -- legacy 01a0e239-eb09-7748-811b-3302fb4b9fa0 (open): smoltcp coverage aggregate qualification and epic closure
+    -- The coverage epic completes only when every admitted slice is observed under one execution identity
+    -- with no planned matrix rows remaining. No published recipe aggregates the slices, the demo
+    -- regression and the delta check.
+    (h.planned "01a1b49c-aaa5-74be-9b2e-11f3c9029c05"
+      "One published recipe runs every admitted slice's qualification, the demo network regression, the matrix delta check, contract, closure, formatting and lint checks under a single execution identity, and fails if any admitted slice is missing from it."
+      "smoltcp coverage aggregate qualification and epic closure"
+      "rehomed from a open item; unbound acceptance: aggregate-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-eb09-7748-811b-3302fb4b9fa0"; }; };
+    (h.planned "01a1b49c-aaa5-74be-9b2e-11f4d041f10e"
+      "The matrix contains no planned rows; every excluded row's executable denial or build-time exclusion is exercised by the aggregate; the epic's evidence names the tested target, revision and image identity."
+      "smoltcp coverage aggregate qualification and epic closure"
+      "rehomed from a open item; unbound acceptance: closure-observed"
+      h.noAcceptance) with { supersedes = { "01a0e239-eb09-7748-811b-3302fb4b9fa0"; }; };
+    -- legacy 01a0e60f-4ca9-74e6-906e-31f32f3ff683 (active): Keep CI caches within the repository budget so main runs stay warm
+    -- Main CI runs keep going cold because GitHub evicts their caches. The repository's live cache set is
+    -- about 13.8 GB against a 10 GB budget. The seL4 build-output caches account for about 8.9 GB of that,
+    -- in eight per-job partitions: four generation shards at 1.36 to 1.44 GB each, the product job at 1.53
+    -- GB, and three 0.52 to 0.58 GB image-only jobs. The Nix store, Kani, MyQue, projection and rust-cache
+    -- entries add about 4.9 GB. Every build-output key also carries the commit SHA, so each main run
+    -- writes a new copy of every partition. Least-recently-used eviction then removes entries the next run
+    -- needs, the Zutai evaluation stores and the 2 GB Nix store among them. Of the three main runs after
+    -- 35ca61d that ran the seL4 jobs, one was warm (19 minutes), one was fully cold (30 minutes, at
+    -- d0ec4ee), and one lost its contract-source evaluation store within 45 minutes of saving it.
+    (h.planned "01a1b49c-aab1-7704-8548-abbcd7e6a4fe"
+      "Jobs whose cached build outputs come from the same build restore one shared partition, and exactly one job saves it, so no two jobs race to save the same key. The four generation shards share one partition at the least. Every seL4 job still restores the build outputs it used to restore, so no job becomes a cold build."
+      "Keep CI caches within the repository budget so main runs stay warm"
+      "rehomed from a active item; unbound acceptance: regression-surface; only a human gate: needs an automated exam"
+      {
+        h.human "retention-observed" "ci-cache-retention" "An operator reads the main-branch CI runs after the implementation merges. A run qualifies if it runs the seL4 jobs to success without being cancelled, and if its head commit changes no build-output key input, Nix key input or contracts .zt file relative to the preceding qualifying run. A qualifying run is warm when every seL4 job restored its build-output partition and the Nix store, and both contract jobs restored their Zutai evaluation store. consecutiveWarmRuns counts consecutive warm qualifying runs, with no cold qualifying run between them, and must reach 3. slowestCriticalPathSeconds is the slowest of those runs, measured from its first job starting to the CI aggregate finishing, and is bounded by 1320 s. cacheUsageMegabytes is the repository's active cache size after the last counted run completes, as the Actions cache usage API reports it, and is bounded by 9000 MB. Record the last counted run's URL as the target.";
+      }) with { supersedes = { "01a0e60f-4ca9-74e6-906e-31f32f3ff683"; }; };
+    (h.planned "01a1b49c-aab1-7704-8548-abbd76c26c50"
+      "A build-output partition's key binds its existing inputs (runner, toolchain and lockfiles, pins, seL4 configuration, linker scripts, submodule gitlinks) and the UTC date instead of the commit SHA. A run whose exact key already exists saves nothing for that partition. The first run of a day restores the previous day's entry by prefix and saves the new day's."
+      "Keep CI caches within the repository budget so main runs stay warm"
+      "rehomed from a active item; unbound acceptance: regression-surface; only a human gate: needs an automated exam"
+      {
+        h.human "retention-observed" "ci-cache-retention" "An operator reads the main-branch CI runs after the implementation merges. A run qualifies if it runs the seL4 jobs to success without being cancelled, and if its head commit changes no build-output key input, Nix key input or contracts .zt file relative to the preceding qualifying run. A qualifying run is warm when every seL4 job restored its build-output partition and the Nix store, and both contract jobs restored their Zutai evaluation store. consecutiveWarmRuns counts consecutive warm qualifying runs, with no cold qualifying run between them, and must reach 3. slowestCriticalPathSeconds is the slowest of those runs, measured from its first job starting to the CI aggregate finishing, and is bounded by 1320 s. cacheUsageMegabytes is the repository's active cache size after the last counted run completes, as the Actions cache usage API reports it, and is bounded by 9000 MB. Record the last counted run's URL as the target.";
+      }) with { supersedes = { "01a0e60f-4ca9-74e6-906e-31f32f3ff683"; }; };
+    (h.planned "01a1b49c-aab1-7704-8548-abbe29aa4f4a"
+      "Once a main run has finished and GitHub's eviction has settled, the repository's caches total at most 9000 MB, so one day's rotation fits without evicting entries the next run needs."
+      "Keep CI caches within the repository budget so main runs stay warm"
+      "rehomed from a active item; only a human gate: needs an automated exam"
+      {
+        h.human "retention-observed" "ci-cache-retention" "An operator reads the main-branch CI runs after the implementation merges. A run qualifies if it runs the seL4 jobs to success without being cancelled, and if its head commit changes no build-output key input, Nix key input or contracts .zt file relative to the preceding qualifying run. A qualifying run is warm when every seL4 job restored its build-output partition and the Nix store, and both contract jobs restored their Zutai evaluation store. consecutiveWarmRuns counts consecutive warm qualifying runs, with no cold qualifying run between them, and must reach 3. slowestCriticalPathSeconds is the slowest of those runs, measured from its first job starting to the CI aggregate finishing, and is bounded by 1320 s. cacheUsageMegabytes is the repository's active cache size after the last counted run completes, as the Actions cache usage API reports it, and is bounded by 9000 MB. Record the last counted run's URL as the target.";
+      }) with { supersedes = { "01a0e60f-4ca9-74e6-906e-31f32f3ff683"; }; };
+    -- legacy 01a130ec-7401-7674-893d-602ced3494de (open): Closure generation and resolution re-read the same inputs per closure
+    -- Regenerating or checking the system-image closure corpus dominates the development loop. Measured on
+    -- a warm zutai cache, generate-system-image-closures.py --check takes about 272 s: 200 s re-render
+    -- computed system specs through the system-spec-source evaluator at 13-18 s per call, once per closure
+    -- whose base is a computed system, and 59 s re-hash the same few workspace trees 1727 times.
+    -- resolve_closure costs 1.7 s for an ordinary closure and 15-19 s for one over a computed system,
+    -- because it re-admits the component-spec corpus twice and re-renders the computed source; each
+    -- corpus-wide checker therefore spends minutes re-reading identical bytes. Chained through the closure
+    -- gates this approaches an hour per regeneration.
+    (h.planned "01a1b49c-ac07-758c-9557-0adae5c246a8"
+      "Every committed closure and negative case is reproduced byte for byte: generate-system-image-closures.py --check passes against the corpus that exists before this change, and every tree digest it records is unchanged."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "rehomed from a open item; unbound acceptance: closure-gates-pass"
+      h.noAcceptance) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0adbf5d186a4"
+      "No closure gate accepts anything it refused before: closure resolution still refuses every malformed, mis-pinned and identity-mismatched control, including those that mutate a tree between resolutions, and system_spec_check still refuses every computed-source drift control, including derived-output drift reached through compile_system."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "rehomed from a open item; unbound acceptance: closure-gates-pass"
+      h.noAcceptance) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0adc167b2442"
+      "A closure resolved with default options, as closure_image.build does before every build, still refuses a computed system whose committed .zti its source no longer renders, so a gate that builds through a closure without depending on system_spec_check cannot boot a stale graph."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "rehomed from a open item; unbound acceptance: closure-gates-pass"
+      h.noAcceptance) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0add49e75281"
+      "On a warm zutai cache, generate-system-image-closures.py --check completes in at most 120 seconds of wall time. What remains is about one evaluator render per computed system, which the pinned evaluator bounds; making that evaluator faster is out of scope."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "rehomed from a open item; only a human gate: needs an automated exam"
+      {
+        h.human "closure-wall-time-measured" "closure-wall-time" "Wall time depends on the host, so an operator measures it: after one run that warms build/zutai-cache, the second wall time of generate-system-image-closures.py --check, and the wall time of one fresh python3 process resolving every closure under contracts/system-image-closure/v2/closures/ once the way check-system-image-builder.py's resolution arm does, each rounded up to whole seconds. Before this work the two were about 272 s and, at 1.7 s per ordinary closure and 15-19 s per computed one, about 400 s.";
+      }) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0ade686dfc84"
+      "On a warm zutai cache, resolving every committed closure once in one fresh Python process, through the path the corpus-wide checkers use, completes in at most 120 seconds of wall time."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "rehomed from a open item; only a human gate: needs an automated exam"
+      {
+        h.human "closure-wall-time-measured" "closure-wall-time" "Wall time depends on the host, so an operator measures it: after one run that warms build/zutai-cache, the second wall time of generate-system-image-closures.py --check, and the wall time of one fresh python3 process resolving every closure under contracts/system-image-closure/v2/closures/ once the way check-system-image-builder.py's resolution arm does, each rounded up to whole seconds. Before this work the two were about 272 s and, at 1.7 s per ordinary closure and 15-19 s per computed one, about 400 s.";
+      }) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    -- legacy 01a134f8-ee7c-7e85-9ee8-d441cd7b4b82 (active): Share the work-item and projection CI tool environment and cache
+    -- Work-item CI enters the full product development shell and stores a separate myque cache while
+    -- projection, closeout and retirement enter the existing projection shell. The 2026-10-13 cache
+    -- inventory observed 902313763 bytes for myque and 862882658 bytes for projection. These are archive
+    -- snapshots, not promised savings. The projection shell already contains MyQue, myque-gh, devloop and
+    -- its bridge, wrapped Zutai native compiler tools, Git, GitHub CLI, Python and Just; closeout and
+    -- retirement already invoke the work-item checker in it. Reusing that environment may remove
+    -- duplicated tool storage without changing product builds. This is separate from
+    -- 01a0e60f-4ca9-74e6-906e-31f32f3ff683, whose non-goals exclude Nix, MyQue and projection cache
+    -- changes; this item neither closes nor changes that item's acceptance.
+    (h.planned "01a1b49c-ac11-74a6-8c24-793f995bd641"
+      "All four consumers enter the existing projection environment and use the same architecture-qualified cache identity with every declared local tool-definition input. No consumer retains the full product shell under the shared key. Shared tooling is maintained by a trusted writer, and consumer trigger restrictions must not silently prevent it from being populated."
+      "Share the work-item and projection CI tool environment and cache"
+      "rehomed from a active item; only a human gate: needs an automated exam"
+      {
+        h.human "tool-cache-observation" "ci-shared-tools" "An operator reviews the exact workflow diff and real qualification logs. sharedEnvironmentVerified covers the four common-shell consumers, full key inputs and a permitted trusted writer; coldConsumersPassed and warmConsumersPassed cover all four cold/warm paths including trusted retirement verification and no-publication projection/closeout/retirement exercises; noRepeatedToolBuilds covers the four named tool derivations. checksPreserved and trustBoundaryPreserved attest unchanged checks, native validation and main-only privileged trust boundaries. legacyRetirementVerified requires authorized narrow deletion after successful replacement restore and no recreation on a later successful main run. measurementsRecorded requires reproducible matched before/after archive inventories, individual cold/warm durations and URLs or retained logs for every observation. cacheBytesSaved is the measured legacy pair minus replacement shared-tools bytes, not whole-repository fluctuation. Set target to the later successful main CI run URL and image to its full source commit. All booleans must be true and savings positive; do not infer observations from implementation or a cache-hit label alone.";
+      }) with { supersedes = { "01a134f8-ee7c-7e85-9ee8-d441cd7b4b82"; }; };
+    (h.planned "01a1b49c-ac11-74a6-8c24-79405444c7b7"
+      "Work-item validation, its negative controls, spec-driven native compilation and the trusted retirement verifier retain their behavior. Projection, closeout and retirement keep their existing commands, canonical-main checkout boundaries and publication safeguards. No check, pin, trust boundary or required permission restriction is removed to obtain a cache hit."
+      "Share the work-item and projection CI tool environment and cache"
+      "rehomed from a active item; unbound acceptance: store-regression; only a human gate: needs an automated exam"
+      {
+        h.human "tool-cache-observation" "ci-shared-tools" "An operator reviews the exact workflow diff and real qualification logs. sharedEnvironmentVerified covers the four common-shell consumers, full key inputs and a permitted trusted writer; coldConsumersPassed and warmConsumersPassed cover all four cold/warm paths including trusted retirement verification and no-publication projection/closeout/retirement exercises; noRepeatedToolBuilds covers the four named tool derivations. checksPreserved and trustBoundaryPreserved attest unchanged checks, native validation and main-only privileged trust boundaries. legacyRetirementVerified requires authorized narrow deletion after successful replacement restore and no recreation on a later successful main run. measurementsRecorded requires reproducible matched before/after archive inventories, individual cold/warm durations and URLs or retained logs for every observation. cacheBytesSaved is the measured legacy pair minus replacement shared-tools bytes, not whole-repository fluctuation. Set target to the later successful main CI run URL and image to its full source commit. All booleans must be true and savings positive; do not infer observations from implementation or a cache-hit label alone.";
+      }) with { supersedes = { "01a134f8-ee7c-7e85-9ee8-d441cd7b4b82"; }; };
+    (h.planned "01a1b49c-ac11-74a6-8c24-7941d6ec9b5b"
+      "For the same tool-input identity on Linux x86-64, qualify each of the four consumer paths from an absent shared tools cache and from a restored shared cache. Exercise publication paths with safe fixtures or supported no-publication modes, never mutate issues or retire items for this experiment. Cold consumers must succeed; warm consumers must restore the common tools entry and must not rebuild MyQue, myque-gh, devloop or Zutai derivations. Record all commands, outcomes and tool-realization durations; there must also be a successful real main work-item CI run restoring the shared entry."
+      "Share the work-item and projection CI tool environment and cache"
+      "rehomed from a active item; only a human gate: needs an automated exam"
+      {
+        h.human "tool-cache-observation" "ci-shared-tools" "An operator reviews the exact workflow diff and real qualification logs. sharedEnvironmentVerified covers the four common-shell consumers, full key inputs and a permitted trusted writer; coldConsumersPassed and warmConsumersPassed cover all four cold/warm paths including trusted retirement verification and no-publication projection/closeout/retirement exercises; noRepeatedToolBuilds covers the four named tool derivations. checksPreserved and trustBoundaryPreserved attest unchanged checks, native validation and main-only privileged trust boundaries. legacyRetirementVerified requires authorized narrow deletion after successful replacement restore and no recreation on a later successful main run. measurementsRecorded requires reproducible matched before/after archive inventories, individual cold/warm durations and URLs or retained logs for every observation. cacheBytesSaved is the measured legacy pair minus replacement shared-tools bytes, not whole-repository fluctuation. Set target to the later successful main CI run URL and image to its full source commit. All booleans must be true and savings positive; do not infer observations from implementation or a cache-hit label alone.";
+      }) with { supersedes = { "01a134f8-ee7c-7e85-9ee8-d441cd7b4b82"; }; };
+    (h.planned "01a1b49c-ac11-74a6-8c24-79421588b7aa"
+      "Measure the legacy myque-plus-projection archive bytes and the replacement shared-tools archive bytes under matched runner, tool-input and cache-scope conditions; the former minus the latter must be positive. Record exact keys, versions, refs, IDs, byte sizes, API observation times, source revision and cold/warm logs. Retire only allowlisted redundant legacy tool entries after replacement restore succeeds and an operator authorizes the deletion. Confirm obsolete workflow keys no longer recreate those entries. Unrelated caches are untouched; a failed replacement or missing authorization retains the old entries and leaves this requirement pending."
+      "Share the work-item and projection CI tool environment and cache"
+      "rehomed from a active item; only a human gate: needs an automated exam"
+      {
+        h.human "tool-cache-observation" "ci-shared-tools" "An operator reviews the exact workflow diff and real qualification logs. sharedEnvironmentVerified covers the four common-shell consumers, full key inputs and a permitted trusted writer; coldConsumersPassed and warmConsumersPassed cover all four cold/warm paths including trusted retirement verification and no-publication projection/closeout/retirement exercises; noRepeatedToolBuilds covers the four named tool derivations. checksPreserved and trustBoundaryPreserved attest unchanged checks, native validation and main-only privileged trust boundaries. legacyRetirementVerified requires authorized narrow deletion after successful replacement restore and no recreation on a later successful main run. measurementsRecorded requires reproducible matched before/after archive inventories, individual cold/warm durations and URLs or retained logs for every observation. cacheBytesSaved is the measured legacy pair minus replacement shared-tools bytes, not whole-repository fluctuation. Set target to the later successful main CI run URL and image to its full source commit. All booleans must be true and savings positive; do not infer observations from implementation or a cache-hit label alone.";
+      }) with { supersedes = { "01a134f8-ee7c-7e85-9ee8-d441cd7b4b82"; }; };
+    -- legacy 01a148f2-d144-7395-b9e0-862a6e66ab33 (open): Retire the RPi5 ROS 2 demo format-1 contract
+    -- contracts/rpi5-ros2-demo/v2 replaces format 1's frozen DDSI-RTPS shape with a named transport
+    -- discriminator, and no component, system spec or composition emits or reads the format-1 profile
+    -- rpi5-ros2-demo-v1. The format-1 contract and its 684-line checker scripts/check/check-
+    -- rpi5-ros2-demo-contract.py are still maintained and run by rpi5_artifact_check and check-
+    -- contracts.py beside format 2. The project has decided that format 1 will not be used for a long
+    -- time.
+    (h.planned "01a1b49c-ac41-766b-b3e6-5b464fee254f"
+      "The format-2 contract still admits its valid fixture, refuses its invalid one, and rpi5_artifact_check still passes with the architecture contract and format 2 alone."
+      "Retire the RPi5 ROS 2 demo format-1 contract"
+      "rehomed from a open item; unbound acceptance: retired-pass"
+      h.noAcceptance) with { supersedes = { "01a148f2-d144-7395-b9e0-862a6e66ab33"; }; };
+    (h.planned "01a1b49c-ac41-766b-b3e6-5b4726f01a57"
+      "contracts/rpi5-ros2-demo/v1 no longer exists, no codePaths entry names a deleted file, and no maintained document or command reference names the removed recipe or checker."
+      "Retire the RPi5 ROS 2 demo format-1 contract"
+      "rehomed from a open item; unbound acceptance: retired-pass, store-consistent"
+      h.noAcceptance) with { supersedes = { "01a148f2-d144-7395-b9e0-862a6e66ab33"; }; };
+    -- legacy 01a148f2-d6d1-726f-893f-46192044f478 (open): Retire the generation v5 guard and keep the corpus build
+    -- scripts/check/check-generation-v5.py (341 lines) guarded the cutover from generation v4 to v5. That
+    -- cutover is long finished and no producer selects v4, but the checker is also the only gate that
+    -- builds every seL4 manifest the generation builder declares (45 on main at c98759b8), and CI runs it
+    -- as a four-shard job. About 120 of its lines are controls for its own shard-selection logic and
+    -- header reader. The v5 framing (pinned magic, single-version constant, header controls) no longer
+    -- protects anything, while the corpus build still does.
+    (h.planned "01a1b49c-ac4c-7331-a990-989459cd09c7"
+      "Every seL4 manifest the generation builder declares builds and produces a non-empty generation.bin, so retiring the v5 guard removes no manifest from the corpus CI builds."
+      "Retire the generation v5 guard and keep the corpus build"
+      "rehomed from a open item; unbound acceptance: retired-pass"
+      h.noAcceptance) with { supersedes = { "01a148f2-d6d1-726f-893f-46192044f478"; }; };
+    (h.planned "01a1b49c-ac4c-7331-a990-9895f0919359"
+      "check-generation-v5.py no longer exists, and no codePaths entry, maintained document, recipe, or CI step still names it or generation_v5_check."
+      "Retire the generation v5 guard and keep the corpus build"
+      "rehomed from a open item; unbound acceptance: retired-pass, store-consistent"
+      h.noAcceptance) with { supersedes = { "01a148f2-d6d1-726f-893f-46192044f478"; }; };
+    -- legacy 01a148f2-dbe6-7a06-a096-492b503551bf (open): Share one pipeline across the Zutai binding generators
+    -- Forty-two scripts/generate/generate-*-bindings.py files (4,348 lines on main at c98759b8) each re-
+    -- implement the same pipeline around one pinned Zutai invocation: stage a temporary root, run the
+    -- schema's generator, format Rust output through rustfmt, then write or compare the output for
+    -- --check. Most differ only in paths, the staging environment variable and messages, yet the copies
+    -- have already drifted: 29 of the 42 write atomically and the rest overwrite in place; 31 look for an
+    -- INVALID_*_SCHEMA marker, and three of those (block, store, generation-management) test whether an
+    -- output equals the marker rather than contains it, so they never refuse one. A fix to the pipeline
+    -- must be made once per copy, and check-contracts.py and check-architecture-contract.py name copies by
+    -- path.
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd0f4b307f7"
+      "Every committed generated binding the table covers, Rust, C and Python, is reproduced byte for byte by the shared pipeline: its --check passes and the change edits no generated file."
+      "Share one pipeline across the Zutai binding generators"
+      "rehomed from a open item; unbound acceptance: architecture-pass"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd18ed044e7"
+      "A renderer run that exits non-zero, does not write a declared output, or emits its INVALID_*_SCHEMA sentinel anywhere in an output is refused for every binding in the table, and --check proves it on every run through the pipeline's seven negative controls."
+      "Share one pipeline across the Zutai binding generators"
+      "rehomed from a open item; unbound acceptance: architecture-pass"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd2ecc6266b"
+      "check-contracts.py and check-architecture-contract.py check the table bindings through the shared CLI and still pass, so no gate runs a removed generator."
+      "Share one pipeline across the Zutai binding generators"
+      "rehomed from a open item; unbound acceptance: architecture-pass"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd38aadb703"
+      "No codePaths entry names a removed generator, every new pipeline file is covered by codePaths, and no maintained document or command reference names a removed script."
+      "Share one pipeline across the Zutai binding generators"
+      "rehomed from a open item; unbound acceptance: store-consistent"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    -- legacy 01a1514d-caa7-74ff-8fca-c4fcda87aba1 (open): Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration
+    -- The Zenoh Profile 0 demo has only ever exchanged its four samples between its own two nodes over the
+    -- network service's loopback backend, where no NIC exists and no packet can be captured, and the stock
+    -- eclipse-zenoh 1.0.0 peer has only been exercised from replayed bytes. The sel4-zenoh composition
+    -- (generation 168) has no interface and grants one loopback destination, 127.0.0.1:7447, which the
+    -- demo hard-codes. Nothing in the repository shows the guest opening a TCP connection out of the VM to
+    -- a Zenoh peer it did not write, or says what such a connection may look like on the wire. A stock
+    -- peer started in listen mode with multicast scouting and gossip off, on the host, is the smallest
+    -- such peer, and QEMU user networking reaches a host listener at 10.0.2.2. Whether the connector
+    -- reaches it, announces the lease the session sends keep-alives against, and delivers four samples the
+    -- peer's own subscriber receives is unobserved. Once the four samples are delivered, the stock peer
+    -- closes its subscription with an UndeclareSubscriber that names the subscriber by id alone, which the
+    -- session refuses and the connector reports as a link failure; 01a1514d-8af5-7fa1-a4c2-70be8785fb2e
+    -- takes that undeclaration into the session, and this exam's capture judge admits it in that one
+    -- shape.
+    (h.planned "01a1b49c-ac82-76a3-b7ef-a45087d33a6a"
+      "The derived sel4-zenoh-external manifest is judged before QEMU starts, on 15 authority facts: generation 169, exactly the five named instances, exactly one network interface with the address, gateway, MAC and prefix above, exactly one destination row held by the publisher to 10.0.2.2 port 17447 as exact IPv4 TCP with exactly the rights connect, send and recv and no listen or resolver allowance, and the publisher as the only network application, a rightless client on the external backend that admits no peer. It refuses, on 30 mutations, each boundary: generation 168 and 170, an extra and a missing instance, no driver, no and two interfaces, another address, gateway, MAC and prefix, no, a second and a resolver destination row, port 17446 and 17448, the loopback address, a DNS name, UDP, a missing and an extra right, a listen limit, a resolver record, a destination held by the subscriber, a loopback backend, a publisher with rights, a listening publisher, a publisher admitting a peer, a subscriber application row and no application."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: cases-observed"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-854f64f6a914"
+      "A listener record is read only through contracts/zenoh-external-receipt/v1. The decoder accepts 10 records, the honest one, one written by the listener's own writer, and eight on a boundary (keys of 1, 128 and 129 bytes, payloads of 11 and 12 bytes, and 2, 7 and 8 remote peers), and refuses 15: three and five samples, format version 2, another peer version, no and nine remote peers, a 130-byte and an empty key, a 13-byte payload, uppercase and odd-length hex, a 32-byte and a 34-byte attachment, and a field the contract does not name at the top and in a sample."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: controls-refused"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-855001627b33"
+      "The listener is the pinned wheel, installed with --require-hashes and --no-deps into an environment that is rebuilt on every run and never reused, in peer mode with multicast scouting and gossip disabled, listening on 127.0.0.1 port 17447 only, with one subscriber on the demo key. It builds the environment with isolated interpreters (-I, and no PYTHON* or PIP_* variable) and pip --isolated, so a pip.conf in the caller's home changes nothing, runs the pinned interpreter with -E, updates its remote-peer count under one lock and floors it at one whenever a sample was delivered, and refuses to start if zenoh is imported from outside that environment, so a PYTHONPATH cannot substitute another package. It closes its session once all four samples have arrived and none has followed for three seconds, without waiting for the peer to disconnect (the connector keeps its link open until the peer closes it). It keeps a thread draining its output from start to exit, so a chatty child cannot block on a full pipe before it writes its record, and it reports ready within 30 seconds or the run is refused, whether the child exits or stays alive and silent. It counts at least one remote peer whenever a sample is delivered, and more when it polls them,  so a peer that connects, publishes and leaves between two polls is still seen. Its record names that endpoint and holds exactly four samples, each equal in key, payload and attachment to the sample the wire carried, in the order sent. A record that names another endpoint, saw no remote peer or more than eight, or differs in any one field of one sample is refused."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: cases-observed"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-85510e69ed45"
+      "The capture holds exactly one TCP connection, from the guest to 10.0.2.2 port 17447, opened with one SYN and accepted with one SYN-ACK that acknowledges it, with only those two handshake packets (and identical retransmissions of them before any data, identical in window and in every TCP option but the timestamp) carrying a SYN flag, and no flag on them but SYN and ACK, and closed by FINs at the end of the bytes each side delivered. The judge refuses a capture with no connection, a connection the peer never accepts, a SYN-ACK that acknowledges one number too few or too many, a bare SYN from the peer, a SYN-ACK from the guest, or a SYN of either side after the connection carried data, a guest SYN retransmitted with a sequence number one over or one under, a SYN or SYN-ACK retransmitted with another window, segment size, window scale or SACK option, a malformed TCP option, and a fixed-format option of the wrong length (MSS other than 4 bytes, window scale other than 3, SACK-permitted other than 2, timestamps other than 10) on either side's handshake, a retransmitted SYN-ACK whose acknowledgement is one too few or one too many, a second connection from another source port, a SYN to port 17446 or 17448 or to another address, a connection whose only destination is port 17446 or 17448, a DNS query, a datagram to the scouting group, an ICMP echo, an ARP request for 10.0.2.99 or for 10.0.2.3, one claiming another sender address or another hardware address, one that is unicast, one naming a third party's target hardware address, one whose Ethernet source is not its sender hardware address, one that is not Ethernet and IPv4 and one that is neither a request nor a reply, a reply with a zero or a third party's target hardware address, to a third party's Ethernet address or to broadcast, a reset, a stream that never closes, a FIN one byte short of or past the data, a missing first or middle segment, and a capture that is empty, not a PCAP, truncated, or has a byte of its IPv4 header or of its TCP payload changed under a stale checksum. It accepts the same exchange re-segmented to 100 bytes and to 1 byte, with segments reordered, with one retransmitted, with either side's sequence number about to wrap, with keep-alives in the guest's stream, with no CLOSE from the guest, and with the peer undeclaring its subscriber by id alone after the last sample and then closing, as a stock peer does."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: controls-refused"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-855282ed8bd9"
+      "The guest's stream is an INIT_SYN as a peer (wire version 9, a 1 to 16 byte ZID, optional size parameters, no extension, ending exactly at the batch boundary), an OPEN_SYN announcing exactly a 2000 ms lease and the initial sequence number the connector reported, then any number of one-byte keep-alives and exactly four reliable FRAMEs, each the canonical encoding by zenoh_wire of the demo key, the contract's CDR payload for its sample and the 33-byte attachment the publisher builds (sequence one over the sample number, source timestamp 1000 plus the sample number, and the one GID e0 to ef for every sample), with frame sequence numbers consecutive from the OPEN_SYN's initial number modulo 2**32 and each fitting 32 bits (an initial number of 0xFFFFFFFE or 0xFFFFFFFF wraps through zero, and a frame carrying the 33-bit value a non-wrapping count reaches is refused), then at most a session CLOSE of exactly two bytes, `23` and a reason of 0 to 7 (contracts/zenoh-profile/v1 closeConnectionToSelf is the highest the profile names). The batches are the bytes the connector reported sending. Capture times are read from the PCAP as exact integers. Each side's silence is bounded by the lease it announced (the guest's 2000 ms, the peer's from its OPEN_ACK; a gap of exactly the lease is admitted and one nanosecond-scale step over is refused), measured between the first packets of its consecutive batches after the INIT. The order across the two directions is judged from the packet that carried each batch: the INIT_ACK follows the whole INIT_SYN, the OPEN_SYN follows the whole INIT_ACK, the OPEN_ACK follows the whole OPEN_SYN, the peer declares a subscriber on the demo key (by name, or through the one alias it declared for that key) and still holds it, applying its declarations and undeclarations in message order (a subscriber declared and undeclared in one frame never held, an undeclaration must name the held subscriber, by id and key in the full form or by id alone in the form a stock peer sends behind the network QoS extension, and one before the last sample is refused), and only then does the first sample go, and a guest KEEP_ALIVE is carried only after the OPEN_ACK is complete, and the peer's stream ends in a Zenoh CLOSE ahead of its FIN, both after the last sample (the connector reads an end of stream with no CLOSE as an error before it can report success) (the connector fails on a close before it has sent all four), and the guest's SYN precedes the peer's SYN-ACK. The OPEN_SYN echoes the INIT_ACK's cookie byte for byte. Both INITs are parsed as the Profile 0 decoder reads them: wire version 9, a peer, a canonical 1 to 16 byte ZID, no extension, size parameters (when present) with the default resolution 10 and a non-zero batch size, a cookie of 1 to 64 bytes in an ACK, and nothing after. Both OPENs carry no extension and a non-zero lease. The peer's stream is an INIT_ACK, an OPEN_ACK (a non-zero lease and an initial sequence number and nothing after them), and then only reliable frames that carry no PUSH (the connector declared no subscriber, so one is refused by the session), numbered from the OPEN_ACK's initial sequence number and by one each (wrapping at 32 bits), whose every network message is parsed to the end of the batch (a declaration, a push or an OAM as the decoder takes them, with a trailing byte that starts no message refusing the batch), one-byte keep-alives and at most one two-byte close with a reason of 0 to 7, after which no batch of any kind. Each is parsed to its fields, not classified by its header. Every honest variant of the capture builds a different capture from every other and from the base, so the count of variants accepted is the count of cases exercised. The positive controls are pinned as the negative ones are: the checker requires exactly 46 honest captures and exactly 10 accepted listener records, so a deleted accepted case is caught as a deleted refusal is. The judge refuses a lease of 1999 and of 2001 ms, three and five frames, frames swapped, one byte changed on the wire only and on the wire and in the report, a sample one byte longer, a sequence number one over, an OPEN_SYN before the INIT_SYN, an INIT_SYN of three bytes, cut inside its ZID or its size parameters, with a byte after it, with an extension flag, of another wire version or as a client, an initial sequence number the report and the wire disagree on (999 against 0, 1 against 0, and 0 against 1), a two-byte keep-alive, a batch after the close, a guest close with bit 6 or an extension flag set, for the link only, with reason 8 or with reason 255, a batch kind the exam does not name from either side, an OPEN_SYN echoing another cookie, one byte short or with a byte added, with an empty cookie, an extension flag or a zero lease, an INIT with a zero batch size, resolution 9, 10's neighbour 11 or reserved resolution bits, or a ZID ending in a zero byte, an INIT_ACK with an empty cookie or a 65 byte cookie, a peer frame with an unsupported message byte, an unknown header, the unreliable form, a QoS extension on its header, a wildcard declaration or a byte after a whole message, an OAM that is not the link-state one, a peer that never declares a subscriber, a SYN-ACK recorded before the SYN, a SYN or SYN-ACK that also carries a FIN, URG or PSH flag, a peer close or FIN before the first sample or after three of the four, a peer stream that ends with no Zenoh CLOSE, a guest KEEP_ALIVE carried with the OPEN_SYN, a guest silent for 2000.001 ms or 3 s before its first sample, a peer silent for 10000.001 ms, a peer frame with a PUSH, an attachment sequence, timestamp or GID that differs from the publisher's by one (or that changes between samples) even when the report, the wire and the record agree on it, a data segment or a FIN without ACK or with URG, a segment acknowledging a byte the other side had not sent (0x70000000, or one past), the closing FINs and last ACK recorded before the SYN or between the SYN and the SYN-ACK, a handshake whose final ACK and first data segment both acknowledge nothing past the peer's ISN, a frame addressed to or sent from a MAC that is not the guest's, a peer subscriber on another key (through an alias or by name), a subscriber the peer declares and undeclares in one frame, undeclares before the first sample, undeclares by another id or key or undeclares twice, undeclares by id alone before the first sample, by an id it does not hold, twice, by id alone and then in full, in one frame with its declaration, without the QoS extension, with the extension flag and no extension, with a reserved header bit, with no id, with a trailing byte, with a QoS value over the bound, or in full behind the QoS extension, peer frames numbered one over or one under the OPEN_ACK's, repeated or skipped, and each step of the session out of turn, a peer that sends no INIT_ACK, a peer stream of three one-byte headers, an INIT_ACK of another wire version, from a client, with an extension flag, cut inside its ZID, with a cookie running past or short of the batch, an OPEN_ACK with no sequence number, with a byte after it or with a zero lease, a keep-alive with a byte after it or a flag set, a close of one or three bytes or with a reason of 8, a close with bit 6 set, a frame with no sequence number or no message, and a keep-alive, a frame or a second close after the peer's close."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: controls-refused"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-85530f601a87"
+      "The connector's report has exactly the three denials the demo already reports (undeclared-endpoint, listen and scouting, once each), one session open as a connector with a 2000 ms lease, one declaration match on the demo key, four sent batches for samples 0 to 3 once each, and one close, in the order: denials, session open, declaration match, first sample, last sample, close last. It refuses a dropped or duplicated sent batch, a dropped denial, a denial reported twice, a denial the exam does not name (including undeclared-port, which the publisher checks and does not print), any connector line that is not exactly one of the named forms (including one that only contains a keyword, and a close line with an extra field), a line from the subscriber, a close before the last sample, a match before the session, and sent batches reported before the session, between the session and the match, with samples 2 and 3 swapped, or with sample 0 last."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: controls-refused"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-8554b7689452"
+      "Every judge is run against its honest evidence and then refused every corruption of it before the real run is judged: 246 corrupted captures, reports and in-memory receipts (46 honest variants of the capture are accepted, none refused), 15 corrupted listener records through the contract's decoder, and 30 corrupted compositions, 291 in all. Where a pinned value is a number, the controls hold it on both sides: the lease at 1999, 2000 and 2001 ms; the frame count at 3, 4 and 5; the generation at 168, 169 and 170; the destination port at 17446, 17447 and 17448, as a composition row and as the connection the capture holds; a FIN and a SYN-ACK acknowledgement at one under, at and one over; the sample count of a listener record at 3, 4 and 5; its key at 0, 1, 128, 129 and 130 bytes; its payload at 11, 12 and 13 bytes; its attachment at 32, 33 and 34 bytes; and its remote peers at 0, 1, 2, 7, 8 and 9. A value that is a name, an address or a count of one is refused on a single wrong value, not on both sides. --controls-only does this without QEMU, without a listener and without an existing build directory."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: controls-refused"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    (h.planned "01a1b49c-ac83-7091-ba42-85556400a37d"
+      "zenoh_external_check passes as the gate adapter observes it. Until the composition and the guest land it fails, and it fails naming that the sel4-zenoh-external composition has not landed."
+      "Zenoh Profile 0 guest connecting out to a stock listener, ending on the stock peer's undeclaration"
+      "rehomed from a open item; unbound acceptance: recipe-passed"
+      h.noAcceptance) with { supersedes = { "01a1514d-caa7-74ff-8fca-c4fcda87aba1"; }; };
+    -- legacy 01a16b6f-1d46-7872-bb29-458dd6ccc7f9 (open): Record every closure the network checker boots, with the devices of its own arm
+    -- `scripts/check/check-sel4-io-network-plane.py` boots 15 closures. Only `sel4-io-network` has a
+    -- record in `contracts/system-test-run/v1/runs/`. Thirteen others have none. The fifteenth, `sel4-io-
+    -- tcp-buffers`, has no closure yet and is planned. `check_records_and_planes_correspond` compares the
+    -- declared runs with the record files. A closure that no table declares is therefore invisible to it.
+    -- A run without a record has no frozen timeout, device list or failure markers. `extract()` also reads
+    -- the whole checker file for devices. It gave the `sel4-io-network` record a `virtio-net-device`,
+    -- although that arm attaches no device.
+    (h.planned "01a1b49c-ace6-71a3-9f97-11f90fd38c48"
+      "Every closure that the network checker passes to `build_image` has a declared run and a record. A call with a keyword, a starred argument, an alias or any other use of the name is refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11faf87fd721"
+      "A record lists `virtio-net-device` only for an arm that declares it. Nine arms declare it and five do not. The declaration must equal the devices of the sites that the arm reaches, counted with repeats."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fb1c8efe07"
+      "A QEMU device, drive or network token may sit only in a function that `QEMU_SITES` names. The generator refuses a token in a module-level statement of any form and in a function that is not a site. It also refuses one in a nested function, lambda or class."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fc74e539ab"
+      "A site passes exactly the devices it declares, counted with repeats. A second device, a repeated device, a missing device and a changed device name are refused. So are a computed flag and a value that is not a device literal. So is a launch path that gives no device while another path gives one. A decoy device literal elsewhere in the site does not satisfy a computed value. Arguments given to a call that is not `run_plane` are refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fdc2beae6d"
+      "An arm that reads a site by any name attaches that site's devices. A call, a value, an alias, a nested function and one branch of a conditional all count. A site read in a branch of `main()` that can run an arm counts for that arm. A use of `arguments.arm` that is not a comparison with string literals in the test of an `if` is refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fe77fed347"
+      "A missing entry, a missing device declaration, a site that the checker does not define and an entry function that the checker lacks are refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11ff84c8a308"
+      "A declared arm with no record is refused by the correspondence check."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "rehomed from a open item; unbound acceptance: arms-recorded"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+  }) with {
+    nonGoals = {
+      "Enabling every Cargo feature simultaneously, implementing protocols absent from the pinned smoltcp release, or a moving completion target tied to future releases.";
+      "Ambient bind/connect/listen, wildcard or port-range client grants, raw packet injection/sniffing for ordinary applications, resolver-wide access, or trust/discovery responses that create authority.";
+      "DDSI-RTPS discovery/reliability/CDR implementation, full Zenoh or ROS compatibility, transport security implementations, and physical NIC qualification; each is separately owned.";
+      "Truncation and queue-bound policy, DDS endpoint profiles and multicast, which are separate slices.";
+      "Ambient bind/connect/listen, wildcard or port-range grants, and raw-packet authority for ordinary applications.";
+      "DDSI-RTPS discovery, reliability, history, CDR or QoS matching; multicast.";
+      "Resolver-wide client access, DNSSEC or encrypted DNS, mDNS, or names authorizing an unrelated destination.";
+      "IPv6 AAAA records before the IPv6 slices land.";
+      "Raw ICMP or arbitrary ICMP types for ordinary clients, traceroute-style TTL control, or ICMP for IPv6 before that slice.";
+      "IPv6 fragmentation, path MTU discovery, or 6LoWPAN fragmentation.";
+      "Physical NIC, IOMMU or board qualification; QEMU evidence carries no hardware claim.";
+      "SLAAC, router advertisement processing, IPv6 fragmentation, or TCP/UDP over IPv6, which are separate slices.";
+      "Dual-stack name resolution policy beyond exact grants, or IPv6 multicast.";
+      "DHCPv6, option-driven boot or configuration beyond address, mask, gateway and resolver, or leases widening any client grant.";
+      "DHCPv6, privacy extensions beyond what the pinned release provides, or multi-router preference policy.";
+      "Any multicast grant or protocol behavior in the network service, or a second verification framework.";
+      "General LAN discovery, DDSI-RTPS or Zenoh scouting policy, IPv6 multicast listener discovery, or source-specific multicast beyond the declared sender policy.";
+      "Implementing any excluded medium, or claiming a backend qualifies another board or NIC.";
+      "Performance targets, denial-of-service resistance claims beyond declared bounds, or physical NIC behavior.";
+      "New protocol behavior, or completion of any slice by aggregation alone.";
+      "Removing a job's restore, a check or the pinned image build, or changing what any check asserts.";
+      "Changing the Nix, Kani, MyQue, projection or rust-cache caches, or the Zutai evaluation store's key recipe.";
+      "Buying cache storage or moving caches off GitHub Actions.";
+      "Changing the closure contract, any closure identity, or the tree-digest encoding.";
+      "Making the system-spec-source evaluator itself faster, or making system_spec_check faster.";
+      "A cross-process render cache, parallel resolution, or factoring shared release inputs out of each closure.";
+      "Any runtime, QEMU-plane or physical-machine claim.";
+      "Changing product builds, seL4 build-output partitions, Cargo target directories, Kani or Rust caches, or Zutai evaluation-store keys.";
+      "Introducing a new shell, changing compiler packaging or pins, buying storage, external cache services, or repository-wide cache scheduling and eviction.";
+      "Granting broader workflow permissions, executing untrusted PR code in privileged jobs, enabling publication or deleting remote caches without separate operator authorization.";
+      "Guaranteeing the historical 902313763-byte saving or the repository-wide 9000 MB retention target; those require independent measurements.";
+      "Changing format 2, its checker, or anything the RPi5 ROS 2 demo plan claims.";
+      "Retiring any other superseded contract version.";
+      "Changing the generation format, the builder, or which manifests it declares.";
+      "Retiring the retained v2-v4 schemas that check-contracts.py still type-checks.";
+      "Controls for the corpus checker's own shard selection: it is verification tooling, which docs/decisions/negative-controls-for-product-judges.md exempts.";
+      "Changing any schema, gen_rust.zt, or generated binding: the committed outputs are the reference this work is judged against and must not move.";
+      "Folding the seven differing generators into the table.";
+      "Changing the pinned Zutai toolchain or rustfmt edition.";
+      "Judging what the idle ros2-demo-subscriber prints: it is in the composition and holds no network authority, and its output is neither required nor judged here. The exam reads the connector's lines only.";
+      "Any peer but one eclipse-zenoh 1.0.0 wheel on x86_64 Linux, any other port, a router or client peer, rmw_zenoh interoperability, liveliness tokens, queryables, and fragmented messages.";
+      "Inbound connections to the guest, a guest listener on a NIC, DNS, scouting of any kind, and a hostname destination.";
+      "A physical NIC. QEMU user networking is the only link observed; its translation of the guest's connection to the host's loopback is not the wire a physical network would show.";
+      "Running a stock peer in CI. The wheel comes from a registry, so the recipe is an explicit local experiment in no aggregate.";
+      "Any product change in this item's planning PR: no system spec, no generated composition, no guest change, and no modified schema. They are the implementation's.";
+      "Making a plane checker execute from its record. A later item owns that.";
+      "Other checkers. This item covers only the network checker.";
+      "Detecting a device that a run-time computation names without any device string in the code. No check here can.";
+      "Any product change and any QEMU boot. This item makes no boot claim.";
+      "Any change to the `system-test-run/v1` contract.";
+    };
+  };
+
+area

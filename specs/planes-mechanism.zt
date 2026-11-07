@@ -1,0 +1,481 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations, capabilities, storage" {
+    "slime-root/**";
+    "boot-contracts/**";
+    "contracts/generation*/**";
+    "contracts/capability-*/**";
+  } {
+    -- legacy 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 (done): TCP socket options: keepalive, Nagle, hop limit, timeouts and congestion control
+    -- The network service sets only a per-operation timeout and disables delayed ACK. The pinned release
+    -- also offers keepalive, Nagle, hop limit, ack-delay tuning and a choice of Reno or CUBIC congestion
+    -- control; these remain unclassified, undeclared and unqualified.
+    (h.req "01a1b49c-a9fb-7066-97d2-5370638d9140"
+      "Every TCP socket option the pinned release exposes (keepalive interval, Nagle, hop limit, ack delay, idle and operation timeouts) is either declared per application binding in a versioned Zutai contract with explicit bounds or recorded in the matrix as fixed service policy. A client cannot change an option at run time beyond what its declaration permits, and an out-of-bound declaration is refused at generation validation."
+      "TCP socket options: keepalive, Nagle, hop limit, timeouts and congestion control"
+      {
+        h.observedWhere "declared-options-observed" "io_tcp_options_check" h.noPredicates "Contract tests refuse out-of-bound and undeclared option values; the boot composition carries at least one binding with non-default declared options and the service reports the applied values at activation.";
+      }) with { supersedes = { "01a0e239-a96d-7db6-8b7f-d6efef5f8b19"; }; };
+    (h.req "01a1b49c-a9fb-7066-97d2-5371ce2ebf49"
+      "Exactly one congestion control algorithm feature is enabled and recorded in the matrix with rationale and the memory and timer cost it adds; the other is classified as not enabled with the reason. The default without either feature is not silently relied upon."
+      "TCP socket options: keepalive, Nagle, hop limit, timeouts and congestion control"
+      {
+        h.observedWhere "congestion-control-observed" "io_tcp_options_check" h.noPredicates "The matrix delta check sees the enabled feature; the qualification observes congestion-window growth and loss reaction consistent with the recorded algorithm under an injected-loss stream.";
+      }) with { supersedes = { "01a0e239-a96d-7db6-8b7f-d6efef5f8b19"; }; };
+    (h.req "01a1b49c-a9fb-7066-97d2-5372d58a196f"
+      "Each declared option has an observable effect on the wire: keepalive probes appear at the declared interval on an idle connection, Nagle coalesces small writes while its absence emits immediate small segments, the declared hop limit appears in the IPv4 header, and an operation timeout aborts with reclamation. A declaration the wire does not reflect fails."
+      "TCP socket options: keepalive, Nagle, hop limit, timeouts and congestion control"
+      {
+        h.observedWhere "wire-effect-observed" "io_tcp_options_check" h.noPredicates "The external frame peer captures and asserts each effect for both settings of every toggle, and the demo loopback path keeps its current behavior.";
+      }) with { supersedes = { "01a0e239-a96d-7db6-8b7f-d6efef5f8b19"; }; };
+    -- legacy 01a0e239-ad77-7754-874f-b8703be81c04 (done): External TCP listener and accept from an off-box peer with half-close
+    -- Listener and accept semantics have been observed only on loopback at 127.0.0.1:7447. An off-box peer
+    -- connecting to a generation-declared exact listener over LinkDevice, orderly half-close with data
+    -- continuing in the other direction, and simultaneous close are unobserved.
+    (h.req "01a1b49c-aa07-721d-9b16-e9a883ced74d"
+      "A component holding an exact external listener grant accepts a connection from the external frame peer over LinkDevice. A listener whose address, port, holder or admitted-peer policy does not match refuses before SYN-ACK; an ungranted component cannot listen; backlog, accepted connections and per-listener bytes stay within the declaration and excess connection attempts are refused deterministically."
+      "External TCP listener and accept from an off-box peer with half-close"
+      {
+        h.observedWhere "external-listener-observed" "io_tcp_listener_check" h.noPredicates "The frame peer observes SYN-ACK only for the declared tuple and admitted source, a refused SYN for every negative case, and exact bidirectional bytes on the accepted connection; missing-marker controls fail.";
+      }) with { supersedes = { "01a0e239-ad77-7754-874f-b8703be81c04"; }; };
+    (h.req "01a1b49c-aa07-721d-9b16-e9a9b9817e62"
+      "Shutting down the send direction emits FIN while receive continues to deliver peer bytes until the peer's FIN. Simultaneous close, close with unread data and close with unsent data each settle to a documented terminal state with reclamation of buffers, timers and charges, and a stale handle is refused afterwards."
+      "External TCP listener and accept from an off-box peer with half-close"
+      {
+        h.observedWhere "half-close-observed" "io_tcp_listener_check" h.noPredicates "The frame peer drives each close ordering and asserts the FIN/RST sequence and delivered byte counts; the service reports numeric reclamation for every case.";
+      }) with { supersedes = { "01a0e239-ad77-7754-874f-b8703be81c04"; }; };
+    -- legacy 01a0e239-b16f-735e-9d04-417a547a42e3 (done): TCP loss, reordering, retransmission and window bounds
+    -- No qualification injects loss, reordering, duplication or window exhaustion on the external TCP
+    -- path. The assembler segment capacity, retransmission timers and persist behavior are unstated, so
+    -- their bounds are unverified claims.
+    (h.req "01a1b49c-aa13-70ac-a7c1-71333ede427f"
+      "Out-of-order segments up to the declared assembler capacity are reassembled and delivered in order with exact bytes. Segments beyond capacity are dropped without memory growth and recovered by retransmission, and the stream still completes with exact bytes."
+      "TCP loss, reordering, retransmission and window bounds"
+      {
+        h.observedWhere "reorder-reassembly-observed" "io_tcp_impairment_check" h.noPredicates "The frame peer delivers a stream with reordering inside and beyond the declared capacity; the application observes exact bytes, and the service reports no growth beyond declared buffers.";
+      }) with { supersedes = { "01a0e239-b16f-735e-9d04-417a547a42e3"; }; };
+    (h.req "01a1b49c-aa13-70ac-a7c1-713489f701e0"
+      "Under injected loss and duplicate ACKs the stream completes with exact bytes while the retransmission count and elapsed time stay within declared bounds. A peer that stops acknowledging causes a typed timeout with full reclamation rather than indefinite state."
+      "TCP loss, reordering, retransmission and window bounds"
+      {
+        h.observedWhere "loss-retransmit-observed" "io_tcp_impairment_check" h.noPredicates "Loss patterns produce a complete exact stream within the declared bounds; the silent-peer case produces the typed timeout, numeric reclamation, and a fresh successful exchange afterwards.";
+      }) with { supersedes = { "01a0e239-b16f-735e-9d04-417a547a42e3"; }; };
+    (h.req "01a1b49c-aa13-70ac-a7c1-71355d39d041"
+      "A stalled application causes a zero receive window to be advertised, persist probes are bounded, and progress resumes after the application drains. A peer's zero window bounds the sender's queued bytes to the declared TX buffer and reports backpressure rather than accepting unbounded writes."
+      "TCP loss, reordering, retransmission and window bounds"
+      {
+        h.observedWhere "window-observed" "io_tcp_impairment_check" h.noPredicates "The frame peer observes the zero-window advertisement and bounded probe count, and asserts that the resumed stream is byte-exact; the sender-side case observes the typed backpressure result and declared queued-byte limit.";
+      }) with { supersedes = { "01a0e239-b16f-735e-9d04-417a547a42e3"; }; };
+    -- legacy 01a0ebea-7ffe-7ca1-956f-006c13dd7251 (done): Spawn arguments from Slisp: fetch a numeric URL on sel4-net
+    -- The resident Slisp shell can spawn a declared command only by name. The spawn/v1 request is one
+    -- fixed 64-byte IPC message whose argument field holds two 7-byte values, so no URL fits, and Slisp
+    -- has no string value to carry one. http-get receives its URL only as network launch frames from a
+    -- testkit launcher that reads hexadecimal input, and no composition joins the product shell with the
+    -- network stack. An operator therefore cannot fetch a numeric-address URL from the shell, and no gate
+    -- observes that path.
+    (h.req "01a1b49c-aac3-7523-b814-0ff3bf99f321"
+      "A spawn request carries up to 4 arguments totalling up to 256 bytes through a versioned Zutai contract. A request whose argument frames are missing, duplicated, out of order, non-contiguous, over the count or byte bound, or not completed is refused before any child is spawned, and the refusal releases every capability the client handed over. The migrated spawn and product-graph planes still pass."
+      "Spawn arguments from Slisp: fetch a numeric URL on sel4-net"
+      {
+        h.observedWhere "spawn-regressions-passed" "sel4_net_check" h.noPredicates "sel4_net_check depends on the spawn plane, the product component graph, the Slisp core check and the host tests, which carry the contract decoder's malformed-framing cases. Its exit code, reported by the gate adapter rather than by the checker, covers the migrated spawn clients and the refused framings.";
+      }) with { supersedes = { "01a0ebea-7ffe-7ca1-956f-006c13dd7251"; }; };
+    (h.req "01a1b49c-aac4-725f-8686-fe2cf998049c"
+      "Slisp accepts a double-quoted string literal only as a spawn argument. A string used anywhere else is a type error, an unterminated string is a syntax error, and neither spawns anything. The bare-symbol form still spawns its command."
+      "Spawn arguments from Slisp: fetch a numeric URL on sel4-net"
+      {
+        h.observedWhere "shell-cases-observed" "sel4_net_check" { h.count "casesObserved" 7; } "The arm types exactly seven lines into one resident shell: the numeric fetch, bare-symbol echo, an undeclared numeric destination, a hostname URL, a string outside spawn, an unterminated string, and an unbound command with an argument. Each line reaches its own terminal marker, with the wire assertions stated in the requirement. Seven is the number of cases the arm types, not a lower bound.";
+      }) with { supersedes = { "01a0ebea-7ffe-7ca1-956f-006c13dd7251"; }; };
+    (h.req "01a1b49c-aac4-725f-8686-fe2d47f7becb"
+      "In sel4-net, typing (spawn 'http-get \"http://10.0.2.2:18080/\") into the resident shell spawns http-get through spawn-service. http-get delivers exactly the controlled peer's body bytes, completes with success and releases its network session. Across the session's three http-get instances the network service attaches each one afresh, releases or aborts each session, and never releases its link."
+      "Spawn arguments from Slisp: fetch a numeric URL on sel4-net"
+      {
+        h.observedWhere "body-identical" "sel4_net_check" { h.count "bytesObserved" 12289; } "The controlled peer serves a fixed 12289-byte body. The checker decodes the guest's hexadecimal body records for the numeric fetch, compares them byte for byte with the peer's body, and reports the matched count. Any other count means bytes were lost, added or altered.";
+        h.observedWhere "shell-cases-observed" "sel4_net_check" { h.count "casesObserved" 7; } "The arm types exactly seven lines into one resident shell: the numeric fetch, bare-symbol echo, an undeclared numeric destination, a hostname URL, a string outside spawn, an unterminated string, and an unbound command with an argument. Each line reaches its own terminal marker, with the wire assertions stated in the requirement. Seven is the number of cases the arm types, not a lower bound.";
+      }) with { supersedes = { "01a0ebea-7ffe-7ca1-956f-006c13dd7251"; }; };
+    (h.req "01a1b49c-aac4-725f-8686-fe2e9e917b63"
+      "A URL whose numeric destination sel4-net does not grant is refused with no TCP SYN to it on the captured wire. A hostname URL fails closed with no DNS packet on the wire. A command sel4-net does not bind is refused by spawn-service even when it carries arguments. The shell stays resident after every refusal."
+      "Spawn arguments from Slisp: fetch a numeric URL on sel4-net"
+      {
+        h.observedWhere "shell-cases-observed" "sel4_net_check" { h.count "casesObserved" 7; } "The arm types exactly seven lines into one resident shell: the numeric fetch, bare-symbol echo, an undeclared numeric destination, a hostname URL, a string outside spawn, an unterminated string, and an unbound command with an argument. Each line reaches its own terminal marker, with the wire assertions stated in the requirement. Seven is the number of cases the arm types, not a lower bound.";
+      }) with { supersedes = { "01a0ebea-7ffe-7ca1-956f-006c13dd7251"; }; };
+    (h.req "01a1b49c-aac4-725f-8686-fe2f773af61b"
+      "The new arm takes part in the checker's shared missing-marker, reordered-marker and explicit-failure controls, so a passing gate is evidence of the observed chain rather than of a quiet transcript."
+      "Spawn arguments from Slisp: fetch a numeric URL on sel4-net"
+      {
+        h.observedWhere "controls-refused" "sel4_net_check" { h.atLeast "negativeControlsRefused" 3; h.atMost "negativeControlsRefused" 64; } "The checker runs its shared missing, reordered and explicit-failure mutations against the captured transcript and reports how many it refused. The inclusive lower bound of three catches a dropped control; the upper bound is a sanity limit, not a target.";
+      }) with { supersedes = { "01a0ebea-7ffe-7ca1-956f-006c13dd7251"; }; };
+    -- legacy 01a0ec3a-a91f-7349-a28a-26a60d8d7f4e (open): Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures
+    -- Slime OS has no entropy source. Every consumer of unpredictability gets its seed from outside the
+    -- guest: the network service's DNS query identifiers and source ports come from 32 bytes the host
+    -- checker types into the serial input. No generation declares who may draw entropy, no component can
+    -- obtain it through a capability, and no deterministic fixture can stand in for it without changing
+    -- component bytes. The pinned AArch64 QEMU CPU (cortex-a53) has no RNDR, so the only guest-visible
+    -- source on the primary target is a virtio-rng device.
+    (h.planned "01a1b49c-aace-763e-bbcc-81af749b768f"
+      "Entropy authority is generation data. An entropy-authority row with an unknown source, a byte budget outside 1..1048576, a seed on a hardware row, a missing or non-64-hex-digit seed on a seeded row, or a duplicate holder is refused at generation validation, as is an entropy-service endpoint grant that is transferable or held by a component without a row. A component with no grant cannot resolve an entropy binding."
+      "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
+      "rehomed from a open item"
+      {
+        h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
+      }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
+    (h.planned "01a1b49c-aace-763e-bbcc-81b02bb2450e"
+      "A seeded holder's drawn bytes equal HMAC-DRBG(SHA-256) instantiated from its declared seed, an empty nonce and its personalisation string, computed independently on the host, and are identical across boots."
+      "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
+      "rehomed from a open item"
+      {
+        h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
+        h.observedWhere "seeded-bytes-matched" "sel4_entropy_check" { h.count "bytesObserved" 288; } "The seeded holder draws 96 bytes in each of three boots. The checker recomputes the stream from the seed in the derived composition and counts the matched bytes. 288 is three full streams; any other count means a boot drew differently or not at all.";
+      }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
+    (h.planned "01a1b49c-aace-763e-bbcc-81b1e9758351"
+      "Hardware holders receive bytes that differ between holders in one boot, between boots, and from every seeded block. No 32-byte block repeats. A holder never receives raw device output directly."
+      "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
+      "rehomed from a open item"
+      {
+        h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
+      }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
+    (h.planned "01a1b49c-aace-763e-bbcc-81b21a482586"
+      "A draw that would exceed the holder's declared byte budget is refused with exhausted and delivers no bytes. A request for 0 or more than 32 bytes is refused with malformed. Neither refusal consumes budget."
+      "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
+      "rehomed from a open item"
+      {
+        h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
+      }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
+    (h.planned "01a1b49c-aace-763e-bbcc-81b38845caa1"
+      "When the virtio-rng device is absent, the driver reports it and the service marks the hardware source unavailable. Every hardware draw is refused with unavailable and never substituted by a seeded, constant or cached stream. Seeded holders are still served with their reproducible bytes, and the graph stays healthy."
+      "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
+      "rehomed from a open item"
+      {
+        h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
+        h.observedWhere "seeded-bytes-matched" "sel4_entropy_check" { h.count "bytesObserved" 288; } "The seeded holder draws 96 bytes in each of three boots. The checker recomputes the stream from the seed in the derived composition and counts the matched bytes. 288 is three full streams; any other count means a boot drew differently or not at all.";
+      }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
+    (h.planned "01a1b49c-aace-763e-bbcc-81b42568ebd9"
+      "The checker refuses mutated transcripts: an altered seeded byte, a hardware block repeated across boots or holders, a missing exhaustion refusal, a hardware draw served while the device is absent, and an explicit failure marker. A passing gate is therefore evidence of the observed behaviour rather than of a quiet transcript."
+      "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
+      "rehomed from a open item"
+      {
+        h.observedWhere "controls-refused" "sel4_entropy_check" { h.atLeast "negativeControlsRefused" 5; h.atMost "negativeControlsRefused" 64; } "The checker applies its own mutations to the accepted transcripts and reports how many it refused. The inclusive lower bound of five matches the five mutation kinds the requirement names; the upper bound is a sanity limit.";
+      }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
+    -- legacy 01a0fa78-cfc0-7dc0-976e-3ff092b908a4 (done): Admit large component images on aarch64 QEMU
+    -- The root refuses any component whose ELF exceeds 512 KiB (the ELF_SCRATCH staging copy) or whose
+    -- loaded footprint exceeds 512 pages (MAX_CHILD_IMAGE_PAGES), and the builder refuses the same 512
+    -- pages; the generation contract additionally caps one object at 8 MiB and a whole generation at 16
+    -- MiB. A statically linked Nav2 component is a 11.7 MB ELF with a 3,396-page footprint, and a single-
+    -- binary application such as a bun-compiled frontend is a 76.5 MB ELF, so neither can be admitted; the
+    -- component contract's own 16 MiB maxImageBytes would refuse the latter too. Raising the per-task
+    -- constant alone would multiply the root's static descriptor envelope for every task, including small
+    -- ones.
+    (h.req "01a1b49c-ab56-74af-890f-0086181a7380"
+      "On aarch64-sel4-qemu-virt a generation carrying the large probe (ELF of at least 72 MiB, larger than the former 16 MiB generation bound; footprint of at least 24,576 pages) is admitted and the probe runs; inside the child it verifies every word of its generated read-only and initialized data against the expected pattern, writes and reads back its writable data, confirms its zero-initialized region reads zero before writing it, and calls code placed in the first, middle, and last page of its text. The root reports installed image pages equal to the builder-derived frame quota for that instance."
+      "Admit large component images on aarch64 QEMU"
+      {
+        h.observedWhere "large-image-verified" "sel4_large_image_check" { h.count "casesObserved" 4; } "The arm launches the probe four times (three clean exits, one deliberate fault after verification); each incarnation that completes the full in-child verification and whose root-reported installed pages equal the instance's declared frame quota counts once. Four is the number the fixture makes: three means a launch failed verification, five means a launch the fixture does not make.";
+        h.observedWhere "large-image-bytes" "sel4_large_image_check" { h.atLeast "bytesObserved" 75497472; } "Bytes of read-only, initialized, and zero-initialized data the probe verified in one incarnation, as reported by the probe and matched by the checker against the image's own section sizes. The floor of 72 MiB keeps a shrunken probe from passing and is above every former bound; the ceiling is the per-image limit.";
+      }) with { supersedes = { "01a0fa78-cfc0-7dc0-976e-3ff092b908a4"; }; };
+    (h.req "01a1b49c-ab56-74af-890f-0087c66e50ce"
+      "The large probe is launched, exits cleanly, and is relaunched repeatedly, including one deliberately faulting incarnation; after each incarnation the root's frame, CSlot, descriptor, and untyped watermarks return to their pre-launch values and a co-resident instance's accounting is unchanged."
+      "Admit large component images on aarch64 QEMU"
+      {
+        h.observedWhere "large-image-reclaimed-counted" "sel4_large_image_check" { h.count "resourcesReclaimed" 4; } "Incarnations after which every root watermark returned to its pre-launch value and the co-resident instance's accounting was unchanged. Equal to the four launches the fixture makes.";
+        h.observedWhere "large-image-fault-isolated" "sel4_large_image_check" { h.count "faultsIsolated" 1; } "The one deliberately faulting incarnation is contained: the root records its fault, reclaims it, and the next incarnation still verifies.";
+      }) with { supersedes = { "01a0fa78-cfc0-7dc0-976e-3ff092b908a4"; }; };
+    (h.req "01a1b49c-ab56-74af-890f-0088d3e9e04b"
+      "Every ceiling fails closed at the earliest owner: the builder admits a footprint of exactly 32,768 pages and refuses 32,769, and refuses an ELF above maxImageBytes; the root refuses a generation forged past the builder whose frame quota exceeds the per-image ceiling, a graph whose declared images exceed the aggregate live-image ceiling (refused whole, before any task is constructed), and an object or generation above the contract bounds; a target that keeps the conservative envelope still refuses a 513-page image."
+      "Admit large component images on aarch64 QEMU"
+      {
+        h.observedWhere "ceilings-refused" "sel4_large_image_check" { h.atLeast "negativeControlsRefused" 10; h.atMost "negativeControlsRefused" 64; } "Builder refusals (footprint 32,769 pages, ELF over maxImageBytes), root refusals of forged generations (per-image quota over ceiling, aggregate over ceiling, object and generation over contract bounds), the conservative-target 513-page refusal, and the three transcript mutations. Inclusive floor of ten so a dropped control is caught; the ceiling is a sanity limit.";
+      }) with { supersedes = { "01a0fa78-cfc0-7dc0-976e-3ff092b908a4"; }; };
+    (h.req "01a1b49c-ab56-74af-890f-00890cfad522"
+      "Compositions that carry no large image are unaffected: the frozen boot-layout fixtures stay byte-identical, the product component graph and the C runtime plane pass, and the arm's transcript controls (missing marker, reordered chain, explicit failure marker) each fail the gate."
+      "Admit large component images on aarch64 QEMU"
+      {
+        h.observedWhere "plane-passed" "sel4_large_image_check" h.noPredicates "The recipe's exit code, reported by the gate adapter rather than the checker, covering the boot-layout, product graph, and C runtime regressions the recipe runs first.";
+      }) with { supersedes = { "01a0fa78-cfc0-7dc0-976e-3ff092b908a4"; }; };
+    -- legacy 01a1118c-6a25-709e-ae7d-64522b7c89d2 (done): An empty non-blocking seL4 receive must not be delivered as a message
+    -- A non-blocking receive on a native seL4 Endpoint that finds nothing can be reported as a message.
+    -- components/runtime/src/syscall/sel4_transport.rs receive_native decides emptiness from the returned
+    -- MessageInfo, but on an empty seL4_NBRecv the kernel writes only the badge register, and the syscall
+    -- wrapper declares the message-info register as output-only, so the value read is whatever the
+    -- register held. Observed on the sel4-io-local plane at upstream main 42a884dc: an empty receive
+    -- returned words=34 caps=0 label=0 badge=0, was delivered as a zero-byte message, and the network
+    -- client printed [io-local-network-probe] fail: attach. The failure depends on compiler layout, so a
+    -- source-identical build can pass or fail.
+    (h.req "01a1b49c-ab90-74fc-80cf-b9609b3e0c7d"
+      "A non-blocking receive that finds no message returns the would-block result and delivers no payload, however the message-info register was left before the syscall."
+      "An empty non-blocking seL4 receive must not be delivered as a message"
+      {
+        h.observedWhere "local-network-passes" "io_local_check" h.noPredicates "just io_local_check boots sel4-io-local and requires the network client to attach, which it cannot do when an empty receive is delivered as a malformed message. It fails at upstream main 42a884dc with the attach failure marker, so a pass is evidence of the repair. It is one plane that uses non-blocking receive; it does not exercise every call site of slime_rt::recv.";
+      }) with { supersedes = { "01a1118c-6a25-709e-ae7d-64522b7c89d2"; }; };
+    -- legacy 01a11bda-7038-7b80-8963-ae49bf9ce922 (done): Root and console diagnostics can splice a local-network qualification marker
+    -- On main revision 0b3917df35e3a26723382068e82a074114e7846f, repeated AArch64 QEMU local-network
+    -- checks on image SHA-256 293e248c7f5f7a622b7b141cd4783d17151fc9effaead67e21cd910dc109324e produced
+    -- eight passes followed by a failure: root SLIME_BACKING output split the publisher attached marker
+    -- between its prefix and role. The guest nevertheless exchanged the exact bidirectional bytes and
+    -- finished HEALTHY with four completed and zero failed instances. The local probe builds markers from
+    -- several console IPC messages; the console thread and root service thread have equal priority and
+    -- both ultimately print one DebugPutChar syscall per byte. Consequently even a single debug_write is
+    -- not a serial-line atomicity guarantee. PR 274 is held in draft; the lost first gate failure cannot
+    -- be attributed to this observed interleaving.
+    (h.req "01a1b49c-abac-7446-a22e-382ea7bf88ff"
+      "Within the qualified root/console boundary, every accepted complete diagnostic record is emitted byte-exact and contiguously despite competing root and console output and a scheduler switch opportunity during emission; one producer record never contains bytes from another. Producer fragments are not implicitly repaired into records."
+      "Root and console diagnostics can splice a local-network qualification marker"
+      {
+        h.observedWhere "qualification-passes" "console_record_check" h.noPredicates "The planning recipe console_record_check must first exercise a deterministic contention fixture with root and console producers, including an explicit scheduler switch opportunity during a single multi-byte write, so the current unprotected byte writer fails regardless of whether a natural QEMU run happens to interleave. It must require byte-exact contiguous output and whole-record refusals for oversize and malformed inputs, exercise bounded progress under contention, and refuse missing, split, reordered and explicit-failure transcript mutations. Then run the existing io_local_check path for twenty consecutive AArch64 QEMU boots with raw serial transcripts retained and no retry-to-green or transcript repair. Each boot must pass its original local chains and HEALTHY census. Twenty boots are a regression envelope, not the proof of atomicity; deterministic contention is mandatory. The recipe must fail on the current baseline and be landed byte-identically on origin/main before grading an implementation.";
+      }) with { supersedes = { "01a11bda-7038-7b80-8963-ae49bf9ce922"; }; };
+    (h.req "01a1b49c-abac-7446-a22e-382f0536d224"
+      "Overlong, malformed or unavailable record writes are refused whole without truncated or partial success markers; the path is bounded, preserves console holder checks and cannot deadlock or starve the root service through preemption of a lock owner."
+      "Root and console diagnostics can splice a local-network qualification marker"
+      {
+        h.observedWhere "qualification-passes" "console_record_check" h.noPredicates "The planning recipe console_record_check must first exercise a deterministic contention fixture with root and console producers, including an explicit scheduler switch opportunity during a single multi-byte write, so the current unprotected byte writer fails regardless of whether a natural QEMU run happens to interleave. It must require byte-exact contiguous output and whole-record refusals for oversize and malformed inputs, exercise bounded progress under contention, and refuse missing, split, reordered and explicit-failure transcript mutations. Then run the existing io_local_check path for twenty consecutive AArch64 QEMU boots with raw serial transcripts retained and no retry-to-green or transcript repair. Each boot must pass its original local chains and HEALTHY census. Twenty boots are a regression envelope, not the proof of atomicity; deterministic contention is mandatory. The recipe must fail on the current baseline and be landed byte-identically on origin/main before grading an implementation.";
+      }) with { supersedes = { "01a11bda-7038-7b80-8963-ae49bf9ce922"; }; };
+    (h.req "01a1b49c-abac-7446-a22e-3830c43d5b15"
+      "The unmodified local-network marker requirements still observe exact successful traffic and teardown; missing, split, reordered, duplicated where prohibited, and explicit failure evidence are rejected by controls rather than suppressed."
+      "Root and console diagnostics can splice a local-network qualification marker"
+      {
+        h.observedWhere "qualification-passes" "console_record_check" h.noPredicates "The planning recipe console_record_check must first exercise a deterministic contention fixture with root and console producers, including an explicit scheduler switch opportunity during a single multi-byte write, so the current unprotected byte writer fails regardless of whether a natural QEMU run happens to interleave. It must require byte-exact contiguous output and whole-record refusals for oversize and malformed inputs, exercise bounded progress under contention, and refuse missing, split, reordered and explicit-failure transcript mutations. Then run the existing io_local_check path for twenty consecutive AArch64 QEMU boots with raw serial transcripts retained and no retry-to-green or transcript repair. Each boot must pass its original local chains and HEALTHY census. Twenty boots are a regression envelope, not the proof of atomicity; deterministic contention is mandatory. The recipe must fail on the current baseline and be landed byte-identically on origin/main before grading an implementation.";
+      }) with { supersedes = { "01a11bda-7038-7b80-8963-ae49bf9ce922"; }; };
+    -- legacy 01a1638d-23a4-7f36-ae0e-7bf1f522f40f (done): Declared TCP socket buffer sizes up to 64 KiB per application row
+    -- The network service gives every TCP socket fixed 2048-byte receive and transmit buffers
+    -- (BUFFER_BYTES in components/services/network-service/src/tcp.rs), held in static arrays for four
+    -- sockets per backend. The transmit buffer bounds the unacknowledged bytes a connection may have in
+    -- flight, so a connection moves at most 2048 bytes per round trip. A guest that streams a 494889-byte
+    -- PointCloud2 sample at 10 Hz needs about 4.95 MB/s, which a 2048-byte window reaches only below a
+    -- 0.41 ms round trip. No application row can declare a larger buffer, and no composition or exam
+    -- observes a buffer other than 2048 bytes.
+    (h.req "01a1b49c-accd-72e5-b7b7-285f3fb80a85"
+      "On the derived sel4-io-tcp-buffers rows, the generation builder accepts each power of two from 2048 to 65536 in rxBufferBytes and in txBufferBytes, and refuses 0, 1024, 3072 and 131072 in each field."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "contract-bounds-observed" "io_tcp_buffers_check" h.noPredicates "Before it boots, the arm passes the derived rows with each listed value to the builder and requires exactly the listed verdicts. A builder that admits one refused value fails the recipe.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-2860074f5d75"
+      "Every composition that carried version 3 rows declares 2048 in both fields at version 4, and io_tcp_impairment_check and io_tcp_options_check pass without edits to their checkers or peers."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "regression-observed" "io_tcp_buffers_check" h.noPredicates "The recipe runs the impairment and options exams first, and their 2048-byte expectations stay on main. A version 4 migration that changes a socket those exams observe fails them.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-2861ad383d91"
+      "At attach the network service reports each holder's declared receive and transmit bytes and an external pool of four sockets at 65536 bytes each way. At every connection it reports the holder, the socket index, the local port and the sizes it applied."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "declared-applied-observed" "io_tcp_buffers_check" h.noPredicates "The arm requires the attach lines with the composition's values and pairs each connection line with one wire connection by its local port. A service that applies one size to both holders disagrees with the wire of one of them.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-28620dc5002b"
+      "The peer acknowledges every tx-flight segment until it has 131072 bytes and then withholds acknowledgments for 600 ms. The guest's unacknowledged bytes peak at exactly 65536 on the large connection and exactly 2048 on the baseline one, and the 262144-byte stream completes byte for byte."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "tx-in-flight-observed" "io_tcp_buffers_check" h.noPredicates "The peer computes the in-flight bytes from the guest's sequence numbers and its own acknowledgments, so the guest cannot report them. The 1024-byte MSS divides both limits, and the 600 ms hold ends before smoltcp's one-second retransmission floor.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-2863e27d566f"
+      "The guest's rx-window SYN carries window scale shift 1 and window 65535 for the large holder and shift 0 and window 2048 for the baseline holder. The guest's first zero window acknowledges exactly its declared receive bytes, and the peer's stream of twice that length completes byte for byte."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "rx-window-observed" "io_tcp_buffers_check" h.noPredicates "The peer reads the SYN options and the acknowledgment that first carries a zero window. Both follow from the receive buffer the service gave the socket.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-286408d01ff0"
+      "Every buffers-baseline SYN follows the close of the last buffers-large connection, and at least one buffers-baseline connection opens on a socket index that a buffers-large connection used, with the baseline limits on the wire."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "socket-reuse-observed" "io_tcp_buffers_check" h.noPredicates "The arm pairs each connection line's socket index with the wire limits of the same connection. A socket that keeps the previous row's buffers shows the large limits on a baseline connection.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-28651a67e13d"
+      "Each holder sends a 1048576-byte throughput stream to a peer that acknowledges every segment at once. The arm prints the bytes and the time from the first data segment to the acknowledgment of the last byte, from the peer's frame times."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "throughput-recorded-observed" "io_tcp_buffers_check" h.noPredicates "The run fails when a holder's stream is not complete and exact. The elapsed time is in the transcript the gate digests and is not compared with any bound.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    (h.req "01a1b49c-accd-72e5-b7b7-28665d166808"
+      "The judges refuse an in-flight peak of 65535 or 65537 on the large connection and 2049 on the baseline one, a large SYN with shift 0 or 2, a baseline SYN with shift 1, and a SYN window one under the declared one. They also refuse a zero-window acknowledgment one byte off, one changed stream byte, a short throughput stream, an open report that disagrees with the wire, an early baseline SYN, and a run without socket reuse."
+      "Declared TCP socket buffer sizes up to 64 KiB per application row"
+      {
+        h.observedWhere "controls-refused" "io_tcp_buffers_check" h.noPredicates "link_peer_check runs every mutation through the same judges as the real evidence and fails unless each one is refused for its stated reason. A judge that accepts one mutation cannot pass the recipe.";
+      }) with { supersedes = { "01a1638d-23a4-7f36-ae0e-7bf1f522f40f"; }; };
+    -- legacy 01a1728d-a7d7-7343-b9ae-b3a827b8012e (active): Root prints each per-operation diagnostic once per key and counts the repeats
+    -- slime-root prints one serial line for every clock request it serves (SLIME_CLOCK served), every
+    -- clock request it refuses (SLIME_CLOCK refused) and every payload DMA it mediates (SLIME_IO payload
+    -- dma and its frame lines). Under aarch64 QEMU TCG each UART byte is a trapped MMIO write on the one
+    -- CPU, so the whole graph stalls while the root prints. In the sel4-io-tcp-buffers run those lines
+    -- were 88 percent of 2304579 serial bytes, both holders took about 7.2 s per 1048576-byte stream, and
+    -- 81 to 86 percent of that time was spent in inter-segment gaps of 8 ms or more. With the three prints
+    -- removed in a scratch build, the same streams took 1.13 s and 1.55 s and the large holder had no gap
+    -- of 8 ms or more. Eight storage-family checkers need one SLIME_IO payload dma line per direction and
+    -- the clock-authority checker needs one SLIME_CLOCK served line per task and label, so the lines
+    -- cannot simply be removed.
+    (h.req "01a1b49c-acf0-718c-841e-41b90cac004f"
+      "In the sel4-io-tcp-buffers run the root prints SLIME_CLOCK served at most once per task and label, SLIME_CLOCK refused at most once per task, label and class, and SLIME_IO payload dma at most once per direction, each followed by exactly its frame lines."
+      "Root prints each per-operation diagnostic once per key and counts the repeats"
+      {
+        h.observedWhere "volume-observed" "root_diagnostic_volume_check" h.noPredicates "root_diagnostic_volume_check runs every gate that reads these lines, then the arm, which fails on any repeated key, a missing or misplaced summary, or counters that disagree with the peer's frame ledger. The ledger is the peer's own record, so the root cannot report its way to a pass. The recipe failed on main when it landed, on repeated SLIME_CLOCK served lines.";
+      }) with { supersedes = { "01a1728d-a7d7-7343-b9ae-b3a827b8012e"; }; };
+    (h.req "01a1b49c-acf0-718c-841e-41ba17abdebc"
+      "The run prints exactly one SLIME_ROOT diagnostic repeats line before SLIME_GRAPH served, its clock_served count is positive, the printed device-read DMA lines plus io_device_read equal the frames the peer received from the guest, and the printed device-write DMA lines plus io_device_write lie between the frames the peer sent and that number plus the 4 posted receive slots."
+      "Root prints each per-operation diagnostic once per key and counts the repeats"
+      {
+        h.observedWhere "volume-observed" "root_diagnostic_volume_check" h.noPredicates "root_diagnostic_volume_check runs every gate that reads these lines, then the arm, which fails on any repeated key, a missing or misplaced summary, or counters that disagree with the peer's frame ledger. The ledger is the peer's own record, so the root cannot report its way to a pass. The recipe failed on main when it landed, on repeated SLIME_CLOCK served lines.";
+      }) with { supersedes = { "01a1728d-a7d7-7343-b9ae-b3a827b8012e"; }; };
+    (h.req "01a1b49c-acf0-718c-841e-41bbfb06807d"
+      "io_tcp_buffers_check, clock_authority_check, sel4_storage_check, sel4_store_check, sel4_rollback_check, sel4_recovery_plane_check, sel4_generation_check, sel4_transfer_check, sel4_filesystem_check and replay_check pass without edits to their checkers."
+      "Root prints each per-operation diagnostic once per key and counts the repeats"
+      {
+        h.observedWhere "volume-observed" "root_diagnostic_volume_check" h.noPredicates "root_diagnostic_volume_check runs every gate that reads these lines, then the arm, which fails on any repeated key, a missing or misplaced summary, or counters that disagree with the peer's frame ledger. The ledger is the peer's own record, so the root cannot report its way to a pass. The recipe failed on main when it landed, on repeated SLIME_CLOCK served lines.";
+      }) with { supersedes = { "01a1728d-a7d7-7343-b9ae-b3a827b8012e"; }; };
+    (h.req "01a1b49c-acf0-718c-841e-41bc28660252"
+      "Before it boots, the arm refuses 14 mutated transcripts: a repeated served, refused and payload DMA line, a payload DMA line without its frame line, a stray frame line, no and two summary lines, a summary after SLIME_GRAPH served, a zero clock_served count, a device-read total one over and one under the wire, and a device-write total below the frames received and above them plus the posted slots."
+      "Root prints each per-operation diagnostic once per key and counts the repeats"
+      {
+        h.observedWhere "volume-observed" "root_diagnostic_volume_check" h.noPredicates "root_diagnostic_volume_check runs every gate that reads these lines, then the arm, which fails on any repeated key, a missing or misplaced summary, or counters that disagree with the peer's frame ledger. The ledger is the peer's own record, so the root cannot report its way to a pass. The recipe failed on main when it landed, on repeated SLIME_CLOCK served lines.";
+      }) with { supersedes = { "01a1728d-a7d7-7343-b9ae-b3a827b8012e"; }; };
+    -- legacy 01a176b0-d527-7499-92db-e0e29f2cbd3d (active): network-service wakes on the virtio-net driver's completions through a device wait-set source
+    -- network-service blocks on one wait-set Notification that carries its clients' requests and its idle
+    -- timer. The virtio-net driver signals TX and RX completion on separate Notifications that the service
+    -- never waits on, so a frame that arrives while no client request is pending is handled only at the
+    -- service's next idle timer, up to 10 ms later. In the sel4-io-tcp-buffers rx-window scenario the
+    -- probe reads nothing for 2000 ms, and the guest acknowledged the peer's data segments after a median
+    -- 12.7 ms on the 65536-byte holder and 14.1 ms on the 2048-byte holder. This item supersedes
+    -- 01a175f8-fc07-7262-8660-93b9f72edd33, whose 4 ms bound sat on the wake path's floor: the implemented
+    -- device source measured 3.03 ms in one run and 4.01 ms in the next. That item superseded
+    -- 01a1734a-313c-7d0d-a1a5-507c7428d47f, whose exam bounded the 65536-byte holder too: with the device
+    -- source in place that holder still measured 12.84 ms, because the median segment of a 64-segment
+    -- burst waits for about 32 frames ahead of it, while the 2048-byte holder fell from 14.05 ms to 3.03
+    -- ms. The wait-set/v1 source vocabulary has no kind for a device completion: every kind but timer
+    -- names a slot to drain.
+    (h.req "01a1b49c-ad0f-717b-8120-0df92eb92080"
+      "In each of the four derived compositions network-service waits on one Notification, the virtio-net driver holds exactly one signal binding on it, and the service's wait set has exactly one device row on that binding's badge, with no drain slot and no other row on that badge."
+      "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      {
+        h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
+      }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
+    (h.req "01a1b49c-ad0f-717b-8120-0dfab1fceb8e"
+      "In the sel4-io-tcp-buffers rx-window scenario the median time from a peer data segment to the first guest frame that acknowledges all of it is below 7 ms for the 2048-byte holder. A timer-paced acknowledgment has a median near or above the service's 10 ms idle timer, and a completion-woken one sits near the wake path's own floor of 3 to 4 ms under QEMU TCG. The arm prints the 65536-byte holder's median and judges no bound on it, because each of its 64-segment bursts queues behind the frames ahead of it."
+      "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      {
+        h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
+      }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
+    (h.req "01a1b49c-ad0f-717b-8120-0dfbcde5093d"
+      "network-service prints exactly one [network-service] wait device wakes=D line with D at least 1 and at most its wait wakes count."
+      "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      {
+        h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
+      }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
+    (h.req "01a1b49c-ad0f-717b-8120-0dfc494b7f12"
+      "io_tcp_buffers_check, io_tcp_listener_check and zenoh_external_check pass without edits to their checkers or peers."
+      "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      {
+        h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
+      }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
+    (h.req "01a1b49c-ad0f-717b-8120-0dfd14764b0d"
+      "Before it boots, the arm refuses 18 mutations: a missing and a doubled device row and driver binding, a device row on another badge or with a drain slot, another row on the device badge, a device row on another Notification, a missing timer row, a 2048-byte holder's median latency above and at 7 ms, too few acknowledged segments, a missing holder, a missing, doubled, zero and over-count device wake line, and a missing wait wakes line."
+      "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      {
+        h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
+      }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
+    -- legacy 01a17b95-2684-71b1-bb67-757af03972fd (done): Component console lines can be split by root output
+    -- A component that builds one serial line from several debug_write calls can have a root line land
+    -- between the calls, so a gate misses a marker the component did print.
+    -- 01a11bda-7038-7b80-8963-ae49bf9ce922 serialized root and console records and made the local-plane
+    -- producers write whole lines; every other producer still writes in parts. On 2026-10-24 to 2026-10-26
+    -- under AArch64 QEMU this split [virtio-net-driver] fresh epoch, [io-network-lifetime-probe]
+    -- role=victim, [network-service] client death handles=, [io-tcp-probe] stream sent=, the io-tcp-
+    -- listener and io-tcp-options probes' markers, [robot-actuator] command cancelled id= and Slisp's =>
+    -- spawned, each by a SLIME_CLOCK, SLIME_IO or SLIME_GRAPH line, and failed io_network_check,
+    -- io_network_lifetime_check, io_network_driver_reset_check, io_tcp_listener_check,
+    -- io_tcp_options_check, sel4_net_check and robot_runtime_check on the branch under test and on main. A
+    -- lexical count on main finds 500 partial-line writes across the Rust and C component sources.
+    (h.req "01a1b49c-ad2f-77a0-ac06-59af08b9a6b5"
+      "The audit examines tracked Rust sources under each of components/system, services, applications and testkit, components/lib/src/console_line.rs, and at least one C component source, and finds no partial-line write under the scope's Rust and C rules."
+      "Component console lines can be split by root output"
+      {
+        h.observedWhere "console-lines-observed" "console_lines_check" h.noPredicates "console_lines_check runs the record boundary's own exam and every plane in which a split marker was observed, then the lexical audit over the tree as merged. The audit is deterministic where the split is a race: a pass of a flaky plane proves little alone, but no partial-line write left in source means no component can be split. The recipe failed on main when it landed: run alone, the audit found 500 partial-line writes.";
+      }) with { supersedes = { "01a17b95-2684-71b1-bb67-757af03972fd"; }; };
+    (h.req "01a1b49c-ad2f-77a0-ac06-59b0d47a0dd9"
+      "console_record_check, io_network_check, io_tcp_listener_check, io_tcp_options_check, io_network_driver_reset_check, sel4_net_check and robot_runtime_check pass without edits to their checkers, peers or marker tables, and the frozen transport sources keep their pinned bytes."
+      "Component console lines can be split by root output"
+      {
+        h.observedWhere "console-lines-observed" "console_lines_check" h.noPredicates "console_lines_check runs the record boundary's own exam and every plane in which a split marker was observed, then the lexical audit over the tree as merged. The audit is deterministic where the split is a race: a pass of a flaky plane proves little alone, but no partial-line write left in source means no component can be split. The recipe failed on main when it landed: run alone, the audit found 500 partial-line writes.";
+      }) with { supersedes = { "01a17b95-2684-71b1-bb67-757af03972fd"; }; };
+    (h.req "01a1b49c-ad2f-77a0-ac06-59b192006406"
+      "Before it reads the tree, the audit accepts an honest fixture and refuses 19 mutations: a partial literal, a literal without a newline, a newline before the end, a built buffer, a qualified built buffer, a call split across lines, a partial raw literal, a conditional argument, a renamed import, a function value, a forwarding macro, a second definition, a sink outside the declared files, a C component call and a C component header call, and trees with no system source, no testkit source, no record sink or no C component."
+      "Component console lines can be split by root output"
+      {
+        h.observedWhere "console-lines-observed" "console_lines_check" h.noPredicates "console_lines_check runs the record boundary's own exam and every plane in which a split marker was observed, then the lexical audit over the tree as merged. The audit is deterministic where the split is a race: a pass of a flaky plane proves little alone, but no partial-line write left in source means no component can be split. The recipe failed on main when it landed: run alone, the audit found 500 partial-line writes.";
+      }) with { supersedes = { "01a17b95-2684-71b1-bb67-757af03972fd"; }; };
+    -- legacy 01a1a02e-58a6-7a60-9d42-61e777816c19 (done): Allow the Zenoh grants read in the frozen console transport
+    -- The console record exam pins the exact bytes of two runtime files,
+    -- `components/runtime/src/syscall/sel4_transport.rs` and `components/runtime/src/syscall.rs`. The
+    -- Zenoh service needs one function added to each, a wrapper that reads the grants table from the root.
+    -- The pin comment says that changing the pins needs a new exam. This item is that exam. It allows
+    -- exactly one named block in each file, and it refuses every other change to either file.
+    (h.req "01a1b49c-ae79-7062-abdc-dce39a4419df"
+      "A file holding the allowed block, and the same file without it, both keep their pin. A block with one changed byte, a reworded doc comment, a second copy or another function name does not. Nor does a change beside the block, an extra line at the end, or the other file's block."
+      "Allow the Zenoh grants read in the frozen console transport"
+      {
+        h.observedWhere "additions-judged" "console_pin_additions_check" { h.count "casesObserved" 4; h.count "negativeControlsRefused" 14; } "`console_pin_additions_check` runs `check-console-pin-additions.py`, which records how many fixtures the pin accepted and how many it refused, through the gate adapter. The exam rejects a run that makes any other number, and the predicates name 4 and 14, so a removed control fails twice. The recipe's script closure holds `console_record_controls.py`, the file under test, so the evidence is not independent. The weakenings of the exemption were run by a separate script outside the repository, and the pull request records them.";
+      }) with { supersedes = { "01a1a02e-58a6-7a60-9d42-61e777816c19"; }; };
+    (h.req "01a1b49c-ae79-7062-abdc-dce48eb0a73c"
+      "The checker accepts exactly 4 fixtures and refuses exactly 14. Removing a control changes one of the two counts, and the observation then fails its predicate."
+      "Allow the Zenoh grants read in the frozen console transport"
+      {
+        h.observedWhere "additions-judged" "console_pin_additions_check" { h.count "casesObserved" 4; h.count "negativeControlsRefused" 14; } "`console_pin_additions_check` runs `check-console-pin-additions.py`, which records how many fixtures the pin accepted and how many it refused, through the gate adapter. The exam rejects a run that makes any other number, and the predicates name 4 and 14, so a removed control fails twice. The recipe's script closure holds `console_record_controls.py`, the file under test, so the evidence is not independent. The weakenings of the exemption were run by a separate script outside the repository, and the pull request records them.";
+      }) with { supersedes = { "01a1a02e-58a6-7a60-9d42-61e777816c19"; }; };
+    (h.req "01a1b49c-ae79-7062-abdc-dce59ced7007"
+      "The controls give the same counts on a tree with the wrapper and on one without it. They build their fixtures from the block texts kept beside the pins."
+      "Allow the Zenoh grants read in the frozen console transport"
+      {
+        h.observedWhere "additions-judged" "console_pin_additions_check" { h.count "casesObserved" 4; h.count "negativeControlsRefused" 14; } "`console_pin_additions_check` runs `check-console-pin-additions.py`, which records how many fixtures the pin accepted and how many it refused, through the gate adapter. The exam rejects a run that makes any other number, and the predicates name 4 and 14, so a removed control fails twice. The recipe's script closure holds `console_record_controls.py`, the file under test, so the evidence is not independent. The weakenings of the exemption were run by a separate script outside the repository, and the pull request records them.";
+      }) with { supersedes = { "01a1a02e-58a6-7a60-9d42-61e777816c19"; }; };
+  }) with {
+    nonGoals = {
+      "External listeners, half-close, IPv6, or run-time option mutation by clients beyond what the declaration permits.";
+      "Physical NIC, IOMMU or board qualification; QEMU evidence carries no hardware claim.";
+      "Wildcard listeners, port ranges, NAT traversal, or a general server personality.";
+      "Congestion control selection, listener semantics, or performance targets beyond the declared bounds.";
+      "Hostname URLs, a DNS resolver in sel4-net, or any entropy source. Hostname support waits for the separate entropy-authority work.";
+      "Public-network retrieval as acceptance evidence. Fetching http://1.1.1.1/ from sel4-net is an opt-in manual demonstration outside CI, not evidence for this item.";
+      "TLS, HTTP redirects, terminal rendering of response bodies, or following the 301 that 1.1.1.1 returns on port 80.";
+      "Rewriting http-get in another language or widening the C component runtime ABI.";
+      "Physical NIC, IOMMU or board qualification. QEMU evidence carries no hardware claim.";
+      "Consuming the entropy service from the network service, http-get or sel4-net; that migration is separate work.";
+      "D3's deterministic-component sealing rule, recording drawn entropy in a replay trace, and entropy for the host build service.";
+      "x86-64 RDRAND or RDSEED, the Framework 13, or any physical device. QEMU evidence carries no hardware claim.";
+      "A claim that virtio-rng output is cryptographically strong. The QEMU backend's quality is the host's; this work establishes authority, isolation, budgets, fail-closed behaviour and reproducibility.";
+      "Raw device bytes reaching any holder, or a holder-selectable algorithm, seed or reseed policy.";
+      "Running Nav2, any ROS 2 workload, or a bun-compiled binary; C++ and language-runtime support (exceptions, .eh_frame retention, TLS, libc, JIT memory) is separate work.";
+      "Sharing or demand-mapping read-only segments from root image frames instead of copying them.";
+      "Read-only data-object grants for maps or other assets.";
+      "The 1 GiB MEM-ADAPTIVE inventory row; the large-image composition boots on the profile's default 2 GiB.";
+      "Generations loaded from the boot store (boot_selector's 4 MiB buffer), riscv64, x86-64, rpi5, Framework, or any 12-bit root CNode target, which keep the 512-page ceiling.";
+      "Physical-machine evidence; QEMU evidence carries no hardware claim.";
+      "Badge-based emptiness: the root mints peer endpoints with badge 0, so a real message can carry badge 0 and the badge cannot mean empty.";
+      "Changing the blocking receive path or the message wire format.";
+      "The Zenoh QEMU exchange; it is blocked by this defect but is graded by its own item.";
+      "No relaxation, reconstruction, deletion or normalization of broken serial markers to obtain a pass; original failure markers and causal ordering remain enforced.";
+      "No receive repair changes, network protocol changes, physical-machine qualification or claims that the missing original failure transcript has been recovered.";
+      "No global conversion of every component diagnostic caller or product-wide scheduling policy redesign; qualify the explicit root/console boundary and the affected local-plane producers.";
+      "A throughput target. The recorded rate describes the frame peer path under QEMU TCG, not a NIC and not QEMU user networking.";
+      "Changing the row of ros2-demo-publisher or the sel4-zenoh-external composition. Using the larger buffer for the LiDAR demo is a separate item.";
+      "More than four sockets per backend, a buffer above 65536 bytes, a window scale shift above 1, or a buffer size a client chooses at run time.";
+      "A change of congestion controller. Reno stays the fixed service policy.";
+      "A change to the impairment, options or listener exams or to their compositions beyond the version 4 regeneration.";
+      "A throughput target. The arm prints the tcp-buffers throughput lines and judges no rate.";
+      "Waking network-service on link completion notifications. That is a separate item.";
+      "The seL4 kernel's own debug messages, SLIME_CLOCK expired lines and every other root diagnostic.";
+      "A build-time or generation-declared switch for root diagnostics.";
+      "Physical NIC or board qualification. QEMU evidence carries no hardware claim.";
+      "A throughput target. Client requests already wake the service while a stream is being sent; this item removes the timer-paced handling of frames that arrive with no request pending.";
+      "Compositions whose network-service has no wait set or no virtio-net driver, which keep the polling profile or the loopback backend.";
+      "Changing the service's 10 ms idle timer.";
+      "The root's per-operation diagnostic lines, which 01a1728d-a7d7-7343-b9ae-b3a827b8012e owns.";
+      "Relaxing, reconstructing or normalizing split markers in any checker to obtain a pass.";
+      "Changing root diagnostics or the root and console serialization, which 01a11bda-7038-7b80-8963-ae49bf9ce922 owns.";
+      "A data-flow or macro-expansion proof; the audit is lexical over tracked sources.";
+      "Physical-machine qualification. QEMU evidence carries no hardware claim.";
+      "The wrapper itself and the reader. They belong to the Zenoh service component items.";
+      "An exemption for any other function in these files. A later root read needs another planning change.";
+      "A change to the console item `01a17b95-2684-71b1-bb67-757af03972fd`. It is done, and its scope says that these two files stay byte-identical. That is no longer exact for the allowed block.";
+      "Binding the totals of the larger gate controls. They hold 516 console record cases and 3954 mutated transcripts, and they move whenever any gate changes. Binding them would fail this item for changes that have nothing to do with it.";
+      "Independent evidence. The recipe's script closure holds `console_record_controls.py`, which is the file under test, so the recipe cannot grade it from outside. The item says so and does not claim otherwise.";
+      "The test-run check that fails on `main`, `generate-system-test-runs.py --check`, because `run_lidar_publish_arm` is not listed in `QEMU_SITES`.";
+    };
+  };
+
+area
