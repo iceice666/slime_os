@@ -84,8 +84,13 @@
 | 第一次全跑後 `status --unenforced` 被人看過 | 待 Evidence run 完成（8 shard，估 1–2 小時） |
 | 第二個真實功能走完 | 未做 |
 
+## 收尾（2026-11-07 下午）
+
+- GitHub 設定完成：ruleset `evidence`（id 26757096：deletion、non_fast_forward）；Environment `evidence`（deployment branch 限 `main`）放 `EVIDENCE_SIGNING_KEY`；公鑰以 `ci` 進 `allowed_signers`；record job 掛 `environment: evidence`。dispatch 驗證：三個 record 帶 `ci` 簽名，`-Y verify` 通過；與操作者手推的 evidence 分支撞在一起，non-FF 重試正常。
+- 操作者本機跑 LiDAR 四個 target（`SLIME_LIDAR_BAG` 指向 `~/Downloads/.../lidar_ros2.mcap`，SHA 吻合）：全部通過，digest 與 CI 一致；以 `iceice666` 簽名 publish。**300/406 enforced**。
+- `link_wake_check` 本機也失敗，但原因不同：`zenoh-external` arm「0 sent batches reported, expected 4」，boot 前 13 秒即拒，重跑一致。真 failing，不是環境。
+
 ## 要你做的
 
 1. 把 `~/slime_os-tasks-67b66e61c9f0.tar.gz` 推進 history 倉庫，commit hash 回填 `docs/history.md`。
-2. GitHub：`evidence` branch ruleset（禁 force push / 刪除）；Environment `evidence` + `EVIDENCE_SIGNING_KEY`；公鑰以 `ci` 加進 `specs/allowed_signers`。
-3. 看第一次全跑的 `status --unenforced`：failing 的就是真實 backlog。
+2. 三個真 failing 目標（`system_test_run_inventory_check`、`zenoh_service_grants_reader_check`、`link_wake_check`）：E3 規則，下一個碰 `contracts` / `hardware` / `planes-mechanism` area 的 PR 修或標 planned。
