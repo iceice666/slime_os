@@ -51,6 +51,19 @@
 | sandbox | QEMU plane 不 sandbox（product 段由 image derivation 保證）；host target sandbox 在 Phase 1 用一個 cargo test target 試，不可行則退為「比對 closure 清單與實際 open() 檔案」 |
 | `scripts/spec/` 行數上限 | 2000，`check` 強制；`migrate` 是過渡工具，Phase 3 後刪，不計入（slime_os 比 v2 多 closure 解析與 image derivation） |
 
+## Phase 3 待辦 5、6、8 的決定
+
+2026-11-07 晚。人說「我不覺得我有能力來審核，幫我決定吧」。同樣是 **byAgentDefault，delegated by human**。
+
+| # | 決策 | 理由 | Reopen if |
+| --- | --- | --- | --- |
+| F1 | 84 條 planned 以舊 item 為單位處理。**刪除** 2 個 CI 快取 item（7 條）：target 已刪、MyQue/projection 已不存在、GitHub cache 預算在 Phase 5 後無意義。**搬家** 6 組：closure 效能（5）與 binding generator 共用 pipeline（4）→ `contracts`；retire rpi5 format-1（2）、retire v5 guard（2）、network checker run record（7）→ `quality`；Zenoh connector（8）→ `zenoh-transport`。**留下** smoltcp epic 15 組 34 條、entropy 6 條、serial 5 條、LiDAR human gate 1 條 | 刪的是描述已不存在的工具的承諾；搬的都有明確的 owns；留的是真實的產品 roadmap，有設計好的 exam 等實作 | 任一組 planned 超過 90 天沒人碰：改成刪除而不是留著 |
+| F2 | `backlog.zt` 改名 `network-coverage.zt`，只剩 smoltcp epic；`owns` 縮成 `components/services/network-service/**`、`contracts/network-*/**` | `backlog` 這個名字和 AGENTS.md 的「backlog = `spec_status --unenforced`」撞名；`owns` 蓋整個產品樹讓 rule 4 形同虛設 | 有第二個 epic 無處可放 |
+| F3 | `hardware.zt` 拆成 5 個 area：`zenoh-transport`（Profile 0 codec / session / link / 互通 / QEMU 交換）、`zenoh-service-core`（core、link 上的 core、server、component、composition）、`zenoh-service-client`（client 協定、wire record、adapter、abort）、`zenoh-service-grants`（grants、table、builder、reader、limits）、`lidar-demo`。requirement id、statement、acceptance 不動 | 照 target 家族切，每檔 ≤ 70 條；只搬區塊，digest 不變、evidence 不重跑 | 任一檔再超過 ~60 條；或 `docs/architecture/` 多出對應頁要重新對齊 |
+| F4 | `owns` 的重疊允許，`contracts` 繼續擁有 `contracts/**`；未涵蓋的 390 個檔案歸戶：`components/proto`、`testkit`、`slisp`、`build-support`、`c-runtime-probe`、`*.ld`、fabric-service、robot-\*/mavlink 應用 → `planes-runtime`；generation-manager、filesystem、spawn、virtio-\*/uart/pwm driver、entropy-service、http-get → `planes-mechanism`。涵蓋率 100% 後 CI 開 `--enforce-owns` | rule 4 只問「有沒有人擁有」，重疊無害；新開空 area 只為放 `owns` 沒有意義 | 某個 area 因 `owns` 太寬被 E3 連坐 >3 次 |
+| F5 | rationale 不集中重寫。歸戶留下的 rationale（item 標題）與 `--` 註解（problem）一起留著；碰到該 requirement 的下一個 PR 順手把 rationale 改成一句「違反時的後果」 | 400 條沒有人能審；rationale 不進 digest，晚改沒有代價 | 有 reader（vsdtdd）要顯示 rationale |
+| F6 | 這次碰到的 area 照 E3 處理 failing：`system_test_run_inventory_check` 的 arm 數量 control 5→6（`sel4-zenoh-service` 在 #935 加入時沒更新）、`zenoh_service_grants_reader_check` 的 `PINNED_TESTS` 365→369，兩者本機重跑驗證；`link_wake_check` 5 條標 planned + note（`zenoh-external` arm 0 sent batches，是產品或 exam 的真實缺陷，非環境） | 前兩個是 checker 沒跟上 tree 的 rot，修法明確；第三個要調查，不在這次範圍 | `link_wake_check` 90 天內沒人修 |
+
 ## 文件修正（直接改 `plan.md` 時套用）
 
 - p.3 圖與 invariant 2 表格改為 evidence branch / 全部 requirement。

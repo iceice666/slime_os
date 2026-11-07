@@ -104,3 +104,16 @@
 | 6 | `hardware.zt` 232 條，超過 D11 reopen 訊號（60） | 人核 | 按 `docs/architecture/` 粒度拆 |
 | 7 | 「第二個真實功能走完」離場條件 | 下一個真實功能 | 未做 |
 | 8 | 歸戶的 rationale 是 item 標題、`problem` 在註解裡；各 area `owns` 是初稿 | Phase 3 人核 | 計畫原定；rule 4 `--enforce-owns` 等 owns 校準後開 |
+
+## 待辦 1、2、5、6、8 的處理（2026-11-07 晚，人委託，決策見 `decisions.md` F1–F6）
+
+| # | 做了什麼 |
+| --- | --- |
+| 1 | `check-system-test-run.py`：arm 數量 control 5→6（`sel4-zenoh-service` #935 加入時沒更新）；planned-arm 的 5 個 control 原本假設 `sel4-io-tcp-buffers` 還是 planned，它在 #893 落地了，改成在 `build/` 下 staged 副本裡藏掉它的 closure 與 record 來模擬。本機 `just system_test_run_inventory_check` 通過（206 個負面案例） |
+| 2 | `zenoh_grants_reader_exam.py` `PINNED_TESTS` 365→369，硬編碼的 365 改用常數。本機不能跑（要 `qemu-aarch64`），等 CI。這個檔在所有 zenoh target 的 grader 集合裡（`check-zenoh-profile0.py` import 它），所以 26 個 zenoh target 會重跑，約 10 分鐘；加上 `system_image_closure_gates_check` 45 分鐘 |
+| 3 | `link_wake_check` 5 條標 planned + note（E3） |
+| 5 | 刪 7 條（2 個 CI 快取 item）；搬 6 組；`backlog.zt` → `network-coverage.zt`（37 條 smoltcp epic）；76 條 planned 的 `note` 改成「等什麼」 |
+| 6 | `hardware.zt` → `zenoh-transport`（69）、`zenoh-service-core`（61）、`zenoh-service-client`（47）、`zenoh-service-grants`（53）、`lidar-demo`（15）。nonGoals 透過 `67b66e61` 的 `.tasks/items` 回溯到 item 再分配。只搬區塊：`status --json` 前後比對，只有 scripts 改動連帶的 target 從 enforced 變 claimed |
+| 8 | `owns`：1713 個產品檔中 405 個無人擁有 → 0；CI `check --base` 加 `--enforce-owns`；`check` rule 1 把「刪掉一個 invariants 為空的 area」誤判為 invariants 改動，修正。rationale 不重寫（F5） |
+
+仍開著：4（rpi5 板子）、7（第二個真實功能）、`link_wake_check` 的真實缺陷、Phase 4 的基線對照。
