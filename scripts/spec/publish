@@ -90,8 +90,10 @@ def commit(ref: str, entries: dict[str, bytes], message: str) -> str | None:
         tree = lib.git("write-tree", env=env).strip()
     if parent and lib.git("rev-parse", parent + "^{tree}").strip() == tree:
         return None
+    # Evidence commits carry no personal identity: the record's signature does.
+    identity = {"GIT_AUTHOR_NAME": "evidence", "GIT_AUTHOR_EMAIL": "evidence@slime-os", "GIT_COMMITTER_NAME": "evidence", "GIT_COMMITTER_EMAIL": "evidence@slime-os"}
     arguments = ["commit-tree", tree, "-m", message] + (["-p", parent] if parent else [])
-    new = lib.git(*arguments).strip()
+    new = lib.git(*arguments, env=identity | os.environ).strip()
     lib.git("update-ref", ref, new, *([current] if current else []))
     return new
 

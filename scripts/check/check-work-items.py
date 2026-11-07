@@ -436,6 +436,7 @@ CODE_IDENTITY_EXEMPT = (
     # each spec edit.
     "specs/",
     "scripts/spec/",
+    "HUMAN_OWNERS",  # who may approve a grader change; read by scripts/spec/check, not by a gate
     ".envrc",
     ".gitignore",
     ".gitmodules",
