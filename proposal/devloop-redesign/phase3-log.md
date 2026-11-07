@@ -38,6 +38,43 @@
 - `slime-zutai-store-save` action 留：它是 Zutai evaluation store 快取，不是 devloop 專屬。
 - `FRAMEs` 進 typos identifier 清單：歸戶的 statement 原文如此。
 
+## 第一次全跑（run 42352634695）
+
+8 個 shard 平行，plan 17 分、最長 shard 2 小時 25 分（`sel4_large_image_check` 單個 131 分），publish 53 檔。**283/406 enforced**。
+
+| 狀態 | 數量 | 內容 |
+| --- | --- | --- |
+| enforced | 283 | |
+| failing | 35 | 9 個 target，見下 |
+| claimed | 3 | `rpi5_ros2_zenoh_check`（operator） |
+| advisory | 85 | 84 planned + 1 human gate |
+
+9 個 failing target 的分類：
+
+| 類 | target | 原因 | 處置 |
+| --- | --- | --- | --- |
+| CI 環境 | `frame_store_check`、`lidar_publish_check`、`lidar_foxglove_bridge_check`、`lidar_foxglove_demo_check` | 需要 `SLIME_LIDAR_BAG`（操作者的 mcap） | 進 `operator` |
+| CI 環境 | `link_wake_check` → `zenoh_external_check` | 沒有 linux aarch64 的 eclipse-zenoh wheel pin | 進 `operator` |
+| CI 設定 | `image_attestation_check` | record job shallow checkout，要 ≥3 個祖先 | `fetch-depth: 0` |
+| **rot** | `zenoh_service_grants_reader_check` | checker pin `PINNED_TESTS = 365`，`quality.just` 在 Phase 3 前就是 369 | 留給人：E3 規則 |
+| **rot** | `system_test_run_inventory_check`（連帶 `system_image_closure_gates_check`） | arm 數量 control 過時，CI 從沒跑過它 | 留給人：E3 規則 |
+
+設計缺口補上：failing record 在同一 digest 下不自動重跑（否則 rot 每次 push 都燒 45 分鐘）；`workflow_dispatch` 帶 `include-failing` 手動重跑。
+
+### 第二次（dispatch，include-failing，run 42366778824）
+
+`image_attestation_check` 通過（476 秒）；兩個 rot target 重跑仍失敗，不是 flaky。**289/406 enforced**。
+
+### 當前 backlog（`status --unenforced` 的 failing / claimed）
+
+| 來源 | requirement 數 | 處置 |
+| --- | --- | --- |
+| `system_test_run_inventory_check` + `system_image_closure_gates_check`（rot） | 8 | E3：下一個碰 `contracts` area 的 PR 修，或標 planned |
+| `zenoh_service_grants_reader_check`（rot） | 5 | 同上，`hardware` area |
+| LiDAR 四個 + `link_wake_check`（operator，第一次跑的 failing record 還在） | 16 | 操作者帶 `SLIME_LIDAR_BAG` 跑 `scripts/spec/record <t> --signer` 覆蓋 |
+| `rpi5_ros2_zenoh_check`（operator） | 3 claimed | 板子上跑 |
+| planned | 84 | 本來就沒 exam |
+
 ## 離場條件
 
 | 條件 | 結果 |
