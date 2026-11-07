@@ -2,8 +2,8 @@
 
 This directory owns important long-lived cross-module choices whose rationale
 must survive any one implementation or review system. It is not a tracker and
-not a per-PR diary; canonical work identity, state, hierarchy, dependencies, and
-observed exit conditions remain in `.tasks/items/`.
+not a per-PR diary; requirement identity, state and acceptances remain in
+`specs/` and its evidence branch.
 
 Each decision record states:
 
@@ -25,16 +25,11 @@ readable and link to the decision that replaced them.
 - [Development record ownership](development-record-ownership.md) — accepted;
   separates current knowledge, work state, change evidence, durable rationale,
   and retained history during the repository split.
-- [Spec-driven work-item bodies](spec-driven-work-item-bodies.md) — accepted;
-  what Slime OS owns once MyQue, devloop, and myque-gh publish the envelope,
-  requirements, evidence, and projection contracts it pins.
-  Its projection part is amended by the record below.
-- [Work items are not projected into GitHub Issues](no-github-issue-projection.md)
-  — accepted; `.tasks/` is the only work-item surface, and the Issue projection
-  workflow is retired after it duplicated 468 Issues during a GitHub outage.
-- [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
-  accepted; makes a devloop body compulsory for items created after a fixed
-  UUIDv7 cutoff, and scales gate identities through a generic target gate.
+- [Living specs replace work items, devloop and the closeout bot](living-spec-devloop.md)
+  — accepted; `specs/<area>.zt` promises, the `evidence` branch observes,
+  `scripts/spec/status` computes; supersedes the three records on spec-driven
+  work-item bodies, mandatory spec-driven items and the retired Issue
+  projection, whose text is in Git at the commit `specs/legacy.zt` names.
 - [Negative controls for product judges](negative-controls-for-product-judges.md)
   — accepted; a negative control is required for every assertion about Slime OS
   itself, and not for assertions about verification or process tooling.

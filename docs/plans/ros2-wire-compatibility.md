@@ -3,7 +3,7 @@
 ## Goal
 
 Qualify bounded ROS 2 wire interoperability without implying support beyond the
-admitted profile. Work-item state lives in `.tasks/items/`.
+admitted profile. Requirement state lives in `specs/`.
 
 ## Release boundary
 

@@ -109,17 +109,16 @@ Exploratory directions are registered in [`docs/directions/`](docs/directions/RE
 
 ## Plan and work items
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for GitHub intake, planning-before-implementation,
-naming the implemented item, and evidence-based completion. See [HUMAN.md](HUMAN.md) for the
+See [CONTRIBUTING.md](CONTRIBUTING.md) for GitHub intake, the one-PR rule
+(spec diff, exam and implementation together), and evidence-based completion. See [HUMAN.md](HUMAN.md) for the
 decisions the people on the project own and how to read an agent-written PR.
 
-Work-item identity, state, hierarchy, dependencies, and observed closure evidence live in `.tasks/items/`, one Markdown file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque). Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: optional, mutable, and never resolved through by a checker or dependency edge.
+What the system promises lives in `specs/<area>.zt`, one living document per plane, as requirements under canonical UUIDs. What has been observed lives on the `evidence` branch, written by CI after every push to `main`. Nothing writes "done"; `just spec_status` computes it ([decision](docs/decisions/living-spec-devloop.md)).
 
 ```sh
-just tasks_list    # every item with its key, kind, and state
-just tasks_next    # what is actionable right now
-just tasks_graph   # the dependency graph
-just tasks_check   # validate the store and the repository's ordering policy
+just spec_status               # every requirement: enforced, failing, claimed, advisory
+just spec_status --unenforced  # the backlog
+just spec_check                # validate the specs, their bound targets and the Zutai pin
 ```
 
 Current ownership, invariants, and limitations live in
@@ -130,9 +129,9 @@ accepted or proposed status. [`docs/`](docs/README.md) is the entry point.
 
 The [roadmap classification](roadmap/README.md) identifies each retained source,
 its extracted owner, and detailed requirements not yet extracted. Historical
-chronology and devlogs are preserved in the [private archive](docs/history.md). Open backlog
-items precede milestone work under `just tasks_check`; this page does not carry
-a second priority or completion table.
+chronology and devlogs are preserved in the [private archive](docs/history.md). Failing
+requirements precede new work; this page does not carry a second priority or
+completion table.
 
 ## Current repository layout
 

@@ -63,9 +63,9 @@ judges on every boundary it claims:
   with no control is unproven. A product judge asserts something about
   Slime OS behavior or a format, wire, or boundary it owns or reads; the
   gate-control suite that supplies the plane gates' controls counts as one.
-  An assertion about verification or process tooling itself (devloop and
-  MyQue adapters, work-item closeout, retirement, and publication automation,
-  CI selection, any test of a checker) needs no control. Adding one is a new
+  An assertion about verification or process tooling itself (`scripts/spec`,
+  the Evidence workflow, CI selection, any test of a checker) needs no
+  control. Adding one is a new
   exam and a human decision; see
   `docs/decisions/negative-controls-for-product-judges.md`.
 - A gate that runs a subset of an exam (a `--slice`, an `--arm`) still runs
@@ -105,14 +105,11 @@ change confined to other checker or library files leaves the closures
 current. Confirm either way with
 `python3 scripts/generate/generate-system-image-closures.py --check`.
 
-A checker, recipe, pin, or fixture under `.devloop/policy.json` `codePaths`
-stales the evidence recorded against it. Where it lands depends on its
-`scripts/lib/pr_scope.py` class:
-
-- A grader path (`scripts/`, `just/`, `Justfile`, `.devloop/`) is a planning
-  change that lands with its item, and the item's acceptances bind only
-  closures the change does not edit (see `work-item-lifecycle`).
-- Any other `codePaths` entry — a product pin or fixture such as
-  `sel4/pins.toml` or `verification/zenoh-xcheck/Cargo.lock` — is product:
-  `scripts/check/check-pr-scope.py` refuses it beside a new item, so it
-  implements an item already on `main`.
+A checker, recipe, `scripts/lib` module, image closure or toolchain pin in a
+bound target's closure stales the records keyed by that closure digest; CI
+runs the target again after the merge. The grader-set part of it — the
+recipe definitions and the `scripts/` files they reach — also asks for a
+human approval on the pull request (`scripts/spec/check --base`, rule 3),
+because the code under test must not rewrite its own exam. A new checker
+file enters freely; a change to an existing one is the decision a person
+makes (see `spec-lifecycle`).

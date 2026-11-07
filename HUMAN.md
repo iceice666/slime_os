@@ -25,7 +25,7 @@ Unix-like system would do, and keeps going.
   nothing.
 - **Stopping.** When the same subject comes back a third round, decide whether
   it is worth another round, needs a design decision, or becomes a known limit.
-- **Process.** A new gate, exam, rule, or work-item stage is a decision about
+- **Process.** A new gate, exam, rule, or spec state is a decision about
   how much of the team's attention verification gets. It is not a fix.
 
 ### How to make one
@@ -65,8 +65,8 @@ Merge only what you can describe in one sentence to a teammate.
   [`docs/glossary.md`](docs/glossary.md). Ask for an entry of at most two
   sentences; if it cannot be explained that briefly, the thing it names may be
   over-built.
-- Over a week, more PRs touch `scripts/`, `.tasks/`, `.devloop/` or `.agents/`
-  than touch `slime-root/` and `components/`.
+- Over a week, more PRs touch `scripts/`, `specs/` or `.agents/` than touch
+  `slime-root/` and `components/`.
 - You merged something last week and cannot say what it does.
 
 ## Keeping the system understood

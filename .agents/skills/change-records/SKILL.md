@@ -1,6 +1,6 @@
 ---
 name: change-records
-description: Where a Slime OS change is recorded and documented — what the commit, PR, and work item each own; when a decision record, plan, or direction is warranted and what it must contain; what belongs in an implementation comment versus owning docs; and where historical investigations live. Use when deciding whether to write a devlog or decision record, when updating `docs/architecture/`, `docs/decisions/`, `docs/plans/`, or `docs/directions/`, when writing or reviewing code comments, or when a review finding says the owning documentation was not updated.
+description: Where a Slime OS change is recorded and documented — what the commit, PR, and spec each own; when a decision record, plan, or direction is warranted and what it must contain; what belongs in an implementation comment versus owning docs; and where historical investigations live. Use when deciding whether to write a devlog or decision record, when updating `docs/architecture/`, `docs/decisions/`, `docs/plans/`, or `docs/directions/`, when writing or reviewing code comments, or when a review finding says the owning documentation was not updated.
 ---
 
 # Change records and documentation
@@ -14,7 +14,8 @@ The accepted ownership split is recorded in
 | Record | Owns |
 | --- | --- |
 | commit and PR | the change, claim, risk, review surface, exact verification, known limits |
-| canonical work item | scope, state, and the exit conditions actually observed |
+| `specs/<area>.zt` | the promise: requirements, acceptances, invariants, non-goals, decisions, open questions |
+| `evidence` branch | what was observed, keyed by closure digest |
 | `docs/architecture/` | current subsystem rationale and the boundary as it is |
 | `docs/decisions/` | long-lived cross-module choices that need a durable record |
 | `docs/plans/` | unimplemented designs and qualification requirements |
@@ -49,10 +50,11 @@ A decision record states:
 - consequences;
 - revisit conditions;
 - status: `proposed`, `accepted`, or `superseded`;
-- relevant work-item UUIDs and code references.
+- relevant requirement ids and code references.
 
-Moving an old proposal never makes it accepted. A decision record landed by
-a planning PR is `proposed` until the implementation and its evidence land.
+Moving an old proposal never makes it accepted. A decision record landed
+ahead of its implementation is `proposed` until the implementation and its
+evidence land.
 
 ## Implementation comments
 

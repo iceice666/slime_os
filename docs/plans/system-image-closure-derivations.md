@@ -35,7 +35,7 @@ The rules:
   of the identity.
 - **Dirty builds.** A build is dirty if a tracked file under an input is modified, or an untracked or
   ignored file sits under an input. A dirty build may run any gate locally. Its build result records
-  `dirty=true`, and no attestation or devloop evidence may name it.
+  `dirty=true`, and no attestation or evidence record may name it.
 - **Derivation id.** On a clean tree the derivation id equals today's `closureIdentity`. Build caches,
   the build result and the SDK release record keep their meaning.
 - **Test runs and negative cases.** A test-run record names its closure. A negative build case names

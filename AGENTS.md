@@ -18,7 +18,7 @@ otherwise. A CPU boot qualifies no device.
 
 ## Code map: start here, do not broad-search
 
-Route work by ownership before searching for a symbol. Read the named module root first; use LSP symbols/references from there when available, and only then grep the exact symbol. Do not scan `deps/`, `target/`, `roadmap/`, or `.tasks/` for implementation symbols unless the task specifically concerns them.
+Route work by ownership before searching for a symbol. Read the named module root first; use LSP symbols/references from there when available, and only then grep the exact symbol. Do not scan `deps/`, `target/`, `roadmap/`, or `specs/` for implementation symbols unless the task specifically concerns them.
 
 For current subsystem rationale, start at [`docs/architecture/`](docs/architecture/README.md), then the owning code or contract below. Unimplemented design and qualification boundaries live in [`docs/plans/`](docs/plans/README.md). [`roadmap/README.md`](roadmap/README.md) classifies retained detail and historical source; do not reconstruct extracted architecture from milestone chronology.
 
@@ -58,32 +58,33 @@ Use the Justfile targets from the repository root. The full list, one row per ta
 - `just test` — run the root/product behavioral aggregate.
 - `just generation_check` — build and validate the deterministic seL4 generation.
 - `just contracts_check` — validate generation manifest contracts and generated bindings.
-- `just tasks_check` — `myque check` plus backlog-first, the spec-driven mandate, and devloop validation of every spec-driven body; offline.
-- `just devloop <args>` — the pinned devloop (`admit`, `validate`, `start`, `gate`, `human`, `eligible`, `complete`, `render`, by canonical UUID) against [`.devloop/policy.json`](.devloop/policy.json). This is how new work is created and closed.
+- `just spec_check` — the living specs under `specs/`: schema, requirement ids, bound targets, `# spec:` marks, Zutai pin; offline.
+- `just spec_status` — what the `evidence` branch says about every requirement (enforced, failing, claimed, advisory); `--unenforced` is the backlog, `--local` adds your own records.
+- `just spec_record <target>` — run one exam under `scripts/spec/record` and write its observation record.
 - `just docs_check` — maintained links, fragments, canonical UUID references, and command references, without network.
 - `just fmt_check_all` / `just lint_all` / `just ruff` / `just typos` — formatting, clippy with warnings denied, Python lint, spell-check.
 
 Explicit hardware and physical-boot targets (`rpi5_ros2_zenoh_check`, `framework_cpu_boot_check`, the `x86_64_*` and `framework_media_*` recipes) are in no aggregate; `framework_cpu_boot_check` cannot manufacture an observation and QEMU cannot close it.
 
-## Work items, backlog, and roadmap
+## Specs, evidence, and the backlog
 
-`.tasks/` is the canonical store, managed by MyQue; identity is the UUID, human keys are display aliases. New work is spec-driven: create it with `just devloop admit`, never `myque new`, and gate, record evidence for, and close it with `just devloop`. Backlog defects (`backlog` tag) are resolved, deferred, or blocked before any milestone work starts. A product or grader change implements an item already on `main`: planning PR first, implementation PR second, and `scripts/check/check-pr-scope.py` refuses product code in a planning PR. An implementation branch cannot rewrite the checker that grades it, so a checker repair is itself a planning change whose acceptances bind elsewhere. Merging fresh passing evidence is a closeout request. Do not run `just devloop complete` for a merged implementation; `myque-closeout.yml` proposes it from `main`.
+`specs/<area>.zt` is the living record of what one plane or subsystem promises; the unit of work is a requirement (UUIDv7, never changed once on `main`). One rule: a behavior change changes the spec, and the spec diff, the exam and the implementation travel in one PR. There is no work item and no `done` state: after a push to `main` the Evidence workflow runs every bound target whose closure digest has no record and writes the records to the `evidence` branch; `just spec_status` computes enforced, failing, claimed or advisory from it. `specs/legacy.zt` indexes the retired `.tasks/` store. A grader change — a file inside a bound target's grader set, an area's `invariants`, an existing `contracts/**/schema.zt` — needs an approval from a login in `HUMAN_OWNERS` (`scripts/spec/check --base`); splitting it into its own PR does not avoid the rule. The backlog is `just spec_status --unenforced` plus `roadmap/`; a `failing` requirement is fixed, or marked `planned` with a note, by the next PR that touches its area.
 
-The full lifecycle — store rules, spec-driven bodies and gates, closure pinning, backlog-first, what each PR class may carry, evidence-only PRs, the author-restatement pause, history and `roadmap/` — is [`.agents/skills/work-item-lifecycle/SKILL.md`](.agents/skills/work-item-lifecycle/SKILL.md). Read it before any `just devloop` or `myque` command or before opening a PR that touches `.tasks/`, `.devloop/`, or a checker. [`CONTRIBUTING.md`](CONTRIBUTING.md) owns the human-facing PR workflow.
+The full lifecycle — the helpers, the CLI, closure digests, human and operator records, what CI judges — is [`.agents/skills/spec-lifecycle/SKILL.md`](.agents/skills/spec-lifecycle/SKILL.md). Read it before editing `specs/`, a checker, or a recipe an acceptance binds. [`CONTRIBUTING.md`](CONTRIBUTING.md) owns the human-facing PR workflow; [`docs/decisions/living-spec-devloop.md`](docs/decisions/living-spec-devloop.md) records why.
 
 ## Code review
 
-These rules bind every reviewer of a PR — a person, a review bot such as Codex, or an agent asked to review — and the author answering the review. A review's job is to find where the diff, the checker it binds, and the landed work item disagree, and to say so with a file and line.
+These rules bind every reviewer of a PR — a person, a review bot such as Codex, or an agent asked to review — and the author answering the review. A review's job is to find where the code diff, the checker it binds, and the spec diff disagree, and to say so with a file and line.
 
-- **The item bounds the review.** Read the work item, the PR description, and the existing threads before the diff. A process PR has no item; there the rules in this file the PR claims to follow, and the claims its description makes, are what a finding is checked against. A finding names what it breaks — an item requirement or acceptance, a stated invariant, or a rule in this file — the file and line, and the input that produces the wrong result. A case the acceptance rationale does not claim is a follow-up proposal in one comment, not a finding; a declared known limit is a decision to weigh, not a gap.
-- **Severity states a consequence.** Blocking only when a gate can pass while its claim is false, a refused input is accepted, an authority, lifetime, or determinism rule is broken, a boundary-crossing format has no Zutai contract, or the recipe cannot pass as landed. A local defect is non-blocking. Style, alternatives, and hardening the item does not require are suggestions, labelled, never blocking, never re-raised. What the PR cannot carry goes to the planning process in one comment.
+- **The spec diff bounds the review.** Read the area's `openQuestions`, then the spec diff, then the PR description and the existing threads, and only then the code diff. A process PR has no spec diff; there the rules in this file the PR claims to follow, and the claims its description makes, are what a finding is checked against. A finding names what it breaks — a requirement or acceptance, a stated invariant, or a rule in this file — the file and line, and the input that produces the wrong result. A case the acceptance rationale does not claim is a follow-up proposal in one comment, not a finding; a declared known limit is a decision to weigh, not a gap.
+- **Severity states a consequence.** Blocking only when a gate can pass while its claim is false, a refused input is accepted, an authority, lifetime, or determinism rule is broken, a boundary-crossing format has no Zutai contract, or the recipe cannot pass as landed. A local defect is non-blocking. Style, alternatives, and hardening the item does not require are suggestions, labelled, never blocking, never re-raised. What the PR cannot carry goes to the area's `openQuestions` or a planned requirement, in one comment.
 - **One review per head.** A later head gets the delta and the threads it answers, not a fresh pass over the whole diff. More than ten findings means a structural problem: name it, give the strongest, stop. Never duplicate a finding another tool posted.
 - **Consistency.** A finding that restates an open thread is a reply there; one that contradicts an earlier round names it and the evidence that changed. A thread answered with a question or a declared decision waits for the human.
 - **Answering.** Reproduce before fixing; what does not reproduce stays open with what was tried. Declining with a reason is legitimate. Answer a whole round in one push. Re-admit once, never for a suggestion. Nothing blocking means ready. Threads hold the history; the description describes the head.
 - **Triage before fixing.** The author's reply to a round opens with one line per finding: the input that breaks it, whether it changes product behavior or only tooling, documentation or process, and the size of the fix. Fixes follow in the same push.
 - **When the author stops and asks.** The author fixes nothing in a round and asks the human in one PR comment, linking [`HUMAN.md`](HUMAN.md), when either holds:
   - a third consecutive round raises a new finding on the same subject. The comment names the subject, the design choice that keeps producing findings, and the decision that would close the whole class (for example: require storage to equal the declared configuration instead of bounding it from below);
-  - a non-blocking finding (Codex P2) lands on process or verification text or code: `scripts/`, `.tasks/`, `.devloop/`, `.agents/`, this file, or `docs/` outside `docs/architecture/`. These are collected into one follow-up comment for the human to accept or drop, not fixed in the PR.
+  - a non-blocking finding (Codex P2) lands on process or verification text or code: `scripts/`, `specs/`, `.agents/`, this file, or `docs/` outside `docs/architecture/`. These are collected into one follow-up comment for the human to accept or drop, not fixed in the PR.
 
   The human's answer is a declared decision under **Consistency**; a finding that follows from it is not re-raised.
 
@@ -91,13 +92,13 @@ These rules bind every reviewer of a PR — a person, a review bot such as Codex
 
 ## Change records and documentation
 
-The commit and PR record the change, claim, risk, exact verification, and known limits; the work item records scope, state, and observed exit conditions; ordinary changes need no devlog. A behavior change at a contract, wire, or operating boundary updates the owning `docs/architecture/` page in the same PR. Durable cross-module choices go to [`docs/decisions/`](docs/decisions/README.md), unimplemented designs to [`docs/plans/`](docs/plans/README.md), historical investigations to the [`slime_os-history` archive](docs/history.md).
+The commit and PR record the change, claim, risk, exact verification, and known limits; the area file records the promise, its acceptances, decisions and open questions; the evidence branch records what was observed; ordinary changes need no devlog. A behavior change at a contract, wire, or operating boundary updates the owning `docs/architecture/` page in the same PR. Durable cross-module choices go to [`docs/decisions/`](docs/decisions/README.md), unimplemented designs to [`docs/plans/`](docs/plans/README.md), historical investigations to the [`slime_os-history` archive](docs/history.md).
 
 A comment should state what must remain true, not argue that the author was right: invariants, ordering, ABI, capability boundaries, and why the simpler local form would break a current invariant — never investigation history, reviewer findings, or verification results. [`.agents/skills/change-records/SKILL.md`](.agents/skills/change-records/SKILL.md) holds the record ownership table, the decision-record template, and the comment rules in full.
 
 ## Writing style
 
-Every PR body, reply to a human, `docs/` page, work-item body, and multi-line comment follows [`.agents/skills/writing-style/SKILL.md`](.agents/skills/writing-style/SKILL.md). Read it before writing any of these. The short form:
+Every PR body, reply to a human, `docs/` page, requirement statement, and multi-line comment follows [`.agents/skills/writing-style/SKILL.md`](.agents/skills/writing-style/SKILL.md). Read it before writing any of these. The short form:
 
 - Conclusion first.
 - One statement per sentence, at most 25 words. Active voice with a named actor.

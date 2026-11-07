@@ -36,9 +36,9 @@ Three files answer most "where is..." questions:
   the index routing every kind of change to its owning module.
 - `Justfile` — every build, run, check, and regeneration command
   (`just --list`).
-- `just tasks_list` / `just tasks_next` — what is done, open, blocked, or
-  deferred, from the canonical work-item store in `.tasks/items/`. Open
-  backlog items come before milestone work; `just tasks_check` enforces it.
+- `just spec_status` — every requirement in `specs/` as enforced, failing,
+  claimed or advisory, from the `evidence` branch. `--unenforced` is the
+  backlog; failing requirements come before new work.
 - [`roadmap/README.md`](../../roadmap/README.md) — the file classification and
   residual-ownership index. It records no state and owns no problem statement;
   each item owns its own.
@@ -66,7 +66,7 @@ Two habits distinguish this repository; adopting them early saves friction:
 4. [Your first change](04-first-change.md) — the workflow, end to end.
 5. [Add a component](05-add-a-component.md) — take new code through
    declaration, composition, authority, and QEMU evidence.
-6. [Carrying a work item](06-work-item-lifecycle.md), then the proving half:
+6. [Carrying a change through the living specs](06-spec-lifecycle.md), then the proving half:
    [add a gate](07-add-a-gate.md) and [debugging](08-debugging.md).
 7. When you know what you want to change, go straight to
    [recipes](11-recipes.md); the [component runtime tour](10-component-runtime.md)

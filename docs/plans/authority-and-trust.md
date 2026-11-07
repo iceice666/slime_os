@@ -185,8 +185,8 @@ error vocabulary against two or three concrete cross-machine agent scenarios.
 
 Each mechanism lands with its capability-matrix and syscall-ABI changes, a
 versioned Zutai contract for every wire/persisted record, bounded tables, explicit
-rollback behavior, and a real denial gate. Work-item UUIDs and dependency edges
-remain in `.tasks/items/`; retained exploratory designs remain in `docs/directions/`,
+rollback behavior, and a real denial gate. Requirement ids remain in `specs/` and
+legacy ids in `specs/legacy.zt`; retained exploratory designs remain in `docs/directions/`,
 and extracted origins route to immutable history below.
 
 ## References

@@ -173,8 +173,8 @@ For an automated failure:
 - [Boot walkthrough](03-boot-walkthrough.md) — what happens between `just run`
   and the terminal `SLIME_GRAPH HEALTHY` marker.
 - `AGENTS.md` and [`task-to-file.md`](../task-to-file.md) — the code map and the routing index for making a change.
-- `just tasks_list` / `just tasks_next` — what is done, what is open, and what
-  is actionable, from the canonical work-item store.
+- `just spec_status` — what is enforced, failing, claimed or advisory, from
+  `specs/` and the `evidence` branch.
 - [Architecture](../architecture/README.md) — current subsystem ownership and
   invariants; [plans](../plans/README.md) — unfinished requirements; the
   [roadmap classification](../../roadmap/README.md) names retained detail.

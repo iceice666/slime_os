@@ -3,7 +3,7 @@
 ## Goal
 
 Qualify a selected existing-workload backend without implying cross-architecture
-support. Work-item state lives in `.tasks/items/`.
+support. Requirement state lives in `specs/`.
 
 ## Release boundary
 

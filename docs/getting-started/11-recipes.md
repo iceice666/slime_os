@@ -13,10 +13,9 @@ and where it says *the owning plane gate*, find the composition your component
 is in (`grep -l '"<component>"' contracts/system-spec/v1/systems/*.zti`) and
 run the `just` recipe whose checker names that closure.
 
-The standing rules apply to every recipe: an item on `main` first for
-non-trivial work ([work-item lifecycle](06-work-item-lifecycle.md)), backlog
-before milestones, never edit a generated file, never weaken a gate to go
-green.
+The standing rules apply to every recipe: a behavior change changes the spec
+([spec lifecycle](06-spec-lifecycle.md)), failing requirements before new
+work, never edit a generated file, never weaken a gate to go green.
 
 ---
 
@@ -138,12 +137,12 @@ The product composition is `contracts/system-spec/v1/systems/sel4.zti`, not
 
 1. `scripts/lib/` is shared mechanism; `scripts/check/` is per-gate
    expectations. Prefer extending the library over copying into a checker.
-2. `just ruff`. If the file is under a work item's `codePaths`,
-   `just tasks_check` will tell you the change stales that item's evidence —
-   add it to the spec you are working under.
+2. `just ruff`. If the file is in a bound target's grader set,
+   `scripts/spec/check --base origin/main` says so and the PR needs a human
+   approval; the records keyed by that closure re-run after the merge.
 3. If a marker table changed: `just sel4_gate_control_check`.
-4. A new `--check`-style rule in `check-docs.py`, `check-work-items.py`, or
-   a contract checker is behavioral — it needs a landed work item first, like
+4. A new `--check`-style rule in `check-docs.py`, `scripts/spec/check`, or
+   a contract checker is behavioral — it changes a spec or a grader, like
    any other non-trivial change.
 
 ## Change documentation
@@ -174,8 +173,9 @@ the Duo/RPi5 targets in `just/hardware.just` have an evidence path; each binds
 the exact image, machine, and firmware, and a QEMU result never substitutes.
 A CPU boot qualifies no device.
 
-## Close a work item
+## See a requirement enforced
 
-[Work-item lifecycle](06-work-item-lifecycle.md). Record what was *observed*
-(evidence class, target, image identity, limits), then `just devloop
-complete` (spec-driven) or `myque close` (pre-cutoff). `just tasks_check`.
+[Spec lifecycle](06-spec-lifecycle.md). Record what was *observed* in the
+PR's verification table (evidence class, target, image identity, limits).
+After the merge the Evidence workflow records the bound targets;
+`just spec_status` shows the requirement enforced, or why not.

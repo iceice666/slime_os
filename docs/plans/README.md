@@ -4,9 +4,9 @@ This directory owns unimplemented designs, delivery requirements, and
 qualification requirements that are specific enough to guide future work but do
 not describe current behavior.
 
-Plans are not a tracker. Identity, state, priority, hierarchy, dependencies, and
-observed exit conditions live only in `.tasks/items/`. A plan links canonical
-work-item UUIDs when work exists; editing a plan never creates, starts, closes,
+Plans are not a tracker. Requirement identity, state and acceptances live only
+in `specs/` and its evidence branch. A plan names requirement ids when work
+exists; editing a plan never creates, starts, closes,
 or reorders an item.
 
 Keep current architecture, operation, and limitations in the owning product or

@@ -7,11 +7,10 @@ change belongs.
 
 ## Before anything: the standing order
 
-1. **Backlog first.** The `backlog`-tagged items in `.tasks/items/` are the
-   known defects, and each one owns its own problem statement.
-   Open items are resolved (or explicitly deferred, with the reason
-   recorded) before new milestone work starts, which `just tasks_check`
-   enforces. `just tasks_next` lists what is actionable.
+1. **Failing first.** `just spec_status --unenforced` lists every
+   requirement that is not enforced. A `failing` one in an area is fixed,
+   or marked `planned` with a note, by the next PR that touches that area,
+   before new work in it.
 2. **Route, don't search.** Find your change's row in the
    [task-to-file index](../task-to-file.md) and read the named module root first. Broad
    symbol-grepping across the tree is how you end up editing a generated
@@ -110,11 +109,11 @@ Then leave the records that make the claim reviewable:
   `docs/directions/`. Expensive reusable investigations or unusual verification
   campaigns belong with their owning knowledge and immutable evidence; consult
   [the history guide](../history.md) for archived records.
-- **Work-item hygiene**: record the exit condition that was *observed*, its
-  evidence class, scope, target or image identity, and limits in the item. Only
-  then close it with `myque close`, which records the closure date. Never
-  allocate an id by scanning for the next number — `myque` assigns a UUID. Run
-  `just tasks_check`.
+- **Spec hygiene**: the PR carries the spec diff with the exam and the
+  implementation. Record what was *observed* in the PR's verification table;
+  CI records it on the `evidence` branch after the merge. A requirement id
+  comes from `uuid.uuid7()`, never from scanning for the next number. Run
+  `just spec_check`.
 
 `AGENTS.md` carries the full statement of these rules; this page is the
 tour, that file is the law.

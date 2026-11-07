@@ -51,8 +51,8 @@ where future maintainers need the rationale independently of one implementation.
 - Existing devlog entries, raw artifacts, and legacy checker rules are preserved
   at the immutable archive revision; product documentation links there without
   making archive availability a build or test dependency.
-- `docs/decisions/` is not a tracker or a per-PR diary. MyQue remains the only
-  live work-state store.
+- `docs/decisions/` is not a tracker or a per-PR diary. `specs/` remains the
+  only live record of what is promised.
 
 ## Revisit conditions
 

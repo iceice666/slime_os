@@ -23,9 +23,8 @@ first-class concepts, current status, and non-goals. Then:
    to end: routing, gates, contracts, evidence, and owning documentation.
 5. [Add a component](getting-started/05-add-a-component.md) — create the crate,
    declare it, compose it, grant authority, and prove it under QEMU.
-6. [Carrying a work item](getting-started/06-work-item-lifecycle.md) — both
-   lifecycles command by command: an ordinary item closed on a recorded
-   observation, and a spec-driven item closed against bound evidence.
+6. [Carrying a change through the living specs](getting-started/06-spec-lifecycle.md)
+   — the requirement, the exam, the record, and what CI judges.
 7. [Add a gate](getting-started/07-add-a-gate.md) — how a QEMU plane gate is
    built from closure, image, run, and marker contract, when to extend versus
    add one, and every file a new plane touches.
@@ -112,9 +111,9 @@ Two lookup pages without update discipline of their own:
 
 | Looking for | Go to |
 | --- | --- |
-| Work-item state: what is done, open, blocked, deferred | `just tasks_list`, `just tasks_next` over the canonical store in `.tasks/items/` |
+| What is enforced, failing, claimed or advisory | `just spec_status` over `specs/` and the `evidence` branch |
 | Current subsystem ownership and invariants | [`architecture/`](architecture/README.md); unfinished requirements in [`plans/`](plans/README.md); retained detail classified in [`roadmap/`](../roadmap/README.md) |
-| Known defects and regressions (open ones precede milestone work) | The `backlog`-tagged canonical work items; the old frozen index is historical only |
+| Known defects and regressions (failing ones precede new work) | `just spec_status --unenforced`; the old frozen index is historical only |
 | How userspace drivers receive device/MMIO/IRQ/DMA authority, and what IO gates prove | [Userspace I/O substrate](architecture/io-substrate.md); the authority surface is in [`capability-matrix.md`](capability-matrix.md) and operations in [`syscall-abi.md`](syscall-abi.md) |
 | How a historical conclusion was reached | [Private history archive](history.md), pinned by full commit and original path; ordinary changes need no investigation |
 | Code map | [`AGENTS.md`](../AGENTS.md); the routing table itself is [`task-to-file.md`](task-to-file.md) |

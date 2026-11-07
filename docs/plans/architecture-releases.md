@@ -3,7 +3,7 @@
 ## Goal
 
 Qualify architecture releases for their exact target profiles without implying
-product-workload or device support. Work-item state lives in `.tasks/items/`.
+product-workload or device support. Requirement state lives in `specs/`.
 
 ## RV64 Milk-V Duo architecture release
 

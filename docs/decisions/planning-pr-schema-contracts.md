@@ -98,10 +98,8 @@ interface, and how much.
 
 ## References
 
-- `scripts/lib/pr_scope.py` — the classes; `INTERFACE`, `NEW_SCHEMA`,
-  `CONTRACT_README`.
-- `scripts/check/check-pr-scope.py` — the synthetic-diff controls.
-- `scripts/check/check-contracts.py` — the schema sweep.
-- `just pr_scope_check` — the recipe the item's acceptance binds.
-- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) "Pull request scope" — the class
-  table contributors read.
+- `scripts/check/check-contracts.py` — the schema sweep, which outlived the
+  PR classes: the classes and `check-pr-scope.py` were retired with the
+  work-item store ([decision](living-spec-devloop.md)); an existing schema's
+  change is now rule 2 of `scripts/spec/check --base`.
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) "Grader independence".

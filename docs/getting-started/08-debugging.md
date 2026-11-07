@@ -162,10 +162,11 @@ breakpoint.
 - **`just docs_check` names an absent recipe** — a `just <name>` literal in
   documentation, a task requirement, a script, or CI does not exist. Recipe
   names are contract surface for docs; rename both.
-- **`just tasks_check` refuses a tracked file no `codePaths` entry covers** —
-  a checker or fixture you touched is bound to a work item's evidence. Add
-  the path to the item's spec, or the change is staling evidence it does not
-  claim.
+- **`scripts/spec/check --base` asks for an approval** — a checker, recipe
+  or `scripts/lib` module you touched is in the grader set of a bound
+  target. That is the rule, not a defect: a person decides whether the exam
+  may change. `python3 scripts/spec/closure <target> --explain` shows why
+  the file is in the set.
 
 ## 6. When you have found it
 

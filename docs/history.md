@@ -1,7 +1,7 @@
 # Development history and evidence
 
 Current architecture, operation and limitations remain in this product repository.
-`.tasks/items/` is the only live work-state store. Historical investigations and
+`specs/` is the only live record of what the system promises. Historical investigations and
 large raw captures are preserved in a private repository, not a build, test,
 submodule or documentation-check dependency.
 
@@ -27,6 +27,21 @@ of personal/device metadata. No live secret was identified by targeted review;
 this is not an exhaustive secret-absence guarantee. Do not broaden access.
 
 ## What moved and what remains
+
+### The retired work-item store
+
+`.tasks/` (167 live items, 280 terminal records, 119 admission digests) and
+`.devloop/` (policy, 75 execution inputs, examples) were removed from the
+tree on 2026-11-07 when the living specs replaced them
+([decision](decisions/living-spec-devloop.md)). Their last full text is in
+this repository at commit `67b66e61c9f0036d62f21811428444aa76b3b687`, the
+value every `specs/legacy.zt` row names as `frozenAt`; read a retired item
+as `git show 67b66e61c9f0036d62f21811428444aa76b3b687:.tasks/items/<UUID>.md`.
+A tarball of both directories at that commit, SHA-256
+`3ab56acce355d1caf8b849fc94b5a6fe960f4227b940d9bd8e5aefffc5ed5de4`, is kept
+for the private archive; the archive commit is recorded here once it lands.
+Neither participates in current validation: `specs/legacy.zt` carries only
+identity, frozen state, kind, title and the requirement ids an item became.
 
 All 491 historical devlog files and the frozen backlog index were verified
 against the archive before removal. The snapshot also preserves the retired
@@ -90,9 +105,9 @@ that every historical environment is reconstructible.
 
 `just docs_check` checks current local links/fragments, canonical UUID references,
 and current commands. Historical prose is not validated against today's recipes;
-its original checker stays at the archive revision. `just tasks_check` runs real
-MyQue integrity checks and backlog-first policy without a frozen index. Neither
-requires history checkout or network access.
+its original checker stays at the archive revision. `just spec_check` validates the
+living specs and the legacy index without a frozen backlog. Neither requires
+history checkout or network access.
 
 The archive's `verify-archive.py` compares every candidate original with its Git
 blob and rejects missing/mismatched bytes; it never deletes files. Local complete

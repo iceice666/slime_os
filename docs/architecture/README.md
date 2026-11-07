@@ -5,8 +5,8 @@ explain the product as it exists now; they do not carry work-item state or
 historical delivery chronology.
 
 Every behavior claim points to the implementation, Zutai contract, reference
-document, or executable gate that owns it. `.tasks/items/` remains the only live
-store for scope, state, relationships, and observed exit conditions.
+document, or executable gate that owns it. `specs/` remains the only live record of
+what is promised, and the `evidence` branch of what was observed.
 
 ## Core runtime
 

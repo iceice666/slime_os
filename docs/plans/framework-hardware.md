@@ -7,8 +7,8 @@ upstream-seL4 CPU/product boot. The existing removable-media observation proves
 only that the resident product graph reached readiness without internal-storage
 write authority. It proves no device support.
 
-Work-item identity, dependencies, state, and per-slice exit conditions remain in
-`.tasks/items/`. This plan owns the stable delivery and qualification boundary.
+Requirement identity, state, and per-slice acceptances remain in `specs/`
+and its evidence branch. This plan owns the stable delivery and qualification boundary.
 
 ## Required sequence
 
@@ -110,4 +110,4 @@ it. Documentation cannot re-stamp the record.
 - [`../architecture/io-substrate.md`](../architecture/io-substrate.md)
 - `evidence/framework-cpu-boot/`
 - `scripts/check/check-framework-cpu-boot.py`
-- the Framework-tagged work items under `.tasks/items/`
+- the Framework requirements in `specs/` and their legacy ids in `specs/legacy.zt`

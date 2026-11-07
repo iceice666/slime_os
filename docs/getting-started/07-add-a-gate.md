@@ -214,9 +214,9 @@ public recipe has one; a recipe that should not be listed is private
 
 CI does not boot the QEMU planes. It runs the pins, host tests, formatting,
 clippy, contract and closure drift checks, `sel4_gate_control_check`, and
-`docs_check`. The plane gates run locally (or through `just devloop gate`,
-which records typed observations against the work item); the PR's
-verification section states which ones ran and what they observed. That is
+`docs_check`. The plane gates run locally (`just spec_record <target>` writes the
+typed observations as a record) and on `main` through the Evidence workflow;
+the PR's verification section states which ones ran and what they observed. That is
 why the gate-control row matters: it is the only part of your gate CI can
 exercise without hardware time.
 

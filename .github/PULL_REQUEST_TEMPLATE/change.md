@@ -40,13 +40,12 @@
 
 ## Related
 
-<!-- Work item UUID from `.tasks/items/` (an optional human key may follow in
-     parentheses); the UUID is the canonical machine identity. Existing
-     evidence or decision links may follow. Ordinary changes need no devlog. -->
+<!-- The requirement ids (specs/<area>.zt) this PR adds, binds or changes,
+     and the area. Existing evidence or decision links may follow. Ordinary
+     changes need no devlog. -->
 -
 
-<!-- Name the implemented work item by its canonical UUID. Work items are not
-     projected into GitHub Issues, so do not use GitHub auto-close keywords.
-     Merging a PR does not complete its item; use myque close only after
-     recording the observed exit evidence, its identity, scope, and limits in
-     the item, or let the closeout workflow run devloop complete. -->
+<!-- A behavior change carries its spec diff here. Do not use GitHub
+     auto-close keywords. Merging does not enforce a requirement: the Evidence
+     workflow records the bound targets on main, and `just spec_status`
+     reports the result. -->

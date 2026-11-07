@@ -1,6 +1,6 @@
 ---
 name: spec-review
-description: Adversarial review of an implementation PR against its landed spec-driven work item. Use after implementation and before gating or completing a devloop item, or when asked to audit whether a checker actually asserts what the spec's rationale claims. Reads the spec and the diff only, never the implementer's conversation.
+description: Adversarial review of a PR against the living spec it changes. Read the area's openQuestions first, then the spec diff, then the code diff. Use when reviewing any PR that carries a spec diff, or when asked to audit whether a checker actually asserts what an acceptance's rationale claims. Reads the spec and the diff only, never the implementer's conversation.
 ---
 
 # Adversarial spec review
@@ -13,16 +13,20 @@ recorded identity.
 
 ## Inputs you take, and inputs you refuse
 
-Take:
+Take, in this order:
 
-- The work item: `myque api get <UUID>` and `just devloop render` for the
-  `dev-spec/v1` body — problem, scope, non-goals, requirements, acceptance
-  rationale, predicates.
-- The execution inputs the acceptances bind (`.devloop/inputs/<name>.json`
-  or the file named on the command line): which `just` recipe answers.
-- The diff: `git diff origin/main...HEAD`, plus the checker and recipe that
-  the inputs name, read in full.
-- `.devloop/policy.json` for gate declarations and `codePaths`.
+1. The owning area's `openQuestions`, `invariants`, `nonGoals` and
+   `decisions` (`specs/<area>.zt`): what a person has and has not decided.
+2. The spec diff: `git diff origin/main...HEAD -- specs/`. Which
+   requirements the PR adds, rewrites, binds or removes, and each
+   acceptance's `justTarget`, predicates and rationale.
+3. The code diff: `git diff origin/main...HEAD`, plus the checker and recipe
+   each acceptance names, read in full.
+4. `python3 scripts/spec/check --base origin/main` output: what the diff
+   asks a human to approve, and whether rule 4 reports uncovered files.
+
+A PR that changes behavior and carries no spec diff is the first finding;
+no checker catches it.
 
 Refuse:
 
@@ -67,13 +71,14 @@ fails.
 Answer directly:
 
 - Did this PR add or change the checker, marker chain, fixture, or recipe
-  that its own acceptances bind? Which files? A change to the assertions
-  that decide the PR's own acceptance needs a reason in the PR that the
-  planning item did not already provide, and that reason must be about the
-  spec, not about making the gate pass.
-- Did it change `.devloop/policy.json`? If `codePaths` grew, was every new
-  entry something the gate reads; if it shrank, what evidence stops being
-  bound?
+  that its own acceptances bind? Which files? `check --base` lists them as
+  rule 3. A change to the assertions that decide the PR's own acceptance
+  needs a reason in the PR, and that reason must be about the spec, not
+  about making the gate pass. The approval is a decision; record why.
+- Did it change an area's `invariants` (rule 1) or an existing contract
+  schema (rule 2)? Each is a human decision, not a formality.
+- Did it add `[metadata("inputs", ...)]` or remove one? A removed input
+  stops staling the record it used to bind.
 - Did it change the expected count, bound, or marker in a way that matches
   what the implementation happens to produce? Ask for the fixture-side
   reason the number is what it is.
@@ -81,7 +86,8 @@ Answer directly:
 
 ### 4. Scope and ownership
 
-- Every file in the diff maps to a `scope` line or a requirement. List the
+- Every product file in the diff falls under the owning area's `owns`, and
+  every behavior change maps to a requirement in the spec diff. List the
   ones that do not.
 - Generated outputs (`@generated`, `boot-contracts/src/generated/`, derived
   manifests, `contracts/system-image-closure/v2/`) changed only alongside
@@ -158,7 +164,7 @@ or "not touched by this diff".
 ## Report
 
 Write findings first, ordered by severity, each with file:line and the
-spec line it contradicts. Then the four tables. Then what you did not
+requirement or acceptance it contradicts. Then the four tables. Then what you did not
 verify. Do not write "looks good"; write what you checked and what remains
 unproven. A review that produces no findings should still list every
 rationale claim and its asserting line, because that table is the record the

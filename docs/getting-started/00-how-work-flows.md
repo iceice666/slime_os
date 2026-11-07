@@ -3,25 +3,24 @@
 One page for a person who has not yet internalised the repository's habits.
 Every rule below is stated once, with the reason it exists and the program
 that enforces it; the pages it links to own the details. If you already know
-why a planning PR lands before an implementation PR, skip to the
+why a grader change needs a human approval, skip to the
 [decision tree](#which-path-am-i-on).
 
 ## The one idea behind all of it
 
 Project state is data that programs check, not prose that people remember.
-The canonical record of *what work exists, what state it is in, and what
-counted as finishing it* lives in `.tasks/` under
-[MyQue](https://github.com/mozufu/myque), and a growing set of checks —
-`just tasks_check`, [devloop](https://github.com/mozufu/devloop) approval,
-CI — refuse a tree that contradicts that record. Almost every convention that
-looks like ceremony is there so one of those checks can be honest:
+What the system promises lives in `specs/<area>.zt`; what has been observed
+lives on the `evidence` branch; `just spec_status` computes the difference.
+No person and no agent writes "done". Almost every convention that looks like
+ceremony is there so one of those checks can be honest:
 
 | Convention | What would break without it |
 |---|---|
-| Work item before implementation | Nothing to bind evidence or a PR to; "done" becomes an opinion |
-| Planning PR merges before implementation PR | The branch being graded could rewrite its own exam (see below) |
-| Backlog defects first | A milestone built on a known-red suite records evidence nobody trusts |
-| Merge is not completion | A landed diff proves nothing about an exit condition that needs a QEMU run, a hardware boot, or a refusal |
+| A behavior change changes the spec | The promise and the code drift apart with nothing to notice |
+| Exam, spec diff and implementation in one PR | Reviewers read a diff without the promise it serves |
+| A grader change needs a human approval | The branch being graded could rewrite its own exam |
+| Merge is not completion | A landed diff proves nothing about a QEMU run, a hardware boot, or a refusal |
+| Evidence keyed by a closure digest | A record would outlive the inputs it was taken on |
 | Closures regenerated with every source edit | A gate would prove a binary nobody can rebuild |
 
 The rest of this page is the timeline those conventions produce.
@@ -32,91 +31,70 @@ The rest of this page is the timeline those conventions produce.
   idea / bug report
         │
         ▼
-  ① check the backlog ─── open backlog defects?  → resolve, defer, or block them first
+  ① read the backlog ───── just spec_status --unenforced; failing first
         │
         ▼
-  ② admit a work item ─── just devloop admit spec.zti ...   (.tasks/items/<UUID>.md)
+  ② write the requirement ─ specs/<area>.zt: h.req ... { h.observedWhere ... }
         │
         ▼
-  ③ planning PR ────────── .tasks/ + .devloop/inputs/ only; merges to main
+  ③ write the exam ──────── a just target; run it under just spec_record <target>
         │
         ▼
-  ④ start & implement ─── just devloop start <UUID>; edit; regenerate closures; run the gate
+  ④ implement ───────────── edit the owning source; regenerate closures; just spec_status --local
         │
         ▼
-  ⑤ implementation PR ─── template; item UUID in the body; CI green; merge
+  ⑤ one PR ──────────────── spec diff + exam + implementation; CI judges the grader set
         │
         ▼
-  ⑥ record evidence ────── just devloop gate / human ...; just devloop complete <UUID>
-        │
-        ▼
-  ⑦ (later) retire ─────── maintenance PR moves the done item to .tasks/terminal/
+  ⑥ evidence ───────────── CI on main runs claimed targets, writes the evidence branch
 ```
 
-### ① Check the backlog
+### ① Read the backlog
 
-Items tagged `backlog` are known defects. Every open one is resolved,
-`deferred` (postponed by a recorded decision), or `blocked` (waiting on
-something outside this repository) before new milestone work starts.
+`just spec_status --unenforced` lists every requirement that is not
+enforced: failing, claimed, or advisory. A `failing` requirement in an area
+is fixed, or marked `planned` with a note, by the next PR that touches that
+area.
 
-- **Why:** a milestone that starts on a red suite closes on evidence nobody
-  can distinguish from the pre-existing failures.
-- **Enforced by:** `just tasks_check` refuses the store; `just devloop start`
-  refuses while an open backlog defect exists.
-- **Look:** `just tasks_next` lists what is actionable.
+- **Why:** a feature built on a red suite closes on evidence nobody can
+  distinguish from the pre-existing failures.
+- **Enforced by:** the review order in the
+  [spec-review skill](../../.agents/skills/spec-review/SKILL.md); the number
+  is always visible.
 
-### ② Admit a work item
+### ② Write the requirement
 
-Every non-trivial change implements a canonical item. From
-`2026-10-01T00:00:00Z` every new item is *spec-driven*: its body is a
-`dev-spec/v1` requirements payload, and its acceptances name gates from
-[`.devloop/policy.json`](../../.devloop/policy.json).
+Open the area file that owns the behavior and add, rewrite or remove
+requirements. A requirement is one sentence of promise, a rationale, and
+acceptances that name a `just` target and the counts it must report.
 
-```sh
-just devloop admit spec.zti --title "Describe the work" --admission <token> --policy .devloop/policy.json --kind task
-echo '{"justTarget": "<recipe>"}' > .devloop/inputs/<UUID>.json
-just tasks_check
-```
+- **Why:** a promise written as data can be checked; prose can only be
+  asserted. The target is named in the acceptance, so the same requirement
+  cannot be quietly re-pointed at an easier check without a spec diff.
+- **Enforced by:** `just spec_check` refuses an id that is not a UUIDv7, a
+  target `just` does not declare, a non-planned requirement without an
+  automated acceptance.
+- **Read:** [Carrying a change through the living specs](06-spec-lifecycle.md)
+  shows the helpers.
 
-- **Why:** an item written as data can be *checked* for completion; prose
-  can only be asserted. The recipe that grades the work is named in the
-  inputs file, never in requirement text, so the same requirement cannot be
-  quietly re-pointed at an easier check.
-- **Enforced by:** `just tasks_check` refuses a post-cutoff item without a
-  `devloop` record, and refuses a tracked file no `codePaths` entry covers.
-- **Never:** invent a UUID, pick "the next number" for a human key, or use
-  `myque new` for new work. Human keys such as `B92` are display aliases;
-  every persistent reference is the UUID.
-- **Read:** [Carrying a work item](06-work-item-lifecycle.md) walks the
-  commands; [`.devloop/examples/`](../../.devloop/examples/) is a complete
-  worked spec.
+### ③ Write the exam
 
-### ③ Planning PR first
+An exam is an ordinary recipe. A checker reports typed observations;
+`scripts/spec/record` turns them into the record's counts and takes
+`passed` from the exit status.
 
-Open a PR that contains only the item and its inputs file, and merge it
-before opening an implementation PR.
+- **Why:** a checker cannot vouch for itself, and a count the acceptance
+  pins (exactly four refusals, at least three controls) is harder to fake
+  than an exit code.
+- **Read:** [Add a gate](07-add-a-gate.md); the
+  [verification-checkers skill](../../.agents/skills/verification-checkers/SKILL.md)
+  owns negative controls.
 
-- **Why:** at `eligible` and `complete`, devloop approval refuses unless the
-  inputs file, the recipe it names, every recipe in that recipe's dependency
-  chain, the scripts they run, and the `scripts/lib` modules those import are
-  byte-for-byte what `origin/main` carries. The exam has to be on `main`
-  before the answer is graded; an implementation branch may add checkers for
-  *other* work but cannot rewrite the one that decides its own acceptance.
-  Combining item and implementation in one PR would defeat that.
-- **Enforced by:** `scripts/check/devloop-approval.py`, run inside
-  `just devloop start | eligible | complete`.
-- **Scope:** one landed item can cover several implementation PRs within its
-  scope; a new planning item is not required for every PR.
+### ④ Implement
 
-### ④ Start and implement
-
-```sh
-just devloop start <UUID> --policy .devloop/policy.json
-```
-
-Then route the change through [`docs/task-to-file.md`](../task-to-file.md)
-— read the named module root, not a grep across the tree — and edit the
-owning source. Two things catch most newcomers:
+Route the change through [`docs/task-to-file.md`](../task-to-file.md) — read
+the named module root, not a grep across the tree — and edit the owning
+source. Two things catch most newcomers:
 
 - **Generated outputs are not sources.** Anything beginning with
   `@generated`, `boot-contracts/src/generated/`, derived manifests, and the
@@ -134,81 +112,64 @@ owning source. Two things catch most newcomers:
 
 Finish with the repository-wide checks that apply: `just fmt_check_all` and
 `just lint_all` for Rust, `just docs_check` and `just typos` for
-documentation, `just tasks_check` if `.tasks/` changed.
+documentation, `just spec_check` if `specs/` changed, and
+`just spec_status --local` to see the requirement enforced from your own
+record before anyone else does.
 
-### ⑤ Implementation PR
+### ⑤ One PR
 
 Use the [change](../../.github/PULL_REQUEST_TEMPLATE/change.md) or
 [system-change](../../.github/PULL_REQUEST_TEMPLATE/system-change.md)
 template. Its `Verification` table wants exact commands, the observed result,
 and an evidence class: *direct* (you ran it), *inherited* (a prior recorded
-run), or *inference* (not observed). Name the implemented item by its canonical
-UUID in the description.
+run), or *inference* (not observed). Name the requirement ids the PR adds
+or changes.
 
-- **Never** write `Closes #123` / `Fixes #123` / `Resolves #123` to complete
-  work: GitHub does not own completion here, and the auto-close would lie.
-- **Why no Issue link:** work items are not projected into GitHub Issues
-  ([decision](../decisions/no-github-issue-projection.md)). `.tasks/` is the
-  only work-item state, so there is no second copy to keep in step.
+- **Judged by:** `scripts/spec/check --base`. Changing an area's
+  `invariants`, an existing `contracts/**/schema.zt`, or a file in the grader
+  set of any bound target needs an approval from a login in `HUMAN_OWNERS`.
+  Splitting the grader change into its own PR does not help: the rule judges
+  every bound target at the base.
+- **Never** write `Closes #123` to complete work: GitHub does not own
+  completion here.
 
-### ⑥ Record evidence, then complete
+### ⑥ Evidence
 
-Merging landed the diff. The item closes only when its acceptances hold
-against evidence recorded on the exact inputs that were tested:
+After the merge, the Evidence workflow resolves every bound target's closure
+digest, runs the targets with no record at that digest, and commits the
+records to the `evidence` branch. Nothing lands on `main`.
 
-```sh
-just devloop gate  <UUID> <ACCEPTANCE> --policy .devloop/policy.json --inputs .devloop/inputs/<UUID>.json --target <target> --image <image>
-just devloop human <UUID> <ACCEPTANCE> ... --observations <observed>.json --observer <who>   # operator-only obligations
-just devloop complete <UUID> --policy .devloop/policy.json --inputs .devloop/inputs/<UUID>.json --target <target> --image <image>
-```
-
-- **Why:** evidence is bound to the requirements digest, code closure, policy,
-  inputs, target, image, and run epoch. Change any of them and it no longer
-  applies; the newest entry for an obligation decides it, so a later failing
-  run is never rescued by an earlier pass. A human obligation (a physical
-  Framework boot, for example) stays pending until an operator records a
-  real observation — nothing synthesises one.
-- **Enforced by:** `just devloop complete` refuses while any mandatory
-  obligation is unmet. `myque close` is the pre-cutoff path and bypasses this
-  by design; never use it on a spec-driven item.
-- You record the gate evidence on the branch; `complete` runs on `main`.
-  After the implementation PR merges, `myque-closeout.yml` runs
-  `just devloop complete` there for every item devloop accepts and opens a
-  `.tasks`-only PR with the transition; merge it and the projector closes
-  the Issue. Details in
-  [Carrying a work item](06-work-item-lifecycle.md#closeout-prs).
-
-### ⑦ Retire (optional, later)
-
-A done item may leave the live tree for a minimal
-`.tasks/terminal/<UUID>.json` record through a maintenance PR, after its
-final bytes are retained in Git. Retirement is storage housekeeping, proves
-nothing, and is covered in [Carrying a work item](06-work-item-lifecycle.md#retirement-maintenance-prs).
+- **Why:** evidence is bound to the recipe definitions, the grader scripts,
+  the image derivation ids and the toolchain pins. Change any of them and the
+  record no longer applies; the target runs again.
+- **Human and hardware:** an `h.human` acceptance waits for
+  `scripts/spec/human ... --signer <login>`; a target CI cannot run waits
+  for its operator's `scripts/spec/record <target> --signer <login>`. The
+  signature, verified against `specs/allowed_signers`, is what status trusts.
 
 ## Which path am I on?
 
 ```text
 Is the change a genuine typo, broken link, format-only edit, or mechanical
 maintenance with no behavioural or project-state consequence?
-├─ yes → TRIVIAL: no item; open the PR; applicable checks still run.
+├─ yes → TRIVIAL: no spec diff; open the PR; applicable checks still run.
 │        Judge semantics, not line count. When unsure, it is not trivial.
 └─ no
-   ├─ Is there an open item on main whose scope already covers it?
-   │  └─ yes → EXISTING: skip ② ③; `just devloop start` (or `myque start`
-   │            for a pre-cutoff item), then ④ ⑤ ⑥ under that UUID.
-   ├─ Is it a defect?
-   │  └─ yes → BUG: ② with `--kind bug --tag backlog`, then ③ ④ ⑤ ⑥.
-   │            It joins the backlog, so it blocks new milestone work until
-   │            resolved, deferred, or blocked — which is the point.
-   └─ otherwise → FEATURE / REFACTOR / DOCS: the full ① – ⑥.
+   ├─ Does a planned requirement already promise it?
+   │  └─ yes → bind it: replace h.planned with h.req and its acceptances; ③ ④ ⑤.
+   ├─ Is it a defect in something enforced?
+   │  └─ yes → BUG: tighten or add the acceptance that would have caught it,
+   │            see it fail, then ④ ⑤. The spec diff is the regression test's name.
+   └─ otherwise → FEATURE / REFACTOR / DOCS: the full ② – ⑤.
 ```
 
 Two cases people misfile:
 
 - *"Substantial documentation"* is not trivial. A page that states a
-  procedure or a limitation is project state; it takes an item.
-- *A checker that needs to change* is a planning change, not an
-  implementation detail, because it is the exam. Land it in ③.
+  procedure or a limitation is project state; it changes with the spec or the
+  architecture page that owns it.
+- *A checker that needs to change* is a grader change: it asks for a human
+  approval in ⑤, and the approval is the decision, not a formality.
 
 ## Working with an agent
 
@@ -220,30 +181,28 @@ first read. You do not need to read it to contribute — this page and
 [CONTRIBUTING.md](../../CONTRIBUTING.md) are the human versions — but it is
 worth knowing what an agent is doing when it goes quiet after "add X":
 
-1. It runs `just tasks_next` and reads the `backlog`-tagged items (①).
-2. It looks for an existing item covering the request; failing that it
-   drafts a `dev-spec/v1` payload and admits it (②), and proposes a planning
-   PR before writing code (③).
+1. It runs `just spec_status --unenforced` and reads what is failing (①).
+2. It finds the area that owns the behavior, writes or binds the requirement
+   and the exam (② ③).
 3. It routes through `docs/task-to-file.md`, edits the owning source,
-   regenerates closures, and runs the narrowest gate (④).
+   regenerates closures, and runs the narrowest gate under `spec_record` (④).
 4. It fills the PR template with a verification table and separates what it
    observed from what it inferred (⑤).
 
 Review an agent's work against that list, not against the diff alone. The
 usual failure modes are the same as a person's: editing a generated file,
-skipping the planning PR "because it is small", presenting a green unrelated
-gate as evidence, or calling a merged PR done. The checks catch most of
-these; the ones they do not catch are ⑤'s evidence classes and ⑥'s judgement
-that an exit condition was actually observed.
+changing behavior without a spec diff, presenting a green unrelated gate as
+evidence, or calling a merged PR done. The checks catch most of these; the
+ones they do not catch are ⑤'s evidence classes and the spec diff's honesty.
 
 ## Where the details live
 
 | Question | Page |
 |---|---|
 | The rules that bind a PR, exactly | [CONTRIBUTING.md](../../CONTRIBUTING.md) |
-| Every `devloop` and `myque` command, in order | [Carrying a work item](06-work-item-lifecycle.md) |
+| The spec helpers, the CLI, and what status means | [Carrying a change through the living specs](06-spec-lifecycle.md) |
 | Which file owns my change | [Task-to-file index](../task-to-file.md), [Recipes](11-recipes.md) |
 | What a gate is and how to add one | [Add a gate](07-add-a-gate.md) |
-| Why the requirements body is data | [Spec-driven work-item bodies](../decisions/spec-driven-work-item-bodies.md) |
-| Why the commit, item, and docs own different records | [Development record ownership](../decisions/development-record-ownership.md) |
+| Why living specs replaced work items | [Living specs replace work items](../decisions/living-spec-devloop.md) |
+| Why the commit, spec, and docs own different records | [Development record ownership](../decisions/development-record-ownership.md) |
 | A term I do not recognise | [Glossary](../glossary.md) |
