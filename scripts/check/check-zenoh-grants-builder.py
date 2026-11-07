@@ -6,7 +6,7 @@
 builds the table from a manifest and from a spec, requires the encoder's bytes, the independent struct writer's bytes and
 a decode back to the declared rows, and refuses each input the contract and the manifest forbid.
 
-The exam is imported here, at the top of the file, so `devloop-approval` follows it into this recipe's closure, and with
+The exam is imported here, at the top of the file, so the closure resolver follows it into this recipe's closure, and with
 it the system spec modules it imports. The other Zenoh slices live in `check-zenoh-profile0.py`, which does not import
 the exam, so a change to the system spec does not stale their evidence or make their items ineligible.
 """

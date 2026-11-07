@@ -15,11 +15,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Cheap, always-run scope detection. A change confined to `.tasks/` (the
-  # canonical work-item store, e.g. an automated retirement batch) touches no
-  # code, contract, or generation surface, so every job below that builds or
-  # boots something is skipped for it. Anything else — including a mix of
-  # `.tasks/` and code — runs the full suite; uncertainty defaults to `true`.
+  # Cheap, always-run scope detection. A change confined to `proposal/` (the
+  # devloop redesign notes) touches no code, contract, or generation surface,
+  # so every job below that builds or boots something is skipped for it.
+  # Anything else — including a mix with code — runs the full suite;
+  # uncertainty defaults to `true`.
   changes:
     name: Detect change scope
     runs-on: ubuntu-latest
@@ -46,28 +46,11 @@ jobs:
           changed="$(git diff --name-only "$base" "$head")"
           echo "Changed files:"
           echo "$changed"
-          if [[ -n "$changed" ]] && ! echo "$changed" | grep -qvE '^\.tasks/'; then
+          if [[ -n "$changed" ]] && ! echo "$changed" | grep -qvE '^proposal/'; then
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
-
-  # A pull request that adds a work item may not also change the product
-  # tree: the item lands first, then its implementation. The classes come
-  # from `.devloop/policy.json`; see CONTRIBUTING.md "Pull request scope".
-  pr_scope:
-    name: Pull request scope
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - run: |
-          python3 scripts/check/check-pr-scope.py \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head "${{ github.event.pull_request.head.sha }}"
 
   # === Jobs that need neither the seL4 prefix nor Nix ===
   #
@@ -232,64 +215,11 @@ jobs:
       - run: just sel4_gate_control_check
       - run: python3 scripts/check/check-generation-v5.py --check-controls
 
-  work_items:
-    name: Canonical work-item store
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # Separate from `docs_gates` on purpose. That job's whole toolchain is a
-    # checkout plus `just`, and `docs_check` is deliberately binary-free so
-    # it stays that cheap. This gate runs `myque check`, which needs the dev
-    # shell shared with projection, closeout and retirement.
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: nixbuild/nix-quick-install-action@v35
-        with:
-          nix_conf: |
-            keep-env-derivations = true
-            keep-outputs = true
-
-      # All tool-cache consumers realize the same projection shell. Keep its
-      # key inputs aligned with the projection, closeout and retirement jobs;
-      # unrelated product lockfiles must not invalidate this tool closure.
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: >-
-            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
-              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
-            }}
-          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
-          gc-max-store-size-linux: 5G
-
-      # Keep the shell closure rooted through cache-nix-action's post-job GC/save.
-      - name: Root shared tool environment
-        run: nix develop .#projection --profile "$RUNNER_TEMP/projection-profile" --command true
-
-      - run: nix develop .#projection --command just tasks_check
-
-      - name: Checkout trusted retirement verifier
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-          path: retirement-verifier
-          persist-credentials: false
-
-      - name: Verify retirement against current main
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
-        working-directory: retirement-verifier
-        env:
-          RETIREMENT_HEAD_REF: ${{ github.head_ref }}
-          RETIREMENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          nix develop .#projection --command
-          python3 scripts/lib/work_item_retirement_publish.py --check-pr
-
   # The living specs (proposal/devloop-redesign/): schema, bound targets,
   # reverse marks, the CLI's own end-to-end run, and on a pull request the
   # grader-independence judgement against the base with the reviews that
-  # approved the head. Runs beside `work_items` until Phase 3 retires it.
+  # approved the head. The `spec` shell is a checkout plus just, python,
+  # zutai-cli and gh; no product toolchain.
   spec:
     name: Living specs
     runs-on: ubuntu-latest
@@ -309,13 +239,13 @@ jobs:
       - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: >-
-            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
-              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            spec-v1-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/zutai.nix')
             }}
-          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
+          restore-prefixes-first-match: spec-v1-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 5G
-      - run: nix develop .#projection --command just spec_check
-      - run: nix develop .#projection --command python3 scripts/spec/e2e
+      - run: nix develop .#spec --command just spec_check
+      - run: nix develop .#spec --command python3 scripts/spec/e2e
       - name: Approvals from HUMAN_OWNERS
         if: github.event_name == 'pull_request'
         id: approvers
@@ -328,7 +258,7 @@ jobs:
       - name: Grader independence against the base
         if: github.event_name == 'pull_request'
         run: >-
-          nix develop .#projection --command
+          nix develop .#spec --command
           python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}"
           --approvers "${{ steps.approvers.outputs.logins }}"
 
@@ -532,7 +462,7 @@ jobs:
     if: always()
     steps:
       # The seL4 jobs report `skipped` rather than `success` for a
-      # `.tasks/`-only change (see `changes` above); that is this aggregate's
+      # `proposal/`-only change (see `changes` above); that is this aggregate's
       # success too, not a failure to paper over.
       - run: |
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
@@ -558,7 +488,6 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - pr_scope
       - lint
       - sel4_pins
       - test_host
@@ -567,7 +496,7 @@ jobs:
       - deps
       - scripts
       - docs_gates
-      - work_items
+      - spec
       - kani_proofs
       - sel4_product
       - sel4_rollback_runtime
@@ -578,17 +507,15 @@ jobs:
       - sel4_rollback
     if: always()
     steps:
-      # `scripts`, `docs_gates`, and `work_items` are cheap and always run, so
-      # they must actually succeed. Every other job is skipped on purpose for
-      # a `.tasks/`-only change (`needs.changes.outputs.code == 'false'`);
-      # `skipped` is as good as `success` for those.
+      # `scripts`, `docs_gates`, and `spec` are cheap and always run, so they
+      # must actually succeed. Every other job is skipped on purpose for a
+      # docs-only change (`needs.changes.outputs.code == 'false'`); `skipped`
+      # is as good as `success` for those.
       - run: |
           test "${{ needs.scripts.result }}" = success
           test "${{ needs.docs_gates.result }}" = success
-          test "${{ needs.work_items.result }}" = success
+          test "${{ needs.spec.result }}" = success
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
-          # `pr_scope` is skipped on pushes; on a pull request it must pass.
-          ok "${{ needs.pr_scope.result }}"
           ok "${{ needs.lint.result }}"
           ok "${{ needs.sel4_pins.result }}"
           ok "${{ needs.test_host.result }}"

@@ -136,18 +136,6 @@ run("check", str(POWERBOX_CONTRACT / "gen_rust.zt"))
 run("check", str(BOOT_MEDIA_CONTRACT / "schema.zt"))
 run("check", str(CPU_BOOT_OBSERVATION_CONTRACT / "schema.zt"))
 
-subprocess.run(
-    [sys.executable, str(ROOT / "scripts/generate/generate-devloop-diagnostics-bindings.py"), "--check"],
-    cwd=ROOT,
-    check=True,
-)
-
-subprocess.run(
-    [sys.executable, str(ROOT / "scripts/generate/generate-observation-capacity-bindings.py"), "--check"],
-    cwd=ROOT,
-    check=True,
-)
-
 run("check", str(TRANSFER_CONTRACT / "schema.zt"))
 run("check", str(TRANSFER_CONTRACT / "gen_rust.zt"))
 
@@ -267,10 +255,9 @@ for contract in (GENERATION_V2_CONTRACT, GENERATION_V3_CONTRACT):
         raise SystemExit("generation wire-layout mismatch was not rejected")
 SLOT_PIN_REASON_CHECK.main()
 
-# Every contract version's schema must compile, named above or not. A planning
-# pull request may land a schema before any generator, binding, or checker
-# refers to it (`scripts/lib/pr_scope.py` INTERFACE), and this is the only
-# gate that would otherwise never see it.
+# Every contract version's schema must compile, named above or not. A change
+# may land a schema before any generator, binding, or checker refers to it,
+# and this is the only gate that would otherwise never see it.
 schemas = sorted((ROOT / "contracts").rglob("schema.zt"))
 if not schemas:
     raise SystemExit("no contracts/**/schema.zt found")

@@ -1,16 +1,15 @@
-# The pinned Zutai toolchain, as `just tasks_check` consumes it.
+# The pinned Zutai toolchain, as `just spec_check` and the dev shell consume it.
 #
-# devloop validates a requirements body by compiling a trusted wrapper over its
-# helpers and running the result, so it needs `zutai-cli`, the standard library,
-# and the native runtime archive. Contract generation and the schema checks get
-# those by building the `deps/zutai` submodule (`scripts/lib/zutai_cli.py`), but
-# the work-item gate runs in a job that checks out no submodules and has no
-# Rust toolchain, so the same revision is packaged here.
+# The living specs (`specs/*.zt`), their records and every contract renderer
+# evaluate with `zutai-cli` and its standard library. Contract generation can
+# build the `deps/zutai` submodule (`scripts/lib/zutai_cli.py`), but the spec
+# gate runs in a job that checks out no submodules and has no Rust toolchain,
+# so the same revision is packaged here; `scripts/spec/lib.py` finds the
+# stdlib beside the binary when the submodule is absent.
 #
-# `revision` is installed alongside the binaries because a recorded helper
-# identity is bound to one compiler revision: `scripts/lib/devloop.py` reads it
-# and refuses to validate with a toolchain devloop was not released against.
-# Keep the flake input's revision equal to the submodule's.
+# `revision` is installed alongside the binaries as record metadata. Keep the
+# flake input's revision equal to the submodule's and to `specs/zutai.toml`;
+# `scripts/spec/check` refuses a checkout where they disagree.
 {
   lib,
   llvmPackages,
