@@ -1,0 +1,139 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "runtime" "Runtime plane" {
+    "components/runtime/**";
+    "slime-root/src/clock*.rs";
+    "slime-root/src/instance*.rs";
+  } {
+    -- legacy 01a0ed72-626c-7675-af57-8510e473b774 (done): Instance lifetime: declared resident instances enforced by the root
+    -- No generation data states whether an instance is meant to run for the life of its graph. The root
+    -- treats every clean exit as completion: a required instance that exits 0 counts as completed, and a
+    -- graph whose required instances have all exited certifies with live=0. Each service decides on its
+    -- own when to stop. network-service ends once its clients' sessions close and releases its link, and
+    -- init's supervise_resident hard-codes a residency rule only for the product components it launches
+    -- itself. A composition therefore cannot declare that network-service, or the planned entropy-service,
+    -- must stay up, and a service that quietly finishes is indistinguishable from one that did its job.
+    (h.req "01a1b3bb-c214-7346-867e-f75fa4ee0357"
+      "Every instance has exactly one lifetime, resident or bounded, resolved from the component spec default and the composition's override. The builder and the decoder refuse any other value, a malformed lifetime object, and a row naming an instance the generation does not admit. A generation without the object has every instance bounded, and every existing plane passes unchanged."
+      "Instance lifetime: declared resident instances enforced by the root"
+      {
+        h.observedWhere "lifetime-regressions-passed" "sel4_lifetime_check" h.noPredicates "sel4_lifetime_check depends on the host tests, which carry the lifetime object's malformed-row cases, and on slime-root's host tests, the lifecycle restart plane and the product component graph, which must pass unchanged with every existing instance bounded. The gate adapter, not the checker, reports the recipe's exit code.";
+      }) with { supersedes = { "01a0ed72-626c-7675-af57-8510e473b774"; }; };
+    (h.req "01a1b3bb-c214-7346-867e-f7602fce96d8"
+      "An instance that asks the root for its lifetime receives the value its generation declares, resident or bounded, and never a value from another instance."
+      "Instance lifetime: declared resident instances enforced by the root"
+      {
+        h.observedWhere "lifetime-cases-observed" "sel4_lifetime_check" { h.count "casesObserved" 4; } "The arm observes exactly four cases over two boots. On sel4-lifetime: a resident required instance that answers resident and stays live under a live>0 certification; a bounded required instance that answers bounded, exits 0 and is counted completed; and a resident optional instance that exits 0 and is recorded as unhealthy. On sel4-lifetime-exit: a resident required instance whose exit ends the graph with the typed failure naming it. Four is the number of cases the arm drives, not a lower bound.";
+      }) with { supersedes = { "01a0ed72-626c-7675-af57-8510e473b774"; }; };
+    (h.req "01a1b3bb-c214-7346-867e-f7610e59bdf3"
+      "A resident required instance that stays live keeps the graph certified with live>0. A bounded required instance that exits 0 is still counted as completed. A resident optional instance that exits 0 is recorded as unhealthy, not as a clean exit, and the graph does not count it as completed. A resident required instance that exits 0 ends the graph with the typed resident-exit failure naming it."
+      "Instance lifetime: declared resident instances enforced by the root"
+      {
+        h.observedWhere "lifetime-cases-observed" "sel4_lifetime_check" { h.count "casesObserved" 4; } "The arm observes exactly four cases over two boots. On sel4-lifetime: a resident required instance that answers resident and stays live under a live>0 certification; a bounded required instance that answers bounded, exits 0 and is counted completed; and a resident optional instance that exits 0 and is recorded as unhealthy. On sel4-lifetime-exit: a resident required instance whose exit ends the graph with the typed failure naming it. Four is the number of cases the arm drives, not a lower bound.";
+      }) with { supersedes = { "01a0ed72-626c-7675-af57-8510e473b774"; }; };
+    (h.req "01a1b3bb-c214-7346-867e-f7623695f8b2"
+      "The new arm takes part in the checker's shared missing-marker, reordered-marker and explicit-failure controls, so a passing gate is evidence of the observed chain rather than of a quiet transcript."
+      "Instance lifetime: declared resident instances enforced by the root"
+      {
+        h.observedWhere "controls-refused" "sel4_lifetime_check" { h.atLeast "negativeControlsRefused" 3; h.atMost "negativeControlsRefused" 64; } "The checker runs its shared missing, reordered and explicit-failure mutations against the captured transcripts and reports how many it refused. The inclusive lower bound of three catches a dropped control; the upper bound is a sanity limit, not a target.";
+      }) with { supersedes = { "01a0ed72-626c-7675-af57-8510e473b774"; }; };
+    -- legacy 01a17874-348b-78c1-a7fd-8f05558cc24b (active): Make monotonic clock reads ambient
+    -- contracts/clock-authority/v1 gates monotonic and rate reads on a declared monotonicRead right, and
+    -- the root serves each read as an IPC round trip. The gate denies nothing on AArch64, where the kernel
+    -- exports CNTPCT_EL0 to every EL0 thread, and the root answers every read with the raw counter value.
+    -- Replay does not depend on it either, because a recording component writes each read value into its
+    -- own trace. Under QEMU TCG one round trip costs about 32 us, and in sel4-io-tcp-buffers network-
+    -- service read the clock 23,453 times, which took 0.75 s of root time. docs/decisions/ambient-clock-
+    -- reads.md records the owner's decision to make these reads ambient. This item supersedes
+    -- 01a1776e-0e31-7ebc-a877-8a2f3d656baf, which also required RISC-V components to read the counter
+    -- directly; the RISC-V root clock on QEMU virt is the Goldfish RTC, which userspace cannot read and
+    -- rdtime does not count. The replay plane's recorder marker pinned bit 26 and is repaired in the same
+    -- planning change.
+    (h.req "01a1b3bb-c45d-7139-8aed-212cd93f9ac0"
+      "No tracked file under contracts/system-spec/v1/systems, baselines or sources, contracts/generation-manifest/v1/compositions, or either manifest schema names monotonicRead. The rights vocabulary defines no CLOCK_MONOTONIC_READ, the generated rights table neither names clockMonotonicRead nor assigns bit 26, GENERATION_RIGHT_ALL excludes bit 26, and the clock-authority binding is format 2."
+      "Make monotonic clock reads ambient"
+      {
+        h.observedWhere "clock-direct-observed" "clock_direct_read_check" h.noPredicates "clock_direct_read_check runs the clock plane, whose transcript shows whether any read reached the root and whether the counter a probe reads agrees with a root-armed delay, then the replay, robot-runtime and TCP-buffer planes that read the clock, then the static and builder judges over the tree as merged. A probe cannot report its way past the root's own served lines. The recipe failed on main when it landed, before booting, because the clock plane's fixture still gave clock-monotonic a row. Run alone, the direct-static arm found monotonicRead in the derived compositions, and the builder accepted a row naming it.";
+      }) with { supersedes = { "01a17874-348b-78c1-a7fd-8f05558cc24b"; }; };
+    (h.req "01a1b3bb-c45d-7139-8aed-212d62346027"
+      "The generation builder's clock-authority encoder accepts the derived sel4-clock-authority table, and refuses that table when any one row gains monotonicRead = true or monotonicRead = false, when a row with no authority is added, and when a row declaring only monotonicRead is added."
+      "Make monotonic clock reads ambient"
+      {
+        h.observedWhere "clock-direct-observed" "clock_direct_read_check" h.noPredicates "clock_direct_read_check runs the clock plane, whose transcript shows whether any read reached the root and whether the counter a probe reads agrees with a root-armed delay, then the replay, robot-runtime and TCP-buffer planes that read the clock, then the static and builder judges over the tree as merged. A probe cannot report its way past the root's own served lines. The recipe failed on main when it landed, before booting, because the clock plane's fixture still gave clock-monotonic a row. Run alone, the direct-static arm found monotonicRead in the derived compositions, and the builder accepted a row naming it.";
+      }) with { supersedes = { "01a17874-348b-78c1-a7fd-8f05558cc24b"; }; };
+    (h.req "01a1b3bb-c45d-7139-8aed-212e54924621"
+      "In the sel4-clock-authority boot the root prints no SLIME_CLOCK served line and no undeclared refusal for label 44 or 70. clock-monotonic, which holds no row, reads a strictly advancing counter and a nonzero rate; clock-denied reads both, and the root still refuses its labels 45, 47 and 48 as undeclared."
+      "Make monotonic clock reads ambient"
+      {
+        h.observedWhere "clock-direct-observed" "clock_direct_read_check" h.noPredicates "clock_direct_read_check runs the clock plane, whose transcript shows whether any read reached the root and whether the counter a probe reads agrees with a root-armed delay, then the replay, robot-runtime and TCP-buffer planes that read the clock, then the static and builder judges over the tree as merged. A probe cannot report its way past the root's own served lines. The recipe failed on main when it landed, before booting, because the clock plane's fixture still gave clock-monotonic a row. Run alone, the direct-static arm found monotonicRead in the derived compositions, and the builder accepted a row naming it.";
+      }) with { supersedes = { "01a17874-348b-78c1-a7fd-8f05558cc24b"; }; };
+    (h.req "01a1b3bb-c45d-7139-8aed-212f69a55d6a"
+      "clock-timer prints exactly one domain line, with a positive delay, and its expiry read W is at least its pre-arm read A plus the armed delay D, so the counter a component reads is the one the root's timers count."
+      "Make monotonic clock reads ambient"
+      {
+        h.observedWhere "clock-direct-observed" "clock_direct_read_check" h.noPredicates "clock_direct_read_check runs the clock plane, whose transcript shows whether any read reached the root and whether the counter a probe reads agrees with a root-armed delay, then the replay, robot-runtime and TCP-buffer planes that read the clock, then the static and builder judges over the tree as merged. A probe cannot report its way past the root's own served lines. The recipe failed on main when it landed, before booting, because the clock plane's fixture still gave clock-monotonic a row. Run alone, the direct-static arm found monotonicRead in the derived compositions, and the builder accepted a row naming it.";
+      }) with { supersedes = { "01a17874-348b-78c1-a7fd-8f05558cc24b"; }; };
+    (h.req "01a1b3bb-c45d-7139-8aed-2130870ce88d"
+      "clock_authority_check passes with the expectations this item lands, and replay_check, robot_runtime_check and io_tcp_buffers_check pass without edits to their checkers or peers."
+      "Make monotonic clock reads ambient"
+      {
+        h.observedWhere "clock-direct-observed" "clock_direct_read_check" h.noPredicates "clock_direct_read_check runs the clock plane, whose transcript shows whether any read reached the root and whether the counter a probe reads agrees with a root-armed delay, then the replay, robot-runtime and TCP-buffer planes that read the clock, then the static and builder judges over the tree as merged. A probe cannot report its way past the root's own served lines. The recipe failed on main when it landed, before booting, because the clock plane's fixture still gave clock-monotonic a row. Run alone, the direct-static arm found monotonicRead in the derived compositions, and the builder accepted a row naming it.";
+      }) with { supersedes = { "01a17874-348b-78c1-a7fd-8f05558cc24b"; }; };
+    (h.req "01a1b3bb-c45d-7139-8aed-213127c37a71"
+      "Before it boots or reads the tree, the checker refuses 22 mutations: a served and an undeclared monotonic and rate read, a missing and a doubled domain line, a zero delay and an early expiry read, the field in a system spec, a baseline, a derived composition and the manifest schema, no examined composition, the right still in the vocabulary, the bindings still naming, reusing or exporting bit 26, format 1, and builders that ignore the field, accept every table or refuse the honest table."
+      "Make monotonic clock reads ambient"
+      {
+        h.observedWhere "clock-direct-observed" "clock_direct_read_check" h.noPredicates "clock_direct_read_check runs the clock plane, whose transcript shows whether any read reached the root and whether the counter a probe reads agrees with a root-armed delay, then the replay, robot-runtime and TCP-buffer planes that read the clock, then the static and builder judges over the tree as merged. A probe cannot report its way past the root's own served lines. The recipe failed on main when it landed, before booting, because the clock plane's fixture still gave clock-monotonic a row. Run alone, the direct-static arm found monotonicRead in the derived compositions, and the builder accepted a row naming it.";
+      }) with { supersedes = { "01a17874-348b-78c1-a7fd-8f05558cc24b"; }; };
+    -- legacy 01a17d6c-c108-78fd-ae62-f543ef9fc3d6 (done): A withdrawn robot command is held until its forwarded cancellation
+    -- This item supersedes 01a17cb1-e76b-7aee-b982-727f31a6e2e5, which excluded any change to the fabric
+    -- call broker: a held request cannot be withdrawn without one, because the broker forwards a
+    -- cancellation only to a server it knows is receiving, and a blocking send to a server still executing
+    -- the call would deadlock against its reply. #859 implemented the protocol below under that item. In
+    -- sel4-robot-runtime the controller issues its withdrawn command and its cancellation back to back.
+    -- The actuator applies and answers the command as soon as it receives it, so whether the cancellation
+    -- reaches the actuator is a race with the actuator's own reply. When the broker correlates that reply
+    -- first, it settles the withdrawal as cancelled itself, the actuator never prints [robot-actuator]
+    -- command cancelled, and robot_runtime_check fails. On main 1 of 20 boots never saw it, but with every
+    -- console line written in one record (01a17b95-2684-71b1-bb67-757af03972fd) it failed 1 boot in 14. In
+    -- every boot the actuator also applied the withdrawn command before its cancellation, although robot-
+    -- actuator's own documentation states that cancellation is produced deliberately rather than from a
+    -- race.
+    (h.req "01a1b3bb-c47e-7052-9190-072c7c26c845"
+      "In each of four boots of sel4-robot-runtime the actuator prints exactly one [robot-actuator] command held id=N, the broker prints exactly one [fabric] call held after it and [fabric] call cancellation forwarded after that, the actuator prints exactly one [robot-actuator] command cancelled id=N with the same N after that, the controller prints [robot-controller] command cancellation observed once after the actuator's line, and the actuator prints [robot-actuator] cancelled total=1."
+      "A withdrawn robot command is held until its forwarded cancellation"
+      {
+        h.observedWhere "withdrawn-observed" "robot_withdrawn_check" h.noPredicates "robot_withdrawn_check runs the arm's controls before any boot and the plane's own gate, then judges the withdrawal in four further boots from the broker's and the controller's lines as well as the actuator's, so the actuator cannot report its way to a pass. A held request settles only on a forwarded cancellation, so the outcome no longer depends on scheduling, and the hold marker separates the repaired protocol from a lucky boot. The superseded exam refused all 34 transcripts recorded before #859 for lacking the hold; removing the held-record checks makes the no-held-record control pass, so the stricter arm is sensitive to the broker mechanism it now names.";
+      }) with { supersedes = { "01a17d6c-c108-78fd-ae62-f543ef9fc3d6"; }; };
+    (h.req "01a1b3bb-c47e-7052-9190-072ddb494bc0"
+      "robot_runtime_check passes without edits to its checker."
+      "A withdrawn robot command is held until its forwarded cancellation"
+      {
+        h.observedWhere "withdrawn-observed" "robot_withdrawn_check" h.noPredicates "robot_withdrawn_check runs the arm's controls before any boot and the plane's own gate, then judges the withdrawal in four further boots from the broker's and the controller's lines as well as the actuator's, so the actuator cannot report its way to a pass. A held request settles only on a forwarded cancellation, so the outcome no longer depends on scheduling, and the hold marker separates the repaired protocol from a lucky boot. The superseded exam refused all 34 transcripts recorded before #859 for lacking the hold; removing the held-record checks makes the no-held-record control pass, so the stricter arm is sensitive to the broker mechanism it now names.";
+      }) with { supersedes = { "01a17d6c-c108-78fd-ae62-f543ef9fc3d6"; }; };
+    (h.req "01a1b3bb-c47e-7052-9190-072e4d7d57d2"
+      "Before any boot, robot_withdrawn_controls accepts one honest withdrawal and refuses 17 mutations: no hold, two holds, another id cancelled, no settlement, two settlements, no held record, two held records, a held record before the hold, after the forward and after the settlement, no forwarded withdrawal, the withdrawal forwarded before the hold, a settlement before the hold, an observation before the settlement, two observations, no total and a zero total."
+      "A withdrawn robot command is held until its forwarded cancellation"
+      {
+        h.observedWhere "withdrawn-observed" "robot_withdrawn_check" h.noPredicates "robot_withdrawn_check runs the arm's controls before any boot and the plane's own gate, then judges the withdrawal in four further boots from the broker's and the controller's lines as well as the actuator's, so the actuator cannot report its way to a pass. A held request settles only on a forwarded cancellation, so the outcome no longer depends on scheduling, and the hold marker separates the repaired protocol from a lucky boot. The superseded exam refused all 34 transcripts recorded before #859 for lacking the hold; removing the held-record checks makes the no-held-record control pass, so the stricter arm is sensitive to the broker mechanism it now names.";
+      }) with { supersedes = { "01a17d6c-c108-78fd-ae62-f543ef9fc3d6"; }; };
+  }) with {
+    nonGoals = {
+      "An operation that stops a resident instance. A composition that must shut an instance down declares it bounded. An authorized stop, carried by the supervision handle, is follow-up work.";
+      "Changing any existing composition's behavior, including making network-service, console, spawn-service or slisp resident. sel4-net (01a0ebea) and sel4-entropy (01a0ec3a) are the first consumers and declare their own resident instances.";
+      "Restarting a resident instance that exited. Restart policy stays with the C9.4 lifecycle policy.";
+      "A generation format version change. The instance record is not re-encoded.";
+      "Physical-machine or pc99 qualification. QEMU evidence carries no hardware claim.";
+      "Replacing the x86_64 or RISC-V root clock with a counter userspace can read.";
+      "Reusing an unchanged timer deadline in network-service, or printing SLIME_CLOCK expired once. A separate item owns those.";
+      "A throughput or latency target.";
+      "Closing EL0 write access to the AArch64 physical timer registers, which needs a kernel or platform change.";
+      "Board qualification. QEMU evidence carries no hardware claim.";
+      "Host unit tests of the call broker, which builds only with the component runtime; the plane judges its held handling.";
+      "Other robot-runtime timing: which samples each controller incarnation consumes is judged as a scheduling fact by the same planning change.";
+      "Physical-machine qualification. QEMU evidence carries no hardware claim.";
+    };
+  };
+
+area
