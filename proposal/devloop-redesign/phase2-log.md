@@ -29,7 +29,21 @@
 | e2e | 29/29 |
 | `spec_check`、`docs_check`、ruff、typos | 綠 |
 
-**沒驗證**：`evidence.yml` 與 `ci.yml` 的 `spec` job 沒在 GitHub 跑過（尚未 push）。第一次 push 後要看：projection shell 有沒有 `ssh-keygen`（human 驗簽要）；arm64 runner 上 `status --claimed` 的 closure 解析時間；`GITHUB_TOKEN` 能否推 `evidence`。
+### GitHub 上的結果（push 後，4 輪修正）
+
+| Run | 結果 | 學到 |
+| --- | --- | --- |
+| 1 | `spec` job 紅：`deps/zutai/stdlib` 不存在 | projection shell 不 checkout submodule；`lib.stdlib_root()` 改為 env → submodule → `<zutai-cli>/../share/zutai/stdlib` |
+| 1 | Evidence 紅：`status --claimed` 的輸出被 shellHook 的 rustup 訊息污染 | 改為 `scripts/spec/ci` 在一次 shell 內做 claimed → record → publish |
+| 2 | `spec` job 紅：e2e 的 publish 缺 git identity；`work_items` 紅：`HUMAN_OWNERS` 未 exempt | `commit-tree` 固定用 `evidence <evidence@slime-os>`；exempt 加一列 |
+| 2 | Evidence：`sel4_lifetime_check` 82 秒失敗 | 不是 rot：`test_sel4_root` 要 `build/sel4-prefix`，其他 CI job 都先跑 `sel4_qemu_image_check`；workflow 補一步 |
+| 3 | Evidence：push 被拒 `directory file conflict` | 遠端殘留 `evidence/data-volume-and-aggregate`、`evidence/image-attestations`（已 merge 的 #912/#921 分支）；刪除 |
+| 3 | Evidence：`robot_withdrawn_check` 6 秒失敗（「restart total did not land between two chunks of the declared load」），前後兩次都 23 秒通過 | **flaky plane**，計畫預言的 rot 類型；同一 digest 下 passed 來回跳會留在 evidence branch 的 git log 裡。Phase 3 要排進 backlog |
+| 4 | **Evidence 綠** | `clock_direct_read_check` 913 秒、`robot_withdrawn_check` 23 秒、`sel4_lifetime_check` 740 秒；publish 3 檔；`evidence` branch 建立；`status --unenforced` **13/13 enforced**；main 零 commit |
+
+本機（macOS）算出的 closureDigest 與 CI（Linux arm64）完全一致，`status` 直接讀 `origin/evidence` 得 13/13。
+
+CI 時間：slime-env + `sel4_qemu_image_check` 約 10 分；三個 target 共 28 分；全 run 約 45 分。這是 Phase 0 量測 (2) 的第一個數據點：3 個 target / 11 個 image。全部 ~85 個 plane recipe 按比例估 4–6 小時，超過單 job 180 分鐘上限；Phase 3 全量歸戶前要分 shard 或分 plane job。
 
 ## 做的時候發現的事
 
