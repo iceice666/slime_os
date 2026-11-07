@@ -6,6 +6,83 @@ area :: s.Area = (h.area "quality" "Repository quality gates" {
     "scripts/lib/**";
     "docs/**";
   } {
+    -- legacy 01a148f2-d144-7395-b9e0-862a6e66ab33 (open): Retire the RPi5 ROS 2 demo format-1 contract
+    -- contracts/rpi5-ros2-demo/v2 replaces format 1's frozen DDSI-RTPS shape with a named transport
+    -- discriminator, and no component, system spec or composition emits or reads the format-1 profile
+    -- rpi5-ros2-demo-v1. The format-1 contract and its 684-line checker scripts/check/check-
+    -- rpi5-ros2-demo-contract.py are still maintained and run by rpi5_artifact_check and check-
+    -- contracts.py beside format 2. The project has decided that format 1 will not be used for a long
+    -- time.
+    (h.planned "01a1b49c-ac41-766b-b3e6-5b464fee254f"
+      "The format-2 contract still admits its valid fixture, refuses its invalid one, and rpi5_artifact_check still passes with the architecture contract and format 2 alone."
+      "Retire the RPi5 ROS 2 demo format-1 contract"
+      "waits on retiring contracts/rpi5-ros2-demo/v1 and its checker; exam retired-pass not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-d144-7395-b9e0-862a6e66ab33"; }; };
+    (h.planned "01a1b49c-ac41-766b-b3e6-5b4726f01a57"
+      "contracts/rpi5-ros2-demo/v1 no longer exists, no codePaths entry names a deleted file, and no maintained document or command reference names the removed recipe or checker."
+      "Retire the RPi5 ROS 2 demo format-1 contract"
+      "waits on retiring contracts/rpi5-ros2-demo/v1 and its checker; exam retired-pass, store-consistent not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-d144-7395-b9e0-862a6e66ab33"; }; };
+    -- legacy 01a148f2-d6d1-726f-893f-46192044f478 (open): Retire the generation v5 guard and keep the corpus build
+    -- scripts/check/check-generation-v5.py (341 lines) guarded the cutover from generation v4 to v5. That
+    -- cutover is long finished and no producer selects v4, but the checker is also the only gate that
+    -- builds every seL4 manifest the generation builder declares (45 on main at c98759b8), and CI runs it
+    -- as a four-shard job. About 120 of its lines are controls for its own shard-selection logic and
+    -- header reader. The v5 framing (pinned magic, single-version constant, header controls) no longer
+    -- protects anything, while the corpus build still does.
+    (h.planned "01a1b49c-ac4c-7331-a990-989459cd09c7"
+      "Every seL4 manifest the generation builder declares builds and produces a non-empty generation.bin, so retiring the v5 guard removes no manifest from the corpus CI builds."
+      "Retire the generation v5 guard and keep the corpus build"
+      "waits on a new owner for the corpus build before check-generation-v5.py goes; exam retired-pass not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-d6d1-726f-893f-46192044f478"; }; };
+    (h.planned "01a1b49c-ac4c-7331-a990-9895f0919359"
+      "check-generation-v5.py no longer exists, and no codePaths entry, maintained document, recipe, or CI step still names it or generation_v5_check."
+      "Retire the generation v5 guard and keep the corpus build"
+      "waits on a new owner for the corpus build before check-generation-v5.py goes; exam retired-pass, store-consistent not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-d6d1-726f-893f-46192044f478"; }; };
+    -- legacy 01a16b6f-1d46-7872-bb29-458dd6ccc7f9 (open): Record every closure the network checker boots, with the devices of its own arm
+    -- `scripts/check/check-sel4-io-network-plane.py` boots 15 closures. Only `sel4-io-network` has a
+    -- record in `contracts/system-test-run/v1/runs/`. Thirteen others have none. The fifteenth, `sel4-io-
+    -- tcp-buffers`, has no closure yet and is planned. `check_records_and_planes_correspond` compares the
+    -- declared runs with the record files. A closure that no table declares is therefore invisible to it.
+    -- A run without a record has no frozen timeout, device list or failure markers. `extract()` also reads
+    -- the whole checker file for devices. It gave the `sel4-io-network` record a `virtio-net-device`,
+    -- although that arm attaches no device.
+    (h.planned "01a1b49c-ace6-71a3-9f97-11f90fd38c48"
+      "Every closure that the network checker passes to `build_image` has a declared run and a record. A call with a keyword, a starred argument, an alias or any other use of the name is refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11faf87fd721"
+      "A record lists `virtio-net-device` only for an arm that declares it. Nine arms declare it and five do not. The declaration must equal the devices of the sites that the arm reaches, counted with repeats."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fb1c8efe07"
+      "A QEMU device, drive or network token may sit only in a function that `QEMU_SITES` names. The generator refuses a token in a module-level statement of any form and in a function that is not a site. It also refuses one in a nested function, lambda or class."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fc74e539ab"
+      "A site passes exactly the devices it declares, counted with repeats. A second device, a repeated device, a missing device and a changed device name are refused. So are a computed flag and a value that is not a device literal. So is a launch path that gives no device while another path gives one. A decoy device literal elsewhere in the site does not satisfy a computed value. Arguments given to a call that is not `run_plane` are refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fdc2beae6d"
+      "An arm that reads a site by any name attaches that site's devices. A call, a value, an alias, a nested function and one branch of a conditional all count. A site read in a branch of `main()` that can run an arm counts for that arm. A use of `arguments.arm` that is not a comparison with string literals in the test of an `if` is refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11fe77fed347"
+      "A missing entry, a missing device declaration, a site that the checker does not define and an entry function that the checker lacks are refused."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
+    (h.planned "01a1b49c-ace6-71a3-9f97-11ff84c8a308"
+      "A declared arm with no record is refused by the correspondence check."
+      "Record every closure the network checker boots, with the devices of its own arm"
+      "waits on system-test-run records for the 13 network closures that have none; exam arms-recorded not written"
+      h.noAcceptance) with { supersedes = { "01a16b6f-1d46-7872-bb29-458dd6ccc7f9"; }; };
     -- legacy 01a15570-6ff5-7bc2-9055-6673a6082f0a (done): Private-memory growth costs the same however much the holder already has
     -- Serving one pooled private-memory growth request walks whole allocator tables: every retyped object
     -- reads every extent record to find the best fit, and the free-descriptor, free-extent and reusable-
@@ -45,6 +122,17 @@ area :: s.Area = (h.area "quality" "Repository quality gates" {
       }) with { supersedes = { "01a15570-6ff5-7bc2-9055-6673a6082f0a"; }; };
   }) with {
     nonGoals = {
+      "Any runtime, QEMU-plane or physical-machine claim.";
+      "Changing format 2, its checker, or anything the RPi5 ROS 2 demo plan claims.";
+      "Retiring any other superseded contract version.";
+      "Changing the generation format, the builder, or which manifests it declares.";
+      "Retiring the retained v2-v4 schemas that check-contracts.py still type-checks.";
+      "Controls for the corpus checker's own shard selection: it is verification tooling, which docs/decisions/negative-controls-for-product-judges.md exempts.";
+      "Making a plane checker execute from its record. A later item owns that.";
+      "Other checkers. This item covers only the network checker.";
+      "Detecting a device that a run-time computation names without any device string in the code. No check here can.";
+      "Any product change and any QEMU boot. This item makes no boot claim.";
+      "Any change to the `system-test-run/v1` contract.";
       "Shortening the rollback path's walks, the split and merge path's searches, or guaranteed-lane growth per run; any change to policy, pricing, entitlement, the ledger's figures or what a private-memory checker asserts; a wall-clock bound.";
     };
   };

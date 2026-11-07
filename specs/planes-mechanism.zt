@@ -6,6 +6,14 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
     "boot-contracts/**";
     "contracts/generation*/**";
     "contracts/capability-*/**";
+    "components/services/sel4-generation-manager/**";
+    "components/services/sel4-filesystem-service/**";
+    "components/services/spawn-service/**";
+    "components/services/virtio-*/**";
+    "components/services/uart16550-driver/**";
+    "components/services/pwm-servo-driver/**";
+    "components/services/entropy-service/**";
+    "components/applications/http-get/**";
   } {
     -- legacy 01a0e239-a96d-7db6-8b7f-d6efef5f8b19 (done): TCP socket options: keepalive, Nagle, hop limit, timeouts and congestion control
     -- The network service sets only a per-operation timeout and disables delayed ACK. The pinned release
@@ -115,14 +123,14 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
     (h.planned "01a1b49c-aace-763e-bbcc-81af749b768f"
       "Entropy authority is generation data. An entropy-authority row with an unknown source, a byte budget outside 1..1048576, a seed on a hardware row, a missing or non-64-hex-digit seed on a seeded row, or a duplicate holder is refused at generation validation, as is an entropy-service endpoint grant that is transferable or held by a component without a row. A component with no grant cannot resolve an entropy binding."
       "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
-      "rehomed from a open item"
+      "waits on the entropy service and sel4_entropy_check, unimplemented"
       {
         h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
       }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
     (h.planned "01a1b49c-aace-763e-bbcc-81b02bb2450e"
       "A seeded holder's drawn bytes equal HMAC-DRBG(SHA-256) instantiated from its declared seed, an empty nonce and its personalisation string, computed independently on the host, and are identical across boots."
       "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
-      "rehomed from a open item"
+      "waits on the entropy service and sel4_entropy_check, unimplemented"
       {
         h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
         h.observedWhere "seeded-bytes-matched" "sel4_entropy_check" { h.count "bytesObserved" 288; } "The seeded holder draws 96 bytes in each of three boots. The checker recomputes the stream from the seed in the derived composition and counts the matched bytes. 288 is three full streams; any other count means a boot drew differently or not at all.";
@@ -130,21 +138,21 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
     (h.planned "01a1b49c-aace-763e-bbcc-81b1e9758351"
       "Hardware holders receive bytes that differ between holders in one boot, between boots, and from every seeded block. No 32-byte block repeats. A holder never receives raw device output directly."
       "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
-      "rehomed from a open item"
+      "waits on the entropy service and sel4_entropy_check, unimplemented"
       {
         h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
       }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
     (h.planned "01a1b49c-aace-763e-bbcc-81b21a482586"
       "A draw that would exceed the holder's declared byte budget is refused with exhausted and delivers no bytes. A request for 0 or more than 32 bytes is refused with malformed. Neither refusal consumes budget."
       "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
-      "rehomed from a open item"
+      "waits on the entropy service and sel4_entropy_check, unimplemented"
       {
         h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
       }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
     (h.planned "01a1b49c-aace-763e-bbcc-81b38845caa1"
       "When the virtio-rng device is absent, the driver reports it and the service marks the hardware source unavailable. Every hardware draw is refused with unavailable and never substituted by a seeded, constant or cached stream. Seeded holders are still served with their reproducible bytes, and the graph stays healthy."
       "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
-      "rehomed from a open item"
+      "waits on the entropy service and sel4_entropy_check, unimplemented"
       {
         h.observedWhere "entropy-cases-observed" "sel4_entropy_check" { h.count "casesObserved" 9; } "sel4_entropy_check runs contracts_check, system_spec_check and test_host, which carry the refused authority declarations, then boots sel4-entropy twice with a virtio-rng device and once without. It judges exactly nine cases: seeded bytes match the host HMAC-DRBG, seeded bytes repeat across boots, hardware blocks are distinct within a boot, hardware blocks differ across boots, budgets are exhausted at 96 bytes, malformed sizes are refused, the unauthorised probe has no binding, hardware draws fail closed without the device, and seeded draws survive the device's absence. Nine is the number of cases the checker judges, not a lower bound.";
         h.observedWhere "seeded-bytes-matched" "sel4_entropy_check" { h.count "bytesObserved" 288; } "The seeded holder draws 96 bytes in each of three boots. The checker recomputes the stream from the seed in the derived composition and counts the matched bytes. 288 is three full streams; any other count means a boot drew differently or not at all.";
@@ -152,7 +160,7 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
     (h.planned "01a1b49c-aace-763e-bbcc-81b42568ebd9"
       "The checker refuses mutated transcripts: an altered seeded byte, a hardware block repeated across boots or holders, a missing exhaustion refusal, a hardware draw served while the device is absent, and an explicit failure marker. A passing gate is therefore evidence of the observed behaviour rather than of a quiet transcript."
       "Entropy authority: a userspace entropy service over virtio-rng with seeded fixtures"
-      "rehomed from a open item"
+      "waits on the entropy service and sel4_entropy_check, unimplemented"
       {
         h.observedWhere "controls-refused" "sel4_entropy_check" { h.atLeast "negativeControlsRefused" 5; h.atMost "negativeControlsRefused" 64; } "The checker applies its own mutations to the accepted transcripts and reports how many it refused. The inclusive lower bound of five matches the five mutation kinds the requirement names; the upper bound is a sanity limit.";
       }) with { supersedes = { "01a0ec3a-a91f-7349-a28a-26a60d8d7f4e"; }; };
@@ -339,33 +347,38 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
     -- burst waits for about 32 frames ahead of it, while the 2048-byte holder fell from 14.05 ms to 3.03
     -- ms. The wait-set/v1 source vocabulary has no kind for a device completion: every kind but timer
     -- names a slot to drain.
-    (h.req "01a1b49c-ad0f-717b-8120-0df92eb92080"
+    (h.planned "01a1b49c-ad0f-717b-8120-0df92eb92080"
       "In each of the four derived compositions network-service waits on one Notification, the virtio-net driver holds exactly one signal binding on it, and the service's wait set has exactly one device row on that binding's badge, with no drain slot and no other row on that badge."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.req "01a1b49c-ad0f-717b-8120-0dfab1fceb8e"
+    (h.planned "01a1b49c-ad0f-717b-8120-0dfab1fceb8e"
       "In the sel4-io-tcp-buffers rx-window scenario the median time from a peer data segment to the first guest frame that acknowledges all of it is below 7 ms for the 2048-byte holder. A timer-paced acknowledgment has a median near or above the service's 10 ms idle timer, and a completion-woken one sits near the wake path's own floor of 3 to 4 ms under QEMU TCG. The arm prints the 65536-byte holder's median and judges no bound on it, because each of its 64-segment bursts queues behind the frames ahead of it."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.req "01a1b49c-ad0f-717b-8120-0dfbcde5093d"
+    (h.planned "01a1b49c-ad0f-717b-8120-0dfbcde5093d"
       "network-service prints exactly one [network-service] wait device wakes=D line with D at least 1 and at most its wait wakes count."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.req "01a1b49c-ad0f-717b-8120-0dfc494b7f12"
+    (h.planned "01a1b49c-ad0f-717b-8120-0dfc494b7f12"
       "io_tcp_buffers_check, io_tcp_listener_check and zenoh_external_check pass without edits to their checkers or peers."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.req "01a1b49c-ad0f-717b-8120-0dfd14764b0d"
+    (h.planned "01a1b49c-ad0f-717b-8120-0dfd14764b0d"
       "Before it boots, the arm refuses 18 mutations: a missing and a doubled device row and driver binding, a device row on another badge or with a drain slot, another row on the device badge, a device row on another Notification, a missing timer row, a 2048-byte holder's median latency above and at 7 ms, too few acknowledged segments, a missing holder, a missing, doubled, zero and over-count device wake line, and a missing wait wakes line."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
+      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
@@ -425,8 +438,8 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
       }) with { supersedes = { "01a1a02e-58a6-7a60-9d42-61e777816c19"; }; };
   }) with {
     nonGoals = {
-      "External listeners, half-close, IPv6, or run-time option mutation by clients beyond what the declaration permits.";
       "Physical NIC, IOMMU or board qualification; QEMU evidence carries no hardware claim.";
+      "External listeners, half-close, IPv6, or run-time option mutation by clients beyond what the declaration permits.";
       "Wildcard listeners, port ranges, NAT traversal, or a general server personality.";
       "Congestion control selection, listener semantics, or performance targets beyond the declared bounds.";
       "Hostname URLs, a DNS resolver in sel4-net, or any entropy source. Hostname support waits for the separate entropy-authority work.";

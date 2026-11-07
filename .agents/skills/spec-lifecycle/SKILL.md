@@ -104,8 +104,10 @@ from a login in `HUMAN_OWNERS` when the diff:
    acceptance binds at the base, or changes such a target's recipe closure.
    New checker files enter freely.
 
-Rule 4 — every touched product file under some area's `owns` — is reported,
-not enforced, until every plane has an area. The rule judges every bound
+Rule 4 — every touched product file (`components/`, `slime-root/`,
+`contracts/`, `boot-contracts/`) falls under some area's `owns` — refuses the
+PR on CI (`--enforce-owns`); a new product path needs an `owns` glob in the
+area that promises its behavior, in the same PR. The rule judges every bound
 target at the base, enforced or not, and ignores whether the PR carries a
 spec diff: splitting a grader change into its own PR triggers it twice. A
 chore that touches no area takes the same approval exit. An agent account

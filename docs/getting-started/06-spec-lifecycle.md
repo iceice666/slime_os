@@ -85,8 +85,9 @@ from a login in `HUMAN_OWNERS` when the diff:
    acceptance binds, or changes such a target's recipe closure. New checker
    files enter freely.
 
-Rule 4, every touched product file under some area's `owns`, is reported but
-not enforced yet. Splitting a grader change and its implementation into two
+Rule 4, every touched product file under some area's `owns`, refuses the PR
+when a path has no owner; add the glob to the area that promises its
+behavior. Splitting a grader change and its implementation into two
 PRs does not avoid rule 3: it judges against every bound target at the base,
 enforced or not.
 

@@ -260,7 +260,7 @@ jobs:
         run: >-
           nix develop .#spec --command
           python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}"
-          --approvers "${{ steps.approvers.outputs.logins }}"
+          --approvers "${{ steps.approvers.outputs.logins }}" --enforce-owns
 
   kani_proofs:
     name: Kani IO wire and device-boundary proofs

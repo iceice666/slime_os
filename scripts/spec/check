@@ -25,8 +25,8 @@ HUMAN_OWNERS must be among `--approvers` when the diff
      closure. New checker files enter freely.
 
 Rule 4, owns coverage: every product file the diff touches must fall under
-some area's `owns`. Reported always; refused only with `--enforce-owns`
-until every plane has an area (Phase 3).
+some area's `owns`. Reported always; refused with `--enforce-owns`, which CI
+passes now that every product path has an owner.
 """
 
 from __future__ import annotations
@@ -138,7 +138,7 @@ def judge_base(base: str, approvers: set[str], enforce_owns: bool, findings: Fin
     for area_id, area in base_areas.items():
         head = head_areas.get(area_id)
         before = lib.canonical(area.value["invariants"])
-        after = lib.canonical(head.value["invariants"]) if head else b""
+        after = lib.canonical(head.value["invariants"]) if head else lib.canonical([])
         if before != after:
             reasons.append(f"rule 1: invariants of area {area_id} changed")
 

@@ -5,6 +5,74 @@ area :: s.Area = (h.area "contracts" "Contract corpus and generated bindings" {
     "contracts/**";
     "scripts/generate/**";
   } {
+    -- legacy 01a130ec-7401-7674-893d-602ced3494de (open): Closure generation and resolution re-read the same inputs per closure
+    -- Regenerating or checking the system-image closure corpus dominates the development loop. Measured on
+    -- a warm zutai cache, generate-system-image-closures.py --check takes about 272 s: 200 s re-render
+    -- computed system specs through the system-spec-source evaluator at 13-18 s per call, once per closure
+    -- whose base is a computed system, and 59 s re-hash the same few workspace trees 1727 times.
+    -- resolve_closure costs 1.7 s for an ordinary closure and 15-19 s for one over a computed system,
+    -- because it re-admits the component-spec corpus twice and re-renders the computed source; each
+    -- corpus-wide checker therefore spends minutes re-reading identical bytes. Chained through the closure
+    -- gates this approaches an hour per regeneration.
+    (h.planned "01a1b49c-ac07-758c-9557-0adae5c246a8"
+      "Every committed closure and negative case is reproduced byte for byte: generate-system-image-closures.py --check passes against the corpus that exists before this change, and every tree digest it records is unchanged."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "waits on closure resolution caching work; no exam exists; exam closure-gates-pass not written"
+      h.noAcceptance) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0adbf5d186a4"
+      "No closure gate accepts anything it refused before: closure resolution still refuses every malformed, mis-pinned and identity-mismatched control, including those that mutate a tree between resolutions, and system_spec_check still refuses every computed-source drift control, including derived-output drift reached through compile_system."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "waits on closure resolution caching work; no exam exists; exam closure-gates-pass not written"
+      h.noAcceptance) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0adc167b2442"
+      "A closure resolved with default options, as closure_image.build does before every build, still refuses a computed system whose committed .zti its source no longer renders, so a gate that builds through a closure without depending on system_spec_check cannot boot a stale graph."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "waits on closure resolution caching work; no exam exists; exam closure-gates-pass not written"
+      h.noAcceptance) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0add49e75281"
+      "On a warm zutai cache, generate-system-image-closures.py --check completes in at most 120 seconds of wall time. What remains is about one evaluator render per computed system, which the pinned evaluator bounds; making that evaluator faster is out of scope."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "waits on closure resolution caching work; no exam exists; only a human gate: needs an automated exam"
+      {
+        h.human "closure-wall-time-measured" "closure-wall-time" "Wall time depends on the host, so an operator measures it: after one run that warms build/zutai-cache, the second wall time of generate-system-image-closures.py --check, and the wall time of one fresh python3 process resolving every closure under contracts/system-image-closure/v2/closures/ once the way check-system-image-builder.py's resolution arm does, each rounded up to whole seconds. Before this work the two were about 272 s and, at 1.7 s per ordinary closure and 15-19 s per computed one, about 400 s.";
+      }) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    (h.planned "01a1b49c-ac07-758c-9557-0ade686dfc84"
+      "On a warm zutai cache, resolving every committed closure once in one fresh Python process, through the path the corpus-wide checkers use, completes in at most 120 seconds of wall time."
+      "Closure generation and resolution re-read the same inputs per closure"
+      "waits on closure resolution caching work; no exam exists; only a human gate: needs an automated exam"
+      {
+        h.human "closure-wall-time-measured" "closure-wall-time" "Wall time depends on the host, so an operator measures it: after one run that warms build/zutai-cache, the second wall time of generate-system-image-closures.py --check, and the wall time of one fresh python3 process resolving every closure under contracts/system-image-closure/v2/closures/ once the way check-system-image-builder.py's resolution arm does, each rounded up to whole seconds. Before this work the two were about 272 s and, at 1.7 s per ordinary closure and 15-19 s per computed one, about 400 s.";
+      }) with { supersedes = { "01a130ec-7401-7674-893d-602ced3494de"; }; };
+    -- legacy 01a148f2-dbe6-7a06-a096-492b503551bf (open): Share one pipeline across the Zutai binding generators
+    -- Forty-two scripts/generate/generate-*-bindings.py files (4,348 lines on main at c98759b8) each re-
+    -- implement the same pipeline around one pinned Zutai invocation: stage a temporary root, run the
+    -- schema's generator, format Rust output through rustfmt, then write or compare the output for
+    -- --check. Most differ only in paths, the staging environment variable and messages, yet the copies
+    -- have already drifted: 29 of the 42 write atomically and the rest overwrite in place; 31 look for an
+    -- INVALID_*_SCHEMA marker, and three of those (block, store, generation-management) test whether an
+    -- output equals the marker rather than contains it, so they never refuse one. A fix to the pipeline
+    -- must be made once per copy, and check-contracts.py and check-architecture-contract.py name copies by
+    -- path.
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd0f4b307f7"
+      "Every committed generated binding the table covers, Rust, C and Python, is reproduced byte for byte by the shared pipeline: its --check passes and the change edits no generated file."
+      "Share one pipeline across the Zutai binding generators"
+      "waits on the generator consolidation; no exam exists; exam architecture-pass not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd18ed044e7"
+      "A renderer run that exits non-zero, does not write a declared output, or emits its INVALID_*_SCHEMA sentinel anywhere in an output is refused for every binding in the table, and --check proves it on every run through the pipeline's seven negative controls."
+      "Share one pipeline across the Zutai binding generators"
+      "waits on the generator consolidation; no exam exists; exam architecture-pass not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd2ecc6266b"
+      "check-contracts.py and check-architecture-contract.py check the table bindings through the shared CLI and still pass, so no gate runs a removed generator."
+      "Share one pipeline across the Zutai binding generators"
+      "waits on the generator consolidation; no exam exists; exam architecture-pass not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
+    (h.planned "01a1b49c-ac56-71e0-ac6f-ccd38aadb703"
+      "No codePaths entry names a removed generator, every new pipeline file is covered by codePaths, and no maintained document or command reference names a removed script."
+      "Share one pipeline across the Zutai binding generators"
+      "waits on the generator consolidation; no exam exists; exam store-consistent not written"
+      h.noAcceptance) with { supersedes = { "01a148f2-dbe6-7a06-a096-492b503551bf"; }; };
     -- legacy 01a0fcbe-6eb7-7eda-a979-d0796e72f303 (done): Keep test-run inventory explicit and arm-qualified
     -- The system-test-run generator unconditionally inventories every seL4 plane checker, so the
     -- deliberately planning-only entropy grader blocks unrelated identity refresh because its
@@ -215,6 +283,13 @@ area :: s.Area = (h.area "contracts" "Contract corpus and generated bindings" {
       }) with { supersedes = { "01a19c71-04b0-7355-960e-66fd1877c1a6"; }; };
   }) with {
     nonGoals = {
+      "Changing the closure contract, any closure identity, or the tree-digest encoding.";
+      "Making the system-spec-source evaluator itself faster, or making system_spec_check faster.";
+      "A cross-process render cache, parallel resolution, or factoring shared release inputs out of each closure.";
+      "Any runtime, QEMU-plane or physical-machine claim.";
+      "Changing any schema, gen_rust.zt, or generated binding: the committed outputs are the reference this work is judged against and must not move.";
+      "Folding the seven differing generators into the table.";
+      "Changing the pinned Zutai toolchain or rustfmt edition.";
       "Implementing entropy, large component loading, or any userspace/runtime mechanism; no QEMU or physical-machine support claim.";
       "Making plane checkers execute from frozen system-test-run records, or redesigning all checker arms and transport discovery.";
       "Skipping arbitrary missing closures, classifying a real QEMU checker as NOT_A_PLANE, inventing placeholder closure identities, or weakening execution-drift refusal.";
@@ -222,7 +297,6 @@ area :: s.Area = (h.area "contracts" "Contract corpus and generated bindings" {
       "Blessing execution declarations: any change to disks, devices, timeouts, faults or marker contracts is out of scope and must still be refused.";
       "Changing the closure contract or the closure generator, or changing a closure record beyond the regeneration that a release-input change forces.";
       "Making the closure gates faster; that is separate work.";
-      "Any runtime, QEMU-plane or physical-machine claim.";
       "Removing input identities from the closures themselves, attestations, or a resolver over the working tree; those are steps 2 and 3 of the plan.";
       "Changing any execution field of a run: profile, fixtures, devices, fault controls, timeout, marker contract or forbidden outcomes.";
       "Any QEMU plane behavior or any plane gate's expectations.";

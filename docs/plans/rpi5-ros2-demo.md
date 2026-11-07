@@ -79,4 +79,4 @@ requires them.
 - [`../architecture/typed-data-fabric.md`](../architecture/typed-data-fabric.md)
 - [`../architecture/runtime-authority.md`](../architecture/runtime-authority.md)
 - [`../architecture/targets-and-portability.md`](../architecture/targets-and-portability.md)
-- the RPi5/ROS requirements in `specs/hardware.zt` and `specs/backlog.zt`
+- the RPi5/ROS requirements in `specs/zenoh-transport.zt` and `specs/network-coverage.zt`

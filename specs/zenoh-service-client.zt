@@ -1,0 +1,344 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "zenoh-service-client" "Zenoh service client protocol, wire records and holder adapter" {
+    "components/lib/src/zenoh_service_client.rs";
+    "components/proto/src/zenoh_service_client*.rs";
+    "components/applications/zenoh-holder-*/**";
+    "contracts/zenoh-service-client/**";
+  } {
+    -- legacy 01a17dad-fa21-739d-a55e-ef59fa3ce0ea (done): Fix the Zenoh service client protocol
+    -- A local holder has no way to speak to the Zenoh service. No contract says what a request names, what
+    -- a completion reports, or what a take returns. Four rules are undecided. A request names a grant row
+    -- by its index and never a key, because a key string in a request grants nothing. The service learns
+    -- the holder from the endpoint the request arrives on, so no field names a holder. A request and a
+    -- completion must fit the IO0 payloads of 56 and 24 bytes. A sample header and its payload must fit
+    -- the data page. This item fixes those rules as a Zutai schema and judges it before any client library
+    -- or component exists.
+    (h.req "01a1b49c-ad60-751f-81b8-439775fbf881"
+      "The schema states format version 1 and the magic for `ZSVC`, as a little-endian integer. It states four queue slots, one ring page and one data page of 4096 bytes each. A success status is zero."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-4398ab605484"
+      "The request, completion, sample header and loan layouts add up to 32, 24, 16 and 64 bytes. Each layout equals a field list that the judge holds apart from the schema. Each layout lists the fields of its record type in order. Every record field has the type `Int`. A commented field is not a field."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-4399566d5a7c"
+      "A request of 32 bytes is within the IO0 request payload of 56. A completion of 24 bytes is within the IO0 completion payload of 24."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-439acfbcdb33"
+      "No field name contains key, holder, session, peer, link, topic or name. A request names a grant row by its index."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-439b7772ab05"
+      "The sequence, the timestamp and the status are signed. A reserved field is an unsigned byte array and a named field is not a byte array."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-439c11340981"
+      "The request and the completion carry the row in two bytes, and `maxRows` is 65535."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-439d8f810a6e"
+      "The sample header of 16 bytes and the largest payload of 4080 bytes fill the data page of 4096 bytes. The largest payload is at most the grants contract's sample limit."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-439e556cc092"
+      "The five operations, the six statuses, the three items and the two loan roles are distinct within their group. Operations are positive and failures are negative. The item none is zero. Each value fits the width and sign of the field that carries it."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-439f84a63f01"
+      "The known completion flags equal the sum of the flags, and each flag is one bit."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-43a09ca14007"
+      "A holder with five rows and samples of 12 bytes is served by this protocol. A sample of 4081 bytes, a sample of no bytes, a holder of no rows and a holder of 65536 rows are each refused."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-43a1b1c9751b"
+      "The committed Rust constants file equals the generator's output byte for byte. Ten edits are each refused. They change a value, drop or add a constant, swap two, or change a type. They also drop the header, append a comment, use CRLF, drop the final newline or empty the file."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_check" { h.count "casesObserved" 24; } "The checker counts 24 facts that the judge derives from the schema text. They are constants, layouts, IO0 fit, signs, the row index, the data page, distinct values, flags and a served holder. The count is exact. The judge reads no Rust, so these facts come from the schema and the two contracts it is checked against.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-43a2dbfaf50d"
+      "The judge refuses 80 corruptions before it checks the generated file. They are 66 edits of the schema, 4 holders that the protocol cannot serve and 10 edits of the generated file."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_client_check" { h.count "negativeControlsRefused" 80; } "The checker refuses exactly 80 corruptions before it checks the generated file. They are 66 edits of the schema, 4 holders the protocol cannot serve and 10 edits of the generated file. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    (h.req "01a1b49c-ad60-751f-81b8-43a304becda4"
+      "`just zenoh_service_client_check` exits zero and reports its observations through the gate adapter."
+      "Fix the Zenoh service client protocol"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_client_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe fails until the generated constants file lands.";
+      }) with { supersedes = { "01a17dad-fa21-739d-a55e-ef59fa3ce0ea"; }; };
+    -- legacy 01a18328-71de-7291-922f-87adc0b3a8cc (done): Generate and judge the Zenoh service client wire records
+    -- The Zenoh service client protocol has constants and layouts and no encoder or decoder. A holder and
+    -- the service would each write the field offsets by hand. A hand-written offset for a format that
+    -- crosses a process boundary is what the repository forbids. Four rules are undecided in code. Each
+    -- record must encode to the bytes the schema's layout gives. Each record must decode back to the value
+    -- it was encoded from. A buffer shorter than the record must be refused. A signed field must stay
+    -- signed and a multi-byte field must be little-endian. This item generates the encoders and decoders
+    -- from the layouts and judges them before any client or service uses them.
+    (h.req "01a1b49c-ada1-7700-83f1-0e85eccbd9bc"
+      "The generator renders a struct, an encoder and a decoder for the request, the completion, the sample header and the loan descriptor. Their lengths are 32, 24, 16 and 64 bytes."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e86b1c13724"
+      "The committed Rust file equals the renderer's output byte for byte. Eleven edits are each refused. They move an offset, change a field type or an endianness, drop a length check or an encoded field, or remove the header. They also append a comment, use CRLF, drop the final newline or empty the file."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_client_wire_check" { h.count "negativeControlsRefused" 76; } "The checker refuses exactly 76 corruptions before it runs any Rust. They are 40 transcripts, 11 edits of the generated file, 7 corrupted layouts and 18 corrupted exports. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e87f9d593ed"
+      "The bytes the Rust encoder prints for each record equal what Python's `struct` writes from the schema's layout. Every field, reserved padding included, holds a distinct nonzero pattern."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e88634d387f"
+      "Each record decodes to the value it was encoded from."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e898ffd74ff"
+      "A buffer one byte shorter than the record is refused for each of the four records. A longer buffer is read from its start."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e8ae1233a9c"
+      "The request sequence, the sample timestamp and the completion status are signed and little-endian. The test encodes a negative value in each."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e8bd0113c8d"
+      "The judge reads the layouts from the schema. Seven corrupted layouts each make the honest transcript fail. They narrow a field, change a sign, swap two fields or widen the padding."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_client_wire_check" { h.count "negativeControlsRefused" 76; } "The checker refuses exactly 76 corruptions before it runs any Rust. They are 40 transcripts, 11 edits of the generated file, 7 corrupted layouts and 18 corrupted exports. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e8cee58231b"
+      "`components/proto/src/lib.rs` holds the export of the wire records once, with no attribute directly above it. The Rust test imports the records through the crate and includes no source by path. Eighteen corrupted files are each refused. They remove or comment out the export or wrap it in a block comment or an inline module. They also put an attribute above it, indent it, make it private, rename it or double it. For the test, they remove the import or include the generated file by path."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e8dc0a2a588"
+      "The slice runs the client schema's judge and requires its 24 facts and 80 controls first."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_wire_check" { h.count "casesObserved" 17; } "The checker counts 13 lines that the Rust test printed. They are four sizes, four encodings, four round trips and one verdict. It also counts 4 refusals of a short buffer. The total is 17. The count is exact, and it is reported only after the client schema's judge passes.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e8e9ca176ab"
+      "The judge refuses 76 corruptions before it runs any Rust. They are 40 transcripts, 11 generated files, 7 layouts and 18 corrupted exports."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_client_wire_check" { h.count "negativeControlsRefused" 76; } "The checker refuses exactly 76 corruptions before it runs any Rust. They are 40 transcripts, 11 edits of the generated file, 7 corrupted layouts and 18 corrupted exports. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    (h.req "01a1b49c-ada1-7700-83f1-0e8f53178c55"
+      "`just zenoh_service_client_wire_check` exits zero and reports its observations through the gate adapter."
+      "Generate and judge the Zenoh service client wire records"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_client_wire_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe fails until the generated file lands.";
+      }) with { supersedes = { "01a18328-71de-7291-922f-87adc0b3a8cc"; }; };
+    -- legacy 01a18328-7a0d-7507-9850-cbbb0baae9ca (done): Write and judge the Zenoh service client adapter
+    -- A local holder has no way to publish to or take from the Zenoh service. No code opens the session,
+    -- bounds a request, checks an answer or returns a loan. Five rules are undecided in code. The adapter
+    -- must refuse a request outside the protocol before it publishes anything. It must check every answer
+    -- against the request it sent. It must poison the session and return both loans when an answer is
+    -- missing or outside the protocol. It must return every loan it imported, whatever failed. It must not
+    -- claim a clean detach after the session was poisoned. This item writes the adapter and judges it
+    -- against a scripted service on the host, before any service component exists.
+    (h.req "01a1b49c-adaf-7404-bafb-35cb37661c13"
+      "Attach sends the attach request and takes the ring loan and then the data loan. The service reports three rows and the adapter imports two loans. The attach request is the 32 bytes that the schema's layout gives."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35ccc6ad54e8"
+      "Attach refuses ten cases after the service answered. They are data before ring, one buffer for both, one lease for both, no rows and too many rows. The others are a refused attach, no attach answer, a data loan that never arrives, no loans, and a ring the service did not format. Each returns exactly the loans it imported, and the data loan that never arrives returns the one ring loan."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35cd334539ad"
+      "Attach refuses six cases before it sends anything. They are one endpoint for both and an unaligned ring base. The others are an unaligned data base, the same base twice, a zero base and a base that wraps."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35ce998f73fa"
+      "A loan descriptor is valid with its magic, version, role, zero reserved bytes, the length of its role and nonzero identities. Eight corruptions of one field are each refused, and a data descriptor is valid only as a data loan."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35cfd4c32785"
+      "A publication of three bytes on row 2 with sequence -7 writes the 32-byte request that the layout gives. It names the data page by its buffer and lease and reads three bytes from it. It reports two holders reached and a copy sent to the peer."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d02894af01"
+      "A take returns a sample from row 1 with its sequence, timestamp and four payload bytes, a loss of 16 and an empty ring. It asks the data page for the header and the buffer, naming the data page by its buffer and lease. A buffer of exactly 4080 bytes is accepted."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d14caa34e0"
+      "A row past the holder's rows, a payload past 4080 bytes and a take buffer past 4080 bytes are each refused as a bad request. Nothing is published, and the ring holds only the one request that was valid."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d2643374bb"
+      "A denied publication, a publication on a closed link and an accepted one return statuses -1, -5 and 0. The session stays usable and no loan is returned."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d309428831"
+      "Twenty-one answers outside the protocol are each refused as malformed. Ten are for a publish, including a wrong magic, a wrong version and a nonzero reserved field. Eleven are for a take, including a wrong magic, a wrong version, a failure carrying a count and a consistent sample longer than the buffer. Each poisons the session and returns both loans."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d4c0cf2157"
+      "A publish with no completion is refused as lost, poisons the session and returns both loans. Every later request is refused as lost."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d56a81d92f"
+      "Detach and abort each return both loans before the request is sent. Each sends one request of the 32 bytes the layout gives and consumes the acknowledgement. A teardown with no acknowledgement is lost. An acknowledgement for another operation is malformed."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d67d21a827"
+      "Detach on a poisoned session is refused as lost and sends nothing. Abort on a poisoned session succeeds."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d7abeede03"
+      "`components/lib/src/lib.rs` holds the export of the adapter once, directly under the `component-runtime` feature attribute. Fourteen corrupted files are each refused. They remove the line or change the attribute. They also comment it out, wrap it in a block comment or an inline module, make it private or double it."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d82f12dafb"
+      "The slice first runs the client schema's judge, with its 24 facts and 80 controls. It then runs the wire records' judge, with its 17 cases and 76 controls. It also runs the wire records' Rust test. It compares the committed client constants and wire records with their renderers before it runs the adapter's Rust. A stale constant that the adapter and its stand-in share is therefore refused."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_io_check" { h.count "casesObserved" 73; } "The checker counts 31 lines that the Rust test printed. They are loan checks, requests, slices, statuses, samples and teardowns. It also counts 42 refusals by name and class. The total is 73. The count is exact, and it is reported only after the schema's judge and the wire records' judge pass.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35d9b1c27aa7"
+      "The judge refuses 170 corruptions before it runs any Rust. They are 153 transcripts, 3 corrupted request layouts and 14 corrupted exports of the adapter."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_client_io_check" { h.count "negativeControlsRefused" 170; } "The checker refuses exactly 170 corruptions before it runs any Rust. They are 153 transcripts, 3 corrupted request layouts and 14 corrupted exports. Each corrupted layout is run through the judge with the honest transcript. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    (h.req "01a1b49c-adaf-7404-bafb-35dab44bf9d4"
+      "`just zenoh_service_client_io_check` exits zero and reports its observations through the gate adapter."
+      "Write and judge the Zenoh service client adapter"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_client_io_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe fails until the adapter lands.";
+      }) with { supersedes = { "01a18328-7a0d-7507-9850-cbbb0baae9ca"; }; };
+    -- legacy 01a186d0-03db-7232-a90f-70f0750a5793 (done): Judge the Zenoh service client adapter failed-attach abort
+    -- When an attach fails after both loans arrived, the Zenoh service client adapter ends the session the
+    -- service holds. Review of the adapter found this gap twice. The first version left the session open.
+    -- The first fix sent the abort before it read the attach answer, and a blocking send could turn that
+    -- into a deadlock. Only an assert-only test grades the fixed behavior, and no judge reads it. This
+    -- item makes the judge grade it. A later change that drops the abort or reorders it is then refused.
+    (h.req "01a1b49c-adbd-759e-bfba-a00e487ee8ec"
+      "Four attaches fail after the service answered. They are an unformatted ring, one buffer for both loans, no rows and too many rows. Each returns malformed. Each sends the attach request and then one abort request of the 32 bytes the layout gives. Each returns both loans before the abort is sent, once each, and leaves no answer unread. The test prints the capability slot of each returned loan, so a slot returned twice while the other leaks is seen."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_abort_check" { h.count "casesObserved" 9; } "The checker counts 8 failed-attach lines and one closing line that the Rust test printed. The 8 each name an error the adapter returned, so they are the refusals. The total is 9. The count is exact, and it is reported only after the judge accepted every line against independent bytes and ordering.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+    (h.req "01a1b49c-adbd-759e-bfba-a00fcdfc16cb"
+      "Five of the six cases that send an abort have two scripted answers unread when the attach goes out. They have one unread when the abort goes out. The service sends its attach answer with a send that blocks until it is received, so an abort sent first could wait forever."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_abort_check" { h.count "casesObserved" 9; } "The checker counts 8 failed-attach lines and one closing line that the Rust test printed. The 8 each name an error the adapter returned, so they are the refusals. The total is 9. The count is exact, and it is reported only after the judge accepted every line against independent bytes and ordering.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+    (h.req "01a1b49c-adbd-759e-bfba-a01051eae274"
+      "An abort that is not acknowledged and an abort that is acknowledged as another operation each return malformed, the attach error. Both loans are back before the abort. When the unacknowledged abort goes out, the attach answer is already read and no answer is unread."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_abort_check" { h.count "casesObserved" 9; } "The checker counts 8 failed-attach lines and one closing line that the Rust test printed. The 8 each name an error the adapter returned, so they are the refusals. The total is 9. The count is exact, and it is reported only after the judge accepted every line against independent bytes and ordering.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+    (h.req "01a1b49c-adbd-759e-bfba-a01136409a96"
+      "An attach with no answer returns lost and both loans, and sends no abort. An attach the service refused returns setup, and sends no abort. It imports no loan and returns none, and the line records both counts. Each prints that no abort request was sent."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_abort_check" { h.count "casesObserved" 9; } "The checker counts 8 failed-attach lines and one closing line that the Rust test printed. The 8 each name an error the adapter returned, so they are the refusals. The total is 9. The count is exact, and it is reported only after the judge accepted every line against independent bytes and ordering.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+    (h.req "01a1b49c-adbd-759e-bfba-a012ce794fd4"
+      "The slice first runs the wire records' judge, with its 17 cases and 76 controls. It then runs the adapter judge's 170 controls. A change to either fails this slice."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_client_abort_check" { h.count "casesObserved" 9; } "The checker counts 8 failed-attach lines and one closing line that the Rust test printed. The 8 each name an error the adapter returned, so they are the refusals. The total is 9. The count is exact, and it is reported only after the judge accepted every line against independent bytes and ordering.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+    (h.req "01a1b49c-adbd-759e-bfba-a0132f9ced13"
+      "The judge refuses 199 corruptions before it runs any Rust. They are 6 whole-transcript edits, 9 missing lines, 170 single-field changes, 11 wrong adapters and 3 corrupted request layouts. The judge fails if two controls corrupt a transcript the same way, so each of the 199 is distinct."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_client_abort_check" { h.count "negativeControlsRefused" 199; } "The checker refuses exactly 199 corruptions before it runs any Rust. Every field of every line is changed alone, so a judge that stopped comparing one field fails. Eleven wrong adapters are written by name. One sends the abort before the attach answer is read. One returns a loan twice while the other leaks. One imports a slot on a refused attach and never returns it. Each corrupted layout is run through the judge with the honest transcript.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+    (h.req "01a1b49c-adbd-759e-bfba-a014117918ca"
+      "`just zenoh_service_client_abort_check` exits zero and reports its observations through the gate adapter."
+      "Judge the Zenoh service client adapter failed-attach abort"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_client_abort_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe fails until the test prints these lines.";
+      }) with { supersedes = { "01a186d0-03db-7232-a90f-70f0750a5793"; }; };
+  }) with {
+    nonGoals = {
+      "Generated encoders and decoders for the layouts. The schema has no `gen_rust.zt`, which is product code. A later planning step owns the wire records and their bindings.";
+      "The client library, the grants path, the service component and a booted composition. Later items own them.";
+      "A holder with a sample larger than 4080 bytes. The grants contract allows larger samples and this version does not serve them.";
+      "A request that names a key, a topic or a type.";
+      "Any product change in the planning PR.";
+      "The client adapter, the grants path, the service component and a booted composition. Other items own them.";
+      "A change to `contracts/zenoh-service-client/v1`. The schema is landed and its item is done. This item reads it.";
+      "A validator for the semantics of a record, such as which operation may carry which flag. The adapter owns it.";
+      "A `gen_rust.zt` renderer. It is product code, and a planning PR cannot carry it. The generator is a script, as the grants and the client constants are.";
+      "The service component, the grants path and a booted composition. Other items own them, and no service exists to attach to.";
+      "Notifications, deadlines and timers. The adapter polls a bounded number of times, and a completion that does not arrive is lost.";
+      "A sample larger than 4080 bytes. The protocol does not carry one.";
+      "More than one outstanding request. The ring holds four slots and the adapter uses one.";
+      "A change to the adapter's behavior. The behavior landed in the adapter item, and this item grades it.";
+      "The real service. The test plays the service with a scripted stand-in, so what the real service does with an abort is not graded.";
+      "An attach that has received only one loan. The adapter sends no abort there, and the item does not claim that this is right.";
+      "A change to `contracts/zenoh-service-client/v1`.";
+    };
+  };
+
+area

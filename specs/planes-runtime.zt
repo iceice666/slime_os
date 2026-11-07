@@ -8,6 +8,17 @@ area :: s.Area = (h.area "planes-runtime" "Runtime planes: component runtime, li
     "slime-root/src/clock*.rs";
     "slime-root/src/task.rs";
     "slime-root/src/supervision.rs";
+    "components/proto/**";
+    "components/testkit/**";
+    "components/slisp/**";
+    "components/build-support/**";
+    "components/c-runtime-probe/**";
+    "components/*.ld";
+    "components/.cargo/**";
+    "components/Cargo.toml";
+    "components/services/fabric-service/**";
+    "components/applications/robot-*/**";
+    "components/applications/mavlink-heartbeat/**";
   } {
     -- legacy 01a0ed72-626c-7675-af57-8510e473b774 (done): Instance lifetime: declared resident instances enforced by the root
     -- No generation data states whether an instance is meant to run for the life of its graph. The root
@@ -133,9 +144,9 @@ area :: s.Area = (h.area "planes-runtime" "Runtime planes: component runtime, li
       "A throughput or latency target.";
       "Closing EL0 write access to the AArch64 physical timer registers, which needs a kernel or platform change.";
       "Board qualification. QEMU evidence carries no hardware claim.";
+      "Physical-machine qualification. QEMU evidence carries no hardware claim.";
       "Host unit tests of the call broker, which builds only with the component runtime; the plane judges its held handling.";
       "Other robot-runtime timing: which samples each controller incarnation consumes is judged as a scheduling fact by the same planning change.";
-      "Physical-machine qualification. QEMU evidence carries no hardware claim.";
     };
   };
 

@@ -1,0 +1,277 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "network-coverage" "Network coverage epic: smoltcp facilities admitted behind explicit authority" {
+    "components/services/network-service/**";
+    "contracts/network-*/**";
+  } {
+    -- legacy 01a0ddaa-8676-7d7e-8faf-47285166731f (open): Broad smoltcp coverage within explicit network authority
+    -- Slime OS currently enables a small IPv4/Ethernet smoltcp configuration and lacks usable TCP/UDP
+    -- payload services. After the short-term ROS 2 Zenoh network facilities, the long-term goal is the
+    -- widest supported smoltcp surface consistent with explicit capability authority, not an ambient BSD-
+    -- socket personality or an unbounded promise to follow every future upstream feature.
+    (h.planned "01a1b49c-a9ec-7379-8976-90872f328a43"
+      "Maintain a version-bound exhaustive support matrix with an upstream feature/source reference, applicable target/backend, dependency slice, authority mapping, quantitative bounds and verification for each facility. Classify each as supported, planned, excluded for a documented authority-model conflict, or not applicable/not provided by that pinned version. Resource/profile options are not individually new network services. Unsupported because unfinished must remain planned, not excluded."
+      "Broad smoltcp coverage within explicit network authority"
+      "waits on the network coverage epic, scheduled after the ROS 2 Zenoh work; exam inventory-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908810d62254"
+      "Provide bounded UDP local bind and per-peer datagrams with message boundaries, source identity, size/truncation semantics, receive queues and independent send/receive rights. Support static DDS participant endpoints without making remote locators or discovered participant ports into grants. Leave RTPS reliability and discovery policy to middleware."
+      "Broad smoltcp coverage within explicit network authority"
+      "waits on the network coverage epic, scheduled after the ROS 2 Zenoh work; exam udp-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-90890b155243"
+      "Implement the authority-compatible pinned TCP options, DNS, IPv6/NDP, ICMP/control traffic, routes, supported address configuration and fragmentation/reassembly facilities. Treat a DNS answer, DHCP lease, route advertisement or discovered address as untrusted configuration data, never newly granted client authority. Tie names to bounded resolution/use policy and prevent alternate-address or rebinding bypass. Refuse features whose service/control-plane authority cannot be bounded and represented."
+      "Broad smoltcp coverage within explicit network authority"
+      "waits on the network coverage epic, scheduled after the ROS 2 Zenoh work; exam network-families-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908aee0e6a98"
+      "Admit multicast only with explicit group, interface, port, direction, membership lifetime and bounded sender policy; implement supported group maintenance such as IPv4 IGMP behind that authority. Discovery/scouting remains opt-in userspace policy, and received advertisements cannot authorize unlisted locators. If a required behavior cannot satisfy this boundary, exclude that behavior rather than broaden ambient access."
+      "Broad smoltcp coverage within explicit network authority"
+      "waits on the network coverage epic, scheduled after the ROS 2 Zenoh work; exam multicast-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908bb0a712d6"
+      "Assess every pinned medium and backend separately. Keep Ethernet/raw-IP/other framing inside explicitly authorized services, never as raw packet authority for ordinary applications. Implement applicable compatible adapters without assuming virtio-net qualifies another backend or board. Bound neighbor/route/reassembly/socket caches, fairness, timers and state under malformed or saturated traffic."
+      "Broad smoltcp coverage within explicit network authority"
+      "waits on the network coverage epic, scheduled after the ROS 2 Zenoh work; exam media-isolation-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    (h.planned "01a1b49c-a9ec-7379-8976-908c99e68aab"
+      "Admit implementation children through the canonical workflow before their code, ordered after short-term Zenoh networking. Publish narrow qualification recipes using the existing network/I/O verification mechanism unless a genuinely distinct boundary requires another owner. Completion requires all admitted facilities and children observed, with maintained exclusions; inventory or TCP/UDP echo alone does not complete broad coverage."
+      "Broad smoltcp coverage within explicit network authority"
+      "waits on the network coverage epic, scheduled after the ROS 2 Zenoh work; exam completion-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0ddaa-8676-7d7e-8faf-47285166731f"; }; };
+    -- legacy 01a0e239-b54c-7782-8dd6-b403038fa3dd (open): Application UDP endpoints: exact bind, per-peer datagrams and message boundaries
+    -- The network service contract enumerates a UdpEndpoint capability, but only the service's resolver
+    -- uses UDP. No component can bind a local UDP endpoint or exchange datagrams, so DDS-style transports
+    -- have no substrate.
+    (h.planned "01a1b49c-aa1e-7072-8f8f-c56d0a3d5ba7"
+      "A UDP endpoint is an exact local address and port bound to one holder with explicit admitted-peer sets per direction and independent send and receive rights. A datagram to or from an unlisted peer, port or transport is refused before egress or delivery; loopback confers no implicit authority; no wildcard or range grant exists."
+      "Application UDP endpoints: exact bind, per-peer datagrams and message boundaries"
+      "waits on application UDP; no component can bind a UDP endpoint today; exam udp-authority-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-b54c-7782-8dd6-b403038fa3dd"; }; };
+    (h.planned "01a1b49c-aa1e-7072-8f8f-c56ec046e920"
+      "Send and receive preserve message boundaries. Each received datagram carries source address, port and exact length; each sent datagram appears on the wire as one UDP packet with the declared source. The external frame peer exchanges exact datagrams in both directions over LinkDevice, and two separately authorized local endpoints exchange datagrams over loopback without external egress."
+      "Application UDP endpoints: exact bind, per-peer datagrams and message boundaries"
+      "waits on application UDP; no component can bind a UDP endpoint today; exam udp-datagrams-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-b54c-7782-8dd6-b403038fa3dd"; }; };
+    -- legacy 01a0e239-b927-7d7d-bb54-16c2bc465faa (open): UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile
+    -- Once application UDP exists, queue depth, datagram size, truncation, drop behavior and lifetime
+    -- settlement are unbounded claims, and the static DDS participant endpoint shape the epic requires has
+    -- no declared form.
+    (h.planned "01a1b49c-aa28-77a7-b73f-1a9b0bb923c9"
+      "Receive queue depth, per-datagram size, oversize policy and per-endpoint bytes are declared per binding. An oversized datagram is truncated or rejected according to the declared policy with the outcome reported to the holder; a full queue drops deterministically with a counter; malformed, reordered, duplicated and lost datagrams leave state within bounds and other endpoints progressing."
+      "UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile"
+      "waits on application UDP (01a0e239-b54c); exam udp-bounds-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-b927-7d7d-bb54-16c2bc465faa"; }; };
+    (h.planned "01a1b49c-aa28-77a7-b73f-1a9ccdca3b95"
+      "Two static DDS-style endpoint pairs (user and metatraffic unicast ports) can be declared for one component and exchanged with a fixed external peer without a remote locator or discovered port ever becoming a grant. Discovery, reliability and CDR remain middleware policy and are not implemented."
+      "UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile"
+      "waits on application UDP (01a0e239-b54c); exam dds-profile-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-b927-7d7d-bb54-16c2bc465faa"; }; };
+    (h.planned "01a1b49c-aa28-77a7-b73f-1a9ded8a7d52"
+      "Client death, service restart and driver reset settle or invalidate pending datagram requests exactly once, reclaim queues, buffers and charges, and refuse predecessor handles under fresh epochs."
+      "UDP resource bounds, truncation policy, lifetime and static DDS endpoint profile"
+      "waits on application UDP (01a0e239-b54c); exam udp-lifetime-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-b927-7d7d-bb54-16c2bc465faa"; }; };
+    -- legacy 01a0e239-bd70-75e4-90d5-0645363f6fbd (open): DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision
+    -- Bounded DNS exists only for the native HTTP slice's holder, name, TCP and port grant with a single
+    -- retained record. UDP destinations cannot be named, expiry and re-resolution are unspecified, and the
+    -- pinned socket-dns facility is unclassified.
+    (h.planned "01a1b49c-aa33-743e-9ddc-c2747684c270"
+      "Any exact-name destination grant, TCP or UDP, resolves through the service's resolver authority. Results stay inside the service and are never returned as numeric addresses; CNAME chain depth, record count and name length are bounded by declared limits and excess is refused."
+      "DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision"
+      "waits on application UDP; DNS today serves only the HTTP slice; exam name-grants-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-bd70-75e4-90d5-0645363f6fbd"; }; };
+    (h.planned "01a1b49c-aa33-743e-9ddc-c27540dc7dab"
+      "TTL expiry triggers re-resolution before reuse within bounded retries and backoff. A changed answer never authorizes a destination outside the original grant; resolver replies with a wrong id, port or name and rebinding attempts to another address family or host are refused."
+      "DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision"
+      "waits on application UDP; DNS today serves only the HTTP slice; exam expiry-retry-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-bd70-75e4-90d5-0645363f6fbd"; }; };
+    (h.planned "01a1b49c-aa33-743e-9ddc-c2762423e35f"
+      "Record whether the pinned socket-dns facility replaces or supplements the service resolver, with its selected bounds. Whichever path is retained is the only resolver path; the other is not compiled in."
+      "DNS generalization: any exact-name grant, TTL expiry, retry bounds and resolver socket decision"
+      "waits on application UDP; DNS today serves only the HTTP slice; exam resolver-choice-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-bd70-75e4-90d5-0645363f6fbd"; }; };
+    -- legacy 01a0e239-c1db-736d-a7a3-7ab4dd179e93 (open): ICMP: service-held echo probes and ICMP error mapping
+    -- The stack answers ICMP echo automatically, but no component can issue a bounded echo probe, ICMP
+    -- errors received for admitted sockets are not surfaced, and the socket-icmp facility is unclassified.
+    (h.planned "01a1b49c-aa3d-749e-954d-810eebc54121"
+      "An explicit ICMP echo grant lets a component issue echo requests to its exact destination and observe replies with round-trip identity. No grant, a wrong destination, an oversized payload or rate excess refuses before egress; ordinary clients receive no raw ICMP and cannot observe replies to other holders."
+      "ICMP: service-held echo probes and ICMP error mapping"
+      "waits on the network coverage epic; socket-icmp is unclassified; exam icmp-probe-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-c1db-736d-a7a3-7ab4dd179e93"; }; };
+    (h.planned "01a1b49c-aa3d-749e-954d-810fe90bea76"
+      "Received ICMP destination-unreachable and time-exceeded messages that match an admitted socket map to typed errors visible to that holder. Messages that match no admitted socket, or whose embedded header does not match, are ignored and counted within bounds."
+      "ICMP: service-held echo probes and ICMP error mapping"
+      "waits on the network coverage epic; socket-icmp is unclassified; exam icmp-errors-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-c1db-736d-a7a3-7ab4dd179e93"; }; };
+    (h.planned "01a1b49c-aa3d-749e-954d-8110ff774db4"
+      "The socket-icmp and auto-icmp-echo-reply rows in the matrix record the outcome: supported behind the grant above or excluded with the violated invariant, and the automatic echo reply is recorded as service policy with its rate bound."
+      "ICMP: service-held echo probes and ICMP error mapping"
+      "waits on the network coverage epic; socket-icmp is unclassified; exam classification-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-c1db-736d-a7a3-7ab4dd179e93"; }; };
+    -- legacy 01a0e239-c630-71d3-8c0c-85ab4d366bd4 (open): IPv4 fragmentation and reassembly: bounded support or executable exclusion
+    -- The pinned release offers IPv4 fragmentation and reassembly with selectable buffer counts and sizes.
+    -- The service neither enables it nor records why, so datagrams above the MTU have undefined fate.
+    (h.planned "01a1b49c-aa47-7575-ab3b-aaad44e44028"
+      "Decide whether proto-ipv4-fragmentation is enabled with declared reassembly and fragmentation buffer bounds or excluded, and record the decision, rationale and bounds in the matrix."
+      "IPv4 fragmentation and reassembly: bounded support or executable exclusion"
+      "waits on the network coverage epic; fragmentation is neither enabled nor excluded; exam decision-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-c630-71d3-8c0c-85ab4d366bd4"; }; };
+    (h.planned "01a1b49c-aa47-7575-ab3b-aaaeb2ca0045"
+      "If enabled: fragmented datagrams up to the declared size reassemble with exact bytes; overlapping, incomplete and excess concurrent assemblies expire within bounded time and memory, and malformed fragments are dropped and counted. If excluded: incoming fragments are dropped and counted, outgoing datagrams above the MTU are refused with a typed error, and no partial state is retained."
+      "IPv4 fragmentation and reassembly: bounded support or executable exclusion"
+      "waits on the network coverage epic; fragmentation is neither enabled nor excluded; exam bounded-or-denied-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-c630-71d3-8c0c-85ab4d366bd4"; }; };
+    -- legacy 01a0e239-ca2d-78c4-b9e1-689e6db39e9f (open): Static IPv6 interface, NDP and ICMPv6
+    -- The destination contract enumerates IPv6 addresses but the interface contract and the stack carry no
+    -- IPv6: no address, no neighbor discovery and no ICMPv6, so IPv6 destinations cannot exist.
+    (h.planned "01a1b49c-aa52-71f5-a8be-724fecb54f1b"
+      "The network interface contract gains versioned IPv6 address, prefix and gateway declarations. The interface holds the declared link-local and global addresses with address count bounded by the selected feature, remains generation data, and an interface without IPv6 declarations runs exactly as today."
+      "Static IPv6 interface, NDP and ICMPv6"
+      "waits on the network coverage epic; the stack carries no IPv6; exam ipv6-interface-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-ca2d-78c4-b9e1-689e6db39e9f"; }; };
+    (h.planned "01a1b49c-aa52-71f5-a8be-72505048d72b"
+      "Neighbor solicitation and advertisement and static default routing work against the external frame peer; the neighbor cache is bounded; unsolicited or ungranted control traffic is dropped and counted; ICMPv6 echo reply follows the same policy and rate bound as IPv4."
+      "Static IPv6 interface, NDP and ICMPv6"
+      "waits on the network coverage epic; the stack carries no IPv6; exam ndp-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-ca2d-78c4-b9e1-689e6db39e9f"; }; };
+    -- legacy 01a0e239-ce56-7d42-9e8a-3b4aa5dce585 (open): TCP and UDP over IPv6 destinations and listeners
+    -- After a static IPv6 interface exists, exact IPv6 destination and listener grants still carry no
+    -- stream or datagram path, and the authority split between an address family pair of one host is
+    -- unstated.
+    (h.planned "01a1b49c-aa5d-7586-9ee7-9e08a86f499f"
+      "Exact IPv6 destination, listener and UDP endpoint grants carry the same authority semantics as IPv4. An IPv4 grant never authorizes the IPv6 address of the same host and vice versa; a mismatched family is refused before egress."
+      "TCP and UDP over IPv6 destinations and listeners"
+      "waits on a static IPv6 interface (01a0e239-ca2d); exam ipv6-destinations-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-ce56-7d42-9e8a-3b4aa5dce585"; }; };
+    (h.planned "01a1b49c-aa5d-7586-9ee7-9e09bd74a6e7"
+      "The external frame peer exchanges exact TCP stream bytes and UDP datagrams over IPv6 in both directions, and the refusal, timeout and lifetime cases of the IPv4 qualification hold over IPv6."
+      "TCP and UDP over IPv6 destinations and listeners"
+      "waits on a static IPv6 interface (01a0e239-ca2d); exam ipv6-streams-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-ce56-7d42-9e8a-3b4aa5dce585"; }; };
+    -- legacy 01a0e239-d236-753f-ad60-f56c378eb2fe (open): DHCPv4 address configuration for an authorized interface
+    -- Interface addressing is static generation data. The pinned release offers a DHCPv4 client; whether a
+    -- lease may configure an authorized interface without minting client authority is undecided and
+    -- unimplemented.
+    (h.planned "01a1b49c-aa67-7692-aa9e-641dd9b4c515"
+      "The interface contract declares static or DHCPv4 mode. In DHCPv4 mode the service performs discover, offer, request and acknowledge on the declared interface and applies address, mask, gateway and resolver only to it. Lease contents are untrusted configuration: they never add, widen or redirect a client grant, and an exact numeric grant remains bound to its declared address."
+      "DHCPv4 address configuration for an authorized interface"
+      "waits on a decision whether a DHCP lease may configure an authorized interface; exam dhcp-mode-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-d236-753f-ad60-f56c378eb2fe"; }; };
+    (h.planned "01a1b49c-aa67-7692-aa9e-641ecc0b6baa"
+      "Renewal, rebinding, expiry, NAK and server disappearance are handled within bounded retries and timers. On expiry the interface drops the address and admitted sockets fail with a typed error; restart re-acquires a lease under a fresh epoch and refuses predecessor handles."
+      "DHCPv4 address configuration for an authorized interface"
+      "waits on a decision whether a DHCP lease may configure an authorized interface; exam lease-lifetime-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-d236-753f-ad60-f56c378eb2fe"; }; };
+    -- legacy 01a0e239-d614-767b-95d0-9c7261951e72 (open): IPv6 SLAAC and router advertisement handling
+    -- With a static IPv6 interface in place, the pinned release's stateless address autoconfiguration and
+    -- router advertisement handling remain unclassified; a rogue advertisement must not reconfigure an
+    -- authorized interface or redirect admitted traffic.
+    (h.planned "01a1b49c-aa71-731a-91fe-6880e71a3d21"
+      "With the SLAAC feature enabled and a declared router, advertisements configure a prefix-derived address and default route with prefix count and lifetimes bounded by declaration. Advertisements from an undeclared router are ignored and counted; lifetime expiry removes the address and admitted sockets on it fail with a typed error."
+      "IPv6 SLAAC and router advertisement handling"
+      "waits on a static IPv6 interface (01a0e239-ca2d); exam slaac-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-d614-767b-95d0-9c7261951e72"; }; };
+    (h.planned "01a1b49c-aa71-731a-91fe-688197fc6b2e"
+      "Advertisement options such as recursive DNS, MTU and route information are untrusted data. None creates or widens client authority, and a rogue advertisement cannot redirect an admitted destination's egress to another next hop."
+      "IPv6 SLAAC and router advertisement handling"
+      "waits on a static IPv6 interface (01a0e239-ca2d); exam untrusted-ra-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-d614-767b-95d0-9c7261951e72"; }; };
+    -- legacy 01a0e239-daa7-7fb9-b1c7-8c7e9336d95a (open): Multicast-capable peer backend for the network plane checker
+    -- The network plane qualification uses QEMU user-mode networking and a frame peer that cannot deliver
+    -- Ethernet multicast in both directions. Multicast and IGMP claims need a backend that does, before
+    -- any group behavior can be qualified.
+    (h.planned "01a1b49c-aa7b-778d-94c8-0911d5e9f7be"
+      "The network plane verification gains a backend that delivers Ethernet multicast to and from a host-side controlled peer, reusing the shared plane library for QEMU invocation, transcript collection and marker chains. User-mode networking is not used for any multicast claim, and the backend is selectable per case."
+      "Multicast-capable peer backend for the network plane checker"
+      "waits on a multicast-capable peer backend for the network checker; exam peer-backend-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-daa7-7fb9-b1c7-8c7e9336d95a"; }; };
+    (h.planned "01a1b49c-aa7b-778d-94c8-09126e18f085"
+      "The backend has missing-evidence, reordered-marker and forged-marker controls in the existing gate control mechanism, and every existing unicast gate keeps its current backend and result."
+      "Multicast-capable peer backend for the network plane checker"
+      "waits on a multicast-capable peer backend for the network checker; exam controls-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-daa7-7fb9-b1c7-8c7e9336d95a"; }; };
+    -- legacy 01a0e239-de7f-7bb7-ae5c-756b8cbfe637 (open): Multicast group grants, IGMP membership and mDNS classification
+    -- Multicast is absent from the stack and the authority model. The epic admits it only behind an
+    -- explicit group, interface, port, direction, lifetime and sender policy, with received advertisements
+    -- never creating authority.
+    (h.planned "01a1b49c-aa86-73ad-b612-1484b7bc9e39"
+      "A multicast grant names holder, group, interface, local port, direction, membership lifetime and sender policy. Join and leave emit IGMP membership report and leave on the wire; datagrams for ungranted groups, ports, senders or directions are refused; the group count is bounded by declaration; memberships are reclaimed on client death and restart with the leave observed."
+      "Multicast group grants, IGMP membership and mDNS classification"
+      "waits on a multicast-capable peer backend (01a0e239-daa7); exam group-grant-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-de7f-7bb7-ae5c-756b8cbfe637"; }; };
+    (h.planned "01a1b49c-aa86-73ad-b612-148539370160"
+      "A received multicast advertisement is data: it never authorizes a unicast destination, port or sender it names. The pinned mDNS facility is classified as supported behind a service-owned exact-name grant or excluded with the violated invariant and executable denial."
+      "Multicast group grants, IGMP membership and mDNS classification"
+      "waits on a multicast-capable peer backend (01a0e239-daa7); exam discovery-boundary-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-de7f-7bb7-ae5c-756b8cbfe637"; }; };
+    -- legacy 01a0e239-e2a7-7844-abbc-833a5820dfe0 (open): Media and backend classification with build-time exclusions
+    -- The pinned release advertises media, PHY backends, raw sockets and protocol features that Slime OS
+    -- does not enable and has not classified. Without a recorded reason and an executable exclusion, the
+    -- boundary between an authorized stack and ordinary-client raw-packet authority is asserted rather
+    -- than enforced.
+    (h.planned "01a1b49c-aa90-73a5-99be-dbe99a15a979"
+      "Each pinned feature outside the admitted set is classified in the matrix as planned, excluded with the violated invariant and considered bounded alternative, or not applicable with the reason. A client-facing raw-packet or raw-IP facility is excluded; raw-IP framing inside the authorized service, if ever needed, is recorded separately from client authority. The loopback medium implemented in the service is recorded as a medium row with its bounds."
+      "Media and backend classification with build-time exclusions"
+      "waits on the network coverage epic; media and backends are unclassified; exam classification-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-e2a7-7844-abbc-833a5820dfe0"; }; };
+    (h.planned "01a1b49c-aa90-73a5-99be-dbea56a9f653"
+      "Each excluded feature is not enabled and the delta check refuses enabling it without a matrix change. Where a client request could name an excluded facility, such as a raw transport or medium selector, the service refuses it with a typed denial before any state is allocated."
+      "Media and backend classification with build-time exclusions"
+      "waits on the network coverage epic; media and backends are unclassified; exam executable-exclusion-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-e2a7-7844-abbc-833a5820dfe0"; }; };
+    -- legacy 01a0e239-e6af-7561-92fc-334aa2ba28df (open): Resource bounds under malformed and saturating traffic
+    -- Neighbor cache, route, socket, reassembly and timer bounds are declared per slice but never
+    -- exercised together under hostile input. The epic requires bounded state and fairness under malformed
+    -- or saturated traffic before any backend is considered isolated.
+    (h.planned "01a1b49c-aa9a-72a8-826e-f09a0b426ff6"
+      "Under ARP and neighbor floods, SYN floods, fragment floods, malformed frames, oversized packets and datagram bursts from the frame peer, the neighbor cache, routes, sockets, listeners, reassembly and timer state stay within declared bounds, service memory does not grow, and an admitted client's stream and datagram exchange continue to progress with exact bytes."
+      "Resource bounds under malformed and saturating traffic"
+      "waits on every admitted slice existing; a hostile-traffic exam needs them all; exam saturation-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-e6af-7561-92fc-334aa2ba28df"; }; };
+    (h.planned "01a1b49c-aa9a-72a8-826e-f09bee2a4cb4"
+      "After the flood stops, caches converge to the legitimate peers, drop counters report the discarded input, and service restart returns every bound to zero under a fresh epoch."
+      "Resource bounds under malformed and saturating traffic"
+      "waits on every admitted slice existing; a hostile-traffic exam needs them all; exam recovery-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-e6af-7561-92fc-334aa2ba28df"; }; };
+    -- legacy 01a0e239-eb09-7748-811b-3302fb4b9fa0 (open): smoltcp coverage aggregate qualification and epic closure
+    -- The coverage epic completes only when every admitted slice is observed under one execution identity
+    -- with no planned matrix rows remaining. No published recipe aggregates the slices, the demo
+    -- regression and the delta check.
+    (h.planned "01a1b49c-aaa5-74be-9b2e-11f3c9029c05"
+      "One published recipe runs every admitted slice's qualification, the demo network regression, the matrix delta check, contract, closure, formatting and lint checks under a single execution identity, and fails if any admitted slice is missing from it."
+      "smoltcp coverage aggregate qualification and epic closure"
+      "waits on every other requirement of the network coverage epic; exam aggregate-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-eb09-7748-811b-3302fb4b9fa0"; }; };
+    (h.planned "01a1b49c-aaa5-74be-9b2e-11f4d041f10e"
+      "The matrix contains no planned rows; every excluded row's executable denial or build-time exclusion is exercised by the aggregate; the epic's evidence names the tested target, revision and image identity."
+      "smoltcp coverage aggregate qualification and epic closure"
+      "waits on every other requirement of the network coverage epic; exam closure-observed not written"
+      h.noAcceptance) with { supersedes = { "01a0e239-eb09-7748-811b-3302fb4b9fa0"; }; };
+  }) with {
+    nonGoals = {
+      "Enabling every Cargo feature simultaneously, implementing protocols absent from the pinned smoltcp release, or a moving completion target tied to future releases.";
+      "Ambient bind/connect/listen, wildcard or port-range client grants, raw packet injection/sniffing for ordinary applications, resolver-wide access, or trust/discovery responses that create authority.";
+      "DDSI-RTPS discovery/reliability/CDR implementation, full Zenoh or ROS compatibility, transport security implementations, and physical NIC qualification; each is separately owned.";
+      "Truncation and queue-bound policy, DDS endpoint profiles and multicast, which are separate slices.";
+      "Ambient bind/connect/listen, wildcard or port-range grants, and raw-packet authority for ordinary applications.";
+      "DDSI-RTPS discovery, reliability, history, CDR or QoS matching; multicast.";
+      "Resolver-wide client access, DNSSEC or encrypted DNS, mDNS, or names authorizing an unrelated destination.";
+      "IPv6 AAAA records before the IPv6 slices land.";
+      "Raw ICMP or arbitrary ICMP types for ordinary clients, traceroute-style TTL control, or ICMP for IPv6 before that slice.";
+      "IPv6 fragmentation, path MTU discovery, or 6LoWPAN fragmentation.";
+      "Physical NIC, IOMMU or board qualification; QEMU evidence carries no hardware claim.";
+      "SLAAC, router advertisement processing, IPv6 fragmentation, or TCP/UDP over IPv6, which are separate slices.";
+      "Dual-stack name resolution policy beyond exact grants, or IPv6 multicast.";
+      "DHCPv6, option-driven boot or configuration beyond address, mask, gateway and resolver, or leases widening any client grant.";
+      "DHCPv6, privacy extensions beyond what the pinned release provides, or multi-router preference policy.";
+      "Any multicast grant or protocol behavior in the network service, or a second verification framework.";
+      "General LAN discovery, DDSI-RTPS or Zenoh scouting policy, IPv6 multicast listener discovery, or source-specific multicast beyond the declared sender policy.";
+      "Implementing any excluded medium, or claiming a backend qualifies another board or NIC.";
+      "Performance targets, denial-of-service resistance claims beyond declared bounds, or physical NIC behavior.";
+      "New protocol behavior, or completion of any slice by aggregation alone.";
+    };
+  };
+
+area

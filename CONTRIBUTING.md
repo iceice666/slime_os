@@ -141,8 +141,8 @@ requires one of them to be in `HUMAN_OWNERS` when the diff:
 The rule looks at every bound target at the base, enforced or not, and not at
 whether the PR carries a spec diff. Splitting the grader change and the
 implementation into two PRs triggers it on both. Rule 4 — every touched
-product file under some area's `owns` — is reported, not enforced, until every
-plane has an area. A chore that touches no area (rename, format, pure
+product file under some area's `owns` — refuses the PR; a new product path
+needs an `owns` glob in the area that promises its behavior. A chore that touches no area (rename, format, pure
 refactor) takes the same approval exit; there is no separate class.
 
 Every `contracts/**/schema.zt` is compiled by `just contracts_check` whether
