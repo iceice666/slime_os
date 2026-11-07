@@ -41,7 +41,7 @@
 | 項目 | 決策 |
 | --- | --- |
 | `mandatory` / `advisory` | 不加；跟 v2。「軟」acceptance 用 `planned` |
-| helper 集合 | `passed`、`count`、`atLeast`、`equals`、`all`、`any`；`all`/`any` 收 list 不遞迴 |
+| helper 集合 | `count`、`atLeast`、`atMost`、`flag`；`passed` 隱含；list 即 all。Phase 1 實測舊 body 沒有 `any`，不加（見 `phase1-log.md`） |
 | `Area` 欄位 | 加 `nonGoals`（list of text）；歸戶時 `problem` 併入 `rationale`，`scope` 丟掉（已被 requirements 表達） |
 | `render`、`spec_gen` 產 `.zti` | 不做；`check --digest` 印 requirementsDigest |
 | Zutai pin 位置 | `specs/zutai.toml`，不進 digest；不併入 `sel4/pins.toml` |
