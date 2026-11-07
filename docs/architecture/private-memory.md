@@ -308,7 +308,7 @@ stage owns.
 ### Root and system funding — implementation in progress
 
 Qualification of the current funding changes is pending under the
-[canonical reserve-accounting follow-up](../../.tasks/items/01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981.md).
+canonical reserve-accounting follow-up (`01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981`, legacy index in `specs/legacy.zt`).
 The mechanisms below describe the current implementation, not completed QEMU
 matrix evidence or closure of that work item. Earlier qualification does not
 establish the new reserve floor or mixed-pressure construction claim.
@@ -496,7 +496,7 @@ dumps are identical.
   guarantee-redemption, twenty-cycle zeroed reuse, census conservation,
   residency-scaling and launcher-only RAM controls. Successful runs of these new
   checks, tied to tested image identities, remain pending under the
-  [reserve-accounting follow-up](../../.tasks/items/01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981.md).
+  reserve-accounting follow-up (`01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981`, legacy index in `specs/legacy.zt`).
 - `just private_memory_phase4_check` runs both over the whole phase-3 surface,
   because adaptive binding changes construction, growth and reclamation for
   fixed holders too.

@@ -1,7 +1,7 @@
 # Console record qualification
 
 This is the exam design for backlog
-[`01a11bda-7038-7b80-8963-ae49bf9ce922`](../../.tasks/items/01a11bda-7038-7b80-8963-ae49bf9ce922.md),
+`01a11bda-7038-7b80-8963-ae49bf9ce922` (legacy index in `specs/legacy.zt`),
 not a claim that the product already serializes records.
 
 ## Landed-exam boundary

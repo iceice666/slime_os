@@ -96,4 +96,4 @@ return all pages, objects, slots, and accounting after both exit and fault.
 - `contracts/private-memory-budget/v1/`
 - `slime-root/src/private_memory.rs`
 - `components/runtime/src/private_heap.rs`
-- `.tasks/items/01a07a2c-9c4f-7ca0-8417-aba2b48ce16b.md`
+- `01a07a2c-9c4f-7ca0-8417-aba2b48ce16b` (legacy index in `specs/legacy.zt`)

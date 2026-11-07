@@ -1,7 +1,7 @@
 # Adaptive memory guarantee reservation
 
 - Status: **accepted**
-- Work item: [01a0bd36-7f01-76cd-873d-b9c03687fd9f](../../.tasks/items/01a0bd36-7f01-76cd-873d-b9c03687fd9f.md)
+- Work item: `01a0bd36-7f01-76cd-873d-b9c03687fd9f` (legacy index in `specs/legacy.zt`)
 - Parent identity: `01a09b65-4386-7b79-a64a-f263de037b8d`
 
 ## Context

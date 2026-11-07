@@ -33,7 +33,7 @@ import yaml
 from harness import ROOT
 from just_metadata import recipes
 from markdown_anchors import anchors, controls as anchor_controls
-from work_items import FIELD, UUID, identities, items, retired, without_consumer_records
+from work_items import identities, items
 import smoltcp_matrix
 
 REQUIRED_ACTIVE_DOCUMENTS = (
@@ -69,7 +69,6 @@ def active_documents(root: _Path = ROOT) -> tuple[_Path, ...]:
                 *sorted((root / "docs").rglob("*.md")),
                 *sorted((root / "roadmap").rglob("*.md")),
                 *sorted((root / "contracts").rglob("*.md")),
-                *sorted((root / ".tasks" / "items").glob("*.md")),
                 *sorted((root / ".github" / "PULL_REQUEST_TEMPLATE").rglob("*.md")),
                 *sorted((root / ".github").glob("pull_request_template.md")),
                 *sorted((root / ".github").glob("PULL_REQUEST_TEMPLATE.md")),
@@ -82,8 +81,7 @@ def checks_commands(path: _Path, root: _Path = ROOT) -> bool:
     """Current indexes are checked; retained delivery narratives are link-only."""
     relative = path.relative_to(root)
     return (
-        relative.parts[:2] != (".tasks", "items")
-        and (relative.parts[0] != "roadmap" or relative.parts[1:] == ("README.md",))
+        (relative.parts[0] != "roadmap" or relative.parts[1:] == ("README.md",))
         and relative.parts[:4] != ("contracts", "generation-manifest", "v1", "compositions")
     )
 
@@ -92,15 +90,11 @@ def document_reference_failures(
     path: _Path,
     text: str,
     *,
-    item_root: _Path = ROOT / ".tasks" / "items",
     known_items: frozenset[str] | None = None,
-    retired_items: frozenset[str] | None = None,
 ) -> list[str]:
-    """Validate local Markdown destinations, fragments, and work-item links."""
+    """Validate local Markdown destinations, fragments, and identity references."""
     found: list[str] = []
     known = identities() if known_items is None else known_items
-    gone = retired() if retired_items is None else retired_items
-    linked_work_items: set[str] = set()
     for target in dict.fromkeys(HISTORY_URL.findall(text)):
         if not HISTORY_COMMIT.match(target):
             found.append(f"{path}: history URL must use src/commit/<full 40-hex commit>: {target}")
@@ -109,22 +103,6 @@ def document_reference_failures(
             continue
         base, _, fragment = target.partition("#")
         destination = (path.parent / unquote(base)) if base else path
-        resolved = destination.resolve()
-        is_work_item = resolved.parent == item_root.resolve() and resolved.suffix == ".md"
-        reference = resolved.stem
-        if is_work_item:
-            linked_work_items.add(reference)
-            if not UUID.fullmatch(reference):
-                found.append(f"{path}: work-item link {target} does not use a canonical UUID")
-                continue
-            if reference not in known:
-                found.append(f"{path}: work-item link {target} names absent UUID {reference}")
-                continue
-            if reference in gone:
-                # A retired item's identity is its terminal record; the
-                # Markdown body it used to have lives only in Git history, so
-                # the canonical path is a resolvable reference, not a document.
-                continue
         if not destination.exists():
             found.append(f"{path}: dead relative link {target}")
         elif fragment and (
@@ -137,7 +115,7 @@ def document_reference_failures(
     # An archive URL names historical content, not an item in the current store.
     local_text = HISTORY_URL.sub("", text)
     for reference in dict.fromkeys(UUID_REFERENCE.findall(local_text)):
-        if reference not in linked_work_items and reference not in known:
+        if reference not in known:
             found.append(f"{path}: references absent work-item UUID {reference}")
     return found
 
@@ -219,30 +197,6 @@ def command_reference_failures(path: _Path, text: str, known_recipes: dict[str, 
                         break
                     index += 1
     return list(dict.fromkeys(found))
-
-
-def task_requirements(text: str) -> str:
-    """Only unfinished items' requirement sections, never Gate/Observed evidence."""
-    state = FIELD["state"].search(text.split("---", 2)[1] if text.startswith("---\n") else "")
-    if state is None or state.group("value") not in {"open", "active", "blocked", "deferred"}:
-        return ""
-    selected: list[str] = []
-    active = False
-    history_level: int | None = None
-    for line in text.splitlines():
-        heading = re.match(r"^(#{2,6})\s+(.+?)\s*#*\s*$", line)
-        if heading:
-            level = len(heading[1])
-            title = heading[2].casefold()
-            if level == 2:
-                active = title in {"scope", "requirements", "exit conditions", "verification"}
-            if history_level is not None and level <= history_level:
-                history_level = None
-            if re.match(r"(?:gates?|observed|outcomes?|evidence|history)\b", title):
-                history_level = level
-        if active and history_level is None:
-            selected.append(line)
-    return "\n".join(selected)
 
 
 def machine_consumers(root: _Path = ROOT) -> tuple[_Path, ...]:
@@ -406,21 +360,12 @@ def controls() -> list[str]:
         source = root / "README.md"
         target = root / "target.md"
         target.write_text("# Existing heading\n")
-        item_root = root / ".tasks" / "items"
-        item_root.mkdir(parents=True)
-        (item_root / f"{present}.md").write_text("# Present\n")
         cases = (
-            ("valid", f"[doc](target.md#existing-heading) [item](.tasks/items/{present}.md)", ()),
+            ("valid", f"[doc](target.md#existing-heading) {present}", ()),
             ("missing path", "[doc](missing.md)", ("dead relative link",)),
             ("missing fragment", "[doc](target.md#missing)", ("names no heading",)),
-            ("noncanonical UUID", "[item](.tasks/items/not-an-id.md)", ("canonical UUID",)),
-            ("absent UUID", f"[item](.tasks/items/{absent}.md)", ("absent UUID",)),
             ("absent plain UUID", absent, ("absent work-item UUID",)),
-            (
-                "retired UUID keeps resolving without a document",
-                f"[item](.tasks/items/{gone}.md) {gone}",
-                (),
-            ),
+            ("retired UUID keeps resolving without a document", gone, ()),
             (
                 "immutable history",
                 f"[just retired_check]({HISTORY_BASE}src/commit/{'a' * 40}/devlog/missing.md)",
@@ -436,9 +381,7 @@ def controls() -> list[str]:
             found = document_reference_failures(
                 source,
                 document,
-                item_root=item_root,
                 known_items=frozenset({present, gone}),
-                retired_items=frozenset({gone}),
             )
             if len(found) != len(signals) or any(
                 signal not in failure for signal, failure in zip(signals, found, strict=True)
@@ -453,10 +396,8 @@ def controls() -> list[str]:
         discovered = active_documents(root)
         if future not in discovered:
             failures.append("discovery control: new architecture page was not discovered")
-        if future_contract not in discovered or (item_root / f"{present}.md") not in discovered:
-            failures.append(
-                "discovery control: contract docs or work-item evidence was not discovered"
-            )
+        if future_contract not in discovered:
+            failures.append("discovery control: contract docs were not discovered")
         if any(not path.is_file() for path in discovered) or (root / "devlog").exists():
             failures.append("discovery control: docs-only tree requires missing files or devlog")
         command_cases = (
@@ -474,7 +415,6 @@ def controls() -> list[str]:
             ),
             (root / "roadmap" / "history.md", "`just retired_check`", False),
             (root / "roadmap" / "README.md", "`just removed_check`", True),
-            (item_root / f"{present}.md", "`just retired_check`", False),
         )
         for path, document, expected in command_cases:
             found = (
@@ -486,109 +426,6 @@ def controls() -> list[str]:
                 failures.append(
                     f"command control {document!r}: expected failure={expected}, got {found}"
                 )
-        live_item = "---\nstate: open\n---\n## Scope\n`just removed_check`\n"
-        history = "## Gate\n`just retired_check`\n## Observed\n`just retired_check`\n"
-        for document, expected in (
-            (live_item + history, True),
-            (live_item.replace("removed_check", "current_check") + history, False),
-            (live_item.replace("state: open", "state: done") + history, False),
-            ("---\nstate: active\n---\n## Verification\n### Observed\n`just retired_check`", False),
-        ):
-            found = command_reference_failures(
-                item_root / f"{present}.md", task_requirements(document), {"current_check": {}}
-            )
-            if bool(found) != expected:
-                failures.append(f"task consumer control: expected failure={expected}, got {found}")
-        machine_cases = (
-            (
-                "scripts/consumer.py",
-                "import subprocess\nsubprocess.run(['just', 'removed_check'])",
-                True,
-            ),
-            (
-                "scripts/consumer.py",
-                "from subprocess import run\nrun('just removed_check', shell=True)",
-                True,
-            ),
-            (
-                "scripts/consumer.py",
-                "import subprocess\nsubprocess.run(['just', 'removed_check', dynamic])",
-                True,
-            ),
-            (
-                "scripts/consumer.py",
-                "# just retired_check\nexample = ['just', 'retired_check']",
-                False,
-            ),
-            (
-                "scripts/consumer.py",
-                "import subprocess\nsubprocess.run(['just', '--dump', '--dump-format', 'json'])",
-                False,
-            ),
-            (
-                "scripts/consumer.sh",
-                "# just retired_check\necho 'just retired_check'\njust $RECIPE",
-                False,
-            ),
-            ("scripts/consumer.sh", "just removed_check # active invocation", True),
-            (
-                "scripts/consumer.sh",
-                "nix build .#kani; nix develop .#kani --command just removed_check",
-                True,
-            ),
-            (
-                ".github/workflows/consumer.yml",
-                "jobs:\n  check:\n    strategy:\n      matrix:\n        include:\n        - recipe: removed_check\n",
-                True,
-            ),
-            (
-                ".github/workflows/consumer.yml",
-                "jobs:\n  check:\n    steps:\n    - run: |\n        just current_check\n        just removed_check\n",
-                True,
-            ),
-            (
-                ".github/workflows/consumer.yml",
-                "jobs:\n  check:\n    steps:\n    - run: nix develop --command just removed_check",
-                True,
-            ),
-            (
-                ".github/workflows/consumer.yml",
-                "# just retired_check\nname: just retired_check\nrun: echo 'just retired_check'",
-                False,
-            ),
-        )
-        for relative, text, expected in machine_cases:
-            path = root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
-            found = machine_reference_failures(path, text, {"current_check": {}})
-            absent_recipe = any("absent recipe 'removed_check'" in failure for failure in found)
-            if (expected and not absent_recipe) or (not expected and found):
-                failures.append(
-                    f"machine consumer control {relative}: expected failure={expected}, got {found}"
-                )
-            if path not in machine_consumers(root):
-                failures.append(f"machine discovery control: missed {relative}")
-    return failures
-
-
-def consumer_record_controls() -> list[str]:
-    """A consumer record's own identities are not work-item references."""
-    failures: list[str] = []
-    epoch = "3f2b9c11-4d5e-4a7b-9c2d-8e1f0a6b5c44"
-    parent = "00000000-0000-7000-8000-000000000001"
-    item = (
-        "---\nschema: work-item/v2\nid: 00000000-0000-7000-8000-000000000002\n"
-        "kind: task\nstate: open\ncreated: 2026-09-15T10:00:00Z\n"
-        f"parent: {parent}\ndevloop:\n  epoch: {epoch}\n  evidence: []\n---\n\n# Control\n"
-    )
-    scanned = without_consumer_records(item)
-    if epoch in scanned:
-        failures.append("consumer record control: a devloop identity was read as a reference")
-    if parent not in scanned:
-        failures.append("consumer record control: a MyQue-owned parent reference was dropped")
-    if "# Control" not in scanned:
-        failures.append("consumer record control: the item body was dropped")
     return failures
 
 
@@ -619,7 +456,7 @@ def main() -> int:
     )
     if parser.parse_args().smoltcp_matrix:
         return smoltcp_matrix_main()
-    failures = controls() + consumer_record_controls() + smoltcp_matrix.controls()
+    failures = controls() + smoltcp_matrix.controls()
     known_recipes = recipes()
     known_items = identities()
     documents = active_documents()
@@ -628,18 +465,9 @@ def main() -> int:
             failures.append(f"{path}: maintained document is missing")
             continue
         text = path.read_text()
-        is_work_item = path.relative_to(ROOT).parts[:2] == (".tasks", "items")
-        # A consumer's frontmatter record carries identities of its own — a
-        # devloop run epoch is a UUID, and names no work item — so only
-        # MyQue-owned metadata and the body are read as references.
-        scanned = without_consumer_records(text) if is_work_item else text
-        failures.extend(document_reference_failures(path, scanned, known_items=known_items))
+        failures.extend(document_reference_failures(path, text, known_items=known_items))
         if checks_commands(path):
             failures.extend(command_reference_failures(path, text, known_recipes))
-        elif is_work_item:
-            failures.extend(
-                command_reference_failures(path, task_requirements(text), known_recipes)
-            )
     consumers = machine_consumers()
     for path in consumers:
         failures.extend(machine_reference_failures(path, path.read_text(), known_recipes))

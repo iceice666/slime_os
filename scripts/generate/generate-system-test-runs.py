@@ -238,7 +238,7 @@ ARM_DEVICES: dict[str, dict[str, tuple[str, ...]]] = {
 # Rows are (canonical item UUID, checker filename, closure name, artifact paths).
 PLANNED_RUNS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
     "sel4-serial": (
-        "01a10778-adf1-7d64-a4e8-851e425c03e9",
+        "01a1b49c-ab84-75c9-86f4-b1e30664a13c",
         "check-sel4-component-graph.py",
         "sel4-serial",
         (
@@ -308,30 +308,11 @@ def validate_planned_runs() -> None:
         identity, checker, closure, artifacts = row
         if not isinstance(identity, str) or not work_items.UUID.fullmatch(identity):
             fail(f"{run}: planning identity is not a canonical UUID")
-        # The shared reader is deliberately shallow. An exclusion additionally
-        # needs identity and state in the item's envelope, never its body.
-        try:
-            item_text = (work_items.ITEMS / f"{identity}.md").read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
-            fail(f"{run}: cannot read planning item envelope: {error}")
-        opening, separator, remainder = item_text.partition("---\n")
-        frontmatter, closing, _body = remainder.partition("\n---\n")
-        if opening or not separator or not closing:
-            fail(f"{run}: planning item lacks a delimited frontmatter envelope")
-        fields = {
-            key: re.findall(rf"^{key}:[ \t]*(.*)$", frontmatter, re.MULTILINE)
-            for key in ("schema", "id", "state")
-        }
-        if (any(len(values) != 1 for values in fields.values())
-                or fields["schema"][0] not in {"work-item/v1", "work-item/v2"}
-                or fields["id"][0] != identity
-                or fields["state"][0] not in {"open", "active", "blocked", "deferred"}):
-            fail(f"{run}: planning item envelope has invalid identity, schema or state")
-        matches = [item for item in work_items.items() if item["id"] == identity]
-        if (identity not in work_items.identities() or len(matches) != 1
-                or matches[0]["state"] not in {"open", "active", "blocked", "deferred"}
-                or matches[0]["retired"]):
-            fail(f"{run}: planning identity must name one nonterminal work item")
+        # A planned requirement is a promise without an exam yet: the only
+        # identity that may excuse a run from the inventory. A bound or
+        # legacy identity cannot, so a landed implementation unregisters.
+        if not work_items.planned(identity):
+            fail(f"{run}: planning identity must name one planned requirement in specs/")
         if (not isinstance(checker, str) or _Path(checker).name != checker
                 or checker in NOT_A_PLANE
                 or not checker.startswith("check-sel4-") or not checker.endswith(".py")

@@ -501,26 +501,38 @@ def check_inventory_controls() -> int:
         checkers = root / "scripts/check"
         closures = root / "contracts/system-image-closure/v3/closures"
         runs = root / "contracts/system-test-run/v2/runs"
-        items = root / ".tasks/items"
-        for path in (checkers, closures, runs, items):
+        specs = root / "specs"
+        for path in (checkers, closures, runs, specs):
             path.mkdir(parents=True)
-        for item, checker, _crates in required.values():
+        for name in ("schema.zt", "helpers.zt"):
+            (specs / name).write_bytes((ROOT / "specs" / name).read_bytes())
+
+        def write_area(planned: dict[str, bool], present: set[str] | None = None) -> None:
+            """A control area whose requirements carry the planning identities."""
+            rows = []
+            for item, _checker, _crates in required.values():
+                if present is not None and item not in present:
+                    continue
+                if planned.get(item, True):
+                    rows.append(f'  h.planned "{item}" "control" "control" "control" h.noAcceptance;')
+                else:
+                    rows.append(f'  h.req "{item}" "control" "control" {{ h.observed "sel4_pin_check" "control"; }};')
+            (specs / "control.zt").write_text(
+                's ::= import "./schema.zt";\nh ::= import "./helpers.zt";\n'
+                'area :: s.Area = h.area "control" "Control" { "nowhere/**"; } {\n'
+                + "\n".join(rows) + "\n};\narea\n")
+            work_items.cache_clear()
+
+        for _item, checker, _crates in required.values():
             (checkers / checker).write_bytes((ROOT / "scripts/check" / checker).read_bytes())
-            source_item = ROOT / ".tasks/items" / f"{item}.md"
-            if source_item.is_file():
-                item_text = source_item.read_text()
-            else:
-                item_text = json.loads((ROOT / ".tasks/terminal" / f"{item}.json").read_text())["metadata"]
-            (items / f"{item}.md").write_text(
-                re.sub(r"^state: .+$", "state: open", item_text, flags=re.MULTILINE))
+        write_area({})
         closure_source = (CLOSURE_ROOT / "sel4-reclamation-unwind.zti").read_text()
         (closures / "sel4-reclamation-unwind.zti").write_text(closure_source)
         local_registry = {run: registry[run] for run in required}
         with (
             patch.multiple(generator, ROOT=root, CHECK_ROOT=checkers, CLOSURE_ROOT=closures,
                            RUN_ROOT=runs, PLANNED_RUNS=local_registry),
-            patch.multiple(work_items, ROOT=root, TASKS=root / ".tasks", ITEMS=items,
-                           TERMINAL=root / ".tasks/terminal"),
+            patch.object(work_items.spec_lib(), "SPECS", specs),
         ):
             work_items.cache_clear()
             try:
@@ -570,19 +582,13 @@ def check_inventory_controls() -> int:
                         path.write_text("present\n")
                         refuse(f"stale {run} registration at {artifact}", generator.outputs)
                         path.unlink()
-                item_path = items / f"{row[0]}.md"
-                item_text = item_path.read_text()
-                for state in ("active", "blocked", "deferred"):
-                    item_path.write_text(re.sub(r"^state: .+$", f"state: {state}", item_text, flags=re.MULTILINE))
-                    work_items.cache_clear()
-                    if generator.outputs() != emitted:
-                        fail(f"inventory control: explicit planning registration lost in {state} state")
-                for state in ("done", "cancelled", "invalid"):
-                    item_path.write_text(re.sub(r"^state: .+$", f"state: {state}", item_text, flags=re.MULTILINE))
-                    work_items.cache_clear()
-                    refuse(f"{state} planning identity", generator.outputs)
-                item_path.write_text(item_text)
-                work_items.cache_clear()
+                write_area({row[0]: False})
+                refuse("bound (not planned) planning identity", generator.outputs)
+                write_area({}, present={r[0] for r in required.values()} - {row[0]})
+                refuse("absent planning identity", generator.outputs)
+                write_area({})
+                if generator.outputs() != emitted:
+                    fail("inventory control: restoring the planned requirement did not restore inventory")
 
                 source = reclamation.read_text()
                 unwind = generator.extract(reclamation, "sel4-reclamation")

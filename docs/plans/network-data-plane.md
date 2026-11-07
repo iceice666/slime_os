@@ -203,7 +203,7 @@ The goal is the widest applicable surface of a **pinned smoltcp release**, not
 all Cargo features enabled together or a promise to implement every future
 upstream feature. The [support matrix](#smoltcp-support-matrix) below is the
 complete inventory of that release's protocols, sockets, media, configuration
-and resource options; implementation state and dependency edges stay in MyQue. Each matrix row must name its upstream feature/source, applicable
+and resource options; implementation state stays in `specs/`. Each matrix row must name its upstream feature/source, applicable
 backend/target, authority mapping, quantitative bounds, implementation slice and
 verification. Distinguish supported, planned, excluded for a concrete authority
 conflict, and not applicable/not provided by the pinned release. Unfinished
@@ -786,4 +786,4 @@ runtime behavior, and no generic green recipe substitutes for the stated tests.
 - [`../architecture/io-substrate.md`](../architecture/io-substrate.md)
 - `contracts/{link-device,network-destination,network-service,io-queue}/v1/`
 - `components/services/{virtio-net-driver,network-service}/`
-- `.tasks/items/01a08ff0-0b99-7315-99b0-7e7f340fa6f9.md`
+- `01a08ff0-0b99-7315-99b0-7e7f340fa6f9` (legacy index in `specs/legacy.zt`)
