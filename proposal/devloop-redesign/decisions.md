@@ -8,7 +8,7 @@
 
 | # | 決策 | 理由 | Reopen if |
 | --- | --- | --- | --- |
-| D1 | (a) submodule 是 Zutai 唯一真相，`nix/zutai.nix { src = ./deps/zutai }`，eval 帶 `?submodules=1` | v2 已這樣跑，離線可建，GitLab 不用 token | CI 的 recursive checkout 讓 pipeline 多 >2 分鐘 |
+| D1 | (a) submodule 是 Zutai 唯一真相，`nix/zutai.nix { src = ./deps/zutai }`，eval 帶 `?submodules=1`。**Phase 2 修正**：flake 改寫併入 Phase 5（41 個 `nix develop` 呼叫點、projection job 刻意不 checkout submodule）；Phase 2 先加 `specs/zutai.toml`，`spec check` 拒絕 toml / gitlink / flake input 三處不一致 | v2 已這樣跑，離線可建，GitLab 不用 token | CI 的 recursive checkout 讓 pipeline 多 >2 分鐘 |
 | D2 | (a) `ssh-keygen -Y sign`，`specs/allowed_signers` 進 repo，namespace 固定 `slime-human` | 不依賴 host，v2 已驗簽名、竄改、未知簽名者三個負面案例 | 有第二個人要簽而 key 管理成為阻力 |
 | D3 | (b) 5 個 active item 立即歸戶為新格式 | Phase 1–2 每個碰 `scripts/` 的 PR 都改 `identity.code`，留在舊 loop 會一直 re-record | 任一 active item 兩天內就能走舊流程收尾 |
 | D4 | (a) 純計算，不回寫 `.zt`；`spec status` 另印 product vs process commit 比例 | 回寫就是 bot commit，正是要刪的東西 | 一個月後有人要在 `git log` 看進度 |
@@ -49,7 +49,7 @@
 | 63 個 prose item | 全部只留索引，移出 critical path；要做再手寫 |
 | Phase 3 工時 | 1 週；總計 5.5 週 |
 | sandbox | QEMU plane 不 sandbox（product 段由 image derivation 保證）；host target sandbox 在 Phase 1 用一個 cargo test target 試，不可行則退為「比對 closure 清單與實際 open() 檔案」 |
-| `scripts/spec/` 行數上限 | 1500，`check` 強制 |
+| `scripts/spec/` 行數上限 | 2000，`check` 強制；`migrate` 是過渡工具，Phase 3 後刪，不計入（slime_os 比 v2 多 closure 解析與 image derivation） |
 
 ## 文件修正（直接改 `plan.md` 時套用）
 
