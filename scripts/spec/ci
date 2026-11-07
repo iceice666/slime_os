@@ -2,7 +2,7 @@
 """The evidence job's body: run claimed targets, publish their records.
 
     scripts/spec/ci                       # claimed -> record each -> publish
-    scripts/spec/ci --plan N              # JSON shards of claimed targets
+    scripts/spec/ci --plan N --out FILE   # JSON shards of claimed targets
     scripts/spec/ci --targets a b ...     # record these only, no publish
     scripts/spec/ci --publish             # publish build/observations only
 
@@ -76,6 +76,7 @@ def record(targets: list[str], runner: str, signer: str | None, key: str | None)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--plan", type=int, metavar="N")
+    parser.add_argument("--out")
     parser.add_argument("--targets", nargs="*")
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--runner", default="ci")
@@ -90,8 +91,13 @@ def main() -> int:
         return 0
     targets = claimed()
     if args.plan:
-        json.dump(plan(targets, args.plan), sys.stdout)
-        print()
+        shards = plan(targets, args.plan)
+        if args.out:
+            Path(args.out).write_text(json.dumps(shards) + "\n", encoding="utf-8")
+        else:
+            json.dump(shards, sys.stdout)
+            print()
+        print(f"[ci] plan: {len(shards)} shard(s) for {len(targets)} claimed target(s)", file=sys.stderr)
         return 0
     print(f"[ci] claimed: {' '.join(targets) or 'none'}", flush=True)
     if not targets:

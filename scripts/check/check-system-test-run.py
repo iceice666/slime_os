@@ -532,7 +532,7 @@ def check_inventory_controls() -> int:
         with (
             patch.multiple(generator, ROOT=root, CHECK_ROOT=checkers, CLOSURE_ROOT=closures,
                            RUN_ROOT=runs, PLANNED_RUNS=local_registry),
-            patch.object(work_items.spec_lib(), "SPECS", specs),
+            patch.object(work_items, "SPECS", specs),
         ):
             work_items.cache_clear()
             try:

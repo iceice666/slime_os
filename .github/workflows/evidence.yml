@@ -40,7 +40,7 @@ jobs:
       - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
       - id: plan
         run: |
-          nix develop --command python3 scripts/spec/ci --plan 8 > "$RUNNER_TEMP/shards.json"
+          nix develop --command python3 scripts/spec/ci --plan 8 --out "$RUNNER_TEMP/shards.json"
           cat "$RUNNER_TEMP/shards.json"
           echo "shards=$(cat "$RUNNER_TEMP/shards.json")" >> "$GITHUB_OUTPUT"
 

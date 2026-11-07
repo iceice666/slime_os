@@ -1,0 +1,54 @@
+# Phase 3 紀錄
+
+2026-11-07。依 `plan.md` Phase 3 與 `decisions.md`。Phase 4 的文件重寫被 `docs_check` 拉進來一起做了（刪 recipe 與 doc 後 65 個失效引用，不修不能綠）。
+
+## 五個 commit
+
+| Commit | 內容 |
+| --- | --- |
+| `c9cd8701 feat(repo/specs)` | `migrate --all`：7 個 area 檔、406 條 requirement（84 planned）、`legacy.zt` 447 列、`targets.toml` |
+| `a391c0ad ci(repo/spec)` | evidence.yml 分 shard：plan job → ≤8 個 record job → publish job |
+| `a0f2e37c refactor(scripts/lib)` | `work_items.py` 改讀 specs；check-docs、system-test-run generator 與 controls 跟著改 |
+| `f4abcb38 chore(repo)` | 刪除清單全部：`.tasks/`、`.devloop/`、2 個 workflow、28 支 script、2 個 contract、3 個 flake input、`nix/devloop.nix`、12 個 recipe、2 個 CI job；`.#projection` → `.#spec` |
+| `8d4ee92c docs(repo)` | `living-spec-devloop.md` 決策、`06-spec-lifecycle.md`、CONTRIBUTING / AGENTS / HUMAN / README / glossary / just-targets / 4 個 skill / PR template；刪 4 份舊 doc |
+
+## 歸戶結果
+
+| 來源 | 數量 | 去處 |
+| --- | --- | --- |
+| done spec-driven | 57 | 7 contracts、31 hardware、10 planes-mechanism、2 planes-runtime、1 quality；6 個只綁已刪 target 的進索引（state `retired`） |
+| active | 5 | 2 backlog（CI 快取兩個 process item，target 已刪）、2 planes-mechanism、1 planes-runtime |
+| open spec-driven | 24 | 21 backlog（無 target）、1 hardware、1 planes-mechanism、1 product，全部 planned |
+| cancelled | 18 | 索引 |
+| deferred / blocked / prose | 59 | 索引 |
+| terminal | 280 | 索引 |
+
+綁定 target 54 個，其中 `rpi5_ros2_zenoh_check` 是 operator target。全量 closure 解析本機 2 分 44 秒。
+
+## 做的時候發現的事
+
+- **`.tasks/terminal/` 的 280 個 retired id 仍被 docs 引用 17 處**：legacy 索引必須含 terminal，不只 167。
+- **只有 human gate 的 requirement**（lidar pointCloudViewed）違反「至少一條 automated」：歸成 planned 並註明，浮出來當 backlog。
+- **generator 的 PLANNED_RUNS 綁 work item**：改綁 planned requirement id；`check-system-test-run` 的 controls 改造假 area 並 patch `spec_lib.SPECS`。
+- **14 個 zenoh exam 讀 `.tasks/items` 交叉比對 pin**：設計上 `.tasks` 不存在就回 `(0,0)`，pin 常數自己綁，不用改（改了會 stale evidence）。
+- **`system_test_run_inventory_check` 在本機 main 上本來就紅**（network checker arm 數量），CI 從沒跑它；現在它是綁定 target，第一次全跑會記 failing——計畫說的 rot。
+- **歷史倉庫連不上**（`git.justaslime.dev:2222` timeout）：tarball `~/slime_os-tasks-67b66e61c9f0.tar.gz`（SHA-256 `3ab56acc…`）等你推；`docs/history.md` 已記 frozenAt commit。
+- `migrate` 一併刪除：輸入已不存在。
+- `evidence/duo`、`evidence/framework-cpu-boot` 留在 tree：它們是 checker fixture（`check-duo-gate-control` 讀），不是 devloop evidence；D9 不適用。
+- `slime-zutai-store-save` action 留：它是 Zutai evaluation store 快取，不是 devloop 專屬。
+- `FRAMEs` 進 typos identifier 清單：歸戶的 statement 原文如此。
+
+## 離場條件
+
+| 條件 | 結果 |
+| --- | --- |
+| 刪除清單 Phase 3 每一列不在 tree 上 | 是（`grep -rn "\.tasks\|\.devloop\|myque"` 只剩 proposal 與 history 文字） |
+| CI 綠 | push 後待確認 |
+| 第一次全跑後 `status --unenforced` 被人看過 | 待 Evidence run 完成（8 shard，估 1–2 小時） |
+| 第二個真實功能走完 | 未做 |
+
+## 要你做的
+
+1. 把 `~/slime_os-tasks-67b66e61c9f0.tar.gz` 推進 history 倉庫，commit hash 回填 `docs/history.md`。
+2. GitHub：`evidence` branch ruleset（禁 force push / 刪除）；Environment `evidence` + `EVIDENCE_SIGNING_KEY`；公鑰以 `ci` 加進 `specs/allowed_signers`。
+3. 看第一次全跑的 `status --unenforced`：failing 的就是真實 backlog。

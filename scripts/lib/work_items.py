@@ -7,48 +7,59 @@ froze in, and a requirement inside a `specs/<area>.zt` area, whose state is
 sense the smoltcp matrix and the test-run inventory need — bound to an
 exam — not an enforced record; `scripts/spec/status` computes that.)
 
+This reader is deliberately shallow and binary-free: `docs_check` runs
+without `zutai-cli`. It reads the literals `h.req "<id>"`, `h.planned
+"<id>"` and the legacy rows' `id = "..."; state = "..."` as text.
+`scripts/spec/check` is the deep reader that evaluates the files; it
+refuses an id these regexes would misread (not a UUIDv7, repeated).
+
 Callers match ``UUID`` before asking ``identities()`` or ``state()``; the
 state table is cached, and ``cache_clear()`` drops it after a test rewrote
-the spec root (`spec_lib.SPECS`).
+the spec root (``SPECS``).
 """
 
 from __future__ import annotations
 
-import importlib.util
 import re
 from functools import lru_cache
 
 from harness import ROOT
 
+SPECS = ROOT / "specs"
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 FINISHED = frozenset({"done", "cancelled", "retired"})
-_SPEC_LIB = ROOT / "scripts" / "spec" / "lib.py"
+_REQUIREMENT = re.compile(r"\bh\.(req|planned)\s+\"([0-9a-f-]{36})\"")
+_LEGACY_ROW = re.compile(r"\{\s*id = \"([0-9a-f-]{36})\";\s*state = \"([a-z]+)\";")
+_HELPER_FILES = frozenset({"schema.zt", "helpers.zt", "legacy.zt"})
 
 
-def spec_lib():
-    """`scripts/spec/lib`, loaded by path so its module name cannot collide."""
-    import sys
-
-    if "spec_lib" not in sys.modules:
-        specification = importlib.util.spec_from_file_location("spec_lib", _SPEC_LIB)
-        module = importlib.util.module_from_spec(specification)
-        sys.modules["spec_lib"] = module
-        specification.loader.exec_module(module)
-    return sys.modules["spec_lib"]
+def spec_root():
+    """The directory the reader scans; tests patch this module's `SPECS`."""
+    return SPECS
 
 
 @lru_cache(maxsize=1)
 def _states() -> dict[str, str]:
-    lib = spec_lib()
+    root = spec_root()
     states: dict[str, str] = {}
-    legacy = lib.SPECS / "legacy.zt"
+    legacy = root / "legacy.zt"
     if legacy.is_file():
-        for row in lib.zutai_json(legacy):
-            states[row["id"]] = row["state"]
-    for area in lib.load_areas():
-        for requirement in area.requirements:
-            states[requirement["id"]] = "open" if requirement["planned"] else "done"
+        for identity, state in _LEGACY_ROW.findall(legacy.read_text(encoding="utf-8")):
+            states[identity] = state
+    for path in sorted(root.glob("*.zt")):
+        if path.name in _HELPER_FILES:
+            continue
+        for kind, identity in _REQUIREMENT.findall(path.read_text(encoding="utf-8")):
+            states[identity] = "open" if kind == "planned" else "done"
     return states
+
+
+@lru_cache(maxsize=1)
+def legacy_ids() -> frozenset[str]:
+    legacy = spec_root() / "legacy.zt"
+    if not legacy.is_file():
+        return frozenset()
+    return frozenset(identity for identity, _ in _LEGACY_ROW.findall(legacy.read_text(encoding="utf-8")))
 
 
 def identities() -> frozenset[str]:
@@ -63,13 +74,6 @@ def state(identity: str) -> str | None:
 def planned(identity: str) -> bool:
     """True for a requirement that is promised but not yet bound to an exam."""
     return _states().get(identity) == "open" and identity not in legacy_ids()
-
-
-@lru_cache(maxsize=1)
-def legacy_ids() -> frozenset[str]:
-    lib = spec_lib()
-    legacy = lib.SPECS / "legacy.zt"
-    return frozenset(row["id"] for row in lib.zutai_json(legacy)) if legacy.is_file() else frozenset()
 
 
 def items() -> list[dict[str, object]]:
