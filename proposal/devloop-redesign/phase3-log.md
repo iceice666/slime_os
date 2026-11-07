@@ -81,7 +81,7 @@
 | --- | --- |
 | 刪除清單 Phase 3 每一列不在 tree 上 | 是（`grep -rn "\.tasks\|\.devloop\|myque"` 只剩 proposal 與 history 文字） |
 | CI 綠 | 是，第二次 push（第一次：`docs_gates` job 沒有 zutai → `work_items` 改純 regex 淺讀；`--plan` stdout 又被 shellHook 污染 → 寫檔） |
-| 第一次全跑後 `status --unenforced` 被人看過 | 待 Evidence run 完成（8 shard，估 1–2 小時） |
+| 第一次全跑後 `status --unenforced` 被人看過 | 跑完（見下節）；failing 清單已分類，人看過 LiDAR / 簽名 的處置 |
 | 第二個真實功能走完 | 未做 |
 
 ## 收尾（2026-11-07 下午）
@@ -90,7 +90,17 @@
 - 操作者本機跑 LiDAR 四個 target（`SLIME_LIDAR_BAG` 指向 `~/Downloads/.../lidar_ros2.mcap`，SHA 吻合）：全部通過，digest 與 CI 一致；以 `iceice666` 簽名 publish。**300/406 enforced**。
 - `link_wake_check` 本機也失敗，但原因不同：`zenoh-external` arm「0 sent batches reported, expected 4」，boot 前 13 秒即拒，重跑一致。真 failing，不是環境。
 
-## 要你做的
+- tarball 已進 history 倉庫 commit `245ef0ca69d924a085756647c0a15bc20baaabca`，`docs/history.md` 已回填。
 
-1. 把 `~/slime_os-tasks-67b66e61c9f0.tar.gz` 推進 history 倉庫，commit hash 回填 `docs/history.md`。
-2. 三個真 failing 目標（`system_test_run_inventory_check`、`zenoh_service_grants_reader_check`、`link_wake_check`）：E3 規則，下一個碰 `contracts` / `hardware` / `planes-mechanism` area 的 PR 修或標 planned。
+## 待辦（Phase 3 結束時）
+
+| # | 事項 | 誰 | 規則 / 去處 |
+| --- | --- | --- | --- |
+| 1 | `system_test_run_inventory_check` rot（連帶 `system_image_closure_gates_check`，8 條 requirement，`contracts` area）：arm 數量 control 過時 | 下一個碰 `contracts` area 的 PR | E3：修或標 planned |
+| 2 | `zenoh_service_grants_reader_check` rot（5 條，`hardware` area）：checker pin 365 vs `quality.just` 369 | 下一個碰 `hardware` area 的 PR | E3 |
+| 3 | `link_wake_check` failing（5 條，`planes-mechanism` area）：`zenoh-external` arm 0 sent batches；CI 另缺 linux aarch64 wheel pin | 下一個碰 `planes-mechanism` area 的 PR | E3；wheel pin 補上後可從 `operator` 移除 |
+| 4 | `rpi5_ros2_zenoh_check` 3 條 claimed | 操作者在板子上 `record --signer` | D9 |
+| 5 | 84 條 planned（72 在 `backlog.zt`）：open item 歸戶、無 exam | 人核哪些要做 | 計畫 Phase 3「逐一判斷」未做，順延 |
+| 6 | `hardware.zt` 232 條，超過 D11 reopen 訊號（60） | 人核 | 按 `docs/architecture/` 粒度拆 |
+| 7 | 「第二個真實功能走完」離場條件 | 下一個真實功能 | 未做 |
+| 8 | 歸戶的 rationale 是 item 標題、`problem` 在註解裡；各 area `owns` 是初稿 | Phase 3 人核 | 計畫原定；rule 4 `--enforce-owns` 等 owns 校準後開 |
