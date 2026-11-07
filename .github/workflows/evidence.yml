@@ -14,6 +14,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      include-failing:
+        description: Also re-run targets whose record at the current digest failed
+        type: boolean
+        default: false
 
 concurrency:
   group: evidence
@@ -40,7 +45,8 @@ jobs:
       - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
       - id: plan
         run: |
-          nix develop --command python3 scripts/spec/ci --plan 8 --out "$RUNNER_TEMP/shards.json"
+          nix develop --command python3 scripts/spec/ci --plan 8 --out "$RUNNER_TEMP/shards.json" \
+            ${{ inputs.include-failing && '--include-failing' || '' }}
           cat "$RUNNER_TEMP/shards.json"
           echo "shards=$(cat "$RUNNER_TEMP/shards.json")" >> "$GITHUB_OUTPUT"
 
@@ -49,15 +55,18 @@ jobs:
     needs: [plan]
     if: needs.plan.outputs.shards != '[]'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 180
+    # sel4_large_image_check alone takes 131 minutes after a 10-minute setup.
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
+      # Full history: image_attestation_check attaches notes to HEAD's ancestors.
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          fetch-depth: 0
       - uses: ./.github/actions/slime-env
         with:
           build-save: 'false'

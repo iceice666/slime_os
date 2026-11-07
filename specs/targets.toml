@@ -1,17 +1,76 @@
 # Per-target facts scripts/spec/ci reads. Not part of any digest.
 #
-# `operator`: targets CI cannot run (a board, a physical machine). Their
-# records come from `scripts/spec/record <target> --signer <principal>`
-# (decision D9); `ci --plan` never schedules them.
+# `operator`: targets CI cannot run. Their records come from
+# `scripts/spec/record <target> --signer <principal>` (decision D9);
+# `ci --plan` never schedules them. Besides the boards and the physical
+# machine: the LiDAR exams need the operator's `SLIME_LIDAR_BAG` capture,
+# and link_wake_check reaches zenoh_external_check, which has no
+# eclipse-zenoh wheel pinned for linux aarch64.
 operator = [
   "rpi5_ros2_zenoh_check",
   "framework_cpu_boot_check",
+  "frame_store_check",
+  "lidar_publish_check",
+  "lidar_foxglove_bridge_check",
+  "lidar_foxglove_demo_check",
+  "link_wake_check",
 ]
 
 # Observed wall time in seconds on the ubuntu-24.04-arm runner, as
-# `scripts/spec/record` printed it; balances evidence shards. A missing
-# target counts as 600.
+# `scripts/spec/record` printed it in the first full evidence run
+# (2026-11-07, 8 shards); balances evidence shards. A missing target
+# counts as 600.
 [wall_time]
-clock_direct_read_check = 913
+clock_direct_read_check = 871
+closure_derivation_check = 1503
+closure_input_host_paths_check = 0
+console_lines_check = 2067
+console_pin_additions_check = 0
+console_record_check = 317
+data_volume_check = 456
+frame_store_check = 1
+image_attestation_check = 4
+io_local_check = 8
+io_tcp_buffers_check = 494
+io_tcp_impairment_check = 191
+io_tcp_listener_check = 181
+io_tcp_options_check = 174
+lidar_foxglove_bridge_check = 8
+lidar_foxglove_demo_check = 10
+lidar_publish_check = 824
+link_wake_check = 475
 robot_withdrawn_check = 23
-sel4_lifetime_check = 740
+root_diagnostic_volume_check = 1134
+sel4_large_image_check = 7852
+sel4_lifetime_check = 735
+sel4_net_check = 572
+system_image_closure_aggregate_check = 0
+system_image_closure_gates_check = 2715
+system_test_run_inventory_check = 4
+system_test_run_reference_check = 830
+test_sel4_root = 153
+zenoh_cdr_check = 9
+zenoh_composition_check = 0
+zenoh_encoder_check = 1
+zenoh_grants_check = 10
+zenoh_links_check = 127
+zenoh_service_booted_check = 118
+zenoh_service_check = 128
+zenoh_service_client_abort_check = 3
+zenoh_service_client_check = 0
+zenoh_service_client_io_check = 4
+zenoh_service_client_wire_check = 1
+zenoh_service_component_check = 0
+zenoh_service_grants_builder_check = 1
+zenoh_service_grants_reader_check = 0
+zenoh_service_grants_table_check = 2
+zenoh_service_limits_builder_check = 1
+zenoh_service_limits_check = 0
+zenoh_service_link_check = 123
+zenoh_service_server_check = 2
+zenoh_session_check = 4
+zenoh_stock_check = 1
+zenoh_subscribers_check = 127
+zenoh_transport_check = 0
+zenoh_undeclare_check = 4
+zenoh_xcheck_check = 16

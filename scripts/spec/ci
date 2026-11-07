@@ -2,7 +2,7 @@
 """The evidence job's body: run claimed targets, publish their records.
 
     scripts/spec/ci                       # claimed -> record each -> publish
-    scripts/spec/ci --plan N --out FILE   # JSON shards of claimed targets
+    scripts/spec/ci --plan N --out FILE [--include-failing]
     scripts/spec/ci --targets a b ...     # record these only, no publish
     scripts/spec/ci --publish             # publish build/observations only
 
@@ -33,15 +33,17 @@ TARGETS = lib.SPECS / "targets.toml"
 DEFAULT_SECONDS = 600
 
 
-def claimed() -> list[str]:
+def claimed(include_failing: bool = False) -> list[str]:
+    """Bound targets with no record at their current digest; with `include_failing`, also those whose record failed."""
     evidence = lib.Evidence()
+    wanted = {"claimed", "failing"} if include_failing else {"claimed"}
     targets: set[str] = set()
     for area in lib.load_areas():
         for requirement in area.requirements:
             if requirement["planned"]:
                 continue
             for tag, payload in lib.acceptances(requirement):
-                if tag == "observed" and evidence.record(payload["justTarget"])[0] == "claimed":
+                if tag == "observed" and evidence.record(payload["justTarget"])[0] in wanted:
                     targets.add(payload["justTarget"])
     return sorted(targets)
 
@@ -77,6 +79,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--plan", type=int, metavar="N")
     parser.add_argument("--out")
+    parser.add_argument("--include-failing", action="store_true", help="also re-run targets whose record at this digest failed")
     parser.add_argument("--targets", nargs="*")
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--runner", default="ci")
@@ -89,7 +92,7 @@ def main() -> int:
     if args.targets is not None:
         record(args.targets, args.runner, args.signer, args.key)
         return 0
-    targets = claimed()
+    targets = claimed(args.include_failing)
     if args.plan:
         shards = plan(targets, args.plan)
         if args.out:
