@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Commit observation records onto the evidence branch.
+
+    scripts/spec/publish [--ref refs/heads/evidence] [--require-signed]
+
+Takes every record under build/observations/: a machine record goes to
+<target>/<closureDigest>.zt, a human record keeps its human/... path, and
+a `.sig` beside either travels with it. Refused: a machine record whose
+digest is not the target's closure in this checkout (a stale or dirty
+run), a record whose runner says `dirty`, a human record without a
+verifying signature, and with `--require-signed` any record without one.
+The commit is made with git plumbing, no checkout; pushing is the
+caller's job:
+
+    git push origin refs/heads/evidence
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+
+def collect(require_signed: bool) -> tuple[dict[str, bytes], list[str]]:
+    entries: dict[str, bytes] = {}
+    errors: list[str] = []
+    evidence = lib.Evidence(ref="", local=False)
+    for path in sorted(lib.OBSERVATIONS.glob("*.zt")):
+        if path.name == "schema.zt":
+            continue
+        data = path.read_bytes()
+        signature = path.with_name(path.name + ".sig")
+        try:
+            record = lib.parse_record(data)
+        except lib.SpecError as error:
+            errors.append(f"{path.name}: {str(error).splitlines()[0]}")
+            continue
+        closure = evidence.closure(record["target"])
+        if closure is None or closure.digest() != record["closureDigest"]:
+            errors.append(f"{path.name}: closure digest is not {record['target']}'s in this checkout")
+            continue
+        if "dirty" in record["runner"].split():
+            errors.append(f"{path.name}: recorded from a dirty tree")
+            continue
+        signed = signature.is_file() and lib.verify_signature(data, signature.read_bytes(), record["runner"].split()[0])
+        if require_signed and not signed:
+            errors.append(f"{path.name}: no verifying signature by {record['runner'].split()[0]!r}")
+            continue
+        key = f"{record['target']}/{record['closureDigest']}.zt"
+        entries[key] = data
+        if signed:
+            entries[key + ".sig"] = signature.read_bytes()
+    for path in sorted((lib.OBSERVATIONS / "human").rglob("*.zt")):
+        relative = path.relative_to(lib.OBSERVATIONS).as_posix()
+        signature = path.with_name(path.name + ".sig")
+        data = path.read_bytes()
+        try:
+            record = lib.parse_record(data, "HumanRecord")
+        except lib.SpecError as error:
+            errors.append(f"{relative}: {str(error).splitlines()[0]}")
+            continue
+        if not signature.is_file() or not lib.verify_signature(data, signature.read_bytes(), record["signer"]):
+            errors.append(f"{relative}: signature does not verify against specs/allowed_signers")
+            continue
+        entries[relative] = data
+        entries[relative + ".sig"] = signature.read_bytes()
+    return entries, errors
+
+
+def commit(ref: str, entries: dict[str, bytes], message: str) -> str | None:
+    """Commit on top of `ref`, or of the fetched evidence ref when `ref` does not exist yet."""
+    current = lib.git("rev-parse", "-q", "--verify", ref + "^{commit}", check=False).strip() or None
+    parent = current
+    if parent is None and lib.evidence_ref():
+        parent = lib.git("rev-parse", lib.evidence_ref()).strip()
+    with tempfile.TemporaryDirectory(prefix="slime-spec-index-") as temporary:
+        env = os.environ | {"GIT_INDEX_FILE": str(Path(temporary) / "index")}
+        if parent:
+            lib.git("read-tree", parent, env=env)
+        for path, data in sorted(entries.items()):
+            blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=lib.ROOT, input=data, capture_output=True, check=True).stdout.decode().strip()
+            lib.git("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
+        tree = lib.git("write-tree", env=env).strip()
+    if parent and lib.git("rev-parse", parent + "^{tree}").strip() == tree:
+        return None
+    arguments = ["commit-tree", tree, "-m", message] + (["-p", parent] if parent else [])
+    new = lib.git(*arguments).strip()
+    lib.git("update-ref", ref, new, *([current] if current else []))
+    return new
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--ref", default=lib.EVIDENCE_REF)
+    parser.add_argument("--require-signed", action="store_true")
+    args = parser.parse_args()
+    entries, errors = collect(args.require_signed)
+    for error in errors:
+        print(f"skip {error}", file=sys.stderr)
+    head = lib.git("rev-parse", "HEAD").strip()
+    new = commit(args.ref, entries, f"evidence: {len(entries)} file(s) for {head}") if entries else None
+    print(f"publish: {new or 'nothing new'} ({len(entries)} file(s), {len(errors)} skipped)")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

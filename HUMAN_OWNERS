@@ -1,0 +1,3 @@
+# GitHub logins whose approval satisfies `scripts/spec/check --base` (decision D5).
+# One per line. An agent account never belongs here.
+iceice666

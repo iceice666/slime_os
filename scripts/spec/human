@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Answer an `h.human` acceptance and sign the answer.
+
+    scripts/spec/human <area> <requirement-id> <acceptance-id> yes|no \
+        --signer <principal> [--key ~/.ssh/id_ed25519] [--note TEXT]
+
+Writes build/observations/human/<requirement>/<acceptance>/<digest>.zt and
+signs it with `ssh-keygen -Y sign -n slime-spec`. The record binds to the
+requirement's digest: rewording the statement or any acceptance asks the
+question again; rewording a decision or invariant does not. <principal>
+must be listed in specs/allowed_signers. `scripts/spec/publish` carries it
+to the evidence branch; the signature, not the pusher, is what status
+trusts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("area")
+    parser.add_argument("requirement")
+    parser.add_argument("acceptance")
+    parser.add_argument("value", choices=("yes", "no"))
+    parser.add_argument("--signer", required=True)
+    parser.add_argument("--key", default=str(Path.home() / ".ssh" / "id_ed25519"))
+    parser.add_argument("--note", default="")
+    args = parser.parse_args()
+
+    area = next((a for a in lib.load_areas() if a.id == args.area), None)
+    if area is None:
+        raise lib.SpecError(f"human: no area {args.area!r}")
+    requirement = next((r for r in area.requirements if r["id"] == args.requirement), None)
+    if requirement is None:
+        raise lib.SpecError(f"human: area {args.area} has no requirement {args.requirement}")
+    gate = next((p for t, p in lib.acceptances(requirement) if t == "human" and p["id"] == args.acceptance), None)
+    if gate is None:
+        raise lib.SpecError(f"human: requirement {args.requirement} has no h.human acceptance {args.acceptance!r}")
+    print(f"{gate['question']}\nanswer: {args.value}", file=sys.stderr)
+
+    observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    text = lib.human_record_text(area.id, requirement["id"], args.acceptance, lib.requirement_digest(requirement), args.value == "yes", args.note, args.signer, observed_at)
+    out = lib.OBSERVATIONS / lib.human_path(requirement, args.acceptance)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    lib.parse_record(out.read_bytes(), "HumanRecord")
+    signature = lib.sign(out, args.key)
+    ok = lib.verify_signature(out.read_bytes(), signature.read_bytes(), args.signer)
+    print(f"human: wrote {out.relative_to(lib.ROOT)}" + ("" if ok else f" (WARNING: {args.signer!r} does not verify against specs/allowed_signers)"))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

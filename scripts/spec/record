@@ -11,9 +11,13 @@ Record keyed by the target's closure digest. The process exits with the
 command's status, so a recipe wrapped by `record` fails when its exam fails.
 
 `passed` comes from the exit status, never from the report: a checker
-cannot vouch for itself. The record names `dirty = true` in its runner
-field when the closure was resolved from a tree that differs from HEAD;
+cannot vouch for itself. The record names `dirty` in its runner field
+when the closure was resolved from a tree that differs from HEAD;
 `publish` refuses such a record.
+
+`--signer <principal> --key <ssh key>` signs the record (decision D9): an
+operator running a hardware target attests it this way, and `publish`
+carries the signature beside the record.
 """
 
 from __future__ import annotations
@@ -46,9 +50,11 @@ def toolchain() -> list[tuple[str, str]]:
     for line in rust.read_text().splitlines() if rust.is_file() else []:
         if line.startswith("channel"):
             tools.append(("rustc", line.split("=", 1)[1].strip().strip('"')))
-    done = subprocess.run(["git", "-C", "deps/zutai", "rev-parse", "HEAD"], cwd=lib.ROOT, check=False, text=True, capture_output=True)
-    if done.returncode == 0:
-        tools.append(("zutai", done.stdout.strip()))
+    pin = lib.SPECS / "zutai.toml"
+    if pin.is_file():
+        import tomllib
+
+        tools.append(("zutai", tomllib.loads(pin.read_text()).get("rev", "")))
     return tools
 
 
@@ -80,6 +86,8 @@ def main() -> int:
     parser.add_argument("target")
     parser.add_argument("command", nargs="*")
     parser.add_argument("--runner", default=os.environ.get("SPEC_RUNNER", "local"))
+    parser.add_argument("--signer")
+    parser.add_argument("--key", default=str(Path.home() / ".ssh" / "id_ed25519"))
     args = parser.parse_args()
     target = args.target
     if not target or "/" in target or target.startswith("."):
@@ -105,13 +113,18 @@ def main() -> int:
             report = {}
     report = {k: v for k, v in report.items() if isinstance(v, (bool, int)) and (isinstance(v, bool) or -INT_BOUND <= v < INT_BOUND)}
 
-    runner = args.runner + (" dirty" if closure.dirty else "")
+    runner = (args.signer or args.runner) + (" dirty" if closure.dirty else "")
     OBSERVATIONS.mkdir(parents=True, exist_ok=True)
     # Records import the schema beside them: Zutai refuses imports above the entry file.
     shutil.copyfile(lib.OBSERVATION_SCHEMA, OBSERVATIONS / "schema.zt")
     out = OBSERVATIONS / f"{target}.zt"
     out.write_text(render(target, digest, done.returncode == 0, done.returncode, report, runner), encoding="utf-8")
     lib.zutai_json(out)  # type-check against contracts/observation/v1
+    out.with_name(out.name + ".sig").unlink(missing_ok=True)
+    if args.signer:
+        signature = lib.sign(out, args.key)
+        if not lib.verify_signature(out.read_bytes(), signature.read_bytes(), args.signer):
+            print(f"[record] WARNING: {args.signer!r} does not verify against specs/allowed_signers", file=sys.stderr)
     print(f"[record] {target} {'passed' if done.returncode == 0 else f'failed ({done.returncode})'} in {elapsed:.0f}s -> {out.relative_to(lib.ROOT)} @ {digest[:12]}{' dirty' if closure.dirty else ''}", file=sys.stderr)
     return done.returncode
 

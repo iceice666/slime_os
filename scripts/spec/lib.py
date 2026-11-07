@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,12 @@ SPECS = ROOT / "specs"
 STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 SCHEMA_VERSION = "spec/v1"
 OBSERVATION_SCHEMA = ROOT / "contracts" / "observation" / "v1" / "schema.zt"
+OBSERVATION_VERSION = "observation/v1"
+OBSERVATIONS = ROOT / "build" / "observations"
+EVIDENCE_REF = "refs/heads/evidence"
+ALLOWED_SIGNERS = SPECS / "allowed_signers"
+HUMAN_OWNERS = ROOT / "HUMAN_OWNERS"
+SIGN_NAMESPACE = "slime-spec"
 DIGEST_PREFIX = "slime-spec-requirement-digest-v1\n"
 UUID7 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 AREA_ID = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -146,6 +153,26 @@ class Recipes:
 
     def __contains__(self, name: str) -> bool:
         return name in self.by_name
+
+    @classmethod
+    def load_at(cls, rev: str) -> Recipes:
+        """Recipes as committed at `rev`: the Justfile and just/ extracted to a temp dir."""
+        with tempfile.TemporaryDirectory(prefix="slime-spec-just-") as temporary:
+            archive = subprocess.run(["git", "archive", rev, "Justfile", "just"], cwd=ROOT, check=True, capture_output=True).stdout
+            subprocess.run(["tar", "-x", "-C", temporary], input=archive, check=True)
+            done = subprocess.run(
+                ["just", "--justfile", f"{temporary}/Justfile", "--working-directory", temporary, "--dump", "--dump-format", "json"],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+        if done.returncode != 0:
+            raise SpecError(f"just --dump at {rev} failed\n{done.stderr}")
+        dump = json.loads(done.stdout)
+        recipes = dict(dump.get("recipes", {}))
+        for module in dump.get("modules", {}).values():
+            recipes.update(module.get("recipes", {}))
+        return cls(recipes)
 
     def closure(self, target: str) -> list[str]:
         """`target` and every recipe it depends on, transitively, sorted."""
@@ -336,3 +363,218 @@ def spec_marks(paths: list[str]) -> list[tuple[str, int, str, str]]:
 def tracked(pathspec: str = ".") -> list[str]:
     process = subprocess.run(["git", "ls-files", "--", pathspec], cwd=ROOT, check=True, text=True, capture_output=True)
     return process.stdout.splitlines()
+
+
+def git(*arguments: str, check: bool = True, env: dict | None = None, data: bytes | None = None) -> str:
+    done = subprocess.run(["git", *arguments], cwd=ROOT, check=False, capture_output=True, env=env, input=data)
+    if check and done.returncode != 0:
+        raise SpecError(f"git {' '.join(arguments)} failed: {done.stderr.decode().strip()}")
+    return done.stdout.decode()
+
+
+def read_blob(ref: str, path: str) -> bytes | None:
+    """`path` at `ref`, or None when either is absent."""
+    done = subprocess.run(["git", "cat-file", "-p", f"{ref}:{path}"], cwd=ROOT, check=False, capture_output=True)
+    return done.stdout if done.returncode == 0 else None
+
+
+def evidence_ref() -> str | None:
+    """The first evidence ref that exists: $SPEC_EVIDENCE_REF, origin/evidence, evidence."""
+    for candidate in (os.environ.get("SPEC_EVIDENCE_REF"), "refs/remotes/origin/evidence", EVIDENCE_REF):
+        if candidate and git("rev-parse", "-q", "--verify", candidate + "^{commit}", check=False).strip():
+            return candidate
+    return None
+
+
+def parse_record(data: bytes, kind: str = "Record") -> dict:
+    """Type-check a record against contracts/observation/v1 and return its value."""
+    text = data.decode("utf-8")
+    if f"r :: o.{kind} =" not in text:
+        raise SpecError(f"not an o.{kind} record")
+    with tempfile.TemporaryDirectory(prefix="slime-spec-record-") as temporary:
+        shutil.copyfile(OBSERVATION_SCHEMA, Path(temporary) / "schema.zt")
+        entry = Path(temporary) / "record.zt"
+        entry.write_text(text, encoding="utf-8")
+        value = zutai_json(entry)
+    if not isinstance(value, dict) or value.get("schema") != OBSERVATION_VERSION:
+        raise SpecError(f"record schema is not {OBSERVATION_VERSION}")
+    return value
+
+
+def zt_text(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def human_record_text(area: str, requirement: str, acceptance: str, digest: str, value: bool, note: str, signer: str, observed_at: str) -> str:
+    return (
+        'o ::= import "./schema.zt";\n'
+        "r :: o.HumanRecord = {\n"
+        "  schema = o.schemaVersion;\n"
+        f"  area = {zt_text(area)};\n"
+        f"  requirement = {zt_text(requirement)};\n"
+        f"  acceptance = {zt_text(acceptance)};\n"
+        f"  requirementsDigest = {zt_text(digest)};\n"
+        f"  value = {'true' if value else 'false'};\n"
+        f"  note = {zt_text(note)};\n"
+        f"  signer = {zt_text(signer)};\n"
+        f"  observedAt = {zt_text(observed_at)};\n"
+        "};\nr\n"
+    )
+
+
+def human_path(requirement: dict, acceptance_id: str) -> str:
+    return f"human/{requirement['id']}/{acceptance_id}/{requirement_digest(requirement)}.zt"
+
+
+def sign(path: Path, key: str) -> Path:
+    """`ssh-keygen -Y sign` the file; returns the `.sig` path."""
+    signature = path.with_name(path.name + ".sig")
+    signature.unlink(missing_ok=True)
+    done = subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key, "-n", SIGN_NAMESPACE, str(path)], check=False, capture_output=True, text=True)
+    if done.returncode != 0:
+        raise SpecError(f"ssh-keygen -Y sign failed: {done.stderr.strip()}")
+    return signature
+
+
+def verify_signature(data: bytes, signature: bytes | None, signer: str) -> bool:
+    """True when `signature` over `data` verifies for `signer` in specs/allowed_signers."""
+    if signature is None or not ALLOWED_SIGNERS.is_file():
+        return False
+    with tempfile.TemporaryDirectory(prefix="slime-spec-sig-") as temporary:
+        sig = Path(temporary) / "record.sig"
+        sig.write_bytes(signature)
+        done = subprocess.run(
+            ["ssh-keygen", "-Y", "verify", "-f", str(ALLOWED_SIGNERS), "-I", signer, "-n", SIGN_NAMESPACE, "-s", str(sig)],
+            input=data,
+            check=False,
+            capture_output=True,
+        )
+    return done.returncode == 0
+
+
+def human_owners() -> set[str]:
+    if not HUMAN_OWNERS.is_file():
+        return set()
+    return {line.strip() for line in HUMAN_OWNERS.read_text().splitlines() if line.strip() and not line.startswith("#")}
+
+
+def load_areas_at(rev: str) -> list[Area]:
+    """Areas as committed at `rev`, evaluated from a temporary extraction."""
+    listing = git("ls-tree", "--name-only", rev, "specs/", check=False)
+    names = [line.split("/", 1)[1] for line in listing.splitlines() if line.endswith(".zt")]
+    if not names:
+        return []
+    with tempfile.TemporaryDirectory(prefix="slime-spec-base-") as temporary:
+        root = Path(temporary)
+        for name in names:
+            blob = read_blob(rev, f"specs/{name}")
+            if blob is not None:
+                (root / name).write_bytes(blob)
+        areas = []
+        for name in sorted(names):
+            if name in {"schema.zt", "helpers.zt", "legacy.zt"}:
+                continue
+            value = zutai_json(root / name)
+            if isinstance(value, dict) and value.get("schema") == SCHEMA_VERSION:
+                areas.append(Area(SPECS / name, value))
+        return areas
+
+
+class Evidence:
+    """Answers: is there a passing record for this target at the current closure?
+
+    Reads the evidence ref; with `local=True` also `build/observations/`.
+    Closures are resolved from the working tree, which on CI is HEAD.
+    """
+
+    def __init__(self, ref: str | None = None, local: bool = False) -> None:
+        self.ref = ref if ref is not None else evidence_ref()
+        self.local = local
+        self.recipes = Recipes.load()
+        self.images = ImageResolver()
+        self._closures: dict[str, Closure | None] = {}
+        self._records: dict[str, tuple[str, str, dict | None]] = {}
+
+    def closure(self, target: str) -> Closure | None:
+        if target not in self._closures:
+            try:
+                self._closures[target] = resolve(target, self.recipes, self.images)
+            except SpecError:
+                self._closures[target] = None
+        return self._closures[target]
+
+    def blob(self, path: str) -> bytes | None:
+        if self.local and (OBSERVATIONS / path).is_file():
+            return (OBSERVATIONS / path).read_bytes()
+        return read_blob(self.ref, path) if self.ref else None
+
+    def record(self, target: str) -> tuple[str, str, dict | None]:
+        """(state, detail, record) for a machine target: enforced, failing or claimed."""
+        if target in self._records:
+            return self._records[target]
+        closure = self.closure(target)
+        if closure is None:
+            out: tuple[str, str, dict | None] = ("claimed", f"{target} is not a just target", None)
+        else:
+            digest = closure.digest()
+            data = read_blob(self.ref, f"{target}/{digest}.zt") if self.ref else None
+            local = OBSERVATIONS / f"{target}.zt"
+            if self.local and local.is_file():
+                try:
+                    candidate = local.read_bytes()
+                    if parse_record(candidate)["closureDigest"] == digest:
+                        data = candidate
+                except SpecError:
+                    pass
+            if data is None:
+                out = ("claimed", f"no record at {digest[:12]}", None)
+            else:
+                try:
+                    record = parse_record(data)
+                    ok = record["passed"] and record["target"] == target and record["closureDigest"] == digest
+                    out = ("enforced" if ok else "failing", f"exit {record['exitCode']}" if not ok else f"record at {digest[:12]}", record)
+                except SpecError as error:
+                    out = ("failing", f"bad record: {str(error).splitlines()[0]}", None)
+        self._records[target] = out
+        return out
+
+
+def _predicate(predicate: dict, counts: dict[str, int], flags: dict[str, bool]) -> str | None:
+    tag, payload = predicate["tag"], predicate["payload"]
+    key = payload["key"]
+    if tag == "flag":
+        return None if flags.get(key) is True else f"flag {key} is {flags.get(key)}"
+    if key not in counts:
+        return f"count {key} missing"
+    value = counts[key]
+    if tag == "count" and value != payload["equals"]:
+        return f"{key} = {value}, want {payload['equals']}"
+    if tag == "atLeast" and value < payload["min"]:
+        return f"{key} = {value}, want >= {payload['min']}"
+    if tag == "atMost" and value > payload["max"]:
+        return f"{key} = {value}, want <= {payload['max']}"
+    return None
+
+
+def acceptance_state(tag: str, payload: dict, requirement: dict, evidence: Evidence) -> tuple[str, str]:
+    """(enforced | failing | claimed | advisory, detail)."""
+    if tag == "observed":
+        state, detail, record = evidence.record(payload["justTarget"])
+        if state == "enforced" and record is not None:
+            counts = {c["key"]: c["value"] for c in record["counts"]}
+            flags = {f["key"]: f["value"] for f in record["flags"]}
+            failed = [m for m in (_predicate(p, counts, flags) for p in payload["predicates"]) if m]
+            if failed:
+                return "failing", "; ".join(failed)
+        return state, detail
+    path = human_path(requirement, payload["id"])
+    data = evidence.blob(path)
+    if data is None:
+        return "advisory", "awaiting a signed human record"
+    try:
+        record = parse_record(data, "HumanRecord")
+    except SpecError as error:
+        return "advisory", f"bad human record: {str(error).splitlines()[0]}"
+    if not verify_signature(data, evidence.blob(path + ".sig"), record["signer"]):
+        return "advisory", f"signature by {record['signer']} does not verify against specs/allowed_signers"
+    return ("enforced", f"signed yes by {record['signer']}") if record["value"] else ("failing", f"signed no by {record['signer']}")

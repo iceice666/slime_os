@@ -12,6 +12,21 @@ resolves to nothing, a `# spec:` mark that names no acceptance, a `.zti`
 under `specs/`, and a `scripts/spec/` that grew past its line budget.
 
 `--digest` prints `<area> <requirement> <digest>` per requirement.
+
+    scripts/spec/check --base <ref> [--approvers a,b] [--enforce-owns]
+
+Judges the diff base...HEAD (decisions E1, E2, D5). A person listed in
+HUMAN_OWNERS must be among `--approvers` when the diff
+
+  1. changes any area's evaluated `invariants`;
+  2. modifies or deletes a `contracts/**/schema.zt` that exists at base;
+  3. modifies, deletes or renames a file in the grader set of any target
+     an acceptance binds at base, or changes such a target's recipe
+     closure. New checker files enter freely.
+
+Rule 4, owns coverage: every product file the diff touches must fall under
+some area's `owns`. Reported always; refused only with `--enforce-owns`
+until every plane has an area (Phase 3).
 """
 
 from __future__ import annotations
@@ -23,7 +38,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
-BUDGET = 1500
+BUDGET = 2000  # migrate is transitional and excluded; see proposal/devloop-redesign/decisions.md
+PRODUCT_PREFIXES = ("components/", "slime-root/", "contracts/", "boot-contracts/")
 LEGACY_ITEMS = lib.ROOT / ".tasks" / "items"
 MARKED_ROOTS = ("scripts", "just", "Justfile", "slime-root", "components", "contracts")
 
@@ -87,18 +103,120 @@ def check_area(area: lib.Area, recipes: lib.Recipes, findings: Findings) -> dict
     return seen
 
 
+def changed_files(base: str) -> dict[str, str]:
+    """path -> status letter for base...HEAD (renames report both paths)."""
+    merge_base = lib.git("merge-base", base, "HEAD").strip()
+    out = lib.git("diff", "--name-status", "--find-renames", merge_base, "HEAD")
+    changed: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        status = parts[0][0]
+        for path in parts[1:]:
+            changed[path] = status
+    return changed
+
+
+def owns_match(path: str, globs: list[str]) -> bool:
+    from fnmatch import fnmatchcase
+
+    for glob in globs:
+        if glob.endswith("/**") and path.startswith(glob[:-2]):
+            return True
+        if fnmatchcase(path, glob):
+            return True
+    return False
+
+
+def judge_base(base: str, approvers: set[str], enforce_owns: bool, findings: Findings) -> None:
+    merge_base = lib.git("merge-base", base, "HEAD").strip()
+    changed = changed_files(base)
+    existed = {p for p, s in changed.items() if s != "A"}
+    reasons: list[str] = []
+
+    head_areas = {a.id: a for a in lib.load_areas()}
+    base_areas = {a.id: a for a in lib.load_areas_at(merge_base)}
+    for area_id, area in base_areas.items():
+        head = head_areas.get(area_id)
+        before = lib.canonical(area.value["invariants"])
+        after = lib.canonical(head.value["invariants"]) if head else b""
+        if before != after:
+            reasons.append(f"rule 1: invariants of area {area_id} changed")
+
+    for path in sorted(existed):
+        if path.startswith("contracts/") and path.endswith("/schema.zt"):
+            reasons.append(f"rule 2: {path} is an existing contract schema ({changed[path]})")
+
+    head_recipes = lib.Recipes.load()
+    base_recipes = lib.Recipes.load_at(merge_base)
+    targets = sorted({p["justTarget"] for a in base_areas.values() for r in a.requirements for t, p in lib.acceptances(r) if t == "observed"})
+    for target in targets:
+        if target not in base_recipes:
+            continue
+        base_names = base_recipes.closure(target)
+        head_names = head_recipes.closure(target) if target in head_recipes else []
+        if sorted(base_names) != sorted(head_names) or any(
+            lib.Recipes.definition(base_recipes.by_name[n]) != lib.Recipes.definition(head_recipes.by_name[n]) for n in base_names
+        ):
+            reasons.append(f"rule 3: recipe closure of {target} changed")
+            continue
+        grader = lib.lib_imports(base_recipes.scripts(base_names)) | set(lib.GRADER)
+        touched = sorted(grader & existed)
+        if touched:
+            reasons.append(f"rule 3: {target} grader file(s) changed: {', '.join(touched)}")
+
+    owns = [g for a in head_areas.values() for g in a.value["owns"]]
+    uncovered = sorted(p for p in changed if p.startswith(PRODUCT_PREFIXES) and not owns_match(p, owns))
+    for path in uncovered:
+        message = f"rule 4: {path} is under no area's owns"
+        if enforce_owns:
+            findings.error("owns", message)
+        else:
+            print(f"note: {message}", file=sys.stderr)
+
+    humans = approvers & lib.human_owners()
+    for reason in reasons:
+        print(f"approval: {reason}", file=sys.stderr)
+    if reasons and not humans:
+        findings.error("approval", f"{len(reasons)} reason(s) need an approval from HUMAN_OWNERS; approvers given: {sorted(approvers) or 'none'}")
+    elif reasons:
+        print(f"approval: satisfied by {sorted(humans)}", file=sys.stderr)
+
+
+def check_zutai_pin(findings: Findings) -> None:
+    """specs/zutai.toml, the deps/zutai gitlink and the flake input name one revision."""
+    import re
+    import tomllib
+
+    pin = lib.SPECS / "zutai.toml"
+    if not pin.is_file():
+        findings.error("specs/zutai.toml", "missing")
+        return
+    rev = tomllib.loads(pin.read_text()).get("rev", "")
+    gitlink = lib.git("ls-tree", "HEAD", "deps/zutai", check=False).split()
+    if len(gitlink) >= 3 and gitlink[2] != rev:
+        findings.error("specs/zutai.toml", f"rev {rev[:12]} is not the deps/zutai gitlink {gitlink[2][:12]}")
+    flake = (lib.ROOT / "flake.nix").read_text() if (lib.ROOT / "flake.nix").is_file() else ""
+    match = re.search(r'"github:iceice666/zutai/([0-9a-f]{40})"', flake)
+    if match and match.group(1) != rev:
+        findings.error("specs/zutai.toml", f"rev {rev[:12]} is not the flake.nix zutai input {match.group(1)[:12]}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--digest", action="store_true")
+    parser.add_argument("--base")
+    parser.add_argument("--approvers", default="")
+    parser.add_argument("--enforce-owns", action="store_true")
     args = parser.parse_args()
     findings = Findings()
 
     for stray in lib.SPECS.rglob("*.zti"):
         findings.error(stray.relative_to(lib.ROOT).as_posix(), ".zti is computed, never committed")
-    budget = sum(len(f.read_bytes().splitlines()) for f in lib.tracked("scripts/spec") for f in [lib.ROOT / f])
+    budget = sum(len((lib.ROOT / f).read_bytes().splitlines()) for f in lib.tracked("scripts/spec") if not f.endswith("/migrate"))
     if budget > BUDGET:
         findings.error("scripts/spec", f"{budget} lines exceeds the {BUDGET}-line budget")
 
+    check_zutai_pin(findings)
     recipes = lib.Recipes.load()
     areas = lib.load_areas()
     requirements: dict[str, tuple[str, dict]] = {}
@@ -124,6 +242,9 @@ def main() -> int:
     for path, line, rid, acc in lib.spec_marks(marked):
         if (rid, acc) not in acceptance_keys:
             findings.error(f"{path}:{line}", f"# spec: {rid}/{acc} names no acceptance")
+
+    if args.base:
+        judge_base(args.base, {a.strip() for a in args.approvers.split(",") if a.strip()}, args.enforce_owns, findings)
 
     if args.digest:
         for area in areas:

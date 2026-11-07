@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""End-to-end exercise of scripts/spec on a throwaway clone.
+
+    scripts/spec/e2e [--keep]
+
+Clones this checkout (no submodules), adds a synthetic area, exam recipe
+and checker, then walks: check -> status claimed -> record -> local
+enforced -> human gate -> publish -> enforced from the evidence ref ->
+grader edit stales it -> check --base rules 1-4 and approvers -> predicate
+failure -> dirty and stale records refused by publish -> human signature
+tamper. Never touches the real checkout or its refs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+PASSED = 0
+FAILED: list[str] = []
+
+
+def ok(condition: bool, label: str) -> None:
+    global PASSED
+    if condition:
+        PASSED += 1
+    else:
+        FAILED.append(label)
+        print(f"FAIL {label}", file=sys.stderr)
+
+
+class Clone:
+    def __init__(self, root: Path, key: Path) -> None:
+        self.root = root
+        self.key = key
+        self.env = os.environ | {"SPEC_EVIDENCE_REF": "refs/heads/evidence", "HOME": str(root / "home")}
+
+    def run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        return subprocess.run(args, cwd=self.root, env=self.env, check=check, text=True, capture_output=True)
+
+    def spec(self, tool: str, *args: str) -> subprocess.CompletedProcess:
+        return self.run(sys.executable, str(self.root / "scripts" / "spec" / tool), *args, check=False)
+
+    def git(self, *args: str) -> str:
+        return self.run("git", *args).stdout
+
+    def write(self, path: str, text: str) -> None:
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    def commit(self, message: str) -> None:
+        self.run("git", "add", "-A")
+        self.run("git", "-c", "user.name=e2e", "-c", "user.email=e2e@example", "commit", "-q", "-m", message)
+
+    def state(self, requirement: str, local: bool = False) -> str:
+        done = self.spec("status", "--json", *(["--local"] if local else []))
+        import json
+
+        report = json.loads(done.stdout)
+        for area in report["areas"]:
+            for row in area["requirements"]:
+                if row["id"] == requirement:
+                    return row["state"]
+        return "missing"
+
+
+EXAM = """import sys
+sys.path.insert(0, "scripts/lib")
+import devloop_observations
+devloop_observations.record(casesObserved={cases}, negativeControlsRefused=3)
+sys.exit({exit})
+"""
+
+R1 = "01a1b3bb-e2e0-7000-8000-000000000001"
+R2 = "01a1b3bb-e2e0-7000-8000-000000000002"
+
+
+def area_text(statement: str = "The e2e exam observes three cases.", invariant: str = "Never.") -> str:
+    return f'''s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+area :: s.Area = (h.area "e2e" "End-to-end fixture" {{ "components/e2e/**"; }} {{
+  h.req "{R1}" "{statement}" "fixture" {{
+    h.observedWhere "cases" "e2e_exam" {{ h.count "casesObserved" 3; h.atLeast "negativeControlsRefused" 1; }} "counts";
+    h.human "looked" "Did a person look?" "fixture";
+  }};
+  h.planned "{R2}" "A later promise." "fixture" "waits for the next phase" h.noAcceptance;
+}}) with {{ invariants = {{ h.invariant "i1" "{invariant}"; }}; }};
+area
+'''
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--keep", action="store_true")
+    args = parser.parse_args()
+    temporary = Path(tempfile.mkdtemp(prefix="slime-spec-e2e-"))
+    try:
+        root = temporary / "repo"
+        subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", f"file://{ROOT}", str(root)], check=True)
+        # The clone's working tree must carry what the real checkout has uncommitted in scripts/spec and specs.
+        for sub in ("scripts/spec", "specs", "contracts/observation", "HUMAN_OWNERS"):
+            source = ROOT / sub
+            if source.is_dir():
+                shutil.rmtree(root / sub, ignore_errors=True)
+                shutil.copytree(source, root / sub, ignore=shutil.ignore_patterns("__pycache__"))
+            elif source.is_file():
+                shutil.copyfile(source, root / sub)
+        (root / "home").mkdir()
+        key = temporary / "key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+        clone = Clone(root, key)
+        public = key.with_suffix(".pub").read_text().split()
+        clone.write("specs/allowed_signers", f'tester namespaces="slime-spec" {public[0]} {public[1]}\n')
+        clone.write("HUMAN_OWNERS", "owner\n")
+        for stale in (root / "specs").glob("*.zt"):
+            if stale.name not in {"schema.zt", "helpers.zt"}:
+                stale.unlink()
+        clone.write("specs/e2e.zt", area_text())
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+        with (root / "Justfile").open("a") as handle:
+            handle.write("\ne2e_exam:\n    python3 scripts/check/e2e-exam.py\n")
+        clone.commit("e2e fixture")
+
+        done = clone.spec("check")
+        ok(done.returncode == 0, f"check passes on fixture: {done.stderr[-300:]}")
+        ok(clone.state(R1) == "claimed", "fresh requirement is claimed")
+        ok(clone.state(R2) == "advisory", "planned requirement is advisory")
+        done = clone.spec("status", "--claimed")
+        ok(done.stdout.split() == ["e2e_exam"], "--claimed names the exam")
+
+        done = clone.spec("record", "e2e_exam")
+        ok(done.returncode == 0, f"record runs the exam: {done.stderr[-300:]}")
+        ok(clone.state(R1, local=True) == "advisory", "observed enforced locally, human gate still advisory")
+        done = clone.spec("human", "e2e", R1, "looked", "yes", "--signer", "tester", "--key", str(key))
+        ok(done.returncode == 0, f"human signs yes: {done.stderr[-300:]}")
+        ok(clone.state(R1, local=True) == "enforced", "requirement enforced locally after human yes")
+        ok(clone.state(R1) == "claimed", "without --local nothing is published yet")
+
+        done = clone.spec("publish")
+        ok(done.returncode == 0 and "nothing new" not in done.stdout, f"publish commits: {done.stdout} {done.stderr[-200:]}")
+        ok(clone.state(R1) == "enforced", "enforced from the evidence ref")
+        done = clone.spec("publish")
+        ok("nothing new" in done.stdout, "publish is idempotent")
+        shutil.rmtree(root / "build" / "observations")
+
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0) + "# touched\n")
+        clone.commit("touch grader")
+        ok(clone.state(R1) == "claimed", "grader edit stales the record")
+        done = clone.spec("check", "--base", "HEAD~1")
+        ok(done.returncode == 1 and "rule 3" in done.stderr, "rule 3: grader edit needs approval")
+        done = clone.spec("check", "--base", "HEAD~1", "--approvers", "bot")
+        ok(done.returncode == 1, "an approver outside HUMAN_OWNERS does not satisfy")
+        done = clone.spec("check", "--base", "HEAD~1", "--approvers", "bot,owner")
+        ok(done.returncode == 0 and "satisfied" in done.stderr, "HUMAN_OWNERS approval satisfies")
+
+        clone.write("scripts/check/e2e-new.py", "print('new checker')\n")
+        clone.commit("new checker file")
+        done = clone.spec("check", "--base", "HEAD~1")
+        ok(done.returncode == 0, "a new checker file enters freely")
+
+        with (root / "Justfile").open("a") as handle:
+            handle.write("    echo changed\n")
+        clone.commit("recipe change")
+        done = clone.spec("check", "--base", "HEAD~1")
+        ok(done.returncode == 1 and "recipe closure" in done.stderr, "rule 3: recipe change needs approval")
+
+        clone.write("specs/e2e.zt", area_text(invariant="Changed."))
+        clone.commit("invariant reworded")
+        done = clone.spec("check", "--base", "HEAD~1")
+        ok(done.returncode == 1 and "rule 1" in done.stderr, "rule 1: invariant change needs approval")
+
+        clone.write("contracts/observation/v1/schema.zt", (root / "contracts/observation/v1/schema.zt").read_text() + "-- comment\n")
+        clone.commit("schema touched")
+        done = clone.spec("check", "--base", "HEAD~1")
+        ok(done.returncode == 1 and "rule 2" in done.stderr, "rule 2: existing schema.zt change needs approval")
+
+        clone.write("components/e2e/lib.rs", "// owned\n")
+        clone.write("components/other/lib.rs", "// not owned\n")
+        clone.commit("product files")
+        done = clone.spec("check", "--base", "HEAD~1", "--enforce-owns")
+        ok(done.returncode == 1 and "components/other/lib.rs" in done.stderr and "components/e2e/lib.rs" not in done.stderr, "rule 4: owns coverage")
+        done = clone.spec("check", "--base", "HEAD~1")
+        ok(done.returncode == 0, "rule 4 only reports without --enforce-owns")
+
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=2, exit=0))
+        clone.commit("exam reports two")
+        clone.spec("record", "e2e_exam")
+        ok(clone.state(R1, local=True) == "failing", "predicate failure is failing")
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=1))
+        clone.commit("exam exits 1")
+        done = clone.spec("record", "e2e_exam")
+        ok(done.returncode == 1 and clone.state(R1, local=True) == "failing", "exit 1 is failing and propagates")
+
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+        clone.commit("exam fixed")
+        clone.spec("record", "e2e_exam")
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0) + "# dirty\n")
+        done = clone.spec("publish")
+        ok(done.returncode == 1 and "closure digest" in done.stderr, "a record whose digest is not HEAD's is refused")
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+        clone.write("components/e2e/lib.rs", "// edited\n")
+        done = clone.spec("record", "e2e_exam")
+        ok("dirty" in done.stderr, "record from a dirty tree says so")
+        done = clone.spec("publish")
+        ok(done.returncode == 1 and "dirty" in done.stderr, "a dirty record is refused")
+        clone.run("git", "checkout", "--", "components/e2e/lib.rs")
+
+        clone.write("specs/e2e.zt", area_text(statement="The e2e exam observes three cases, reworded.", invariant="Changed."))
+        clone.commit("statement reworded")
+        ok(clone.state(R1) in {"claimed", "advisory"}, "rewording the statement asks the human again")
+        human = next((root / "build" / "observations" / "human").rglob("*.zt"), None)
+        if human is not None:
+            human.write_text(human.read_text().replace("value = true", "value = false"))
+            done = clone.spec("publish")
+            ok("signature does not verify" in done.stderr, "a tampered human record is refused")
+
+        clone.write("specs/e2e.zti", "{}")
+        done = clone.spec("check")
+        ok(done.returncode == 1 and ".zti" in done.stderr, ".zti under specs/ is refused")
+        (root / "specs" / "e2e.zti").unlink()
+    finally:
+        if args.keep:
+            print(f"kept {temporary}")
+        else:
+            shutil.rmtree(temporary, ignore_errors=True)
+    print(f"e2e: {PASSED} passed, {len(FAILED)} failed")
+    return 1 if FAILED else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
