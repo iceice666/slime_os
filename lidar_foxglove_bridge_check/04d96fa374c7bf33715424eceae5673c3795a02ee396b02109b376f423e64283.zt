@@ -3,12 +3,12 @@ r :: o.Record = {
   schema = o.schemaVersion;
   target = "lidar_foxglove_bridge_check";
   closureDigest = "04d96fa374c7bf33715424eceae5673c3795a02ee396b02109b376f423e64283";
-  passed = false;
-  exitCode = 1;
-  counts = {;};
+  passed = true;
+  exitCode = 0;
+  counts = { { key = "bytesObserved"; value = 98977800; }; { key = "casesObserved"; value = 200; }; { key = "negativeControlsRefused"; value = 83; }; };
   flags = {;};
-  observedAt = "2026-11-07T08:28:19Z";
-  runner = "ci";
+  observedAt = "2026-11-07T13:00:24Z";
+  runner = "iceice666";
   toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
 };
 r

@@ -3,12 +3,12 @@ r :: o.Record = {
   schema = o.schemaVersion;
   target = "frame_store_check";
   closureDigest = "b893204872434b34369bb0118687c880b3157473d07a2005fdbbebc8cdd5ad49";
-  passed = false;
-  exitCode = 1;
+  passed = true;
+  exitCode = 0;
   counts = {;};
   flags = {;};
-  observedAt = "2026-11-07T08:34:28Z";
-  runner = "ci";
+  observedAt = "2026-11-07T12:59:37Z";
+  runner = "iceice666";
   toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
 };
 r
