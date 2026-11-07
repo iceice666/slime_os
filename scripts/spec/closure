@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Print the closure digest of one or more `just` targets.
+
+    scripts/spec/closure <target>... [--explain] [--json]
+    scripts/spec/closure --bound            # every target an area binds
+
+The digest is what an evidence record is keyed by. `--explain` lists the
+composition: recipe definitions, grader files, declared inputs, image
+derivation ids, toolchain files and, when a target declares neither an
+image nor inputs, the coarse product fallback. A `dirty` closure names a
+working tree that differs from HEAD; a record taken from it cannot be
+published.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+
+def bound_targets() -> list[str]:
+    targets = set()
+    for area in lib.load_areas():
+        for requirement in area.requirements:
+            targets.update(p["justTarget"] for t, p in lib.acceptances(requirement) if t == "observed")
+    return sorted(targets)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("targets", nargs="*")
+    parser.add_argument("--bound", action="store_true")
+    parser.add_argument("--explain", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    targets = bound_targets() if args.bound else args.targets
+    if not targets:
+        parser.error("name a target or pass --bound")
+
+    recipes = lib.Recipes.load()
+    images = lib.ImageResolver()
+    report = []
+    for target in targets:
+        started = time.monotonic()
+        closure = lib.resolve(target, recipes, images)
+        elapsed = time.monotonic() - started
+        row = {
+            "target": target,
+            "closureDigest": closure.digest(),
+            "dirty": closure.dirty,
+            "coarse": closure.coarse,
+            "recipes": sorted(closure.recipes),
+            "grader": sorted(closure.grader),
+            "inputs": sorted(closure.inputs),
+            "images": closure.images,
+            "toolchain": sorted(closure.toolchain),
+            "product": closure.product,
+            "seconds": round(elapsed, 2),
+        }
+        report.append(row)
+        if not args.json:
+            flags = " dirty" if closure.dirty else ""
+            flags += " coarse" if closure.coarse else ""
+            print(f"{target} {row['closureDigest']}{flags}")
+            if args.explain:
+                for key in ("recipes", "grader", "inputs", "toolchain"):
+                    for entry in row[key]:
+                        print(f"  {key[:-1] if key != 'toolchain' else key} {entry}")
+                for name, identity in closure.images.items():
+                    print(f"  image {name} {identity}")
+                for root, identity in closure.product.items():
+                    print(f"  product {root} {identity}")
+                print(f"  resolved in {elapsed:.2f}s")
+    if args.json:
+        json.dump(report, sys.stdout, indent=1, sort_keys=True)
+        print()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

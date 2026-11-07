@@ -1,0 +1,71 @@
+--| Constructors for `specs/<area>.zt`. Import as `h ::= import "./helpers.zt";`.
+--| The file's final expression is the `Area` value.
+s ::= import "./schema.zt";
+
+noText :: List Text = {;};
+noPredicates :: List s.Predicate = {;};
+--| For a `planned` requirement that names no exam yet.
+noAcceptance :: List s.Acceptance = {;};
+
+--| An area with no invariants, decisions or questions yet. Extend with
+--| `with { invariants = ...; decisions = ...; }`.
+area :: Text -> Text -> List Text -> List s.Requirement -> s.Area
+  = id title owns requirements => {
+    schema = s.schemaVersion;
+    id =; title =; owns =; requirements =;
+    invariants = {;};
+    nonGoals = noText;
+    decisions = {;};
+    openQuestions = noText;
+    constrainedBy = noText;
+  };
+
+--| Acceptance id = justTarget. Holds when the record passed.
+observed :: Text -> Text -> s.Acceptance
+  = justTarget rationale =>
+    #observed { id = justTarget; justTarget =; predicates = noPredicates; rationale =; };
+
+--| Same, with its own id and predicates on the record's counts and flags.
+observedWhere :: Text -> Text -> List s.Predicate -> Text -> s.Acceptance
+  = id justTarget predicates rationale => #observed { id =; justTarget =; predicates =; rationale =; };
+
+count :: Text -> Int -> s.Predicate = key equals => #count { key =; equals =; };
+atLeast :: Text -> Int -> s.Predicate = key min => #atLeast { key =; min =; };
+atMost :: Text -> Int -> s.Predicate = key max => #atMost { key =; max =; };
+flag :: Text -> s.Predicate = key => #flag { key =; };
+
+human :: Text -> Text -> Text -> s.Acceptance
+  = id question rationale => #human { id =; question =; rationale =; };
+
+--| A requirement bound to its exams.
+req :: Text -> Text -> Text -> List s.Acceptance -> s.Requirement
+  = id statement rationale acceptance => {
+    id =; statement =; rationale =; acceptance =;
+    planned = false;
+    note = "";
+    supersedes = noText;
+    depends = noText;
+  };
+
+--| A promise not yet bound to a passing exam; `note` says why it waits.
+--| It may still name the exams it will bind to.
+planned :: Text -> Text -> Text -> Text -> List s.Acceptance -> s.Requirement
+  = id statement rationale note acceptance => {
+    id =; statement =; rationale =; acceptance =; note =;
+    planned = true;
+    supersedes = noText;
+    depends = noText;
+  };
+
+invariant :: Text -> Text -> s.Invariant = id statement => { id =; statement =; };
+
+decided :: s.DecidedBy -> Text -> Text -> Text -> List Text -> s.Decision
+  = by id decision because binds => { id =; decision =; because =; by =; binds =; };
+
+byHuman :: Text -> Text -> Text -> List Text -> s.Decision = decided #byHuman;
+byAgentDefault :: Text -> Text -> Text -> List Text -> s.Decision = decided #byAgentDefault;
+
+{
+  noPredicates =; noAcceptance =; area =; observed =; observedWhere =; count =; atLeast =; atMost =; flag =;
+  human =; req =; planned =; invariant =; byHuman =; byAgentDefault =;
+}

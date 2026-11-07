@@ -123,6 +123,17 @@ pr_scope_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# The living specs under specs/: schema, ids, bound targets, reverse marks
+# (proposal/devloop-redesign/). Runs beside tasks_check until Phase 3 replaces it.
+[group('quality')]
+spec_check:
+    python3 scripts/spec/check
+
+# Closure digest of every target an area binds, with its composition.
+[group('quality')]
+spec_closure *ARGS:
+    python3 scripts/spec/closure --bound {{ARGS}}
+
 # Work items are not projected into GitHub Issues: refuses while the projection
 # workflow exists, policy names it, a workflow or script runs `myque-gh apply`,
 # or contributor guidance still asks for `myque-gh pr link`.

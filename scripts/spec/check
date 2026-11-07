@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Validate `specs/*.zt`.
+
+    scripts/spec/check [--digest]
+
+Refuses: a file whose final value is not a `spec/v1` Area, an area id that
+is not its file name, a requirement id that is not a UUIDv7 or repeats
+across areas, a non-planned requirement without an automated acceptance,
+an acceptance id that repeats inside a requirement, a `justTarget` that
+`just --dump` does not declare, a `supersedes`, `depends` or `binds` that
+resolves to nothing, a `# spec:` mark that names no acceptance, a `.zti`
+under `specs/`, and a `scripts/spec/` that grew past its line budget.
+
+`--digest` prints `<area> <requirement> <digest>` per requirement.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+BUDGET = 1500
+LEGACY_ITEMS = lib.ROOT / ".tasks" / "items"
+MARKED_ROOTS = ("scripts", "just", "Justfile", "slime-root", "components", "contracts")
+
+
+class Findings:
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def error(self, where: str, message: str) -> None:
+        self.errors.append(f"{where}: {message}")
+
+
+def legacy_ids() -> set[str]:
+    """Until Phase 3 lands `specs/legacy.zt`, `.tasks/items/<id>.md` is the legacy index."""
+    legacy = lib.SPECS / "legacy.zt"
+    if legacy.is_file():
+        value = lib.zutai_json(legacy)
+        return {entry["id"] for entry in value} if isinstance(value, list) else set(value)
+    return {p.stem for p in LEGACY_ITEMS.glob("*.md")} if LEGACY_ITEMS.is_dir() else set()
+
+
+def check_area(area: lib.Area, recipes: lib.Recipes, findings: Findings) -> dict[str, dict]:
+    where = area.path.relative_to(lib.ROOT).as_posix()
+    if area.id != area.path.stem or not lib.AREA_ID.match(area.id):
+        findings.error(where, f"area id {area.id!r} must equal the file name and match {lib.AREA_ID.pattern}")
+    if not area.value["title"].strip():
+        findings.error(where, "title is empty")
+    if not area.value["owns"]:
+        findings.error(where, "owns is empty; name the paths this area implements")
+    seen: dict[str, dict] = {}
+    for requirement in area.requirements:
+        rid = requirement["id"]
+        tag = f"{where} requirement {rid}"
+        if not lib.UUID7.match(rid):
+            findings.error(tag, "id is not a UUIDv7")
+        if not requirement["statement"].strip():
+            findings.error(tag, "statement is empty")
+        ids = [payload["id"] for _, payload in lib.acceptances(requirement)]
+        if len(ids) != len(set(ids)):
+            findings.error(tag, f"acceptance ids repeat: {ids}")
+        automated = [p for t, p in lib.acceptances(requirement) if t == "observed"]
+        if not requirement["planned"] and not automated:
+            findings.error(tag, "a requirement that is not planned needs at least one h.observed acceptance")
+        if requirement["planned"] and not requirement["note"].strip():
+            findings.error(tag, "a planned requirement needs a note saying why it waits")
+        for payload in automated:
+            if payload["justTarget"] not in recipes:
+                findings.error(tag, f"acceptance {payload['id']} binds just target {payload['justTarget']!r}, which `just --dump` does not declare")
+        seen[rid] = requirement
+    binders = {r["id"] for r in area.requirements} | {p["id"] for r in area.requirements for _, p in lib.acceptances(r)}
+    for decision in area.value["decisions"]:
+        for bound in decision["binds"]:
+            if bound not in binders:
+                findings.error(f"{where} decision {decision['id']}", f"binds {bound!r}, which is no requirement or acceptance of this area")
+    for invariant in area.value["invariants"]:
+        if not invariant["statement"].strip():
+            findings.error(f"{where} invariant {invariant['id']}", "statement is empty")
+    for page in area.value["constrainedBy"]:
+        if not (lib.ROOT / page).is_file():
+            findings.error(where, f"constrainedBy names {page!r}, which does not exist")
+    return seen
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--digest", action="store_true")
+    args = parser.parse_args()
+    findings = Findings()
+
+    for stray in lib.SPECS.rglob("*.zti"):
+        findings.error(stray.relative_to(lib.ROOT).as_posix(), ".zti is computed, never committed")
+    budget = sum(len(f.read_bytes().splitlines()) for f in lib.tracked("scripts/spec") for f in [lib.ROOT / f])
+    if budget > BUDGET:
+        findings.error("scripts/spec", f"{budget} lines exceeds the {BUDGET}-line budget")
+
+    recipes = lib.Recipes.load()
+    areas = lib.load_areas()
+    requirements: dict[str, tuple[str, dict]] = {}
+    for area in areas:
+        for rid, requirement in check_area(area, recipes, findings).items():
+            if rid in requirements:
+                findings.error(f"{area.id} requirement {rid}", f"id already used in area {requirements[rid][0]}")
+            requirements[rid] = (area.id, requirement)
+
+    legacy = legacy_ids()
+    for area in areas:
+        for requirement in area.requirements:
+            tag = f"{area.id} requirement {requirement['id']}"
+            for old in requirement["supersedes"]:
+                if old not in requirements and old not in legacy:
+                    findings.error(tag, f"supersedes {old!r}, which is no requirement and no legacy item")
+            for dep in requirement["depends"]:
+                if dep not in requirements:
+                    findings.error(tag, f"depends on {dep!r}, which is no requirement")
+
+    acceptance_keys = {(rid, p["id"]) for rid, (_, r) in requirements.items() for _, p in lib.acceptances(r)}
+    marked = [f for root in MARKED_ROOTS for f in lib.tracked(root)]
+    for path, line, rid, acc in lib.spec_marks(marked):
+        if (rid, acc) not in acceptance_keys:
+            findings.error(f"{path}:{line}", f"# spec: {rid}/{acc} names no acceptance")
+
+    if args.digest:
+        for area in areas:
+            for requirement in area.requirements:
+                print(area.id, requirement["id"], lib.requirement_digest(requirement))
+
+    for error in findings.errors:
+        print(f"error: {error}", file=sys.stderr)
+    if findings.errors:
+        return 1
+    total = sum(len(a.requirements) for a in areas)
+    print(f"spec check: {len(areas)} area(s), {total} requirement(s), {len(marked)} marked file(s) scanned")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

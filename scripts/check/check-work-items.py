@@ -428,7 +428,14 @@ CODE_IDENTITY_EXEMPT = (
     ".tasks/",  # the store is the subject of evidence, not its input
     "assets/",
     "docs/",  # `docs_check` validates docs; that gate is `work-item-store`
+    "proposal/",  # planning notes for the devloop redesign; no gate reads them
     "roadmap/",
+    # The living-spec devloop (proposal/devloop-redesign/): its evidence is
+    # keyed by closure digests scripts/spec computes, not by devloop's code
+    # identity. Listing it under codePaths would stale every old record on
+    # each spec edit.
+    "specs/",
+    "scripts/spec/",
     ".envrc",
     ".gitignore",
     ".gitmodules",

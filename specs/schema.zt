@@ -1,0 +1,94 @@
+--| Living-spec schema (spec/v1).
+--|
+--| `specs/<area>.zt` is an `Area`: what one plane or subsystem promises
+--| today. The unit of work is a `Requirement` inside it. Changing a feature
+--| is a diff that adds, rewrites or removes requirements in the owning
+--| area file, carried by the same PR as the exam and the implementation.
+--|
+--| There is no `done` state. `scripts/spec/status` computes each
+--| acceptance's state from the `evidence` branch: enforced, failing,
+--| claimed or advisory. A `planned` requirement is a promise without a
+--| bound exam yet. Superseded or cancelled requirements are deleted from
+--| the file; `git log` keeps them.
+--|
+--| `.zt` is the only form that enters the repository. `.zti` and digests
+--| are computed, never committed.
+
+--| Who made a decision. Agents may record defaults; people own the rest.
+DecidedBy :: type { #byHuman; #byAgentDefault; };
+
+--| Extra conditions on a machine record. `passed = true` is always
+--| required; a list of predicates is their conjunction.
+Predicate :: type {
+  #count: { key : Text; equals : Int; };
+  #atLeast: { key : Text; min : Int; };
+  #atMost: { key : Text; max : Int; };
+  #flag: { key : Text; };
+};
+
+--| `h.observed <justTarget>`: the target's record at the current closure
+--| digest has `passed = true` and satisfies every predicate.
+Observed :: type {
+  id : Text;
+  justTarget : Text;
+  predicates : List Predicate;
+  rationale : Text;
+};
+
+--| `h.human <id> <question>`: a person looked and signed yes.
+Human :: type { id : Text; question : Text; rationale : Text; };
+
+Acceptance :: type { #observed: Observed; #human: Human; };
+
+--| `id` is a UUIDv7 and never changes once on `main`.
+--| `supersedes` names requirement ids this one replaced (new or legacy).
+--| `depends` is informational: it orders planned work for readers and is
+--| not part of the digest or of the computed state.
+--| `planned` means promised but not yet bound to a passing exam; `note`
+--| says why it waits.
+Requirement :: type {
+  id : Text;
+  statement : Text;
+  rationale : Text;
+  acceptance : List Acceptance;
+  planned : Bool;
+  note : Text;
+  supersedes : List Text;
+  depends : List Text;
+};
+
+--| Human-owned: a diff here needs a person's approval, like a grader.
+Invariant :: type { id : Text; statement : Text; };
+
+--| `Decision: <decision>. Because <because>.` (HUMAN.md format).
+--| `binds` names requirement or acceptance ids of the same area.
+Decision :: type {
+  id : Text;
+  decision : Text;
+  because : Text;
+  by : DecidedBy;
+  binds : List Text;
+};
+
+--| `id` is the file name without `.zt`. `owns` are path globs this area
+--| implements (PR coverage check only). `constrainedBy` lists
+--| `docs/decisions/` pages that bound this area.
+Area :: type {
+  schema : Text;
+  id : Text;
+  title : Text;
+  owns : List Text;
+  invariants : List Invariant;
+  nonGoals : List Text;
+  decisions : List Decision;
+  openQuestions : List Text;
+  constrainedBy : List Text;
+  requirements : List Requirement;
+};
+
+schemaVersion :: Text = "spec/v1";
+
+{
+  DecidedBy =; Predicate =; Observed =; Human =; Acceptance =; Requirement =;
+  Invariant =; Decision =; Area =; schemaVersion =;
+}
