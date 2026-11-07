@@ -28,7 +28,7 @@ TESTS = (
     "ipc::tests::zenoh_grants_rows_are_served_only_to_the_zenoh_service",
     "ipc::tests::zenoh_grants_pages_by_row_cursor_within_the_staged_bound",
 )
-PINNED_TESTS = 365
+PINNED_TESTS = 369
 QUALITY = "just/quality.just"
 
 
@@ -141,7 +141,7 @@ def run_controls() -> int:
     _need(judge_run(honest) == 2, "the honest run was not read as two tests")
     first, second = TESTS
     mutations = (
-        ("no test ran", "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 365 filtered out; finished in 0.00s\n"),
+        ("no test ran", f"running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; {PINNED_TESTS} filtered out; finished in 0.00s\n"),
         ("a third test", honest.replace("running 2 tests", "running 3 tests").replace("2 passed", "3 passed").replace(f"{PINNED_TESTS - 2} filtered out", f"{PINNED_TESTS - 3} filtered out")),
         ("a failed test", honest.replace(f"test {second} ... ok", f"test {second} ... FAILED").replace("2 passed; 0 failed", "1 passed; 1 failed")),
         ("a test of another name", honest.replace(first, "ipc::tests::another_test")),
