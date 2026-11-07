@@ -38,8 +38,8 @@ this repository at commit `67b66e61c9f0036d62f21811428444aa76b3b687`, the
 value every `specs/legacy.zt` row names as `frozenAt`; read a retired item
 as `git show 67b66e61c9f0036d62f21811428444aa76b3b687:.tasks/items/<UUID>.md`.
 A tarball of both directories at that commit, SHA-256
-`3ab56acce355d1caf8b849fc94b5a6fe960f4227b940d9bd8e5aefffc5ed5de4`, is kept
-for the private archive; the archive commit is recorded here once it lands.
+`3ab56acce355d1caf8b849fc94b5a6fe960f4227b940d9bd8e5aefffc5ed5de4`, is in the
+private archive at commit `245ef0ca69d924a085756647c0a15bc20baaabca`.
 Neither participates in current validation: `specs/legacy.zt` carries only
 identity, frozen state, kind, title and the requirement ids an item became.
 
