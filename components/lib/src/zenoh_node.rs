@@ -196,9 +196,13 @@ pub fn denial_line(who: &[u8], class: &[u8]) -> Line<96> {
     line
 }
 
+/// The longest line a node hands to [`Host::write`]. A host's console record must hold this many
+/// bytes, or the wire lines the exams judge are refused at the console.
+pub const MAX_LINE_BYTES: usize = 640;
+
 /// `[<who>] <what> sample=<index> hex=<batch>\n`. The demo's frames are 184 bytes, so 368 hex digits;
 /// a longer batch clips the line, and a clipped line is never emitted.
-pub fn wire_line(who: &[u8], what: &[u8], index: u64, batch: &[u8]) -> Line<640> {
+pub fn wire_line(who: &[u8], what: &[u8], index: u64, batch: &[u8]) -> Line<MAX_LINE_BYTES> {
     let mut line = Line::new();
     line.put(who)
         .put(what)

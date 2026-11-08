@@ -76,7 +76,9 @@ impl Host for Component<'_> {
     }
 
     fn write(&mut self, line: &[u8]) {
-        Line::<256>::new().bytes(line).emit();
+        if !Line::<{ node::MAX_LINE_BYTES }>::new().bytes(line).emit() {
+            fail(b"console line");
+        }
     }
 }
 

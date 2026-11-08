@@ -347,38 +347,33 @@ area :: s.Area = (h.area "planes-mechanism" "Mechanism planes: root, generations
     -- burst waits for about 32 frames ahead of it, while the 2048-byte holder fell from 14.05 ms to 3.03
     -- ms. The wait-set/v1 source vocabulary has no kind for a device completion: every kind but timer
     -- names a slot to drain.
-    (h.planned "01a1b49c-ad0f-717b-8120-0df92eb92080"
+    (h.req "01a1b49c-ad0f-717b-8120-0df92eb92080"
       "In each of the four derived compositions network-service waits on one Notification, the virtio-net driver holds exactly one signal binding on it, and the service's wait set has exactly one device row on that binding's badge, with no drain slot and no other row on that badge."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
-      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.planned "01a1b49c-ad0f-717b-8120-0dfab1fceb8e"
+    (h.req "01a1b49c-ad0f-717b-8120-0dfab1fceb8e"
       "In the sel4-io-tcp-buffers rx-window scenario the median time from a peer data segment to the first guest frame that acknowledges all of it is below 7 ms for the 2048-byte holder. A timer-paced acknowledgment has a median near or above the service's 10 ms idle timer, and a completion-woken one sits near the wake path's own floor of 3 to 4 ms under QEMU TCG. The arm prints the 65536-byte holder's median and judges no bound on it, because each of its 64-segment bursts queues behind the frames ahead of it."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
-      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.planned "01a1b49c-ad0f-717b-8120-0dfbcde5093d"
+    (h.req "01a1b49c-ad0f-717b-8120-0dfbcde5093d"
       "network-service prints exactly one [network-service] wait device wakes=D line with D at least 1 and at most its wait wakes count."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
-      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.planned "01a1b49c-ad0f-717b-8120-0dfc494b7f12"
+    (h.req "01a1b49c-ad0f-717b-8120-0dfc494b7f12"
       "io_tcp_buffers_check, io_tcp_listener_check and zenoh_external_check pass without edits to their checkers or peers."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
-      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
-    (h.planned "01a1b49c-ad0f-717b-8120-0dfd14764b0d"
+    (h.req "01a1b49c-ad0f-717b-8120-0dfd14764b0d"
       "Before it boots, the arm refuses 18 mutations: a missing and a doubled device row and driver binding, a device row on another badge or with a drain slot, another row on the device badge, a device row on another Notification, a missing timer row, a 2048-byte holder's median latency above and at 7 ms, too few acknowledged segments, a missing holder, a missing, doubled, zero and over-count device wake line, and a missing wait wakes line."
       "network-service wakes on the virtio-net driver's completions through a device wait-set source"
-      "link_wake_check fails on main: the zenoh-external arm reports 0 sent batches where 4 are expected, in CI and on an operator host; CI also lacks a linux aarch64 eclipse-zenoh wheel pin"
       {
         h.observedWhere "link-wake-observed" "link_wake_check" h.noPredicates "link_wake_check runs the gates of every changed composition, then the arm, which reads the declarations from the derived manifests and the latencies from the scripted peer's own ledger, so the service cannot report its way to a pass. The 7 ms bound sits between the timer-paced medians of 12 to 14 ms and the completion-woken medians of 3 to 4 ms observed under QEMU TCG. Only the 2048-byte holder is bounded: its window holds two segments, so its latency is the wake latency, while the 65536-byte holder's median is set by the frames queued ahead in a 64-segment burst. The recipe failed on main when it landed, before booting, on the missing driver signal binding.";
       }) with { supersedes = { "01a176b0-d527-7499-92db-e0e29f2cbd3d"; }; };
