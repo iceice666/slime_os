@@ -105,13 +105,14 @@ I1 = "01a1c147-e2e0-7000-8000-000000000001"
 I2 = "01a1c147-e2e0-7000-8000-000000000002"
 
 
-def item_text(slug: str = "e2e-item", uid: str = I1, target: str = "e2e_exam", extra: str = "") -> str:
+def item_text(slug: str = "e2e-item", uid: str = I1, target: str = "e2e_exam", extra: str = "", acceptance: str = "") -> str:
+    acceptance = acceptance or f'h.observedWhere "{target}" {{ h.count "casesObserved" 3; }};'
     return f'''s ::= import "./schema.zt";
 h ::= import "./helpers.zt";
 item :: s.Item = (h.task "{uid}" "{slug}" "e2e" "Fixture" "The e2e fixture item.") with {{
-  owns = {{ "components/e2e/**"; }};
+  owns = {{ "components/e2e/**"; "docs/e2e/**"; }};
   requirements = {{ h.req "cases" "The exam observes three cases." {{ "{target}"; }}; }};
-  acceptance = {{ h.observedWhere "{target}" {{ h.count "casesObserved" 3; }}; }};
+  acceptance = {{ {acceptance} }};
   {extra}
 }};
 item
@@ -144,6 +145,55 @@ def items(clone: Clone) -> None:
     done = clone.spec("tasks", "check")
     ok(done.returncode == 1 and "byte-identical" in done.stderr, "a drifted terminal copy is refused")
     helpers.write_text((clone.root / ".tasks" / "items" / "helpers.zt").read_text())
+
+
+def item_state(clone: Clone, local: bool = False) -> str:
+    import json  # noqa: PLC0415
+
+    done = clone.spec("tasks", "status", "--json", *(["--local"] if local else []))
+    return next((i["state"] for i in json.loads(done.stdout)["items"] if i["slug"] == "e2e-item"), "missing")
+
+
+def item_status(clone: Clone) -> None:
+    """tasks status computes done; T1 refuses an early close; T2 refuses touching a failing item's owns."""
+    clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+    clone.write(".tasks/items/e2e-item.zt", item_text(acceptance='h.observedWhere "e2e_exam" { h.count "casesObserved" 3; }; h.human "looked" "Did a person look?";'))
+    clone.commit("item with a human gate")
+    clone.spec("record", "e2e_exam")
+    done = clone.spec("publish")
+    ok(done.returncode == 0, f"publish the item's record: {done.stderr[-300:]}")
+    ok(item_state(clone) == "claimed", "a mandatory human gate without a record keeps the item claimed")
+    done = clone.spec("tasks", "human", "e2e-item", "looked", "yes", "--signer", "tester", "--key", str(clone.key))
+    ok(done.returncode == 0, f"tasks human signs: {done.stderr[-300:]}")
+    ok(item_state(clone, local=True) == "done", "the item is done once the human gate is signed")
+    clone.spec("publish")
+    ok(item_state(clone) == "done", "done from the evidence ref")
+
+    clone.run("git", "mv", ".tasks/items/e2e-item.zt", ".tasks/terminal/e2e-item.zt")
+    clone.commit("close the item")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 0, f"T1: a done item may enter terminal/: {done.stderr[-300:]}")
+    clone.run("git", "mv", ".tasks/terminal/e2e-item.zt", ".tasks/items/e2e-item.zt")
+    clone.write(".tasks/items/e2e-item.zt", item_text().replace('h.count "casesObserved" 3', 'h.count "casesObserved" 4'))
+    clone.commit("reopen with a failing predicate")
+    ok(item_state(clone) == "failing", "a predicate that does not hold makes the item failing")
+    clone.run("git", "mv", ".tasks/items/e2e-item.zt", ".tasks/terminal/e2e-item.zt")
+    clone.commit("close early")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "T1" in done.stderr, "T1: a failing item may not enter terminal/")
+    clone.run("git", "reset", "-q", "--hard", "HEAD~1")
+
+    clone.write("docs/e2e/note.md", "Touched by a later PR outside the exam's closure.\n")
+    clone.commit("touch the failing item's owns")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "T2" in done.stderr, "T2: touching a failing item's owns is refused")
+    limit = 'knownLimits = { h.knownLimit "failing" "e2e_exam" "the fixture waits" h.agentDefault; };'
+    clone.write(".tasks/items/e2e-item.zt", item_text(extra=limit).replace('h.count "casesObserved" 3', 'h.count "casesObserved" 4'))
+    clone.commit("accept the failure as a known limit")
+    done = clone.spec("tasks", "check", "--base", "HEAD~2")
+    ok(done.returncode == 1 and "approval" in done.stderr and "T2" not in done.stderr, "a new known limit needs an approval")
+    done = clone.spec("tasks", "check", "--base", "HEAD~2", "--approvers", "owner")
+    ok(done.returncode == 0, f"HUMAN_OWNERS approval admits the known limit: {done.stderr[-300:]}")
 
 
 def main() -> int:
@@ -277,6 +327,7 @@ def main() -> int:
         (root / "specs" / "e2e.zti").unlink()
 
         items(clone)
+        item_status(clone)
     finally:
         if args.keep:
             print(f"kept {temporary}")

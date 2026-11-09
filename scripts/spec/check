@@ -103,28 +103,8 @@ def check_area(area: lib.Area, recipes: lib.Recipes, findings: Findings) -> dict
     return seen
 
 
-def changed_files(base: str) -> dict[str, str]:
-    """path -> status letter for base...HEAD (renames report both paths)."""
-    merge_base = lib.git("merge-base", base, "HEAD").strip()
-    out = lib.git("diff", "--name-status", "--find-renames", merge_base, "HEAD")
-    changed: dict[str, str] = {}
-    for line in out.splitlines():
-        parts = line.split("\t")
-        status = parts[0][0]
-        for path in parts[1:]:
-            changed[path] = status
-    return changed
-
-
-def owns_match(path: str, globs: list[str]) -> bool:
-    from fnmatch import fnmatchcase
-
-    for glob in globs:
-        if glob.endswith("/**") and path.startswith(glob[:-2]):
-            return True
-        if fnmatchcase(path, glob):
-            return True
-    return False
+changed_files = lib.changed_files
+owns_match = lib.owns_match
 
 
 def judge_base(base: str, approvers: set[str], enforce_owns: bool, findings: Findings) -> None:

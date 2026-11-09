@@ -131,6 +131,12 @@ spec_record TARGET *ARGS:
 tasks_check:
     python3 scripts/spec/tasks check
 
+# Each work item's computed state from the evidence branch, and its agentDefault
+# share. `--local` also reads build/observations/; `--json` is the reader interface.
+[group('quality')]
+tasks_status *ARGS:
+    python3 scripts/spec/tasks status {{ARGS}}
+
 # Print a work-item skeleton with a fresh UUIDv7: just tasks_new task <slug> --area <area>
 [group('quality')]
 tasks_new *ARGS:
