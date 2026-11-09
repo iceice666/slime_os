@@ -1,0 +1,93 @@
+--| Constructors for `.tasks/items/<slug>.zt`. Import as
+--| `h ::= import "./helpers.zt";`. `scripts/spec/tasks new <kind> <slug>`
+--| prints a skeleton with a fresh UUIDv7.
+s ::= import "./schema.zt";
+t ::= import stdlib.text;
+
+noText :: List Text = {;};
+noPredicates :: List s.Predicate = {;};
+
+agentDefault :: s.Provenance = #agentDefault;
+fromHuman :: Text -> Text -> s.Provenance = quote source => #human { quote =; source =; };
+fromDecision :: Text -> s.Provenance = page => #decision { page =; };
+
+--| Every list field starts empty. Extend with
+--| `with { owns = ...; requirements = ...; acceptance = ...; }`.
+blank :: s.Kind -> Text -> Text -> Text -> Text -> Text -> s.Item
+  = kind id slug area title problem => {
+    schema = s.schemaVersion;
+    id =; slug =; kind =; area =; title =; problem =;
+    parent = "";
+    depends = noText;
+    owns = noText;
+    nonGoals = {;};
+    requirements = {;};
+    acceptance = {;};
+    invariants = {;};
+    decisions = {;};
+    knownLimits = {;};
+  };
+
+--| `h.task <id> <slug> <area> <title> <problem>`.
+task :: Text -> Text -> Text -> Text -> Text -> s.Item = blank #task;
+bug :: Text -> Text -> Text -> Text -> Text -> s.Item = blank #bug;
+--| A milestone must fill owns, nonGoals, requirements, acceptance,
+--| invariants and decisions; `tasks check` refuses an empty one.
+milestone :: Text -> Text -> Text -> Text -> Text -> s.Item = blank #milestone;
+
+--| Acceptance id = justTarget.
+observed :: Text -> s.Acceptance
+  = target => { id = target; mandatory = true; check = #observed { justTarget = target; predicates = noPredicates; }; };
+
+observedWhere :: Text -> List s.Predicate -> s.Acceptance
+  = target predicates => { id = target; mandatory = true; check = #observed { justTarget = target; predicates =; }; };
+
+--| A second acceptance on the same target needs its own id.
+observedAs :: Text -> Text -> List s.Predicate -> s.Acceptance
+  = id target predicates => { id =; mandatory = true; check = #observed { justTarget = target; predicates =; }; };
+
+count :: Text -> Int -> s.Predicate = key equals => #count { key =; equals =; };
+atLeast :: Text -> Int -> s.Predicate = key min => #atLeast { key =; min =; };
+atMost :: Text -> Int -> s.Predicate = key max => #atMost { key =; max =; };
+flag :: Text -> s.Predicate = key => #flag { key =; };
+
+human :: Text -> Text -> s.Acceptance
+  = id question => { id =; mandatory = true; check = #human { question =; }; };
+
+--| Acceptance id = "<interface>/<contractId>/<clauseId>".
+clause :: Text -> Text -> Text -> List s.Backend -> s.Acceptance
+  = interface contractId clauseId backends => {
+    id = t.join "/" { interface; contractId; clauseId; };
+    mandatory = true;
+    check = #clause { interface =; contractId =; clauseId =; backends =; };
+  };
+
+hostSim :: List s.Backend = { #hostSim; };
+
+--| An acceptance that reports `advisory` and never blocks done.
+advisory :: s.Acceptance -> s.Acceptance = acceptance => acceptance with { mandatory = false; };
+
+--| `h.req <id> <statement> <acceptance ids>`, provenance `agentDefault`.
+--| Override with `(h.req ...) with { provenance = h.fromHuman ...; }`.
+req :: Text -> Text -> List Text -> s.Requirement
+  = id statement acceptance => { id =; statement =; acceptance =; provenance = agentDefault; };
+
+nonGoal :: Text -> s.Provenance -> s.NonGoal = statement provenance => { statement =; provenance =; };
+
+invariant :: Text -> Text -> s.Provenance -> s.Invariant
+  = id statement provenance => { id =; statement =; provenance =; };
+
+--| `h.decided <id> <decision> <because> <provenance> <binds>`.
+decided :: Text -> Text -> Text -> s.Provenance -> List Text -> s.Decision
+  = id decision because provenance binds => { id =; decision =; because =; provenance =; binds =; };
+
+--| `h.knownLimit <R1..R4> <subject> <reason> <provenance>`.
+knownLimit :: Text -> Text -> Text -> s.Provenance -> s.KnownLimit
+  = ratchet subject reason provenance => { ratchet =; subject =; reason =; provenance =; };
+
+{
+  noText =; noPredicates =; agentDefault =; fromHuman =; fromDecision =;
+  task =; bug =; milestone =; observed =; observedWhere =; observedAs =;
+  count =; atLeast =; atMost =; flag =; human =; clause =; hostSim =;
+  advisory =; req =; nonGoal =; invariant =; decided =; knownLimit =;
+}

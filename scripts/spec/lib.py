@@ -21,6 +21,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SPECS = ROOT / "specs"
+ITEMS = ROOT / ".tasks" / "items"
+TERMINAL = ROOT / ".tasks" / "terminal"
+ITEM_SCHEMA_VERSION = "task/v1"
+ITEM_SOURCES = ("schema.zt", "helpers.zt")
+ITEM_DIGEST_PREFIX = "slime-task-requirements-digest-v1\n"
 STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 SCHEMA_VERSION = "spec/v1"
 OBSERVATION_SCHEMA = ROOT / "contracts" / "observation" / "v1" / "schema.zt"
@@ -85,12 +90,13 @@ def zutai_json(path: Path) -> object:
         text=True,
         capture_output=True,
     )
+    shown = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
     if process.returncode != 0:
-        raise SpecError(f"{path.relative_to(ROOT)}: zutai-cli json failed (exit {process.returncode})\n{process.stderr}")
+        raise SpecError(f"{shown}: zutai-cli json failed (exit {process.returncode})\n{process.stderr}")
     try:
         return json.loads(process.stdout)
     except json.JSONDecodeError as error:
-        raise SpecError(f"{path.relative_to(ROOT)}: zutai-cli json printed no JSON: {error}") from error
+        raise SpecError(f"{shown}: zutai-cli json printed no JSON: {error}") from error
 
 
 def canonical(value: object) -> bytes:
@@ -134,6 +140,86 @@ def load_area(path: Path) -> Area:
 
 def load_areas() -> list[Area]:
     return [load_area(p) for p in area_files()]
+
+
+@dataclass
+class Item:
+    """A work item: `.tasks/items/<slug>.zt` (open) or `.tasks/terminal/<slug>.zt`."""
+
+    path: Path
+    value: dict
+
+    @property
+    def id(self) -> str:
+        return self.value["id"]
+
+    @property
+    def terminal(self) -> bool:
+        return self.path.parent.name == "terminal"
+
+    @property
+    def where(self) -> str:
+        return self.path.relative_to(ROOT).as_posix() if self.path.is_relative_to(ROOT) else str(self.path)
+
+
+def tag(value: object) -> str:
+    """Union tag of a Zutai value as `zutai-cli json` prints it: `"#t"` or `{tag, payload}`."""
+    if isinstance(value, str):
+        return value.removeprefix("#")
+    return value["tag"] if isinstance(value, dict) else ""
+
+
+def payload(value: object) -> dict:
+    return value.get("payload", {}) if isinstance(value, dict) else {}
+
+
+def item_files(root: Path = ROOT) -> list[Path]:
+    dirs = (root / ".tasks" / "items", root / ".tasks" / "terminal")
+    return sorted(p for d in dirs if d.is_dir() for p in d.glob("*.zt") if p.name not in ITEM_SOURCES)
+
+
+def load_item(path: Path) -> Item:
+    value = zutai_json(path)
+    if not isinstance(value, dict) or value.get("schema") != ITEM_SCHEMA_VERSION:
+        raise SpecError(f"{path}: final value is not a {ITEM_SCHEMA_VERSION} Item")
+    return Item(path, value)
+
+
+def load_items() -> list[Item]:
+    return [load_item(p) for p in item_files()]
+
+
+def load_items_at(rev: str) -> list[Item]:
+    """Items as committed at `rev`, evaluated from a temporary extraction."""
+    listing = git("ls-tree", "-r", "--name-only", rev, ".tasks/", check=False).splitlines()
+    if not any(p.endswith(".zt") for p in listing):
+        return []
+    with tempfile.TemporaryDirectory(prefix="slime-task-base-") as temporary:
+        root = Path(temporary)
+        for name in listing:
+            data = read_blob(rev, name)
+            if data is not None:
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(data)
+        items = []
+        for path in item_files(root):
+            value = zutai_json(path)
+            if isinstance(value, dict) and value.get("schema") == ITEM_SCHEMA_VERSION:
+                items.append(Item(ROOT / path.relative_to(root), value))
+        return items
+
+
+def item_digest(item: dict) -> str:
+    """Digest a signed human record binds to: requirement statements and acceptances.
+
+    Provenance, decisions, invariants and prose are excluded, so editing them
+    does not ask a person again.
+    """
+    bound = {
+        "requirements": [{k: r[k] for k in ("id", "statement", "acceptance")} for r in item["requirements"]],
+        "acceptance": item["acceptance"],
+    }
+    return hashlib.sha256(ITEM_DIGEST_PREFIX.encode() + canonical(bound)).hexdigest()
 
 
 def acceptances(requirement: dict) -> list[tuple[str, dict]]:

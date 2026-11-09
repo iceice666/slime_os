@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Decided by:** the project's human owner, 2026-11-07, delegating the option
 choices to the agent (`proposal/devloop-redesign/decisions.md`)
+**Amended by:** [Work items return on top of living specs](work-item-devloop.md)
+(2026-11-10): the work item returns as the unit of change.
 **Supersedes:** the records *Spec-driven work-item bodies*, *Mandatory
 spec-driven work items* and *No GitHub issue projection* — all three removed
 with the store they described; their text is at the commit `specs/legacy.zt`

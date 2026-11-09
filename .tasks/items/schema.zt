@@ -1,0 +1,117 @@
+--| Work-item schema (task/v1).
+--|
+--| A work item is `.tasks/items/<slug>.zt` while open and
+--| `.tasks/terminal/<slug>.zt` once closed. Its final expression is an
+--| `Item`. One pull request carries the item, the implementation, the exam
+--| and, when the item is done, the move to `terminal/`.
+--|
+--| There is no `state` field. `scripts/spec/tasks status` computes each
+--| acceptance from the `evidence` branch (enforced, failing, claimed,
+--| advisory); an item is done when every mandatory acceptance is enforced.
+--| `.zti` and digests are computed, never committed.
+--|
+--| Zutai refuses an import above the entry file's directory, so
+--| `.tasks/terminal/` carries byte-identical copies of this file and
+--| `helpers.zt`; `scripts/spec/tasks check` refuses a copy that differs.
+
+Kind :: type { #task; #bug; #milestone; };
+
+--| Where a rule came from. `#human` quotes what a person said and names the
+--| session or thread; `#decision` names a `docs/decisions/` page;
+--| `#agentDefault` is a choice no person made. `tasks status` reports the
+--| share of `#agentDefault` per item.
+Provenance :: type {
+  #human: { quote : Text; source : Text; };
+  #decision: { page : Text; };
+  #agentDefault;
+};
+
+--| Conditions on a machine record beyond `passed = true`. A list of
+--| predicates is their conjunction.
+Predicate :: type {
+  #count: { key : Text; equals : Int; };
+  #atLeast: { key : Text; min : Int; };
+  #atMost: { key : Text; max : Int; };
+  #flag: { key : Text; };
+};
+
+--| A backend that can emit a typed trace for an oracle.
+Backend :: type { #hostSim; #qemu; #board; };
+
+--| `#observed`: the target's record at its current closure digest passed
+--| and satisfies every predicate.
+--| `#human`: a person answered yes to `question` in a signed record.
+--| `#clause`: the oracle for `interface` reports the clause checked, with
+--| zero violations on the positive case and a failing negative control, on
+--| every listed backend.
+Check :: type {
+  #observed: { justTarget : Text; predicates : List Predicate; };
+  #human: { question : Text; };
+  #clause: { interface : Text; contractId : Text; clauseId : Text; backends : List Backend; };
+};
+
+--| `mandatory = false` reports `advisory` and never blocks `done`.
+Acceptance :: type { id : Text; mandatory : Bool; check : Check; };
+
+--| `acceptance` names acceptance ids of the same item.
+Requirement :: type {
+  id : Text;
+  statement : Text;
+  acceptance : List Text;
+  provenance : Provenance;
+};
+
+NonGoal :: type { statement : Text; provenance : Provenance; };
+
+Invariant :: type { id : Text; statement : Text; provenance : Provenance; };
+
+--| `Decision: <decision>. Because <because>.` `binds` names requirement or
+--| acceptance ids of the same item.
+Decision :: type {
+  id : Text;
+  decision : Text;
+  because : Text;
+  provenance : Provenance;
+  binds : List Text;
+};
+
+--| An accepted ratchet regression. `ratchet` is `R1` to `R4`; `subject` is
+--| what the ratchet measures (an interface, a crate or a just target).
+--| Adding one needs an approval from a login in `HUMAN_OWNERS`.
+KnownLimit :: type {
+  ratchet : Text;
+  subject : Text;
+  reason : Text;
+  provenance : Provenance;
+};
+
+--| `id` is a UUIDv7 and never changes. `slug` is the file name without
+--| `.zt` and may change. `area` names `specs/<area>.zt`, whose invariants
+--| bind this item. `parent` is "" or an item id; `depends` are item ids.
+--| `owns` are path globs the item may change.
+Item :: type {
+  schema : Text;
+  id : Text;
+  slug : Text;
+  kind : Kind;
+  title : Text;
+  problem : Text;
+  area : Text;
+  parent : Text;
+  depends : List Text;
+  owns : List Text;
+  nonGoals : List NonGoal;
+  requirements : List Requirement;
+  acceptance : List Acceptance;
+  invariants : List Invariant;
+  decisions : List Decision;
+  knownLimits : List KnownLimit;
+};
+
+schemaVersion :: Text = "task/v1";
+
+{
+  Kind =; Provenance =; Predicate =; Backend =; Check =; Acceptance =;
+  Requirement =; NonGoal =; Invariant =; Decision =; KnownLimit =; Item =;
+  schemaVersion =;
+}

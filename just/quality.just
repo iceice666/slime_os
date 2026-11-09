@@ -125,8 +125,21 @@ spec_status *ARGS:
 spec_record TARGET *ARGS:
     python3 scripts/spec/record {{TARGET}} {{ARGS}}
 
-# The CLI's own end-to-end run on a throwaway clone.
+# Work items under .tasks/: schema, ids, links, bound targets and the terminal
+# schema copies (docs/decisions/work-item-devloop.md).
 [group('quality')]
+tasks_check:
+    python3 scripts/spec/tasks check
+
+# Print a work-item skeleton with a fresh UUIDv7: just tasks_new task <slug> --area <area>
+[group('quality')]
+tasks_new *ARGS:
+    python3 scripts/spec/tasks new {{ARGS}}
+
+# The CLI's own end-to-end run on a throwaway clone. Its scripts have no file
+# extension, so the closure resolver cannot see them; the inputs name them.
+[group('quality')]
+[metadata("inputs", "scripts/spec/**", ".tasks/items/schema.zt", ".tasks/items/helpers.zt")]
 spec_e2e:
     python3 scripts/spec/e2e
 

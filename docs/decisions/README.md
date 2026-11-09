@@ -30,6 +30,10 @@ readable and link to the decision that replaced them.
   `scripts/spec/status` computes; supersedes the three records on spec-driven
   work-item bodies, mandatory spec-driven items and the retired Issue
   projection, whose text is in Git at the commit `specs/legacy.zt` names.
+- [Work items return on top of living specs, with machine ratchets](work-item-devloop.md)
+  — accepted; amends the living-spec record: `.tasks/items/<slug>.zt` is the
+  unit of change, four ratchets replace human approval of grader changes,
+  and commit roles separate who writes an exam from who passes it.
 - [Negative controls for product judges](negative-controls-for-product-judges.md)
   — accepted; a negative control is required for every assertion about Slime OS
   itself, and not for assertions about verification or process tooling.

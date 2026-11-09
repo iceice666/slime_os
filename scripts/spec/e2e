@@ -97,6 +97,55 @@ area
 '''
 
 
+def lib_items(root: Path) -> list[Path]:
+    return [*(root / ".tasks" / "items").glob("*.zt"), *(root / ".tasks" / "terminal").glob("*.zt")]
+
+
+I1 = "01a1c147-e2e0-7000-8000-000000000001"
+I2 = "01a1c147-e2e0-7000-8000-000000000002"
+
+
+def item_text(slug: str = "e2e-item", uid: str = I1, target: str = "e2e_exam", extra: str = "") -> str:
+    return f'''s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+item :: s.Item = (h.task "{uid}" "{slug}" "e2e" "Fixture" "The e2e fixture item.") with {{
+  owns = {{ "components/e2e/**"; }};
+  requirements = {{ h.req "cases" "The exam observes three cases." {{ "{target}"; }}; }};
+  acceptance = {{ h.observedWhere "{target}" {{ h.count "casesObserved" 3; }}; }};
+  {extra}
+}};
+item
+'''
+
+
+def items(clone: Clone) -> None:
+    """tasks check: a valid item passes, each malformed one is refused."""
+    clone.write(".tasks/items/e2e-item.zt", item_text())
+    done = clone.spec("tasks", "check")
+    ok(done.returncode == 0, f"tasks check passes a valid item: {done.stderr[-300:]}")
+    refusals = {
+        "slug": ("e2e-item.zt", item_text(slug="other")),
+        "not a UUIDv7": ("e2e-item.zt", item_text(uid="not-a-uuid")),
+        "does not declare": ("e2e-item.zt", item_text(target="no_such_target")),
+        "which is no item": ("e2e-item.zt", item_text(extra=f'parent = "{I2}";')),
+        "already used": ("e2e-copy.zt", item_text(slug="e2e-copy")),
+        "needs a non-empty": ("e2e-item.zt", item_text().replace("h.task", "h.milestone")),
+        "ratchet in": ("e2e-item.zt", item_text(extra='knownLimits = { h.knownLimit "R9" "x" "y" h.agentDefault; };')),
+        "does not exist": ("e2e-item.zt", item_text(extra='nonGoals = { h.nonGoal "x" (h.fromDecision "docs/none.md"); };')),
+    }
+    for label, (name, text) in refusals.items():
+        clone.write(f".tasks/items/{name}", text)
+        done = clone.spec("tasks", "check")
+        ok(done.returncode == 1 and label in done.stderr, f"tasks check refuses ({label}): {done.stderr[-300:]}")
+        clone.write(".tasks/items/e2e-item.zt", item_text())
+        (clone.root / ".tasks" / "items" / "e2e-copy.zt").unlink(missing_ok=True)
+    helpers = clone.root / ".tasks" / "terminal" / "helpers.zt"
+    helpers.write_text(helpers.read_text() + "-- drift\n")
+    done = clone.spec("tasks", "check")
+    ok(done.returncode == 1 and "byte-identical" in done.stderr, "a drifted terminal copy is refused")
+    helpers.write_text((clone.root / ".tasks" / "items" / "helpers.zt").read_text())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--keep", action="store_true")
@@ -106,7 +155,7 @@ def main() -> int:
         root = temporary / "repo"
         subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", f"file://{ROOT}", str(root)], check=True)
         # The clone's working tree must carry what the real checkout has uncommitted in scripts/spec and specs.
-        for sub in ("scripts/spec", "specs", "contracts/observation", "HUMAN_OWNERS"):
+        for sub in ("scripts/spec", "specs", ".tasks", "contracts/observation", "HUMAN_OWNERS"):
             source = ROOT / sub
             if source.is_dir():
                 shutil.rmtree(root / sub, ignore_errors=True)
@@ -120,7 +169,7 @@ def main() -> int:
         public = key.with_suffix(".pub").read_text().split()
         clone.write("specs/allowed_signers", f'tester namespaces="slime-spec" {public[0]} {public[1]}\n')
         clone.write("HUMAN_OWNERS", "owner\n")
-        for stale in (root / "specs").glob("*.zt"):
+        for stale in [*(root / "specs").glob("*.zt"), *lib_items(root)]:
             if stale.name not in {"schema.zt", "helpers.zt"}:
                 stale.unlink()
         clone.write("specs/e2e.zt", area_text())
@@ -226,12 +275,18 @@ def main() -> int:
         done = clone.spec("check")
         ok(done.returncode == 1 and ".zti" in done.stderr, ".zti under specs/ is refused")
         (root / "specs" / "e2e.zti").unlink()
+
+        items(clone)
     finally:
         if args.keep:
             print(f"kept {temporary}")
         else:
             shutil.rmtree(temporary, ignore_errors=True)
     print(f"e2e: {PASSED} passed, {len(FAILED)} failed")
+    sys.path.insert(0, str(ROOT / "scripts" / "lib"))
+    import devloop_observations  # noqa: PLC0415
+
+    devloop_observations.record(casesObserved=PASSED + len(FAILED), casesFailed=len(FAILED))
     return 1 if FAILED else 0
 
 
