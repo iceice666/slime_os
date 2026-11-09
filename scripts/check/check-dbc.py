@@ -43,6 +43,9 @@ import zutai_cli  # noqa: E402
 from harness import ROOT  # noqa: E402
 
 SOURCES = ("schema.zt", "oracle.zt", "fixture.zt")
+# The tree under judgement. scripts/spec/ratchet sets it so the base's
+# checker judges a pull request's head (ratchet R2).
+TREE = Path(os.environ.get("DBC_TREE") or ROOT)
 RUN = 'o ::= import "./oracle.zt";\nf ::= import "./fixture.zt";\nb ::= import "./observed.zt";\no.inspect f b\n'
 
 
@@ -66,7 +69,7 @@ def flag(contract: str, clause: str) -> str:
 def build(adapter: Path, target: Path) -> Path:
     done = subprocess.run(
         ["cargo", "build", "--quiet", "--manifest-path", str(adapter / "Cargo.toml"), "--target-dir", str(target)],
-        cwd=ROOT,
+        cwd=TREE,
         check=False,
         text=True,
         capture_output=True,
@@ -122,7 +125,7 @@ def render(cases: list[dict]) -> str:
 
 def mutant(directory: Path, adapter: Path, mutation: dict, scratch: Path) -> Path:
     """A copy of the adapter wired to a copy of the mutated crate, outside every workspace."""
-    file = ROOT / mutation["file"]
+    file = TREE / mutation["file"]
     crate = next(p for p in file.parents if (p / "Cargo.toml").is_file())
     root = scratch / mutation["id"]
     shutil.copytree(crate, root / "crate", ignore=shutil.ignore_patterns("target"))
@@ -147,7 +150,7 @@ def mutant(directory: Path, adapter: Path, mutation: dict, scratch: Path) -> Pat
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
-    directory = (ROOT / sys.argv[1]).resolve()
+    directory = (TREE / sys.argv[1]).resolve()
     interface = evaluate(directory / "clauses.zt")
     fixture = evaluate(directory / "fixture.zt")
     tampers = evaluate(directory / "bad-traces.zt")
@@ -155,6 +158,8 @@ def main() -> int:
     clauses = [(c["id"], cl["id"], cl["how"]) for c in interface["contracts"] for cl in c["clauses"]]
     checked = {(c, cl) for c, cl, how in clauses if how == "#oracle"}
     clause_ids = {cl for _, cl in checked}
+    if len(clause_ids) != len(checked):
+        raise SystemExit("dbc: two contracts of one interface check the same clause id; coverage is keyed by clause id")
     fixture_json = json.dumps(fixture)
     failures: list[str] = []
     refused = attempted = 0
@@ -168,8 +173,8 @@ def main() -> int:
         for exam in interface["exams"]:
             if exam["backend"] != "hostSim":
                 continue
-            adapter = ROOT / exam["adapter"]
-            honest = observe(build(adapter, ROOT / "build" / "dbc" / interface["id"]), fixture_json)
+            adapter = TREE / exam["adapter"]
+            honest = observe(build(adapter, TREE / "build" / "dbc" / interface["id"]), fixture_json)
             summary = oracle.judge(honest)
             violations += len(summary["violations"])
             for violation in summary["violations"]:
