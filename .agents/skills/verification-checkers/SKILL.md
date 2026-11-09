@@ -79,6 +79,15 @@ judges on every boundary it claims:
   reads PCAP. Either way, its presence is recorded from the event that
   produced it, not from a poll that may miss a short-lived peer.
 
+## Executable contracts
+
+`scripts/check/check-dbc.py` is the one checker for every executable
+contract under `contracts/*/v*/clauses.zt`. Add an interface as a new
+contract directory and an adapter crate under `verification/dbc/`, not as a
+new checker. The adapter stays outside the root workspace, so neither it nor
+a mutated copy of the implementation enters the product `Cargo.lock`. The
+tamper and mutation lists are the negative controls for the oracle's claims.
+
 ## Pinned external artifacts
 
 A pinned external artifact (wheel, crate, image, toolchain) is verified by

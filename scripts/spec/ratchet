@@ -6,6 +6,12 @@
 
 Each ratchet maps a subject to a number (docs/decisions/work-item-devloop.md):
 
+  R1 clauseCount       clauses per interface (`contracts/*/v*/clauses.zt`);
+                       must not fall.
+  R2 clauseCoverage    clauses `scripts/check/check-dbc.py` covers with a
+                       positive case and a refused negative control, over
+                       all clauses, per interface; must not fall.
+
   R3 mutantSurvival    missed / (caught + missed + timeout) of `cargo
                        mutants` over the files an item owns inside a crate
                        listed in specs/targets.toml [mutants]; must not rise.
@@ -16,15 +22,16 @@ Each ratchet maps a subject to a number (docs/decisions/work-item-devloop.md):
 With `--base`, a subject whose measure regressed passes only when an item
 at HEAD carries a known limit naming that ratchet and subject which the base
 did not carry, and a login in HUMAN_OWNERS is among `--approvers`. Raising
-or keeping a measure needs nobody. R3 runs `cargo mutants` twice (base
-worktree and HEAD) and needs the product toolchain; the other ratchets read
-sources only.
+or keeping a measure needs nobody. R2 runs each interface's exam and R3
+runs `cargo mutants`, both in a base worktree and at HEAD, so they need the
+product toolchain; R1 and R4 read sources only.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -66,6 +73,26 @@ def r4(areas: list[lib.Area], items: list[lib.Item]) -> dict[str, float]:
                 body = lib.payload(acceptance["check"])
                 note(body["justTarget"], body["predicates"])
     return floors
+
+
+def r1(root: Path) -> dict[str, float]:
+    return {i["id"]: len(lib.clauses(i)) for i in lib.load_interfaces(root).values()}
+
+
+def r2(root: Path) -> dict[str, float]:
+    """Covered over all clauses, from each interface's exam run in `root`."""
+    measures: dict[str, float] = {}
+    for path in lib.interface_files(root):
+        interface = lib.zutai_json(path)
+        target = "ratchet_r2_" + "".join(c if c.isalnum() else "_" for c in interface["id"])
+        report = root / "build" / "devloop-observations" / f"{target}.json"
+        report.unlink(missing_ok=True)
+        directory = path.parent.relative_to(root).as_posix()
+        subprocess.run([sys.executable, "scripts/check/check-dbc.py", directory], cwd=root, env=os.environ | {"DEVLOOP_JUST_TARGET": target}, check=False)
+        counts = json.loads(report.read_text()) if report.is_file() else {}
+        measures[interface["id"]] = counts.get("clausesCovered", 0) / max(1, counts.get("clauses", 0))
+        print(f"[ratchet] R2 {interface['id']} @ {root.name}: {counts.get('clausesCovered', 0)}/{counts.get('clauses', 0)} covered", file=sys.stderr)
+    return measures
 
 
 def mutant_crates() -> dict[str, str]:
@@ -115,6 +142,10 @@ def r3(items: list[lib.Item], root: Path, files: dict[str, list[str]]) -> dict[s
 
 def measure(only: set[str], areas: list[lib.Area], items: list[lib.Item], root: Path, r3_files: dict[str, list[str]]) -> dict[tuple[str, str], float]:
     table: dict[tuple[str, str], float] = {}
+    if "R1" in only:
+        table.update({("R1", s): v for s, v in r1(root).items()})
+    if "R2" in only:
+        table.update({("R2", s): v for s, v in r2(root).items()})
     if "R4" in only:
         table.update({("R4", s): v for s, v in r4(areas, items).items()})
     if "R3" in only and r3_files:
@@ -180,7 +211,7 @@ def main() -> int:
     changed = lib.changed_files(args.base)
     touched = [i for i in items if i.where in changed]
     r3_files = owned_files(touched, lib.ROOT) if "R3" in only else {}
-    base_root = worktree(merge_base) if r3_files else lib.ROOT
+    base_root = worktree(merge_base) if r3_files or only & {"R1", "R2"} else lib.ROOT
     try:
         before = measure(only, lib.load_areas_at(merge_base), base_items, base_root, r3_files)
     finally:

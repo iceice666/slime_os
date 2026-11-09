@@ -1,0 +1,94 @@
+--| Stimulus for the spawn/v2 argument-framing oracle. It states requests and
+--| frames only; `oracle.zt` decides what each must yield. Every refusal a
+--| case sends is followed by a frame the contract accepts, so a refusal that
+--| changed state shows as a later disagreement.
+s ::= import "./schema.zt";
+
+payloadBytes :: Int = 48;
+
+request :: Int -> Int -> Int -> Int -> Int -> s.Request
+  = count a b c d => { argumentCount = count; argumentBytes = a + b + c + d; lengths = { a; b; c; d; }; };
+
+--| A well-formed frame; `with` makes it malformed in one field.
+frame :: Int -> Int -> Int -> Bool -> s.Frame
+  = sequence offset length final => {
+    sequence =; offset =; length =; final =;
+    extraFlags = 0;
+    magicOk = true;
+    versionOk = true;
+    fill = offset;
+    padding = 0;
+  };
+
+push :: s.Frame -> s.Step
+  = f => #push {
+    sequence = f.sequence; offset = f.offset; length = f.length; final = f.final;
+    extraFlags = f.extraFlags; magicOk = f.magicOk; versionOk = f.versionOk;
+    fill = f.fill; padding = f.padding;
+  };
+
+read :: Int -> s.Step = index => #read { index =; };
+
+--| One 4-byte argument; frame 0 carries two bytes.
+first :: s.Frame = frame 0 0 2 false;
+last :: s.Frame = frame 1 2 2 true;
+
+fixture :: s.Fixture = {
+  schema = s.fixtureVersion;
+  cases = {
+    {
+      id = "four-arguments-256-bytes";
+      request = request 4 64 64 64 64;
+      steps = {
+        read 0;
+        push (frame 0 0 48 false); push (frame 1 48 48 false); push (frame 2 96 48 false);
+        push (frame 3 144 48 false); push (frame 4 192 48 false);
+        read 3;
+        push (frame 5 240 16 true);
+        read 0; read 1; read 2; read 3; read 4;
+      };
+    };
+    {
+      id = "empty-arguments-need-a-final-frame";
+      request = request 2 0 0 0 0;
+      steps = { read 0; push (frame 0 0 0 true); read 0; read 1; read 2; };
+    };
+    {
+      id = "no-arguments-are-complete";
+      request = request 0 0 0 0 0;
+      steps = { read 0; push (frame 0 0 0 true); };
+    };
+    {
+      id = "single-final-frame";
+      request = request 1 4 0 0 0;
+      steps = { push (frame 0 0 4 true); read 0; push last; push (frame 1 4 0 true); };
+    };
+    {
+      id = "refusals-keep-state";
+      request = request 1 4 0 0 0;
+      steps = {
+        push (frame 0 0 2 true);
+        push first;
+        read 0;
+        push first;
+        push (frame 2 2 2 true);
+        push (frame 1 3 1 true);
+        push (frame 1 2 3 true);
+        push (frame 1 2 3 false);
+        push (frame 1 2 1 true);
+        push (frame 1 2 2 false);
+        push (frame 1 2 0 false);
+        push (last with { extraFlags = 2; });
+        push (last with { versionOk = false; });
+        push (last with { magicOk = false; });
+        push (last with { padding = 1; });
+        push (last with { length = payloadBytes + 1; });
+        push last;
+        read 0;
+        push last;
+      };
+    };
+  };
+};
+
+fixture

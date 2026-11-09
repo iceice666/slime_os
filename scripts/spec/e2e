@@ -222,6 +222,27 @@ def ratchets(clone: Clone) -> None:
     ok(done.returncode == 0, "R4: raising a floor needs nobody")
 
 
+def clauses(clone: Clone) -> None:
+    """tasks check resolves h.clause; R1 refuses a deleted clause."""
+    def clause_item(clause: str) -> str:
+        return item_text(acceptance=f'h.observed "e2e_exam"; h.clause "spawn-arguments" "argument-framing" "{clause}" h.hostSim;')
+
+    for clause, label in (("no-such-clause", "names no clause"), ("refusal-releases-capabilities", "unchecked clause")):
+        clone.write(".tasks/items/e2e-item.zt", clause_item(clause))
+        done = clone.spec("tasks", "check")
+        ok(done.returncode == 1 and label in done.stderr, f"h.clause refused ({label}): {done.stderr[-300:]}")
+    clone.write(".tasks/items/e2e-item.zt", item_text())
+    clone.commit("item without clauses")
+    path = clone.root / "contracts" / "spawn-arguments-dbc" / "v1" / "clauses.zt"
+    text = path.read_text()
+    start = text.index("        {\n          id = \"refusal-releases-capabilities\"")
+    end = text.index("        };\n", start) + len("        };\n")
+    path.write_text(text[:start] + text[end:])
+    clone.commit("delete a clause")
+    done = clone.spec("ratchet", "--base", "HEAD~1", "--only", "R1")
+    ok(done.returncode == 1 and "R1 spawn-arguments: 7 -> 6" in done.stderr, f"R1: a deleted clause is refused: {done.stderr[-300:]}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--keep", action="store_true")
@@ -231,7 +252,7 @@ def main() -> int:
         root = temporary / "repo"
         subprocess.run(["git", "clone", "-q", "--no-local", "--depth", "1", f"file://{ROOT}", str(root)], check=True)
         # The clone's working tree must carry what the real checkout has uncommitted in scripts/spec and specs.
-        for sub in ("scripts/spec", "specs", ".tasks", "contracts/observation", "HUMAN_OWNERS"):
+        for sub in ("scripts/spec", "specs", ".tasks", "just", "contracts/observation", "contracts/spawn-arguments-dbc", "verification/dbc", "HUMAN_OWNERS"):
             source = ROOT / sub
             if source.is_dir():
                 shutil.rmtree(root / sub, ignore_errors=True)
@@ -355,6 +376,7 @@ def main() -> int:
         items(clone)
         item_status(clone)
         ratchets(clone)
+        clauses(clone)
     finally:
         if args.keep:
             print(f"kept {temporary}")

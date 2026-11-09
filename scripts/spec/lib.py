@@ -611,6 +611,7 @@ class Evidence:
         self.images = ImageResolver()
         self._closures: dict[str, Closure | None] = {}
         self._records: dict[str, tuple[str, str, dict | None]] = {}
+        self.interfaces: dict[str, dict] | None = None
 
     def closure(self, target: str) -> Closure | None:
         if target not in self._closures:
@@ -724,9 +725,75 @@ def item_acceptance_state(acceptance: dict, item: dict, evidence: Evidence) -> t
     return state, detail
 
 
+INTERFACE_VERSION = "dbc/v1"
+
+
+def interface_files(root: Path = ROOT) -> list[Path]:
+    """Every executable contract: `contracts/<name>/v<N>/clauses.zt`."""
+    return sorted(root.glob("contracts/*/v*/clauses.zt"))
+
+
+def load_interfaces(root: Path = ROOT) -> dict[str, dict]:
+    """interface id -> evaluated `Interface`."""
+    found = {}
+    for path in interface_files(root):
+        value = zutai_json(path)
+        if not isinstance(value, dict) or value.get("schema") != INTERFACE_VERSION:
+            raise SpecError(f"{path}: final value is not a {INTERFACE_VERSION} Interface")
+        found[value["id"]] = value
+    return found
+
+
+def load_interfaces_at(rev: str) -> dict[str, dict]:
+    listing = git("ls-tree", "-r", "--name-only", rev, "contracts/", check=False).splitlines()
+    directories = {str(Path(p).parent) for p in listing if re.fullmatch(r"contracts/[^/]+/v[^/]+/clauses\.zt", p)}
+    if not directories:
+        return {}
+    with tempfile.TemporaryDirectory(prefix="slime-dbc-base-") as temporary:
+        root = Path(temporary)
+        for name in listing:
+            if str(Path(name).parent) in directories and name.endswith(".zt"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(read_blob(rev, name) or b"")
+        return load_interfaces(root)
+
+
+def clauses(interface: dict) -> list[tuple[str, dict]]:
+    """(contract id, clause) for every clause of an interface."""
+    return [(contract["id"], clause) for contract in interface["contracts"] for clause in contract["clauses"]]
+
+
+def clause_flag(contract: str, clause: str) -> str:
+    """The record flag scripts/check/check-dbc.py sets for a covered clause."""
+    return re.sub(r"[^A-Za-z0-9_]", "_", f"covered__{contract}__{clause}")
+
+
+def clause_targets(body: dict, interfaces: dict[str, dict]) -> list[str]:
+    """Exam targets that decide an `h.clause` acceptance, one per listed backend."""
+    interface = interfaces.get(body["interface"], {"exams": []})
+    wanted = {tag(b) for b in body["backends"]}
+    return [exam["justTarget"] for exam in interface["exams"] if exam["backend"] in wanted]
+
+
 def clause_state(body: dict, evidence: Evidence) -> tuple[str, str]:
-    """A contract clause has no oracle until the clause registry exists."""
-    return "claimed", f"no oracle record for {body['interface']}/{body['contractId']}/{body['clauseId']}"
+    """enforced when every listed backend's exam passed with the clause covered and no violation."""
+    if evidence.interfaces is None:
+        evidence.interfaces = load_interfaces()
+    targets = clause_targets(body, evidence.interfaces)
+    if len(targets) != len(body["backends"]):
+        return "failing", f"interface {body['interface']} has no exam for every listed backend"
+    key = clause_flag(body["contractId"], body["clauseId"])
+    states = []
+    for target in targets:
+        state, detail, record = evidence.record(target)
+        if state == "enforced" and record is not None:
+            flags = {f["key"]: f["value"] for f in record["flags"]}
+            counts = {c["key"]: c["value"] for c in record["counts"]}
+            if flags.get(key) is not True or counts.get("violations", 1) != 0:
+                state, detail = "failing", f"{target}: {key} is {flags.get(key)}, violations {counts.get('violations')}"
+        states.append((state, f"{target}: {detail}"))
+    worst = min(states, key=lambda s: ITEM_ORDER[s[0]])
+    return worst
 
 
 ITEM_ORDER = {"failing": 0, "claimed": 1, "advisory": 2, "enforced": 3}

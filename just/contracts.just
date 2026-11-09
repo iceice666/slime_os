@@ -193,3 +193,11 @@ data_fabric_trace_check: contracts_check sel4_trace_check
 
 [group('contracts')]
 sample_descriptor_check: contracts_check sel4_sample_check
+
+# Executable contract for spawn/v2 argument framing: the host-sim adapter drives
+# slime-proto, contracts/spawn-arguments-dbc/v1/oracle.zt judges the trace, and
+# every tamper and mutation must make the oracle report its clause.
+[group('contracts')]
+[metadata("inputs", "contracts/spawn-arguments-dbc/**", "verification/dbc/spawn-arguments/**", "components/proto/**")]
+dbc_spawn_arguments_check:
+    python3 scripts/check/check-dbc.py contracts/spawn-arguments-dbc/v1

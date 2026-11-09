@@ -38,7 +38,10 @@ def claimed(include_failing: bool = False) -> list[str]:
     evidence = lib.Evidence()
     wanted = {"claimed", "failing"} if include_failing else {"claimed"}
     bound = {p["justTarget"] for a in lib.load_areas() for r in a.requirements if not r["planned"] for t, p in lib.acceptances(r) if t == "observed"}
-    bound |= {lib.payload(a["check"])["justTarget"] for i in lib.load_items() for a in i.value["acceptance"] if lib.tag(a["check"]) == "observed"}
+    items = lib.load_items()
+    interfaces = lib.load_interfaces()
+    bound |= {lib.payload(a["check"])["justTarget"] for i in items for a in i.value["acceptance"] if lib.tag(a["check"]) == "observed"}
+    bound |= {t for i in items for a in i.value["acceptance"] if lib.tag(a["check"]) == "clause" for t in lib.clause_targets(lib.payload(a["check"]), interfaces)}
     targets = {t for t in bound if evidence.record(t)[0] in wanted}
     return sorted(targets)
 
