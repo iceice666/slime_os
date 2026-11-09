@@ -67,7 +67,13 @@ refuses a move unless the item is done (T1). It also refuses a PR that
 touches the `owns` of an item whose mandatory acceptance is failing at its
 current closure digest (T2). The PR either changes that closure, which
 re-runs the exam after the merge, or adds `h.knownLimit "failing"
-"<acceptance id>" ...` with an approval from `HUMAN_OWNERS`.
+"<acceptance id>" ...` with an approval from `HUMAN_OWNERS`. CI cannot run
+the exam itself, so a changed closure is a fix attempt, not a proven fix.
+A mandatory acceptance the base carried must not be removed, made advisory,
+moved to another target, or lose a predicate or backend without
+`h.knownLimit "acceptance" "<id>"` (T4); a tighter `atLeast` or `atMost` is
+not a loss. Deleting an item cancels it and needs an approval (T5). A
+closed item is not edited; moving it back to `items/` reopens it (T6).
 
 An item tree is a track: an item with no parent and its descendants. At
 most three tracks are open at once. Two open tracks must not own an
@@ -114,7 +120,7 @@ at the head. CI runs R1 and R4 in the `spec` job, and R2 and R3 in
 | Id | Subject | Measure | Must not |
 | --- | --- | --- | --- |
 | R1 | interface | clauses in its `clauses.zt` | fall |
-| R2 | interface | covered clauses over all clauses, from its exam | fall |
+| R2 | interface | covered clauses over all clauses, judged at both ends by the base's `check-dbc.py` | fall |
 | R3 | crate in `specs/targets.toml` `[mutants]` | `cargo mutants` survival over the files the PR's items own in it | rise |
 | R4 | just target | highest `negativeControls*` floor an area or item declares | fall |
 
@@ -194,7 +200,7 @@ No person approves a grader change. Four machine checks run instead
 | --- | --- |
 | `scripts/spec/roles --base` | a commit that touches a classified path without exactly one `Devloop-Role:` trailer, or a path its role does not admit |
 | `scripts/spec/ratchet --base` | a fall in R1, R2 or R4, or a rise in R3, without a new known limit and a `HUMAN_OWNERS` approval |
-| `scripts/spec/tasks check --base` | an item entering `terminal/` while not done (T1); a touch on a failing item's `owns` (T2) |
+| `scripts/spec/tasks check --base` | closing an item that is not done (T1), a touch on a failing item's `owns` (T2), a product path under no open item (T3), a weakened mandatory acceptance (T4), a cancelled item without approval (T5), an edit to a closed item (T6) |
 | `scripts/spec/check --base --enforce-owns` | a touched product file under no area's `owns` (rule 4) |
 
 Role path classes (`scripts/spec/roles --classify <path>` prints one):
@@ -202,15 +208,21 @@ Role path classes (`scripts/spec/roles --classify <path>` prints one):
 | Class | Paths | Roles |
 | --- | --- | --- |
 | clause | `clauses.zt`, `oracle.zt`, `fixture.zt`, `schema.zt` of an executable contract | spec-writer |
-| control | `bad-traces.zt`, `mutations.zt` of an executable contract; `scripts/check/**` | breaker |
+| control | `bad-traces.zt`, `mutations.zt` of an executable contract; `scripts/check/**`, `scripts/lib/**` | breaker |
 | product | `components/`, `slime-root/`, `boot-contracts/`, other `contracts/**`, `verification/dbc/**` | implementer |
 | recipe | `Justfile`, `just/**` | implementer, breaker |
 | item | `.tasks/**`, `specs/*.zt` | spec-writer, implementer |
+| process | `scripts/spec/**`, `.github/**`, `HUMAN_OWNERS`, `specs/allowed_signers`, `specs/targets.toml`, the item schema and helpers, `contracts/observation/**` | any role, plus a `HUMAN_OWNERS` approval |
 
-A commit that touches only unclassified paths (`docs/`, `scripts/spec/`,
-`scripts/lib/`, workflows) needs no trailer. One pull request may carry
-commits of every role. The only human approval left is a ratchet regression
-or a failing known limit. An agent account never belongs in `HUMAN_OWNERS`;
+A commit that touches only unclassified paths (`docs/`, most of `specs/`)
+needs no trailer. One pull request may carry commits of every role. A human
+approval is left for four things: a ratchet regression, a known limit for a
+failing or weakened acceptance, a cancelled item, and a process path, whose
+code runs these gates. `HUMAN_OWNERS` is read at the base, and only the
+latest review of each login on the head commit counts
+(`scripts/spec/approvers`). `.github/workflows/approvals.yml` runs the
+approval-gated checks again when a review arrives. `ratchet_mutants` must be
+re-run by hand after a late approval. An agent account never belongs in `HUMAN_OWNERS`;
 an approval from one satisfies nothing.
 
 A new product path needs an `owns` glob in the area that promises its

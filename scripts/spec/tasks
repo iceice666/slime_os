@@ -25,7 +25,17 @@ digest, that item must carry a known limit `failing` naming the acceptance;
 a known limit the diff adds needs an approval from `HUMAN_OWNERS`.
 
 T3: every product path the diff touches falls under the owns of an open
-item, or of an item the diff closes; derived closure sources are exempt.
+item, or the base owns of an item the diff closes; derived closure sources
+are exempt. T4: a mandatory acceptance the base carried must not be
+removed, made advisory, moved to another target, or lose a predicate or a
+backend, unless the item carries `h.knownLimit "acceptance" "<id>"`. T5:
+deleting an item needs a HUMAN_OWNERS approval. T6: an item already in
+`terminal/` is not edited; moving it back to `items/` reopens it.
+
+T2 judges the state at the head's closure digest. A diff that changes the
+failing exam's closure makes it claimed, so CI admits it as a fix attempt
+and the Evidence workflow judges it after the merge; only a diff that
+touches the owns and leaves that closure unchanged is refused.
 
 `check` also refuses more than three open item trees, an open item whose
 owns overlap another open tree's (the later id waits), and an owns glob
@@ -61,7 +71,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
-RATCHETS = ("R1", "R2", "R3", "R4", "failing")
+RATCHETS = ("R1", "R2", "R3", "R4", "failing", "acceptance")
 SHARED = ("components/lib/", "scripts/lib/")
 MAX_TRACKS = 3
 PRODUCT_PREFIXES = ("components/", "slime-root/", "contracts/", "boot-contracts/")
@@ -75,13 +85,17 @@ def literal(glob: str) -> str:
 
 
 def overlap(a: str, b: str, files: list[str]) -> bool:
-    """Some path can match both globs: a tracked file does, or one literal path matches the other, or two subtree globs nest."""
+    """Some path may match both globs. Conservative: a nested literal prefix counts
+    when the shorter glob crosses directories or the longer adds no directory."""
     if any(lib.owns_match(f, [a]) and lib.owns_match(f, [b]) for f in files):
         return True
     if not WILD.search(a) or not WILD.search(b):
         path, glob = (a, b) if not WILD.search(a) else (b, a)
         return lib.owns_match(path, [glob])
-    return a.endswith("/**") and b.endswith("/**") and (literal(a).startswith(literal(b)) or literal(b).startswith(literal(a)))
+    short, long = sorted((a, b), key=lambda g: len(literal(g)))
+    if not literal(long).startswith(literal(short)):
+        return False
+    return "**" in short or "/" not in literal(long)[len(literal(short)):]
 
 
 def root_of(item: lib.Item, by_id: dict[str, lib.Item]) -> str:
@@ -232,34 +246,76 @@ def statuses(items: list[lib.Item], evidence: lib.Evidence) -> list[dict]:
     return report
 
 
+def implies(new: dict, old: dict) -> bool:
+    """The predicate `new` holds only where `old` holds: equal, or a tighter bound on the same key."""
+    if new == old:
+        return True
+    kind, body, was = lib.tag(new), lib.payload(new), lib.payload(old)
+    if kind != lib.tag(old) or body.get("key") != was.get("key"):
+        return False
+    return (kind == "atLeast" and body["min"] >= was["min"]) or (kind == "atMost" and body["max"] <= was["max"])
+
+
+def weakened(old: dict, new: dict | None) -> str | None:
+    """Why `new` judges less than the mandatory acceptance `old`, or None."""
+    if new is None:
+        return "removed"
+    if not new["mandatory"]:
+        return "made advisory"
+    if lib.tag(old["check"]) != lib.tag(new["check"]):
+        return "changed kind"
+    before, after = lib.payload(old["check"]), lib.payload(new["check"])
+    if before.get("justTarget") != after.get("justTarget"):
+        return "moved to another target"
+    if not all(any(implies(q, p) for q in after.get("predicates", [])) for p in before.get("predicates", [])):
+        return "lost or changed a predicate"
+    if not all(b in after.get("backends", []) for b in before.get("backends", [])):
+        return "lost a backend"
+    return None
+
+
 def judge_base(base: str, approvers: set[str], items: list[lib.Item], errors: list[str]) -> None:
     changed = lib.changed_files(base)
     merge_base = lib.git("merge-base", base, "HEAD").strip()
     before = {i.id: i for i in lib.load_items_at(merge_base)}
+    now = {i.id: i for i in items}
     evidence = lib.Evidence()
     by_id = {r["id"]: r for r in statuses(items, evidence)}
     reasons: list[str] = []
+    for old in before.values():
+        if old.id not in now:
+            reasons.append(f"T5: item {old.value['slug']} is deleted (cancelled)")
     for item in items:
         row, old = by_id[item.id], before.get(item.id)
+        if old and old.terminal and item.terminal and lib.canonical(old.value) != lib.canonical(item.value):
+            errors.append(f"T6: {item.where} was already closed; reopen it by moving it back to items/ instead of editing it")
+        limits = {(k["ratchet"], k["subject"]) for k in item.value["knownLimits"]}
+        added = {(k["ratchet"], k["subject"], k["reason"]) for k in item.value["knownLimits"]}
+        added -= {(k["ratchet"], k["subject"], k["reason"]) for k in (old.value["knownLimits"] if old else [])}
+        reasons += [f"known limit {r} {s} added to {item.value['slug']}" for r, s, _ in sorted(added)]
+        if old:
+            heads = {a["id"]: a for a in item.value["acceptance"]}
+            for acceptance in old.value["acceptance"]:
+                why = weakened(acceptance, heads.get(acceptance["id"])) if acceptance["mandatory"] else None
+                if why and ("acceptance", acceptance["id"]) not in limits:
+                    errors.append(f"T4: {item.value['slug']} acceptance {acceptance['id']} {why}; add h.knownLimit \"acceptance\" \"{acceptance['id']}\"")
         if item.terminal and not (old and old.terminal) and row["state"] != "done":
             errors.append(f"T1: {item.where} enters terminal/ but its state is {row['state']}")
-        limits = {(k["ratchet"], k["subject"]) for k in item.value["knownLimits"]}
-        added = limits - {(k["ratchet"], k["subject"]) for k in (old.value["knownLimits"] if old else [])}
-        reasons += [f"known limit {r} {s} added to {item.value['slug']}" for r, s in sorted(added)]
         if not any(lib.owns_match(p, item.value["owns"]) for p in changed):
             continue
         for acc in row["acceptances"]:
             if acc["mandatory"] and acc["state"] == "failing" and ("failing", acc["id"]) not in limits:
                 errors.append(f"T2: the diff touches the owns of {item.value['slug']}, whose acceptance {acc['id']} is failing ({acc['reason']}); fix it or add h.knownLimit \"failing\" \"{acc['id']}\"")
-    owned = [g for i in items if not i.terminal or i.where in changed for g in i.value["owns"]]
+    opened = [i for i in items if not i.terminal or (i.id in before and not before[i.id].terminal)]
+    owned = [g for i in opened for g in (before[i.id].value["owns"] if i.terminal else i.value["owns"])]
     for path in sorted(p for p in changed if p.startswith(PRODUCT_PREFIXES) and not lib.owns_match(p, list(lib.DERIVED))):
         if not lib.owns_match(path, owned):
             errors.append(f"T3: {path} is a product path under no open item's owns")
-    humans = approvers & lib.human_owners()
+    humans = approvers & lib.human_owners(merge_base)
     for reason in reasons:
         print(f"approval: {reason}", file=sys.stderr)
     if reasons and not humans:
-        errors.append(f"approval: {len(reasons)} known limit(s) need an approval from HUMAN_OWNERS; approvers given: {sorted(approvers) or 'none'}")
+        errors.append(f"approval: {len(reasons)} decision(s) need an approval from HUMAN_OWNERS at the base; approvers given: {sorted(approvers) or 'none'}")
 
 
 def human(slug: str, acceptance_id: str, value: str, signer: str, key: str, note: str) -> int:

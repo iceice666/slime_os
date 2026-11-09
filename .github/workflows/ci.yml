@@ -217,8 +217,8 @@ jobs:
 
   # The living specs and work items (docs/decisions/work-item-devloop.md):
   # schema, bound targets, reverse marks, the CLI's own end-to-end run, and on
-  # a pull request owns coverage, commit roles, ratchets R1 and R4 and the
-  # work-item rules against the base, with the reviews that approved the head. The `spec` shell is a checkout plus just, python,
+  # a pull request owns coverage and untouched derived sources. The checks
+  # that read approvals run in approvals.yml. The `spec` shell is a checkout plus just, python,
   # zutai-cli and gh; no product toolchain.
   spec:
     name: Living specs
@@ -247,15 +247,6 @@ jobs:
       - run: nix develop .#spec --command just spec_check
       - run: nix develop .#spec --command just tasks_check
       - run: nix develop .#spec --command python3 scripts/spec/e2e
-      - name: Approvals from HUMAN_OWNERS
-        if: github.event_name == 'pull_request'
-        id: approvers
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          approvers="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
-            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(",")')"
-          echo "logins=$approvers" >> "$GITHUB_OUTPUT"
       - name: Owns coverage against the base
         if: github.event_name == 'pull_request'
         run: >-
@@ -266,23 +257,8 @@ jobs:
         run: >-
           nix develop .#spec --command
           python3 scripts/spec/derived --base "${{ github.event.pull_request.base.sha }}"
-      - name: Commit roles against the base
-        if: github.event_name == 'pull_request'
-        run: >-
-          nix develop .#spec --command
-          python3 scripts/spec/roles --base "${{ github.event.pull_request.base.sha }}"
-      - name: Ratchets R1 and R4 against the base
-        if: github.event_name == 'pull_request'
-        run: >-
-          nix develop .#spec --command
-          python3 scripts/spec/ratchet --base "${{ github.event.pull_request.base.sha }}"
-          --only R1,R4 --approvers "${{ steps.approvers.outputs.logins }}"
-      - name: Work items against the base
-        if: github.event_name == 'pull_request'
-        run: >-
-          nix develop .#spec --command
-          python3 scripts/spec/tasks check --base "${{ github.event.pull_request.base.sha }}"
-          --approvers "${{ steps.approvers.outputs.logins }}"
+      # Roles, ratchets R1 and R4 and the work-item rules read approvals, so
+      # they run in approvals.yml, which a submitted review re-runs.
 
   # Ratchets R2 and R3 (docs/decisions/work-item-devloop.md), at the base and at
   # the head. R2 runs every executable contract's exam (scripts/check/check-dbc.py).
@@ -305,14 +281,15 @@ jobs:
       - uses: ./.github/actions/slime-env
         with:
           build-save: 'false'
-      - name: Approvals from HUMAN_OWNERS
+      # An approval given after this job ran needs a re-run of this job: a
+      # review event does not restart ci.yml.
+      - name: Approvals of the head from HUMAN_OWNERS
         id: approvers
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          approvers="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
-            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(",")')"
-          echo "logins=$approvers" >> "$GITHUB_OUTPUT"
+          echo "logins=$(python3 scripts/spec/approvers "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" "${{ github.event.pull_request.head.sha }}")" >> "$GITHUB_OUTPUT"
       - run: >-
           nix develop --command
           python3 scripts/spec/ratchet --base "${{ github.event.pull_request.base.sha }}"

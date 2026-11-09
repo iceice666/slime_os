@@ -15,7 +15,8 @@ Each ratchet maps a subject to a number (docs/decisions/work-item-devloop.md):
   R3 mutantSurvival    missed / (caught + missed + timeout) of `cargo
                        mutants` over the files an item owns inside a crate
                        listed in specs/targets.toml [mutants]; must not rise.
-                       Measured only for items the diff adds or changes.
+                       Measured for items the diff edits or whose owns it
+                       touches.
   R4 negativeControls  per just target, the highest floor any area or item
                        declares on a `negativeControls*` count; must not fall.
 
@@ -79,16 +80,27 @@ def r1(root: Path) -> dict[str, float]:
     return {i["id"]: len(lib.clauses(i)) for i in lib.load_interfaces(root).values()}
 
 
-def r2(root: Path) -> dict[str, float]:
-    """Covered over all clauses, from each interface's exam run in `root`."""
+def r2(root: Path, checker: Path | None = None) -> dict[str, float]:
+    """Covered over all clauses, from each interface's exam run on the tree `root`.
+
+    `checker` is the checkout whose scripts/check/check-dbc.py judges it. The
+    base's checker judges the head too, so a pull request cannot raise its own
+    coverage by editing the checker. A base checker that predates DBC_TREE
+    cannot judge another tree; the head's then judges itself.
+    """
+    checker = checker or root
+    script = checker / "scripts" / "check" / "check-dbc.py"
+    if not script.is_file() or "DBC_TREE" not in script.read_text():
+        checker, script = root, root / "scripts" / "check" / "check-dbc.py"
     measures: dict[str, float] = {}
     for path in lib.interface_files(root):
         interface = lib.zutai_json(path)
         target = "ratchet_r2_" + "".join(c if c.isalnum() else "_" for c in interface["id"])
-        report = root / "build" / "devloop-observations" / f"{target}.json"
+        report = checker / "build" / "devloop-observations" / f"{target}.json"
         report.unlink(missing_ok=True)
         directory = path.parent.relative_to(root).as_posix()
-        subprocess.run([sys.executable, "scripts/check/check-dbc.py", directory], cwd=root, env=os.environ | {"DEVLOOP_JUST_TARGET": target}, check=False)
+        environment = os.environ | {"DEVLOOP_JUST_TARGET": target, "DBC_TREE": str(root)}
+        subprocess.run([sys.executable, str(script), directory], cwd=root, env=environment, check=False)
         counts = json.loads(report.read_text()) if report.is_file() else {}
         measures[interface["id"]] = counts.get("clausesCovered", 0) / max(1, counts.get("clauses", 0))
         print(f"[ratchet] R2 {interface['id']} @ {root.name}: {counts.get('clausesCovered', 0)}/{counts.get('clauses', 0)} covered", file=sys.stderr)
@@ -140,12 +152,12 @@ def r3(items: list[lib.Item], root: Path, files: dict[str, list[str]]) -> dict[s
     return measures
 
 
-def measure(only: set[str], areas: list[lib.Area], items: list[lib.Item], root: Path, r3_files: dict[str, list[str]]) -> dict[tuple[str, str], float]:
+def measure(only: set[str], areas: list[lib.Area], items: list[lib.Item], root: Path, r3_files: dict[str, list[str]], checker: Path | None = None) -> dict[tuple[str, str], float]:
     table: dict[tuple[str, str], float] = {}
     if "R1" in only:
         table.update({("R1", s): v for s, v in r1(root).items()})
     if "R2" in only:
-        table.update({("R2", s): v for s, v in r2(root).items()})
+        table.update({("R2", s): v for s, v in r2(root, checker).items()})
     if "R4" in only:
         table.update({("R4", s): v for s, v in r4(areas, items).items()})
     if "R3" in only and r3_files:
@@ -209,20 +221,20 @@ def main() -> int:
     merge_base = lib.git("merge-base", args.base, "HEAD").strip()
     base_items = lib.load_items_at(merge_base)
     changed = lib.changed_files(args.base)
-    touched = [i for i in items if i.where in changed]
+    touched = [i for i in items if i.where in changed or any(lib.owns_match(p, i.value["owns"]) for p in changed)]
     r3_files = owned_files(touched, lib.ROOT) if "R3" in only else {}
     base_root = worktree(merge_base) if r3_files or only & {"R1", "R2"} else lib.ROOT
     try:
         before = measure(only, lib.load_areas_at(merge_base), base_items, base_root, r3_files)
+        after = measure(only, lib.load_areas(), items, lib.ROOT, r3_files, checker=base_root)
     finally:
         if base_root != lib.ROOT:
             lib.git("worktree", "remove", "--force", str(base_root), check=False)
             shutil.rmtree(base_root, ignore_errors=True)
-    after = measure(only, lib.load_areas(), items, lib.ROOT, r3_files)
 
     old_limits = {(k["ratchet"], k["subject"], k["reason"]) for i in base_items for k in i.value["knownLimits"]}
     new_limits = {(k["ratchet"], k["subject"]) for i in items for k in i.value["knownLimits"] if (k["ratchet"], k["subject"], k["reason"]) not in old_limits}
-    humans = {a.strip() for a in args.approvers.split(",") if a.strip()} & lib.human_owners()
+    humans = {a.strip() for a in args.approvers.split(",") if a.strip()} & lib.human_owners(merge_base)
     errors = []
     for ratchet, subject, was, now in regressions(before, after):
         line = f"{ratchet} {subject}: {was:g} -> {now:g}"

@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
-BUDGET = 3000  # work items, ratchets and roles; see docs/decisions/work-item-devloop.md
+BUDGET = 3500  # work items, ratchets and roles; see docs/decisions/work-item-devloop.md
 PRODUCT_PREFIXES = ("components/", "slime-root/", "contracts/", "boot-contracts/")
 LEGACY_ITEMS = lib.ROOT / ".tasks" / "items"
 MARKED_ROOTS = ("scripts", "just", "Justfile", "slime-root", "components", "contracts")

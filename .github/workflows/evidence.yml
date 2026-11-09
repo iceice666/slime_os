@@ -37,6 +37,7 @@ jobs:
   # request that touches their owns must fix it.
   derive:
     name: Regenerate derived closure sources
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     outputs:
@@ -52,15 +53,22 @@ jobs:
       - id: regenerate
         continue-on-error: true
         shell: bash
-        run: nix develop --command python3 scripts/spec/derived --regenerate | tee "$RUNNER_TEMP/derived.txt"
+        run: nix develop --command python3 scripts/spec/derived --regenerate
       - id: commit
         run: |
           sha="$(git rev-parse HEAD)"
-          if [ "${{ steps.regenerate.outcome }}" = success ] && [ -s "$RUNNER_TEMP/derived.txt" ]; then
-            git add -A -- contracts/system-image-closure/v3/closures contracts/system-image-closure/v2/negative
+          git add -A -- contracts/system-image-closure/v3/closures contracts/system-image-closure/v2/negative
+          git fetch -q origin main
+          if [ "${{ steps.regenerate.outcome }}" != success ]; then
+            echo "regeneration failed; recording ${sha:0:12} as pushed"
+          elif git diff --cached --quiet; then
+            echo "closure sources are current"
+          elif [ "$sha" != "$(git rev-parse origin/main)" ]; then
+            echo "main moved on; recording ${sha:0:12} as pushed"
+          else
             git -c user.name="slime-evidence" -c user.email="evidence@users.noreply.github.com" \
               commit -q -m "chore(derived): regenerate system-image closure sources for ${sha:0:12}"
-            if git push origin HEAD:refs/heads/main; then sha="$(git rev-parse HEAD)"; else echo "main moved on; recording ${sha:0:12} as pushed"; fi
+            if git push origin HEAD:refs/heads/main; then sha="$(git rev-parse HEAD)"; else echo "push refused; recording ${sha:0:12} as pushed"; fi
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 

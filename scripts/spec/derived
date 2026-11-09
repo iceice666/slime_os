@@ -44,7 +44,7 @@ def main() -> int:
         print("derived: the diff edits no derived path")
         return 0
     if args.regenerate:
-        done = subprocess.run([sys.executable, GENERATOR], cwd=lib.ROOT, check=False)
+        done = subprocess.run([sys.executable, GENERATOR], cwd=lib.ROOT, check=False, stdout=sys.stderr)
         if done.returncode != 0:
             print(f"error: derived {GENERATOR} exited {done.returncode}", file=sys.stderr)
             return done.returncode

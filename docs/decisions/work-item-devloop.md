@@ -42,12 +42,14 @@ a machine can run and leaves people the questions they can answer.
   crates. R4 is the declared negative-control floor per target.
 - A ratchet regression passes only when the pull request adds a known limit
   that names the ratchet and subject, and a login in `HUMAN_OWNERS` approves.
-  This is the only remaining human approval.
+  A known limit for a failing or weakened acceptance, a cancelled item, and a
+  change to the gates' own code (D3) need the same approval. No other change
+  needs one.
 - Each commit declares a `Devloop-Role:` trailer: `spec-writer`,
   `implementer` or `breaker`. CI refuses a commit whose diff leaves its
   role's path set.
-- Two open items must not own overlapping paths. At most three item trees
-  are open at once.
+- Two open item trees must not own overlapping paths. At most three item
+  trees are open at once.
 - System-image closure sources are regenerated after the merge by a
   workflow, not inside the pull request. Generated bindings stay in the pull
   request because they are compile inputs.
@@ -56,7 +58,7 @@ a machine can run and leaves people the questions they can answer.
 
 Each row uses `Decision: <option>. Because <reason>. Reopen if <signal>.`
 Rows Q1 to Q8 are agent defaults the human accepted as a set. Row D1 is the
-human's own choice.
+human's own choice. Rows D2 and D3 are agent defaults.
 
 | # | Decision | Because | Reopen if |
 | --- | --- | --- | --- |
@@ -70,6 +72,7 @@ human's own choice.
 | Q8 | `schema.zt` and `helpers.zt` are copied from v2 into `.tasks/items/` and evolve here. | v2 is an experiment, and a separate repository repeats the three V1 pins. | v2 and this repository both still edit the schema after three months |
 | D1 | Only closure sources move to post-merge regeneration. Generated bindings stay in the pull request. | Bindings are compile inputs, so `main` would not build between the merge and the regeneration. | two parallel pull requests conflict on generated bindings more than once a month |
 | D2 | `.tasks/terminal/` holds byte-identical copies of `schema.zt` and `helpers.zt`. | Zutai refuses an import above the entry file's directory. | Zutai gains a project root that spans both directories |
+| D3 | A change to `scripts/spec/`, `.github/`, `HUMAN_OWNERS`, `specs/allowed_signers`, `specs/targets.toml`, the item schema or `contracts/observation/` needs a `HUMAN_OWNERS` approval, read at the base. Agent default, after review; the human owner has not confirmed it. | The gates run the head's code, so a pull request that could edit them could switch every gate off. | the approval rate on pull requests exceeds one in ten |
 
 ## Alternatives considered
 
@@ -93,6 +96,9 @@ human's own choice.
 - A ratchet blocks a decrease and allows no change. `tasks status --weekly`
   shows a measure that does not improve.
 - A finite trace does not prove liveness or every input.
+- CI cannot run a QEMU exam on a pull request. A pull request that touches a
+  failing item's `owns` and changes the failing exam's closure passes as a fix
+  attempt. The Evidence workflow judges it after the merge.
 
 ## Revisit when
 
