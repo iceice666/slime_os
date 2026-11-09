@@ -1,0 +1,40 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+record :: Text = "docs/decisions/work-item-devloop.md";
+session :: Text = "pi session 2026-11-10, proposal/devloop-v1-redesign";
+
+item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a580e5386d1" "devloop-ratchets" "quality"
+  "Ratchet negative-control floors and mutant survival"
+  "A pull request can weaken an exam by deleting a negative control and lowering the count its acceptance pins, and a person approving the checker diff does not notice. Exam strength needs numbers that CI compares with the base, and a weaker number needs an explicit, approved known limit.")
+  with {
+    parent = "01a1c147-34c7-71e6-a116-6a55619c63c1";
+    owns = { "scripts/spec/ratchet"; };
+    requirements = {
+      (h.req "r4-floor"
+        "ratchet --base refuses a diff that lowers the highest negativeControls floor any area or item declares for a just target, unless an item gains a known limit naming R4 and that target and a HUMAN_OWNERS login approves."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "r3-survival"
+        "ratchet --base --only R3 refuses a diff whose items own files in a crate listed in specs/targets.toml [mutants] when cargo mutants survival on those files rises from base to head, under the same known-limit rule."
+        { "spec_e2e"; }) with { provenance = h.fromHuman "全部照 default" session; };
+    };
+    acceptance = {
+      h.observedWhere "spec_e2e" { h.count "casesFailed" 0; h.atLeast "casesObserved" 54; };
+    };
+    decisions = {
+      h.decided "r4-declared-floor"
+        "R4 compares the negativeControls floors that acceptances declare, not counts a pull request observes."
+        "A pull request cannot carry a trusted record of its own head; a checker that drops a control under an unchanged floor fails its acceptance on main, and T2 then blocks the next pull request on its owns."
+        h.agentDefault { "r4-floor"; };
+      h.decided "r3-owned-files"
+        "R3 mutates only the files an item owns inside an allowlisted crate, at base and at head."
+        "slime-proto alone has 4277 mutants; the 67 in spawn_arguments.rs took 14 minutes with four jobs."
+        h.agentDefault { "r3-survival"; };
+      h.decided "known-limit-identity"
+        "A known limit admits a regression only when its ratchet, subject and reason are new in the diff."
+        "A limit accepted once must not admit every later regression on the same subject without a person seeing it."
+        h.agentDefault { "r4-floor"; "r3-survival"; };
+    };
+  };
+
+item

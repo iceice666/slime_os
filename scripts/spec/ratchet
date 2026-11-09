@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Ratchets: exam strength must not fall without an approved known limit.
+
+    scripts/spec/ratchet [--only R3,R4]                 # print HEAD's measures
+    scripts/spec/ratchet --base <ref> [--only ...] [--approvers a,b]
+
+Each ratchet maps a subject to a number (docs/decisions/work-item-devloop.md):
+
+  R3 mutantSurvival    missed / (caught + missed + timeout) of `cargo
+                       mutants` over the files an item owns inside a crate
+                       listed in specs/targets.toml [mutants]; must not rise.
+                       Measured only for items the diff adds or changes.
+  R4 negativeControls  per just target, the highest floor any area or item
+                       declares on a `negativeControls*` count; must not fall.
+
+With `--base`, a subject whose measure regressed passes only when an item
+at HEAD carries a known limit naming that ratchet and subject which the base
+did not carry, and a login in HUMAN_OWNERS is among `--approvers`. Raising
+or keeping a measure needs nobody. R3 runs `cargo mutants` twice (base
+worktree and HEAD) and needs the product toolchain; the other ratchets read
+sources only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+RISE = {"R3"}  # ratchets where a larger number is worse
+CONTROL_KEY = "negativeControls"
+
+
+def predicate_floor(predicate: dict) -> int | None:
+    kind, body = lib.tag(predicate), lib.payload(predicate)
+    if not body.get("key", "").startswith(CONTROL_KEY):
+        return None
+    return body.get("equals") if kind == "count" else body.get("min") if kind == "atLeast" else None
+
+
+def r4(areas: list[lib.Area], items: list[lib.Item]) -> dict[str, float]:
+    floors: dict[str, float] = {}
+
+    def note(target: str, predicates: list[dict]) -> None:
+        for predicate in predicates:
+            floor = predicate_floor(predicate)
+            if floor is not None:
+                floors[target] = max(floors.get(target, 0), floor)
+
+    for area in areas:
+        for requirement in area.requirements:
+            for kind, body in lib.acceptances(requirement):
+                if kind == "observed":
+                    note(body["justTarget"], body["predicates"])
+    for item in items:
+        for acceptance in item.value["acceptance"]:
+            if lib.tag(acceptance["check"]) == "observed":
+                body = lib.payload(acceptance["check"])
+                note(body["justTarget"], body["predicates"])
+    return floors
+
+
+def mutant_crates() -> dict[str, str]:
+    """crate directory -> package name, from specs/targets.toml [mutants]."""
+    facts = tomllib.loads((lib.SPECS / "targets.toml").read_text()) if (lib.SPECS / "targets.toml").is_file() else {}
+    return {path.rstrip("/"): package for package, path in facts.get("mutants", {}).items()}
+
+
+def owned_files(items: list[lib.Item], root: Path) -> dict[str, list[str]]:
+    """package -> owned `.rs` files inside it, for the given items, as tracked under `root`."""
+    listed = subprocess.run(["git", "ls-files", "*.rs"], cwd=root, check=True, text=True, capture_output=True).stdout.split()
+    found: dict[str, set[str]] = {}
+    for directory, package in mutant_crates().items():
+        for path in listed:
+            if path.startswith(directory + "/src/") and any(lib.owns_match(path, i.value["owns"]) for i in items):
+                found.setdefault(package, set()).add(path)
+    return {package: sorted(paths) for package, paths in found.items()}
+
+
+def mutate(root: Path, package: str, files: list[str]) -> tuple[float, str]:
+    """Survival rate of `cargo mutants` on `files` in `root`, with a summary."""
+    with tempfile.TemporaryDirectory(prefix="slime-mutants-") as out:
+        command = ["cargo", "mutants", "--package", package, "--output", out, "--jobs", "4", "--timeout", "120", "--no-shuffle"]
+        for path in files:
+            command += ["--file", path]
+        subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)
+        outcomes = Path(out) / "mutants.out" / "outcomes.json"
+        if not outcomes.is_file():
+            raise lib.SpecError(f"R3: cargo mutants wrote no outcomes for {package} in {root}")
+        data = json.loads(outcomes.read_text())
+    caught, missed, timeout = (int(data.get(k, 0)) for k in ("caught", "missed", "timeout"))
+    judged = caught + missed + timeout
+    rate = missed / judged if judged else 0.0
+    return rate, f"{missed} missed of {judged} ({data.get('unviable', 0)} unviable)"
+
+
+def r3(items: list[lib.Item], root: Path, files: dict[str, list[str]]) -> dict[str, float]:
+    measures: dict[str, float] = {}
+    for package, paths in files.items():
+        present = [p for p in paths if (root / p).is_file()]
+        if present:
+            rate, summary = mutate(root, package, present)
+            measures[package] = rate
+            print(f"[ratchet] R3 {package} @ {root.name}: {summary}", file=sys.stderr)
+    return measures
+
+
+def measure(only: set[str], areas: list[lib.Area], items: list[lib.Item], root: Path, r3_files: dict[str, list[str]]) -> dict[tuple[str, str], float]:
+    table: dict[tuple[str, str], float] = {}
+    if "R4" in only:
+        table.update({("R4", s): v for s, v in r4(areas, items).items()})
+    if "R3" in only and r3_files:
+        table.update({("R3", s): v for s, v in r3(items, root, r3_files).items()})
+    return table
+
+
+def regressions(base: dict[tuple[str, str], float], head: dict[tuple[str, str], float]) -> list[tuple[str, str, float, float]]:
+    found = []
+    for key, before in sorted(base.items()):
+        after = head.get(key, 0.0 if key[0] not in RISE else before)
+        worse = after > before if key[0] in RISE else after < before
+        if worse:
+            found.append((key[0], key[1], before, after))
+    for key, after in sorted(head.items()):
+        if key not in base and key[0] in RISE and after > 0:
+            found.append((key[0], key[1], 0.0, after))
+    return found
+
+
+def worktree(rev: str) -> Path:
+    """A base checkout whose submodule paths link to this checkout's submodules.
+
+    Workspace members reach into `deps/`, so cargo cannot resolve a tree
+    without them. The base therefore builds against HEAD's submodule
+    revisions; a pull request that bumps a submodule measures R3 against it.
+    """
+    path = Path(tempfile.mkdtemp(prefix="slime-ratchet-base-"))
+    lib.git("worktree", "add", "--detach", "--force", str(path), rev)
+    modules = lib.git("config", "-f", ".gitmodules", "--get-regexp", r"\.path$", check=False)
+    for line in modules.splitlines():
+        sub = line.split()[1]
+        if (lib.ROOT / sub).is_dir():
+            shutil.rmtree(path / sub, ignore_errors=True)
+            (path / sub).parent.mkdir(parents=True, exist_ok=True)
+            (path / sub).symlink_to(lib.ROOT / sub)
+    return path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--base")
+    parser.add_argument("--approvers", default="")
+    parser.add_argument("--only", default="R4", help="comma-separated ratchets to measure (default R4)")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    only = {r.strip() for r in args.only.split(",") if r.strip()}
+    items = lib.load_items()
+
+    if not args.base:
+        table = measure(only, lib.load_areas(), items, lib.ROOT, owned_files(items, lib.ROOT) if "R3" in only else {})
+        rows = [{"ratchet": r, "subject": s, "value": v} for (r, s), v in sorted(table.items())]
+        if args.json:
+            json.dump(rows, sys.stdout, indent=1)
+            print()
+        else:
+            for row in rows:
+                print(f"{row['ratchet']} {row['subject']} {row['value']:g}")
+        return 0
+
+    merge_base = lib.git("merge-base", args.base, "HEAD").strip()
+    base_items = lib.load_items_at(merge_base)
+    changed = lib.changed_files(args.base)
+    touched = [i for i in items if i.where in changed]
+    r3_files = owned_files(touched, lib.ROOT) if "R3" in only else {}
+    base_root = worktree(merge_base) if r3_files else lib.ROOT
+    try:
+        before = measure(only, lib.load_areas_at(merge_base), base_items, base_root, r3_files)
+    finally:
+        if base_root != lib.ROOT:
+            lib.git("worktree", "remove", "--force", str(base_root), check=False)
+            shutil.rmtree(base_root, ignore_errors=True)
+    after = measure(only, lib.load_areas(), items, lib.ROOT, r3_files)
+
+    old_limits = {(k["ratchet"], k["subject"], k["reason"]) for i in base_items for k in i.value["knownLimits"]}
+    new_limits = {(k["ratchet"], k["subject"]) for i in items for k in i.value["knownLimits"] if (k["ratchet"], k["subject"], k["reason"]) not in old_limits}
+    humans = {a.strip() for a in args.approvers.split(",") if a.strip()} & lib.human_owners()
+    errors = []
+    for ratchet, subject, was, now in regressions(before, after):
+        line = f"{ratchet} {subject}: {was:g} -> {now:g}"
+        if (ratchet, subject) not in new_limits:
+            errors.append(f"{line}; add h.knownLimit \"{ratchet}\" \"{subject}\" <reason> to the item this PR carries")
+        elif not humans:
+            errors.append(f"{line}; the new known limit needs an approval from HUMAN_OWNERS")
+        else:
+            print(f"ratchet: {line} accepted as a known limit, approved by {sorted(humans)}", file=sys.stderr)
+    for error in errors:
+        print(f"error: ratchet {error}", file=sys.stderr)
+    if errors:
+        return 1
+    print(f"ratchet: {', '.join(sorted(only))} hold against {merge_base[:12]} ({len(after)} subject(s))")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -18,6 +18,12 @@ operator = [
   "link_wake_check",
 ]
 
+# Ratchet R3 (`scripts/spec/ratchet`): package name -> crate directory. Only
+# these crates have host tests `cargo mutants` can run; R3 measures the files
+# an item owns inside them.
+[mutants]
+"slime-proto" = "components/proto"
+
 # Observed wall time in seconds on the ubuntu-24.04-arm runner, as
 # `scripts/spec/record` printed it in the first full evidence run
 # (2026-11-07, 8 shards); balances evidence shards. A missing target

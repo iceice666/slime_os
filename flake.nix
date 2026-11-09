@@ -148,6 +148,8 @@
               ++ [
                 cargo-deny
                 cargo-machete
+                # Ratchet R3 (`scripts/spec/ratchet --only R3`).
+                cargo-mutants
                 ruff
                 typos
                 # seL4 product build: kernel configure/build, cross compilation,

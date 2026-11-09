@@ -74,6 +74,21 @@ name, a repeated or non-UUIDv7 id, a broken `parent` or `depends`, an
 unknown area, an undeclared target, an empty milestone list, a known limit
 outside R1 to R4, and a drifted terminal copy.
 
+## Ratchets
+
+`scripts/spec/ratchet --base <ref>` compares exam strength at the base and
+at the head. CI runs R4 in the `spec` job and R3 in `ratchet_mutants`.
+
+| Id | Subject | Measure | Must not |
+| --- | --- | --- | --- |
+| R3 | crate in `specs/targets.toml` `[mutants]` | `cargo mutants` survival over the files the PR's items own in it | rise |
+| R4 | just target | highest `negativeControls*` floor an area or item declares | fall |
+
+A regression passes only when an item at the head carries a known limit
+(`h.knownLimit "<R>" "<subject>" "<reason>" <provenance>`) that the base
+did not carry, and a login in `HUMAN_OWNERS` approves. A known limit is new
+when its ratchet, subject or reason is new. Raising a measure needs nobody.
+
 ## Writing a requirement
 
 - Open the area file whose `owns` covers the implementation. One area per
