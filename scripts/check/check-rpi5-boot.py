@@ -78,6 +78,21 @@ SERIAL_ENVIRONMENT = "RPI5_SERIAL"
 # `slime-root/src/platform_timer.rs` binds on every AArch64 profile.
 TIMER_IRQ = 30
 
+# The firmware facts of the named board, as it printed them on UART10 when RP3
+# was first observed. They live here rather than in `sel4/pins.toml` because
+# that file is in every target's digest, and these bind only this gate. A board
+# swap or an EEPROM update changes one of them, and the gate fails naming it
+# rather than recording the new firmware under the old evidence.
+#   * the revision code the second stage reads from OTP: a Raspberry Pi 5 Model
+#     B with 4 GB, manufactured by Sony UK;
+#   * the version and build of the BL31 the EEPROM bootloader carries, used
+#     because rpiboot serves no `armstub8-2712.bin`;
+#   * the BCM2712 second stage the gate serves, from the pinned rpiboot.
+BOARD_REVISION = 0xC04170
+BL31_VERSION = "v2.6(release):v2.6-243-ge4d6694234-dirty"
+BL31_BUILT = "15:34:41, Sep 28 2026"
+BOOTFILES_SHA256 = "344c6a2c6a9109e0d041f58bd1a65f839c4f30d8bbe6a73eabd8e894772805ad"
+
 # A board that never prints must fail loudly rather than hang the gate. This is
 # wall-clock from the moment rpiboot starts serving, so it also covers the
 # operator plugging in the board after the gate says it is serving.
@@ -352,6 +367,11 @@ def stage(profile: dict[str, object], media_digest: str, bootfiles: Path) -> dic
     digests = {path.name: sha256_file(path, fail) for path in sorted(SERVED.iterdir())}
     if digests["kernel8.img"] != media_digest:
         fail("the staged kernel8.img differs from the verified media")
+    if digests["bootfiles.bin"] != BOOTFILES_SHA256:
+        fail(
+            f"{BOOTFILES_ENVIRONMENT} is {digests['bootfiles.bin']}, but the gate pins "
+            f"{BOOTFILES_SHA256}; a changed rpiboot changes the board's second stage"
+        )
     return digests
 
 
@@ -527,6 +547,76 @@ def report_transcript(transcript: str) -> None:
     print("---- end of serial transcript ----")
 
 
+def check_firmware(transcript: str) -> int:
+    """The board revision and BL31 the firmware printed are the named board's.
+
+    Each must appear exactly once, before the loader enters the kernel, and
+    equal its pin. Returns the board revision.
+    """
+    entered = transcript.find("Entering kernel")
+    if entered < 0:
+        fail("the loader never reported entering the kernel")
+    early = transcript[:entered]
+    facts = (
+        ("board revision", r"board: boardrev ([0-9a-f]+) otp", f"{BOARD_REVISION:x}"),
+        ("BL31 version", r"BL31: (v\S+)", BL31_VERSION),
+        ("BL31 build", r"BL31: Built : ([^\r\n]+)", BL31_BUILT),
+    )
+    for name, pattern, pinned in facts:
+        found = re.findall(pattern, early)
+        if len(found) != 1:
+            fail(f"the firmware printed {len(found)} {name} lines before the kernel, expected one")
+        if found[0].strip() != pinned:
+            fail(f"the firmware reports {name} {found[0].strip()!r}, but the gate pins {pinned!r}")
+    return BOARD_REVISION
+
+
+def firmware_controls() -> int:
+    """The firmware and timer judges refuse what they claim to refuse.
+
+    Each mutation of an honest board prefix must fail, and the honest prefix
+    must pass. Returns the number of mutations refused.
+    """
+    honest = "\n".join(
+        (
+            f"611.89 MESS:00:10:11.893707:0: board: boardrev {BOARD_REVISION:x} otp {BOARD_REVISION:x}",
+            f"NOTICE:  BL31: {BL31_VERSION}",
+            f"NOTICE:  BL31: Built : {BL31_BUILT}",
+            "seL4 kernel loader | INFO   Entering kernel",
+            "SLIME_TIMER acquired irq=30 freq_hz=54000000",
+        )
+    )
+    mutations = (
+        ("another board revision", honest.replace(f"boardrev {BOARD_REVISION:x}", "boardrev d04170")),
+        ("no board revision", honest.replace("boardrev", "boardrv")),
+        ("another BL31 version", honest.replace(BL31_VERSION, "v2.6(release):v2.6-244-g0000000000")),
+        ("another BL31 build", honest.replace(BL31_BUILT, "15:34:41, Oct 28 2026")),
+        ("a BL31 line printed twice", honest.replace("NOTICE:  BL31: v", f"NOTICE:  BL31: {BL31_VERSION}\nNOTICE:  BL31: v", 1)),
+        ("the QEMU timer frequency", honest.replace("freq_hz=54000000", "freq_hz=62500000")),
+        ("another timer IRQ", honest.replace("irq=30", "irq=27")),
+    )
+
+    def judge(text: str) -> None:
+        check_firmware(text)
+        timer = re.search(r"SLIME_TIMER acquired irq=(\d+) freq_hz=(\d+)", text)
+        if timer is None or int(timer.group(1)) != TIMER_IRQ or int(timer.group(2)) != 54_000_000:
+            fail("the timer facts differ")
+
+    try:
+        judge(honest)
+    except SystemExit as error:
+        fail(f"control: the honest board prefix was refused: {error}")
+    refused = 0
+    for label, text in mutations:
+        try:
+            judge(text)
+        except SystemExit:
+            refused += 1
+            continue
+        fail(f"control: the firmware judge accepted {label}")
+    return refused
+
+
 def check_transcript(transcript: str, profile: dict[str, object]) -> tuple[int, int]:
     """The ordered board subset, then the facts that tell this board from QEMU.
 
@@ -606,6 +696,7 @@ def main() -> None:
         monitor(device, profile["serial_baud"], arguments.timeout)
         return
 
+    controls = firmware_controls()
     rpiboot, bootfiles = rpiboot_inputs()
     if not arguments.no_build:
         build()
@@ -617,14 +708,22 @@ def main() -> None:
 
     transcript = capture(device, profile["serial_baud"], arguments.timeout, rpiboot)
     matched, frequency = check_transcript(transcript, profile)
+    revision = check_firmware(transcript)
     check_served()
-    devloop_observations.record(casesObserved=matched, timerFrequencyHz=frequency)
+    devloop_observations.record(
+        casesObserved=matched,
+        timerFrequencyHz=frequency,
+        boardRevision=revision,
+        firmwareMatched=True,
+        negativeControlsRefused=controls,
+    )
     print(
         f"rpi5 boot check: {profile['board']} ({profile['soc']}) booted the "
         f"pinned {PLATFORM} image (kernel8.img sha256 {media_digest[:16]}) served by "
         f"rpiboot and produced {matched} ordered generation, timer, task, fault, and "
         f"ready markers on {profile['serial']} at the board's "
-        f"{frequency} Hz generic timer"
+        f"{frequency} Hz generic timer, from board revision {revision:x} with BL31 "
+        f"{BL31_VERSION}; the firmware judge refused {controls} mutations"
     )
 
 

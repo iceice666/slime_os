@@ -40,11 +40,14 @@ area :: s.Area = (h.area "rpi5-board" "Raspberry Pi 5 board boot over rpiboot wi
       "Without it, a board that differs from the pin could hang or boot a nearby profile without saying so."
       "waits on a wrong-board exam; rpi5_boot_check judges one honest boot of the named board"
       h.noAcceptance) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
-    (h.planned "01a1c0b2-61b1-7435-a734-49a4aa5549f0"
-      "The gate records the board revision and the bootloader version the board prints on UART10 beside the image identity."
-      "Without it, a firmware update could change the boot path while the evidence still names the same board."
-      "waits on the bootloader's UART10 line format from the first observed boot"
-      h.noAcceptance) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+    -- The first observed boot (ab3818a1, 2026-11-09) printed no EEPROM bootloader version on UART10; the
+    -- second stage's board revision line and the BL31 the EEPROM carries are what identify the firmware.
+    (h.req "01a1c0b2-61b1-7435-a734-49a4aa5549f0"
+      "Before the kernel, the board prints board revision c04170 and BL31 v2.6-243-ge4d6694234 built 15:34:41, Sep 28 2026, each once. The gate serves the pinned bootfiles.bin."
+      "Without it, a board swap or a firmware update could change the boot path while the evidence still names the same board."
+      {
+        h.observedWhere "board-firmware-observed" "rpi5_boot_check" { h.count "boardRevision" 12599664; h.flag "firmwareMatched"; h.count "negativeControlsRefused" 7; } "The gate compares the revision, the BL31 version and its build line with its pins, and the staged bootfiles.bin with its sha256, and fails naming the value that differs. Before it serves anything, it refuses seven mutations of an honest board prefix: another revision, no revision, another BL31 version or build, a doubled BL31 line, the QEMU timer frequency, and another timer IRQ. 12599664 is 0xc04170.";
+      }) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
   }) with {
     nonGoals = {
       "Replaying the AArch64 QEMU corpus on the board (P4, legacy 01a02f59-a800-78b6-9398-6b22bfbc6fdd).";

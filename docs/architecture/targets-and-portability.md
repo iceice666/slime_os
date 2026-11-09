@@ -112,7 +112,10 @@ Raspberry Pi Debug Probe. It writes no block device.
 The gate requires 14 markers in order. Each one is named from the chain of
 `check-sel4-root-boot.py`, so the board gate follows the QEMU product's markers.
 The generic timer must run at the pinned 54 MHz, which a QEMU transcript cannot
-show. The gate fails closed without serial evidence; it never substitutes QEMU. P4's
+show. Before the kernel, the firmware must print the named board's revision and
+the BL31 build the gate pins, and the served `bootfiles.bin` must match its
+pinned sha256. A board swap or an EEPROM update therefore fails the gate and
+names the changed value. The gate fails closed without serial evidence; it never substitutes QEMU. P4's
 [serial rationale](../../roadmap/07-architecture-portability.md#why-serial-is-the-only-evidence-path)
 explains why display output or a debugger cannot replace its ordered transcript.
 
