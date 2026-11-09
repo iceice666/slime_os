@@ -38,7 +38,7 @@ item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a5bfb784949" "devloop-tracks"
         h.agentDefault { "product-under-item"; };
       h.decided "derive-in-evidence"
         "The Evidence workflow regenerates closure sources in its first job and records the commit it pushed."
-        "A push made with GITHUB_TOKEN starts no workflow, so a separate workflow's commit would never be recorded."
+        "The run that makes the commit records it, so the run its deploy-key push starts has nothing to do and skips."
         h.agentDefault { "derived-after-merge"; };
       h.decided "weekly-proxies"
         "--weekly counts first-parent commits per closed item and commits that add a known limit, as offline stand-ins for pull requests per feature and approvals."

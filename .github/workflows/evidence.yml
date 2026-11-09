@@ -30,16 +30,20 @@ permissions:
   contents: write
 
 jobs:
-  # A push made with GITHUB_TOKEN starts no workflow, so this run records the
-  # derived commit itself: every later job checks out `needs.derive.outputs.sha`.
+  # This run records the derived commit itself: every later job checks out
+  # `needs.derive.outputs.sha`, and the run its push starts skips every job.
   # If regeneration fails or main moved on, the jobs record the pushed commit
   # as it is (decision Q6): a stale closure fails its gates, and the next pull
   # request that touches their owns must fix it.
   derive:
     name: Regenerate derived closure sources
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(derived):')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
+    # DERIVE_DEPLOY_KEY is a write deploy key, the only actor the main ruleset
+    # lets push past its required checks. The environment admits main only, so
+    # a workflow edited on a branch cannot reach the key.
+    environment: evidence
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
     steps:
@@ -47,6 +51,7 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+          ssh-key: ${{ secrets.DERIVE_DEPLOY_KEY }}
       - uses: ./.github/actions/slime-env
         with:
           build-save: 'false'
@@ -75,7 +80,7 @@ jobs:
   plan:
     name: Claimed targets
     needs: [derive]
-    if: always()
+    if: always() && !startsWith(github.event.head_commit.message, 'chore(derived):')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     outputs:
