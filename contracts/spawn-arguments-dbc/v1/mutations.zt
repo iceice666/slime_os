@@ -1,0 +1,19 @@
+--| Negative controls on the implementation: each mutation deletes one
+--| refusal from a copy of spawn_arguments.rs. The exam builds the adapter
+--| against the copy, and the oracle must report `clause` on the fixture.
+s ::= import "./schema.zt";
+
+file :: Text = "components/proto/src/spawn_arguments.rs";
+
+mutations :: List s.Mutation = {
+  { id = "skip-sequence"; clause = "in-order"; file =;
+    find = "            || frame.sequence != self.sequence\n"; replace = ""; };
+  { id = "skip-total"; clause = "within-bounds"; file =;
+    find = "            || end > self.total\n"; replace = ""; };
+  { id = "skip-padding"; clause = "well-formed"; file =;
+    find = "            || frame.payload[len..].iter().any(|byte| *byte != 0)\n"; replace = ""; };
+  { id = "accept-after-complete"; clause = "complete-at-final"; file =;
+    find = "        if self.complete\n            || frame.magic"; replace = "        if frame.magic"; };
+};
+
+mutations

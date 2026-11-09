@@ -1,0 +1,147 @@
+--| Oracle for spawn/v2 argument framing: `inspect fixture observed` replays
+--| the stimulus through a model of the contract and compares every
+--| observation with what the model predicts. It knows nothing about Rust,
+--| seL4 or the adapter. A violation names the clause it breaks.
+s ::= import "./schema.zt";
+
+payloadBytes :: Int = 48;
+
+Model :: type { received : Int; sequence : Int; complete : Bool; total : Int; count : Int; lengths : List Int; };
+
+--| What the model predicts for one push: the outcome and the clause that
+--| decides it (`valid-accepted` when every precondition holds).
+Expect :: type { outcome : s.Outcome; clause : Text; };
+
+nth :: List Int -> Int -> Int
+  = values index => match values {
+      | {;} => 0;
+      | {first; ...rest} => if index == 0 then first else nth rest (index - 1);
+    };
+
+isRefused :: s.Outcome -> Bool = outcome => match outcome { | #refused => true; | _ => false; };
+isCompleted :: s.Outcome -> Bool = outcome => match outcome { | #completed => true; | _ => false; };
+
+wellFormed :: s.Frame -> Bool
+  = f => f.magicOk && f.versionOk && f.extraFlags == 0 && f.length <= payloadBytes
+         && (f.length == payloadBytes || f.padding == 0);
+
+expect :: Model -> s.Frame -> Expect
+  = m f =>
+    if m.complete then { outcome = #refused; clause = "complete-at-final"; }
+    else if (if wellFormed f then false else true) then { outcome = #refused; clause = "well-formed"; }
+    else if (if f.sequence == m.sequence then (if f.offset == m.received then false else true) else true)
+      then { outcome = #refused; clause = "in-order"; }
+    else if m.received + f.length > m.total then { outcome = #refused; clause = "within-bounds"; }
+    else if (if f.final then false else (f.length == 0 || m.received + f.length == m.total))
+      then { outcome = #refused; clause = "within-bounds"; }
+    else if (if f.final then (if m.received + f.length == m.total then false else true) else false)
+      then { outcome = #refused; clause = "within-bounds"; }
+    else if f.final then { outcome = #completed; clause = "valid-accepted"; }
+    else { outcome = #accepted; clause = "valid-accepted"; };
+
+advance :: Model -> s.Frame -> Expect -> Model
+  = m f e => if isRefused e.outcome then m else m with {
+      received = m.received + f.length;
+      sequence = m.sequence + 1;
+      complete = isCompleted e.outcome;
+    };
+
+one :: Text -> Text -> Int -> Text -> List s.Violation
+  = clause case step detail => listCons { clause =; case =; step =; detail =; } (listEmpty ());
+
+none :: List s.Violation = listEmpty ();
+
+Judged :: type { model : Model; violations : List s.Violation; exercised : List Text; };
+
+judgePush :: Text -> Int -> Model -> s.Frame -> s.Observation -> Judged
+  = case step m f observed =>
+    [ e := expect m f;
+        next := advance m f e;
+    match observed {
+      | #pushed { outcome = o; complete = c; } =>
+          { model = next;
+            violations = append
+              (if isRefused e.outcome
+                then (if isRefused o then none else one e.clause case step "the implementation accepted a frame the contract refuses")
+                else (if isRefused o then one "valid-accepted" case step "the implementation refused a valid frame"
+                      else if isCompleted o == isCompleted e.outcome then none
+                      else one "complete-at-final" case step "the push outcome disagrees about completion"))
+              (if c == next.complete then none else one "complete-at-final" case step "completion after the push disagrees with the model");
+            exercised = { e.clause; "complete-at-final"; }; };
+      | #read { present = _; length = _; } =>
+          { model = next; violations = one "observation-missing" case step "a read observation answers a push"; exercised = {;}; };
+    } ];
+
+judgeRead :: Text -> Int -> Model -> Int -> s.Observation -> Judged
+  = case step m index observed =>
+    [ present := m.complete && index < m.count;
+        size := if present then nth m.lengths index else 0;
+    match observed {
+      | #read { present = p; length = l; } =>
+          { model = m;
+            violations = if p == present && l == size then none
+              else one "read-after-complete" case step "argument readability or length disagrees with the model";
+            exercised = { "read-after-complete"; }; };
+      | #pushed { outcome = _; complete = _; } =>
+          { model = m; violations = one "observation-missing" case step "a push observation answers a read"; exercised = {;}; };
+    } ];
+
+judgeSteps :: Text -> Int -> Model -> List s.Step -> List s.Observation -> Judged
+  = case step m steps observed => match steps {
+      | {;} => match observed {
+          | {;} => { model = m; violations = none; exercised = {;}; };
+          | _ => { model = m; violations = one "observation-missing" case step "more observations than steps"; exercised = {;}; };
+        };
+      | {first; ...rest} => match observed {
+          | {;} => { model = m; violations = one "observation-missing" case step "a step has no observation"; exercised = {;}; };
+          | {seen; ...later} =>
+              [ here := match first {
+                    | #push { sequence =; offset =; length =; final =; extraFlags =; magicOk =; versionOk =; fill =; padding =; } =>
+                        judgePush case step m { sequence =; offset =; length =; final =; extraFlags =; magicOk =; versionOk =; fill =; padding =; } seen;
+                    | #read { index =; } => judgeRead case step m index seen;
+                  };
+                  tail := judgeSteps case (step + 1) here.model rest later;
+              { model = tail.model;
+                   violations = append here.violations tail.violations;
+                   exercised = append here.exercised tail.exercised; } ];
+        };
+    };
+
+start :: s.Request -> Model
+  = r => { received = 0; sequence = 0; complete = r.argumentCount == 0; total = r.argumentBytes; count = r.argumentCount; lengths = r.lengths; };
+
+judgeCase :: s.Case -> s.CaseObserved -> Judged
+  = c o =>
+    [ m := start c.request;
+        created := if o.created then none else one "valid-accepted" c.id 0 "a valid request yielded no assembly";
+        initial := if o.complete == m.complete then none else one "complete-at-final" c.id 0 "initial completion disagrees with the declared count";
+        steps := judgeSteps c.id 1 m c.steps o.steps;
+    { model = steps.model;
+         violations = append created (append initial steps.violations);
+         exercised = listCons "valid-accepted" (listCons "complete-at-final" steps.exercised); } ];
+
+judgeCases :: List s.Case -> List s.CaseObserved -> Judged
+  = cases observed => match cases {
+      | {;} => match observed {
+          | {;} => { model = start { argumentCount = 0; argumentBytes = 0; lengths = {;}; }; violations = none; exercised = {;}; };
+          | _ => { model = start { argumentCount = 0; argumentBytes = 0; lengths = {;}; }; violations = one "observation-missing" "" 0 "more cases observed than the fixture holds"; exercised = {;}; };
+        };
+      | {first; ...rest} => match observed {
+          | {;} => { model = start first.request; violations = one "observation-missing" first.id 0 "a case has no observation"; exercised = {;}; };
+          | {seen; ...later} =>
+              [ here := judgeCase first seen;
+                  tail := judgeCases rest later;
+              { model = tail.model;
+                   violations = append here.violations tail.violations;
+                   exercised = append here.exercised tail.exercised; } ];
+        };
+    };
+
+inspect :: s.Fixture -> s.Observed -> s.Summary
+  = fixture observed =>
+    [ judged := judgeCases fixture.cases observed.cases;
+        schemas := if fixture.schema == s.fixtureVersion && observed.schema == s.observedVersion then none
+          else one "observation-missing" "" 0 "fixture or observation schema is not the version this oracle reads";
+    { schema = s.schemaVersion; violations = append schemas judged.violations; exercised = judged.exercised; } ];
+
+{ inspect =; }

@@ -60,7 +60,19 @@ def check_provenance(where: str, provenance: object, errors: list[str]) -> None:
         errors.append(f"{where}: provenance names {body.get('page')!r}, which does not exist")
 
 
-def check_item(item: lib.Item, recipes: lib.Recipes, areas: set[str], errors: list[str]) -> None:
+def check_clause(where: str, acceptance: dict, interfaces: dict[str, dict], errors: list[str]) -> None:
+    body = lib.payload(acceptance["check"])
+    interface = interfaces.get(body["interface"])
+    found = interface and next((c for k, c in lib.clauses(interface) if k == body["contractId"] and c["id"] == body["clauseId"]), None)
+    if not found:
+        errors.append(f"{where}: acceptance {acceptance['id']} names no clause of an interface under contracts/*/v*/clauses.zt")
+    elif lib.tag(found["how"]) != "oracle":
+        errors.append(f"{where}: acceptance {acceptance['id']} names an unchecked clause; no oracle can enforce it")
+    elif len(lib.clause_targets(body, interfaces)) != len(body["backends"]) or not body["backends"]:
+        errors.append(f"{where}: acceptance {acceptance['id']} names a backend interface {body['interface']} has no exam for")
+
+
+def check_item(item: lib.Item, recipes: lib.Recipes, areas: set[str], errors: list[str], interfaces: dict[str, dict]) -> None:
     v, where = item.value, item.where
     if v["slug"] != item.path.stem:
         errors.append(f"{where}: slug {v['slug']!r} is not the file name")
@@ -85,6 +97,8 @@ def check_item(item: lib.Item, recipes: lib.Recipes, areas: set[str], errors: li
         body = lib.payload(acceptance["check"])
         if lib.tag(acceptance["check"]) == "observed" and body["justTarget"] not in recipes:
             errors.append(f"{where}: acceptance {acceptance['id']} binds {body['justTarget']!r}, which `just --dump` does not declare")
+        if lib.tag(acceptance["check"]) == "clause":
+            check_clause(where, acceptance, interfaces, errors)
     binders = set(ids)
     for requirement in v["requirements"]:
         binders.add(requirement["id"])
@@ -117,9 +131,14 @@ def check(items: list[lib.Item], recipes: lib.Recipes) -> list[str]:
             if not copy.is_file() or copy.read_bytes() != canonical.read_bytes():
                 errors.append(f".tasks/terminal/{name}: must be a byte-identical copy of .tasks/items/{name}")
     areas = {p.stem for p in lib.area_files()}
+    interfaces = lib.load_interfaces()
+    for interface in interfaces.values():
+        for exam in interface["exams"]:
+            if exam["justTarget"] not in recipes or not (lib.ROOT / exam["adapter"]).is_dir():
+                errors.append(f"interface {interface['id']}: exam {exam} names an undeclared target or a missing adapter")
     by_id: dict[str, lib.Item] = {}
     for item in items:
-        check_item(item, recipes, areas, errors)
+        check_item(item, recipes, areas, errors, interfaces)
         if item.id in by_id:
             errors.append(f"{item.where}: id {item.id} is already used by {by_id[item.id].where}")
         by_id[item.id] = item

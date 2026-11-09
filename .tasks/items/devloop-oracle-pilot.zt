@@ -1,0 +1,73 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+record :: Text = "docs/decisions/work-item-devloop.md";
+adr :: Text = "proposal/devloop-v1-redesign/README.md";
+
+framing :: Text -> s.Acceptance = clause => h.clause "spawn-arguments" "argument-framing" clause h.hostSim;
+
+item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a596432125a" "devloop-oracle-pilot" "planes-mechanism"
+  "Executable contract pilot: spawn argument framing judged by a Zutai oracle"
+  "The spawn argument-framing promise in specs/planes-mechanism.zt is prose, and host tests decide it by assertions the implementation's author wrote. This pilot states the contract as clauses, has an adapter report what slime-proto does as a typed trace, and lets a pure Zutai oracle be the only judge, with tampered traces and mutated implementations as negative controls.")
+  with {
+    parent = "01a1c147-34c7-71e6-a116-6a55619c63c1";
+    owns = {
+      "contracts/spawn-arguments-dbc/**";
+      "verification/dbc/spawn-arguments/**";
+      "scripts/check/check-dbc.py";
+      "components/proto/src/spawn_arguments.rs";
+    };
+    nonGoals = {
+      h.nonGoal "No runtime pre or post check in spawn-service and no generated no_std evaluator." (h.fromDecision adr);
+      h.nonGoal "No QEMU or board trace; the capability-release clause stays unchecked." h.agentDefault;
+      h.nonGoal "No judgement of argument byte content; the host tests compare bytes." h.agentDefault;
+    };
+    requirements = {
+      (h.req "oracle-judges"
+        "dbc_spawn_arguments_check reports zero violations when oracle.zt judges what slime-proto did on every fixture step, and the adapter reports observations only."
+        { "dbc_spawn_arguments_check"; }) with { provenance = h.fromDecision record; };
+      (h.req "controls-fail"
+        "Every tamper in bad-traces.zt, a dropped observation and every mutation in mutations.zt make the oracle report the clause they target, or the exam fails."
+        { "dbc_spawn_arguments_check"; }) with { provenance = h.fromDecision record; };
+      h.req "clauses-covered"
+        "Each checked argument-framing clause is exercised by the honest run and refused by at least one negative control."
+        {
+          "spawn-arguments/argument-framing/well-formed";
+          "spawn-arguments/argument-framing/in-order";
+          "spawn-arguments/argument-framing/within-bounds";
+          "spawn-arguments/argument-framing/valid-accepted";
+          "spawn-arguments/argument-framing/complete-at-final";
+          "spawn-arguments/argument-framing/read-after-complete";
+        };
+    };
+    acceptance = {
+      h.observedWhere "dbc_spawn_arguments_check" {
+        h.count "violations" 0;
+        h.count "clauses" 7;
+        h.count "clausesCovered" 6;
+        h.atLeast "negativeControlsRefused" 11;
+      };
+      framing "well-formed";
+      framing "in-order";
+      framing "within-bounds";
+      framing "valid-accepted";
+      framing "complete-at-final";
+      framing "read-after-complete";
+    };
+    decisions = {
+      h.decided "one-directory"
+        "Clauses, trace types, oracle, fixture and negative controls live together in contracts/spawn-arguments-dbc/v1."
+        "Zutai refuses an import above the entry file's directory, and every file must name the same types."
+        h.agentDefault { "oracle-judges"; };
+      h.decided "fixture-json-on-stdin"
+        "The adapter reads the fixture as zutai-cli json prints it and prints an Observed Zutai document."
+        "Both sides of the process boundary are typed by the contract's schema.zt, and slime-proto stays dependency-free."
+        h.agentDefault { "oracle-judges"; };
+      h.decided "adapter-outside-workspace"
+        "The adapter is a crate outside the root workspace, and mutated copies of slime-proto build outside every workspace."
+        "A Cargo.lock change would stale every evidence record, and a mutant must never enter the product build."
+        h.agentDefault { "controls-fail"; };
+    };
+  };
+
+item

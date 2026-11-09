@@ -74,13 +74,38 @@ name, a repeated or non-UUIDv7 id, a broken `parent` or `depends`, an
 unknown area, an undeclared target, an empty milestone list, a known limit
 outside R1 to R4, and a drifted terminal copy.
 
+## Executable contracts
+
+An executable contract is a directory `contracts/<name>/v<N>/` holding
+`schema.zt` (registry and trace types), `clauses.zt` (an `Interface` of
+pre, post and invariant clauses with their exams), `oracle.zt`,
+`fixture.zt`, `bad-traces.zt` and `mutations.zt`. Zutai refuses an import
+above the entry file's directory, so the files stay together.
+`contracts/spawn-arguments-dbc/v1` is the first one.
+
+- The fixture states stimulus only. The adapter named by an exam drives the
+  implementation and prints an `Observed` document. It never computes an
+  expected outcome or a verdict.
+- `oracle.zt` is the only judge. A violation names the clause it breaks.
+  A clause marked `#unchecked` states what would decide it instead.
+- `scripts/check/check-dbc.py <dir>` requires zero violations on the honest
+  run. It requires every tamper, a dropped observation and every mutation
+  to make the oracle report its clause. A clause is covered when the honest
+  run exercised it and a negative control was refused for it.
+- `h.clause <interface> <contract> <clause> <backends>` is enforced when
+  each backend's exam record passed, has no violation, and sets
+  `covered__<contract>__<clause>`.
+
 ## Ratchets
 
 `scripts/spec/ratchet --base <ref>` compares exam strength at the base and
-at the head. CI runs R4 in the `spec` job and R3 in `ratchet_mutants`.
+at the head. CI runs R1 and R4 in the `spec` job, and R2 and R3 in
+`ratchet_mutants`.
 
 | Id | Subject | Measure | Must not |
 | --- | --- | --- | --- |
+| R1 | interface | clauses in its `clauses.zt` | fall |
+| R2 | interface | covered clauses over all clauses, from its exam | fall |
 | R3 | crate in `specs/targets.toml` `[mutants]` | `cargo mutants` survival over the files the PR's items own in it | rise |
 | R4 | just target | highest `negativeControls*` floor an area or item declares | fall |
 

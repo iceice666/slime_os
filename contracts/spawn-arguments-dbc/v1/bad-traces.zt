@@ -1,0 +1,18 @@
+--| Negative controls on the oracle: each tamper replaces one honest
+--| observation of `fixture.zt` with what a broken implementation would
+--| report. `case` and `step` index the fixture from 0. The oracle must
+--| report `clause` for every one.
+s ::= import "./schema.zt";
+
+pushed :: s.Outcome -> Bool -> s.Observation = outcome complete => #pushed { outcome =; complete =; };
+
+tampers :: List s.Tamper = {
+  { clause = "well-formed"; case = 4; step = 11; observation = pushed #accepted false; };
+  { clause = "in-order"; case = 4; step = 3; observation = pushed #accepted false; };
+  { clause = "within-bounds"; case = 4; step = 0; observation = pushed #completed true; };
+  { clause = "valid-accepted"; case = 4; step = 1; observation = pushed #refused false; };
+  { clause = "complete-at-final"; case = 4; step = 16; observation = pushed #accepted false; };
+  { clause = "read-after-complete"; case = 0; step = 0; observation = #read { present = true; length = 64; }; };
+};
+
+tampers

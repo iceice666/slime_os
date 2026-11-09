@@ -262,12 +262,12 @@ jobs:
           nix develop .#spec --command
           python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}"
           --approvers "${{ steps.approvers.outputs.logins }}" --enforce-owns
-      - name: Ratchet R4 against the base
+      - name: Ratchets R1 and R4 against the base
         if: github.event_name == 'pull_request'
         run: >-
           nix develop .#spec --command
           python3 scripts/spec/ratchet --base "${{ github.event.pull_request.base.sha }}"
-          --only R4 --approvers "${{ steps.approvers.outputs.logins }}"
+          --only R1,R4 --approvers "${{ steps.approvers.outputs.logins }}"
       - name: Work items against the base
         if: github.event_name == 'pull_request'
         run: >-
@@ -275,12 +275,13 @@ jobs:
           python3 scripts/spec/tasks check --base "${{ github.event.pull_request.base.sha }}"
           --approvers "${{ steps.approvers.outputs.logins }}"
 
-  # Ratchet R3 (docs/decisions/work-item-devloop.md): `cargo mutants` over the
-  # files an item this PR adds or changes owns inside a crate listed in
-  # specs/targets.toml [mutants], at the base and at the head. A PR whose items
-  # own no such file measures nothing and passes in seconds.
+  # Ratchets R2 and R3 (docs/decisions/work-item-devloop.md), at the base and at
+  # the head. R2 runs every executable contract's exam (scripts/check/check-dbc.py).
+  # R3 runs `cargo mutants` over the files an item this PR adds or changes owns
+  # inside a crate listed in specs/targets.toml [mutants]; a PR whose items own
+  # no such file measures no R3.
   ratchet_mutants:
-    name: Ratchet R3 (mutant survival)
+    name: Ratchets R2 and R3 (clause coverage, mutant survival)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
@@ -306,7 +307,7 @@ jobs:
       - run: >-
           nix develop --command
           python3 scripts/spec/ratchet --base "${{ github.event.pull_request.base.sha }}"
-          --only R3 --approvers "${{ steps.approvers.outputs.logins }}"
+          --only R2,R3 --approvers "${{ steps.approvers.outputs.logins }}"
 
   kani_proofs:
     name: Kani IO wire and device-boundary proofs

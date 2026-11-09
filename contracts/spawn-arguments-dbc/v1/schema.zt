@@ -1,0 +1,98 @@
+--| Executable contract for spawn/v2 argument framing (dbc/v1).
+--|
+--| `clauses.zt` states the contract as clauses and names its exams.
+--| `fixture.zt` is the stimulus: requests and frames, with no expected
+--| outcome. A backend adapter feeds the stimulus to the implementation and
+--| prints what it observed as an `Observed` value. `oracle.zt` is the only
+--| place that turns a stimulus and an observation into violations.
+--| `bad-traces.zt` and `mutations.zt` are the negative controls.
+--|
+--| Zutai refuses an import above the entry file's directory, so every file
+--| of the interface lives here beside this schema.
+
+--| Registry types, shared in shape by every `contracts/*/v*/clauses.zt`.
+ClauseKind :: type { #pre; #post; #invariant; };
+
+--| `#oracle`: `oracle.zt` reports violations under this clause id.
+--| `#unchecked`: no trace can decide it; `reason` names what would.
+How :: type { #oracle; #unchecked: { reason : Text; }; };
+
+Clause :: type { id : Text; kind : ClauseKind; statement : Text; how : How; };
+
+Contract :: type { id : Text; statement : Text; clauses : List Clause; };
+
+--| `adapter` is the crate directory that drives the implementation for
+--| `backend`; `justTarget` is the exam whose record reports coverage.
+Exam :: type { backend : Text; justTarget : Text; adapter : Text; };
+
+Interface :: type {
+  schema : Text;
+  id : Text;
+  wire : Text;
+  contracts : List Contract;
+  exams : List Exam;
+};
+
+--| Stimulus. A request is valid by construction: request-header refusal is
+--| another contract. `lengths` has one entry per argument slot (four).
+Request :: type { argumentCount : Int; argumentBytes : Int; lengths : List Int; };
+
+--| One frame as the client sends it. `magicOk` and `versionOk` choose the
+--| real constant or a different one, so the fixture names no wire constant.
+--| Payload byte `j < length` is `(fill + j) % 256`; the bytes after `length`
+--| hold `padding`.
+Frame :: type {
+  sequence : Int;
+  offset : Int;
+  length : Int;
+  final : Bool;
+  extraFlags : Int;
+  magicOk : Bool;
+  versionOk : Bool;
+  fill : Int;
+  padding : Int;
+};
+
+Step :: type { #push: Frame; #read: { index : Int; }; };
+
+Case :: type { id : Text; request : Request; steps : List Step; };
+
+Fixture :: type { schema : Text; cases : List Case; };
+
+--| Observation, printed by the adapter. One `CaseObserved` per fixture case
+--| and one `Observation` per step, in order.
+Outcome :: type { #accepted; #completed; #refused; };
+
+Observation :: type {
+  #pushed: { outcome : Outcome; complete : Bool; };
+  #read: { present : Bool; length : Int; };
+};
+
+CaseObserved :: type { created : Bool; complete : Bool; steps : List Observation; };
+
+Observed :: type { schema : Text; cases : List CaseObserved; };
+
+--| Oracle output. `exercised` lists one clause id per judgement made.
+Violation :: type { clause : Text; case : Text; step : Int; detail : Text; };
+
+Summary :: type { schema : Text; violations : List Violation; exercised : List Text; };
+
+--| Negative controls. A tamper replaces one observation of the adapter's
+--| honest output; the oracle must then report `clause`.
+Tamper :: type { clause : Text; case : Int; step : Int; observation : Observation; };
+
+--| A mutation replaces `find`, which must occur exactly once in `file`, with
+--| `replace` in a copy of the implementation; the oracle must report `clause`.
+Mutation :: type { id : Text; clause : Text; file : Text; find : Text; replace : Text; };
+
+schemaVersion :: Text = "dbc/v1";
+fixtureVersion :: Text = "spawn-arguments-fixture/1";
+observedVersion :: Text = "spawn-arguments-observed/1";
+
+{
+  ClauseKind =; How =; Clause =; Contract =; Exam =; Interface =;
+  Request =; Frame =; Step =; Case =; Fixture =;
+  Outcome =; Observation =; CaseObserved =; Observed =;
+  Violation =; Summary =; Tamper =; Mutation =;
+  schemaVersion =; fixtureVersion =; observedVersion =;
+}

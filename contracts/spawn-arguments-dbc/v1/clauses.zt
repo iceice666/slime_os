@@ -1,0 +1,44 @@
+--| The spawn/v2 argument-framing contract as clauses (dbc/v1). Ratchet R1
+--| counts these clauses; R2 counts the ones `just dbc_spawn_arguments_check`
+--| covers with a positive case and a failing negative control.
+s ::= import "./schema.zt";
+
+checked :: Text -> s.ClauseKind -> Text -> s.Clause
+  = id kind statement => { id =; kind =; statement =; how = #oracle; };
+
+interface :: s.Interface = {
+  schema = s.schemaVersion;
+  id = "spawn-arguments";
+  wire = "contracts/spawn/v2/schema.zt";
+  contracts = {
+    {
+      id = "argument-framing";
+      statement = "spawn-service assembles at most 4 arguments of at most 256 bytes from numbered frames, and admits a launch only after the final frame completes the declared total.";
+      clauses = {
+        checked "well-formed" #pre
+          "A frame with a wrong magic or version, a flag other than final, a length beyond the payload, or a non-zero byte after its length is refused.";
+        checked "in-order" #pre
+          "A frame whose sequence is not the number of frames accepted so far, or whose offset is not the number of bytes received so far, is refused.";
+        checked "within-bounds" #pre
+          "A frame that would pass the declared total, an empty non-final frame, a non-final frame that reaches the total, and a final frame that ends before it are refused.";
+        checked "valid-accepted" #post
+          "A frame that meets every precondition is accepted, and a valid request always yields an assembly.";
+        checked "complete-at-final" #post
+          "Assembly is complete exactly after it accepts a final frame, or at once when the request declares no arguments, and it accepts no frame afterwards.";
+        checked "read-after-complete" #invariant
+          "Argument i is readable exactly when assembly is complete and i is below the declared count, and it has its declared length.";
+        {
+          id = "refusal-releases-capabilities";
+          kind = #post;
+          statement = "A refused request releases every capability the client handed over before any child is spawned.";
+          how = #unchecked { reason = "The capabilities live in seL4; a host trace cannot observe them. sel4_net_check observes the refusal path by serial markers."; };
+        };
+      };
+    };
+  };
+  exams = {
+    { backend = "hostSim"; justTarget = "dbc_spawn_arguments_check"; adapter = "verification/dbc/spawn-arguments"; };
+  };
+};
+
+interface

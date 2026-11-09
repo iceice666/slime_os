@@ -1,0 +1,18 @@
+# Host-sim backend adapter for the spawn/v2 argument-framing oracle
+# (contracts/spawn-arguments-dbc/v1), run by `just dbc_spawn_arguments_check`.
+#
+# Outside the root workspace (hence the empty `[workspace]`), like
+# `verification/zenoh-xcheck`: the exam builds it against the real
+# `slime-proto` and against mutated copies, and neither may enter the
+# product's `Cargo.lock`. `slime-proto` has no dependencies, so this crate
+# needs no registry.
+[package]
+name = "dbc-spawn-arguments-adapter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+slime-proto = { path = "../../../components/proto" }
