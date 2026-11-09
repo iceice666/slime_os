@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Work items under `.tasks/` (decision: docs/decisions/work-item-devloop.md).
+
+    scripts/spec/tasks check
+    scripts/spec/tasks new <task|bug|milestone> <slug> --area <area>
+
+`check` refuses: a file whose final value is not a `task/v1` Item, a slug
+that is not the file name, an id that is not a UUIDv7 or repeats, a
+`parent` or `depends` that names no item, an `area` with no
+`specs/<area>.zt`, an acceptance id that repeats, a requirement that names
+no acceptance of its item, an item without a mandatory machine acceptance
+(`h.observed` or `h.clause`), a `justTarget` that `just --dump` does not
+declare, a milestone with an empty owns, nonGoals, requirements,
+acceptance, invariants or decisions list, a decision `binds` that names
+nothing, a `#decision` provenance whose page does not exist, a known limit
+outside R1-R4, a `.zti` under `.tasks/`, and a `terminal/` copy of
+`schema.zt` or `helpers.zt` that differs from `items/`.
+
+`new` prints a skeleton with a fresh UUIDv7; redirect it to the file.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+RATCHETS = ("R1", "R2", "R3", "R4")
+MILESTONE_LISTS = ("owns", "nonGoals", "requirements", "acceptance", "invariants", "decisions")
+
+
+def check_provenance(where: str, provenance: object, errors: list[str]) -> None:
+    kind = lib.tag(provenance)
+    body = lib.payload(provenance)
+    if kind == "human" and not (body.get("quote", "").strip() and body.get("source", "").strip()):
+        errors.append(f"{where}: a #human provenance needs a quote and a source")
+    if kind == "decision" and not (lib.ROOT / body.get("page", "")).is_file():
+        errors.append(f"{where}: provenance names {body.get('page')!r}, which does not exist")
+
+
+def check_item(item: lib.Item, recipes: lib.Recipes, areas: set[str], errors: list[str]) -> None:
+    v, where = item.value, item.where
+    if v["slug"] != item.path.stem:
+        errors.append(f"{where}: slug {v['slug']!r} is not the file name")
+    if not lib.UUID7.match(v["id"]):
+        errors.append(f"{where}: id {v['id']!r} is not a UUIDv7")
+    if v["area"] not in areas:
+        errors.append(f"{where}: area {v['area']!r} has no specs/<area>.zt")
+    for field in ("title", "problem"):
+        if not v[field].strip():
+            errors.append(f"{where}: {field} is empty")
+    if lib.tag(v["kind"]) == "milestone":
+        for field in MILESTONE_LISTS:
+            if not v[field]:
+                errors.append(f"{where}: a milestone needs a non-empty {field}")
+    ids = [a["id"] for a in v["acceptance"]]
+    if len(ids) != len(set(ids)):
+        errors.append(f"{where}: acceptance ids repeat: {ids}")
+    machine = [a for a in v["acceptance"] if a["mandatory"] and lib.tag(a["check"]) in {"observed", "clause"}]
+    if not machine:
+        errors.append(f"{where}: an item needs at least one mandatory h.observed or h.clause acceptance")
+    for acceptance in v["acceptance"]:
+        body = lib.payload(acceptance["check"])
+        if lib.tag(acceptance["check"]) == "observed" and body["justTarget"] not in recipes:
+            errors.append(f"{where}: acceptance {acceptance['id']} binds {body['justTarget']!r}, which `just --dump` does not declare")
+    binders = set(ids)
+    for requirement in v["requirements"]:
+        binders.add(requirement["id"])
+        if not requirement["statement"].strip():
+            errors.append(f"{where}: requirement {requirement['id']} has an empty statement")
+        for named in requirement["acceptance"]:
+            if named not in ids:
+                errors.append(f"{where}: requirement {requirement['id']} names acceptance {named!r}, which this item lacks")
+        check_provenance(f"{where} requirement {requirement['id']}", requirement["provenance"], errors)
+    for decision in v["decisions"]:
+        for bound in decision["binds"]:
+            if bound not in binders:
+                errors.append(f"{where}: decision {decision['id']} binds {bound!r}, which is no requirement or acceptance of this item")
+        check_provenance(f"{where} decision {decision['id']}", decision["provenance"], errors)
+    for entry in v["invariants"] + v["nonGoals"]:
+        check_provenance(f"{where} {entry.get('id', 'nonGoal')}", entry["provenance"], errors)
+    for limit in v["knownLimits"]:
+        if limit["ratchet"] not in RATCHETS or not limit["subject"].strip() or not limit["reason"].strip():
+            errors.append(f"{where}: known limit {limit} needs a ratchet in {RATCHETS}, a subject and a reason")
+        check_provenance(f"{where} known limit {limit['ratchet']}", limit["provenance"], errors)
+
+
+def check(items: list[lib.Item], recipes: lib.Recipes) -> list[str]:
+    errors: list[str] = []
+    for stray in (lib.ROOT / ".tasks").rglob("*.zti"):
+        errors.append(f"{stray.relative_to(lib.ROOT)}: .zti is computed, never committed")
+    if lib.TERMINAL.is_dir():
+        for name in lib.ITEM_SOURCES:
+            copy, canonical = lib.TERMINAL / name, lib.ITEMS / name
+            if not copy.is_file() or copy.read_bytes() != canonical.read_bytes():
+                errors.append(f".tasks/terminal/{name}: must be a byte-identical copy of .tasks/items/{name}")
+    areas = {p.stem for p in lib.area_files()}
+    by_id: dict[str, lib.Item] = {}
+    for item in items:
+        check_item(item, recipes, areas, errors)
+        if item.id in by_id:
+            errors.append(f"{item.where}: id {item.id} is already used by {by_id[item.id].where}")
+        by_id[item.id] = item
+    for item in items:
+        for named in [item.value["parent"]] * bool(item.value["parent"]) + item.value["depends"]:
+            if named not in by_id:
+                errors.append(f"{item.where}: parent or depends names {named!r}, which is no item")
+    return errors
+
+
+SKELETON = '''s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.{kind} "{id}" "{slug}" "{area}"
+  "<title>"
+  "<problem: what is wrong or missing today, in two or three sentences>")
+  with {{
+    owns = {{ "<path glob>"; }};
+    requirements = {{
+      h.req "<requirement id>" "<statement>" {{ "<just target>"; }};
+    }};
+    acceptance = {{
+      h.observed "<just target>";
+    }};
+  }};
+
+item
+'''
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("check")
+    new = sub.add_parser("new")
+    new.add_argument("kind", choices=("task", "bug", "milestone"))
+    new.add_argument("slug")
+    new.add_argument("--area", required=True)
+    args = parser.parse_args()
+
+    if args.command == "new":
+        if not lib.AREA_ID.match(args.slug):
+            parser.error(f"slug must match {lib.AREA_ID.pattern}")
+        print(SKELETON.format(kind=args.kind, id=uuid.uuid7(), slug=args.slug, area=args.area), end="")
+        return 0
+
+    items = lib.load_items()
+    errors = check(items, lib.Recipes.load())
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    if errors:
+        return 1
+    terminal = sum(1 for i in items if i.terminal)
+    print(f"tasks check: {len(items) - terminal} open, {terminal} terminal item(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

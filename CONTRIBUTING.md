@@ -6,7 +6,9 @@ Slime OS uses GitHub for collaboration, but canonical project state lives in
 the repository: `specs/<area>.zt` says what the system promises, and the
 `evidence` branch says what has been observed. GitHub Issues are intake for
 bugs and proposals; nothing projects into them. The rationale is
-[Living specs replace work items](docs/decisions/living-spec-devloop.md).
+[Living specs replace work items](docs/decisions/living-spec-devloop.md),
+amended by [Work items return on top of living specs](docs/decisions/work-item-devloop.md):
+the unit of change is a work item under `.tasks/items/`.
 
 **A behavior change changes the spec.** One pull request carries the spec
 diff, the exam and the implementation together. A PR that changes what the

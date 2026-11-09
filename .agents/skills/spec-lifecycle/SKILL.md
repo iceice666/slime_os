@@ -26,10 +26,37 @@ diff first for that reason.
 | exam | a `just` target, run under `scripts/spec/record` | the checker's author; the grader-independence rule protects it |
 | evidence | branch `evidence`, `<target>/<closureDigest>.zt` | the Evidence workflow for CI targets; the signer for human and operator records |
 
-There is no work item and no `done` state. `scripts/spec/status` computes
-every acceptance from the evidence branch: enforced, failing, claimed,
-advisory. `specs/legacy.zt` indexes the retired `.tasks/` store by UUID;
+No file records a `done` state. `scripts/spec/status` computes every
+acceptance from the evidence branch: enforced, failing, claimed, advisory. `specs/legacy.zt` indexes the retired `.tasks/` store by UUID;
 its full text is in Git at the commit each row names as `frozenAt`.
+
+## Work items
+
+A work item is the unit of change
+(`docs/decisions/work-item-devloop.md`). It is `.tasks/items/<slug>.zt`,
+whose final value is a `task/v1` `Item`; `.tasks/items/schema.zt` defines
+the types and `helpers.zt` the constructors. `just tasks_new task <slug>
+--area <area>` prints a skeleton with a fresh UUIDv7.
+
+- `h.task`, `h.bug` and `h.milestone` take the id, slug, area, title and
+  problem. Extend with `with { owns = ...; requirements = ...; acceptance =
+  ...; }`. A milestone must fill owns, nonGoals, requirements, acceptance,
+  invariants and decisions.
+- An acceptance is `h.observed <target>`, `h.observedWhere <target>
+  { predicates }`, `h.human <id> <question>` or `h.clause <interface>
+  <contract> <clause> <backends>`. `h.advisory` makes one non-mandatory.
+  An item needs one mandatory `h.observed` or `h.clause`.
+- Every requirement, non-goal, invariant, decision and known limit carries
+  a provenance: `h.fromHuman <quote> <source>`, `h.fromDecision <page>` or
+  `h.agentDefault`. `h.req` defaults to `h.agentDefault`.
+- `.tasks/terminal/` holds closed items and byte-identical copies of
+  `schema.zt` and `helpers.zt`, because Zutai refuses an import above the
+  entry file's directory.
+
+`just tasks_check` refuses a malformed item, a slug that is not the file
+name, a repeated or non-UUIDv7 id, a broken `parent` or `depends`, an
+unknown area, an undeclared target, an empty milestone list, a known limit
+outside R1 to R4, and a drifted terminal copy.
 
 ## Writing a requirement
 

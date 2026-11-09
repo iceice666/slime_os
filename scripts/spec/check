@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
-BUDGET = 2000  # migrate is transitional and excluded; see proposal/devloop-redesign/decisions.md
+BUDGET = 3000  # work items, ratchets and roles; see docs/decisions/work-item-devloop.md
 PRODUCT_PREFIXES = ("components/", "slime-root/", "contracts/", "boot-contracts/")
 LEGACY_ITEMS = lib.ROOT / ".tasks" / "items"
 MARKED_ROOTS = ("scripts", "just", "Justfile", "slime-root", "components", "contracts")
@@ -238,6 +238,7 @@ def main() -> int:
                     findings.error(tag, f"depends on {dep!r}, which is no requirement")
 
     acceptance_keys = {(rid, p["id"]) for rid, (_, r) in requirements.items() for _, p in lib.acceptances(r)}
+    acceptance_keys |= {(item.id, a["id"]) for item in lib.load_items() for a in item.value["acceptance"]}
     marked = [f for root in MARKED_ROOTS for f in lib.tracked(root)]
     for path, line, rid, acc in lib.spec_marks(marked):
         if (rid, acc) not in acceptance_keys:

@@ -1,0 +1,55 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+session :: Text = "pi session 2026-11-10, proposal/devloop-v1-redesign";
+record :: Text = "docs/decisions/work-item-devloop.md";
+
+item :: s.Item = (h.milestone "01a1c147-34c7-71e6-a116-6a55619c63c1" "devloop-v1-redesign" "quality"
+  "Work items with machine ratchets on top of living specs"
+  "Living specs ask a person to own invariants and approve grader diffs, and recorded sessions show the person answers with a word. This milestone returns the work item as the unit of change, measures exam strength with four ratchets instead of human approval, and lets parallel tracks merge without manual conflicts.")
+  with {
+    owns = {
+      ".tasks/**";
+      "scripts/spec/**";
+      ".github/workflows/**";
+      "docs/decisions/work-item-devloop.md";
+      ".agents/skills/spec-lifecycle/**";
+    };
+    nonGoals = {
+      h.nonGoal "No separate bot account per role; roles are commit trailers." (h.fromDecision record);
+      h.nonGoal "No migration of the requirements already in specs/<area>.zt into items." h.agentDefault;
+      h.nonGoal "No liveness proof, Kani harness or formal proof from a finite trace." (h.fromDecision record);
+      h.nonGoal "No post-merge regeneration of generated bindings." (h.fromHuman "只搬 closure sources（建議）" session);
+    };
+    requirements = {
+      (h.req "item-format"
+        "A work item is a task/v1 Zutai source under .tasks/items or .tasks/terminal, and tasks check refuses a malformed item, a repeated id, a broken parent or depends link, an undeclared target and a drifted terminal schema copy."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+    };
+    acceptance = {
+      h.observedWhere "spec_e2e" { h.count "casesFailed" 0; h.atLeast "casesObserved" 39; };
+    };
+    invariants = {
+      h.invariant "done-by-machine" "Done is computed from evidence records, never written in an item." (h.fromDecision record);
+      h.invariant "no-self-grading" "One commit cannot both change an oracle or negative control and the product code it judges." (h.fromDecision record);
+      h.invariant "evidence-binds-closure" "A record is keyed by the closure digest of its target and has no time-to-live." (h.fromDecision "docs/decisions/living-spec-devloop.md");
+      h.invariant "people-decide-direction" "People decide direction, the verdict on concrete examples and whether a ratchet regression is accepted." (h.fromHuman "全部照 default" session);
+      h.invariant "offline-uuid" "Work tracking is offline, in the repository and identified by UUIDv7." (h.fromDecision "docs/decisions/living-spec-devloop.md");
+    };
+    decisions = {
+      h.decided "terminal-copies"
+        "The terminal directory holds byte-identical copies of schema.zt and helpers.zt, and tasks check refuses a copy that differs."
+        "Zutai refuses an import above the entry file's directory, so a terminal item cannot import the canonical sources."
+        h.agentDefault { "item-format"; };
+      h.decided "area-positional"
+        "h.task, h.bug and h.milestone take the area as their third argument."
+        "Every item must name an area, and a positional argument cannot be forgotten."
+        h.agentDefault { "item-format"; };
+      h.decided "line-budget"
+        "scripts/spec/ may hold 3000 lines instead of 2000."
+        "The directory held 1715 lines before this milestone, so the proposal's 1500-line figure was already unmet, and items, ratchets and roles add tooling."
+        h.agentDefault { "item-format"; };
+    };
+  };
+
+item

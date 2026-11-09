@@ -3,9 +3,11 @@
 One rule: a behavior change changes the spec. A PR that changes what the
 system does without a diff under `specs/` does not merge.
 
-There is no work item. A feature is one PR carrying three things together:
-the spec diff (requirements added, rewritten or removed in the owning area
-file), the exam (a `just` target), and the implementation. There is no `done`
+A feature is one PR carrying three things together: the spec change (a work
+item under `.tasks/items/`, or requirements added, rewritten or removed in
+the owning area file), the exam (a `just` target), and the implementation.
+[`docs/decisions/work-item-devloop.md`](../decisions/work-item-devloop.md)
+describes the work item. There is no `done`
 state either: `scripts/spec/status` computes each requirement from records
 on the `evidence` branch after the PR lands. The rationale is in
 [`docs/decisions/living-spec-devloop.md`](../decisions/living-spec-devloop.md).

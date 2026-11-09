@@ -1,6 +1,6 @@
 # devloop V1 框架重設計提案
 
-狀態：草稿，2026-11-10。尚未決策，尚未實作。
+狀態：已決策，2026-11-10，見 [`docs/decisions/work-item-devloop.md`](../../docs/decisions/work-item-devloop.md)。實作中。
 
 範圍：保留 V1 devloop 的四個階段 spec → impl → evidence → closeout 與
 work-item 模型，重新設計每個階段裡「誰做、機器擋什麼、人看什麼」。

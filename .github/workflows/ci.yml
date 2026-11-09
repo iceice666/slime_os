@@ -245,6 +245,7 @@ jobs:
           restore-prefixes-first-match: spec-v1-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 5G
       - run: nix develop .#spec --command just spec_check
+      - run: nix develop .#spec --command just tasks_check
       - run: nix develop .#spec --command python3 scripts/spec/e2e
       - name: Approvals from HUMAN_OWNERS
         if: github.event_name == 'pull_request'
