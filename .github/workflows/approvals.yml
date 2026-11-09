@@ -1,0 +1,65 @@
+# The pull-request gates that read approvals (docs/decisions/work-item-devloop.md):
+# commit roles (process paths), ratchets R1 and R4, and the work-item rules.
+# A submitted or dismissed review re-runs them, and only the latest review of
+# each login on the head commit counts (scripts/spec/approvers). HUMAN_OWNERS
+# is read at the base, so a pull request cannot add its own approver.
+name: Approvals
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+concurrency:
+  group: approvals-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  gates:
+    name: Approval-gated checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            spec-v1-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/zutai.nix')
+            }}
+          restore-prefixes-first-match: spec-v1-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+      - name: Approvals of the head from HUMAN_OWNERS
+        id: approvers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "logins=$(python3 scripts/spec/approvers "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" "${{ github.event.pull_request.head.sha }}")" >> "$GITHUB_OUTPUT"
+      - name: Commit roles against the base
+        run: >-
+          nix develop .#spec --command python3 scripts/spec/roles --base "$BASE"
+          --approvers "${{ steps.approvers.outputs.logins }}"
+      - name: Ratchets R1 and R4 against the base
+        run: >-
+          nix develop .#spec --command python3 scripts/spec/ratchet --base "$BASE"
+          --only R1,R4 --approvers "${{ steps.approvers.outputs.logins }}"
+      - name: Work items against the base
+        run: >-
+          nix develop .#spec --command python3 scripts/spec/tasks check --base "$BASE"
+          --approvers "${{ steps.approvers.outputs.logins }}"

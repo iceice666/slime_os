@@ -572,10 +572,15 @@ def verify_signature(data: bytes, signature: bytes | None, signer: str) -> bool:
     return done.returncode == 0
 
 
-def human_owners() -> set[str]:
-    if not HUMAN_OWNERS.is_file():
-        return set()
-    return {line.strip() for line in HUMAN_OWNERS.read_text().splitlines() if line.strip() and not line.startswith("#")}
+def human_owners(rev: str | None = None) -> set[str]:
+    """Logins in HUMAN_OWNERS, at `rev` when given: a pull request judges approvals
+    against its base, so it cannot add its own approver."""
+    if rev is not None:
+        data = read_blob(rev, "HUMAN_OWNERS")
+        text = data.decode() if data is not None else ""
+    else:
+        text = HUMAN_OWNERS.read_text() if HUMAN_OWNERS.is_file() else ""
+    return {line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")}
 
 
 def load_areas_at(rev: str) -> list[Area]:

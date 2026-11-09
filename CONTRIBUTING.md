@@ -17,8 +17,9 @@ system does without a diff under `specs/` does not merge.
 **Machines guard the exams, not approvals.** Each commit declares a
 `Devloop-Role:` trailer (`spec-writer`, `implementer` or `breaker`), and CI
 refuses a commit that leaves its role's paths. Four ratchets refuse a pull
-request that weakens an exam. A login in `HUMAN_OWNERS` approves only a
-ratchet regression the pull request records as a known limit.
+request that weakens an exam. A login in `HUMAN_OWNERS` approves a ratchet
+regression or weakened acceptance the pull request records as a known limit,
+a cancelled item, and a change to the gates' own code.
 
 **PR merged != requirement enforced.** After the merge, CI on `main` runs
 each bound target whose closure digest has no record yet and writes the
@@ -141,7 +142,10 @@ refuses and which paths each role may touch.
   recipe or an item carries exactly one `Devloop-Role:` trailer. The same
   commit cannot change a checker and the product code it judges.
 - A ratchet regression passes only with a new `h.knownLimit` in the PR's
-  item and an approval from a login in `HUMAN_OWNERS`.
+  item and an approval from a login in `HUMAN_OWNERS`. The same approval
+  admits a cancelled item, a weakened acceptance, and a change to the gates'
+  own code (`scripts/spec/`, workflows, `HUMAN_OWNERS`). After approving,
+  re-run `ratchet_mutants` if it failed; `approvals.yml` re-runs itself.
 - Every touched product file falls under some area's `owns`. A new product
   path needs an `owns` glob in the area that promises its behavior.
 
@@ -247,9 +251,10 @@ plain pinned toolchain and `Swatinem/rust-cache`.
 The spec job uses `nix develop .#spec`: a checkout plus `just`, Python,
 `zutai-cli`, `gh` and `ssh-keygen`, with no product toolchain. It runs
 `just spec_check`, `just tasks_check`, the CLI's own end-to-end run, and on
-a pull request owns coverage, commit roles, ratchets R1 and R4, and the
-work-item rules, with the head's approvers. The `ratchet_mutants` job runs
-ratchets R2 and R3 in the product dev shell.
+a pull request owns coverage and untouched derived sources. The `ratchet_mutants`
+job runs ratchets R2 and R3 in the product dev shell. `approvals.yml` runs
+commit roles, ratchets R1 and R4 and the work-item rules, and a submitted
+review re-runs it.
 
 Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the
 seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in

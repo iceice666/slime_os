@@ -275,6 +275,44 @@ def tracks(clone: Clone) -> None:
     ok(done.returncode == 1 and "regenerated after the merge" in done.stderr, "a pull request may not carry a derived closure source")
 
 
+def hardening(clone: Clone) -> None:
+    """T4 weakened acceptance, T5 deleted item, T6 edited closed item, process paths need approval."""
+    for stale in lib_items(clone.root):
+        if stale.name not in {"schema.zt", "helpers.zt"}:
+            stale.unlink()
+    both = 'h.observedWhere "e2e_exam" { h.atLeast "casesObserved" 3; }; h.observedAs "again" "e2e_exam" h.noPredicates;'
+    clone.write(".tasks/items/e2e-item.zt", item_text(acceptance=both))
+    clone.commit("item with two acceptances")
+    clone.write(".tasks/items/e2e-item.zt", item_text(acceptance='h.observedWhere "e2e_exam" { h.atLeast "casesObserved" 4; };'))
+    clone.commit("tighten one, drop the other")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "T4: e2e-item acceptance again removed" in done.stderr and "e2e_exam lost" not in done.stderr, f"T4: a removed acceptance is refused, a tighter bound is not: {done.stderr[-300:]}")
+    clone.write(".tasks/items/e2e-item.zt", item_text(acceptance='h.advisory (h.observedWhere "e2e_exam" { h.atLeast "casesObserved" 3; }); h.observedAs "again" "e2e_exam" h.noPredicates;'))
+    clone.commit("make one advisory")
+    done = clone.spec("tasks", "check", "--base", "HEAD~2")
+    ok(done.returncode == 1 and "made advisory" in done.stderr, "T4: an acceptance made advisory is refused")
+    clone.run("git", "reset", "-q", "--hard", "HEAD~2")
+    clone.run("git", "rm", "-q", ".tasks/items/e2e-item.zt")
+    clone.commit("cancel the item")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "T5" in done.stderr, "T5: deleting an item needs an approval")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1", "--approvers", "owner")
+    ok(done.returncode == 0, f"T5: an approval admits the cancellation: {done.stderr[-300:]}")
+    clone.run("git", "reset", "-q", "--hard", "HEAD~1")
+    clone.run("git", "mv", ".tasks/items/e2e-item.zt", ".tasks/terminal/e2e-item.zt")
+    clone.commit("park the item in terminal for the fixture")
+    clone.write(".tasks/terminal/e2e-item.zt", item_text(acceptance=both).replace('"components/e2e/**";', '"slime-root/**";'))
+    clone.commit("widen a closed item's owns")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "T6" in done.stderr, "T6: editing a closed item is refused")
+    clone.write("HUMAN_OWNERS", "owner\nagent-bot\n")
+    clone.commit("add an approver")
+    done = clone.spec("roles", "--base", "HEAD~1", "--approvers", "agent-bot")
+    ok(done.returncode == 1 and "process paths" in done.stderr, "a process path needs an approver listed at the base")
+    done = clone.spec("roles", "--base", "HEAD~1", "--approvers", "owner")
+    ok(done.returncode == 0, f"a base approver admits a process path: {done.stderr[-300:]}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--keep", action="store_true")
@@ -405,6 +443,7 @@ def main() -> int:
         ratchets(clone)
         clauses(clone)
         tracks(clone)
+        hardening(clone)
     finally:
         if args.keep:
             print(f"kept {temporary}")

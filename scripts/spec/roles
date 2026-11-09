@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Commit roles: one commit cannot both set an exam and pass it.
 
-    scripts/spec/roles --base <ref>
+    scripts/spec/roles --base <ref> [--approvers a,b]
     scripts/spec/roles --classify <path>...
 
 Every non-merge commit in merge-base(<ref>, HEAD)..HEAD that touches a
@@ -13,14 +13,22 @@ every classified path it touches must admit that role
   clause    clauses.zt, oracle.zt, fixture.zt, schema.zt in   spec-writer
             a contracts/*/v*/ directory that holds clauses.zt
   control   bad-traces.zt, mutations.zt in such a directory;  breaker
-            scripts/check/**
+            scripts/check/**, scripts/lib/**
   product   components/, slime-root/, boot-contracts/,        implementer
             contracts/** outside such directories,
             verification/dbc/** (backend adapters)
   recipe    Justfile, just/**                                 implementer, breaker
   item      .tasks/**, specs/*.zt                             spec-writer, implementer
 
-Any other path is unclassified and admits every role or none. Roles
+  process   scripts/spec/**, .github/**, HUMAN_OWNERS,         any role, and an
+            specs/allowed_signers, specs/targets.toml, the      approval from a
+            item schema and helpers, contracts/observation/**  HUMAN_OWNERS login
+
+The process class is the code of these gates and what they trust; a pull
+request that could rewrite it could switch every gate off, so it alone
+keeps a human approval, read from HUMAN_OWNERS at the base. Any other path
+is unclassified and admits every role or none. A merge commit is judged on
+the paths it changes beyond its parents (`git diff-tree --cc`). Roles
 separate contexts, not accounts: two agents can still agree to cheat.
 """
 
@@ -41,12 +49,17 @@ ADMITS = {
     "product": {"implementer"},
     "recipe": {"implementer", "breaker"},
     "item": {"spec-writer", "implementer"},
+    "process": set(ROLES),
 }
+PROCESS = ("scripts/spec/", ".github/", "contracts/observation/")
+PROCESS_FILES = {"HUMAN_OWNERS", "specs/allowed_signers", "specs/targets.toml"}
 DBC_FILE = re.compile(r"^contracts/[^/]+/v[^/]+/([^/]+)$")
 PRODUCT = ("components/", "slime-root/", "boot-contracts/", "contracts/", "verification/dbc/")
 
 
 def classify(path: str, dbc_dirs: set[str]) -> str | None:
+    if path.startswith(PROCESS) or path in PROCESS_FILES or re.fullmatch(r"\.tasks/(items|terminal)/(schema|helpers)\.zt", path):
+        return "process"
     match = DBC_FILE.match(path)
     if match and path.rsplit("/", 1)[0] in dbc_dirs:
         name = match.group(1)
@@ -54,7 +67,7 @@ def classify(path: str, dbc_dirs: set[str]) -> str | None:
             return "clause"
         if name in {"bad-traces.zt", "mutations.zt"}:
             return "control"
-    if path.startswith("scripts/check/"):
+    if path.startswith(("scripts/check/", "scripts/lib/")):
         return "control"
     if path.startswith(PRODUCT):
         return "product"
@@ -70,13 +83,19 @@ def dbc_directories(rev: str) -> set[str]:
     return {p.rsplit("/", 1)[0] for p in listing if re.fullmatch(r"contracts/[^/]+/v[^/]+/clauses\.zt", p)}
 
 
-def judge(base: str) -> list[str]:
+def judge(base: str, approvers: set[str]) -> list[str]:
     merge_base = lib.git("merge-base", base, "HEAD").strip()
+    humans = approvers & lib.human_owners(merge_base)
     errors = []
-    for sha in lib.git("rev-list", "--no-merges", "--reverse", f"{merge_base}..HEAD").split():
+    process: list[str] = []
+    for sha in lib.git("rev-list", "--reverse", f"{merge_base}..HEAD").split():
         dbc_dirs = dbc_directories(sha) | dbc_directories(f"{sha}^")
-        paths = [p for p in lib.git("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--root", sha).splitlines() if p]
+        merge = len(lib.git("rev-list", "--parents", "-n", "1", sha).split()) > 2
+        listing = ["--cc"] if merge else ["-r", "--root"]
+        paths = [p for p in lib.git("diff-tree", "--no-commit-id", "--name-only", *listing, sha).splitlines() if p and p != sha]
         classes = {p: c for p in paths if (c := classify(p, dbc_dirs))}
+        process += [p for p, c in classes.items() if c == "process"]
+        classes = {p: c for p, c in classes.items() if c != "process"}
         if not classes:
             continue
         roles = [r.strip() for r in lib.git("log", "-1", "--format=%(trailers:key=Devloop-Role,valueonly,separator=%x0a)", sha).splitlines() if r.strip()]
@@ -88,6 +107,8 @@ def judge(base: str) -> list[str]:
         refused = sorted(p for p, c in classes.items() if roles[0] not in ADMITS[c])
         if refused:
             errors.append(f"{where}: role {roles[0]} may not touch {', '.join(f'{p} ({classes[p]})' for p in refused)}")
+    if process and not humans:
+        errors.append(f"process paths {sorted(set(process))[:5]} need an approval from HUMAN_OWNERS at the base; approvers given: {sorted(approvers) or 'none'}")
     return errors
 
 
@@ -95,16 +116,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base")
     parser.add_argument("--classify", nargs="+")
+    parser.add_argument("--approvers", default="")
     args = parser.parse_args()
     if args.classify:
         dbc_dirs = dbc_directories("HEAD")
         for path in args.classify:
             kind = classify(path, dbc_dirs)
-            print(f"{path}: {kind or 'unclassified'} ({', '.join(sorted(ADMITS[kind])) if kind else 'any role'})")
+            needs = " + HUMAN_OWNERS approval" if kind == "process" else ""
+            print(f"{path}: {kind or 'unclassified'} ({', '.join(sorted(ADMITS[kind])) if kind else 'any role'}{needs})")
         return 0
     if not args.base:
         parser.error("--base or --classify is required")
-    errors = judge(args.base)
+    errors = judge(args.base, {a.strip() for a in args.approvers.split(",") if a.strip()})
     for error in errors:
         print(f"error: roles {error}", file=sys.stderr)
     if errors:

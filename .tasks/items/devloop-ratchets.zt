@@ -24,7 +24,7 @@ item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a580e5386d1" "devloop-ratchet
     decisions = {
       h.decided "r4-declared-floor"
         "R4 compares the negativeControls floors that acceptances declare, not counts a pull request observes."
-        "A pull request cannot carry a trusted record of its own head; a checker that drops a control under an unchanged floor fails its acceptance on main, and T2 then blocks the next pull request on its owns."
+        "A pull request cannot carry a trusted record of its own head; a checker that drops a control under an unchanged floor fails its acceptance on main after the merge, where tasks status reports it."
         h.agentDefault { "r4-floor"; };
       h.decided "r3-owned-files"
         "R3 mutates only the files an item owns inside an allowlisted crate, at base and at head."
