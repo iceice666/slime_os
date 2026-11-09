@@ -13,20 +13,14 @@ under `specs/`, and a `scripts/spec/` that grew past its line budget.
 
 `--digest` prints `<area> <requirement> <digest>` per requirement.
 
-    scripts/spec/check --base <ref> [--approvers a,b] [--enforce-owns]
+    scripts/spec/check --base <ref> [--enforce-owns]
 
-Judges the diff base...HEAD (decisions E1, E2, D5). A person listed in
-HUMAN_OWNERS must be among `--approvers` when the diff
-
-  1. changes any area's evaluated `invariants`;
-  2. modifies or deletes a `contracts/**/schema.zt` that exists at base;
-  3. modifies, deletes or renames a file in the grader set of any target
-     an acceptance binds at base, or changes such a target's recipe
-     closure. New checker files enter freely.
-
-Rule 4, owns coverage: every product file the diff touches must fall under
-some area's `owns`. Reported always; refused with `--enforce-owns`, which CI
-passes now that every product path has an owner.
+Rule 4, owns coverage: every product file the diff merge-base..HEAD touches
+must fall under some area's `owns`. Reported always; refused with
+`--enforce-owns`, which CI passes. Rules 1 to 3, which asked HUMAN_OWNERS to
+approve grader, invariant and contract-schema changes, were replaced by
+commit roles (`scripts/spec/roles`) and ratchets (`scripts/spec/ratchet`);
+see docs/decisions/work-item-devloop.md.
 """
 
 from __future__ import annotations
@@ -107,59 +101,16 @@ changed_files = lib.changed_files
 owns_match = lib.owns_match
 
 
-def judge_base(base: str, approvers: set[str], enforce_owns: bool, findings: Findings) -> None:
-    merge_base = lib.git("merge-base", base, "HEAD").strip()
+def judge_base(base: str, enforce_owns: bool, findings: Findings) -> None:
+    """Rule 4: every product file the diff touches falls under some area's owns."""
     changed = changed_files(base)
-    existed = {p for p, s in changed.items() if s != "A"}
-    reasons: list[str] = []
-
-    head_areas = {a.id: a for a in lib.load_areas()}
-    base_areas = {a.id: a for a in lib.load_areas_at(merge_base)}
-    for area_id, area in base_areas.items():
-        head = head_areas.get(area_id)
-        before = lib.canonical(area.value["invariants"])
-        after = lib.canonical(head.value["invariants"]) if head else lib.canonical([])
-        if before != after:
-            reasons.append(f"rule 1: invariants of area {area_id} changed")
-
-    for path in sorted(existed):
-        if path.startswith("contracts/") and path.endswith("/schema.zt"):
-            reasons.append(f"rule 2: {path} is an existing contract schema ({changed[path]})")
-
-    head_recipes = lib.Recipes.load()
-    base_recipes = lib.Recipes.load_at(merge_base)
-    targets = sorted({p["justTarget"] for a in base_areas.values() for r in a.requirements for t, p in lib.acceptances(r) if t == "observed"})
-    for target in targets:
-        if target not in base_recipes:
-            continue
-        base_names = base_recipes.closure(target)
-        head_names = head_recipes.closure(target) if target in head_recipes else []
-        if sorted(base_names) != sorted(head_names) or any(
-            lib.Recipes.definition(base_recipes.by_name[n]) != lib.Recipes.definition(head_recipes.by_name[n]) for n in base_names
-        ):
-            reasons.append(f"rule 3: recipe closure of {target} changed")
-            continue
-        grader = lib.lib_imports(base_recipes.scripts(base_names)) | set(lib.GRADER)
-        touched = sorted(grader & existed)
-        if touched:
-            reasons.append(f"rule 3: {target} grader file(s) changed: {', '.join(touched)}")
-
-    owns = [g for a in head_areas.values() for g in a.value["owns"]]
-    uncovered = sorted(p for p in changed if p.startswith(PRODUCT_PREFIXES) and not owns_match(p, owns))
-    for path in uncovered:
+    owns = [g for a in lib.load_areas() for g in a.value["owns"]]
+    for path in sorted(p for p in changed if p.startswith(PRODUCT_PREFIXES) and not owns_match(p, owns)):
         message = f"rule 4: {path} is under no area's owns"
         if enforce_owns:
             findings.error("owns", message)
         else:
             print(f"note: {message}", file=sys.stderr)
-
-    humans = approvers & lib.human_owners()
-    for reason in reasons:
-        print(f"approval: {reason}", file=sys.stderr)
-    if reasons and not humans:
-        findings.error("approval", f"{len(reasons)} reason(s) need an approval from HUMAN_OWNERS; approvers given: {sorted(approvers) or 'none'}")
-    elif reasons:
-        print(f"approval: satisfied by {sorted(humans)}", file=sys.stderr)
 
 
 def check_zutai_pin(findings: Findings) -> None:
@@ -185,7 +136,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--digest", action="store_true")
     parser.add_argument("--base")
-    parser.add_argument("--approvers", default="")
+    parser.add_argument("--approvers", default="", help="ignored; kept so older workflow calls still parse")
     parser.add_argument("--enforce-owns", action="store_true")
     args = parser.parse_args()
     findings = Findings()
@@ -225,7 +176,7 @@ def main() -> int:
             findings.error(f"{path}:{line}", f"# spec: {rid}/{acc} names no acceptance")
 
     if args.base:
-        judge_base(args.base, {a.strip() for a in args.approvers.split(",") if a.strip()}, args.enforce_owns, findings)
+        judge_base(args.base, args.enforce_owns, findings)
 
     if args.digest:
         for area in areas:

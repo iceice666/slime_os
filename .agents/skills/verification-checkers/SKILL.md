@@ -116,9 +116,8 @@ current. Confirm either way with
 
 A checker, recipe, `scripts/lib` module, image closure or toolchain pin in a
 bound target's closure stales the records keyed by that closure digest; CI
-runs the target again after the merge. The grader-set part of it — the
-recipe definitions and the `scripts/` files they reach — also asks for a
-human approval on the pull request (`scripts/spec/check --base`, rule 3),
-because the code under test must not rewrite its own exam. A new checker
-file enters freely; a change to an existing one is the decision a person
-makes (see `spec-lifecycle`).
+runs the target again after the merge. A checker change is a `breaker`
+commit: `scripts/spec/roles` refuses it beside product code in one commit.
+A checker that loses a negative control must lower its declared floor, and
+ratchet R4 then asks for a known limit and a human approval (see
+`spec-lifecycle`).

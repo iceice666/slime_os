@@ -102,4 +102,4 @@ interface, and how much.
   PR classes: the classes and `check-pr-scope.py` were retired with the
   work-item store ([decision](living-spec-devloop.md)); an existing schema's
   change is now rule 2 of `scripts/spec/check --base`.
-- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) "Grader independence".
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) "Roles, ratchets and owns".

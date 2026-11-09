@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Commit roles: one commit cannot both set an exam and pass it.
+
+    scripts/spec/roles --base <ref>
+    scripts/spec/roles --classify <path>...
+
+Every non-merge commit in merge-base(<ref>, HEAD)..HEAD that touches a
+classified path must carry exactly one trailer `Devloop-Role: <role>`, and
+every classified path it touches must admit that role
+(docs/decisions/work-item-devloop.md):
+
+  class     paths                                             roles
+  clause    clauses.zt, oracle.zt, fixture.zt, schema.zt in   spec-writer
+            a contracts/*/v*/ directory that holds clauses.zt
+  control   bad-traces.zt, mutations.zt in such a directory;  breaker
+            scripts/check/**
+  product   components/, slime-root/, boot-contracts/,        implementer
+            contracts/** outside such directories,
+            verification/dbc/** (backend adapters)
+  recipe    Justfile, just/**                                 implementer, breaker
+  item      .tasks/**, specs/*.zt                             spec-writer, implementer
+
+Any other path is unclassified and admits every role or none. Roles
+separate contexts, not accounts: two agents can still agree to cheat.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+ROLES = ("spec-writer", "implementer", "breaker")
+ADMITS = {
+    "clause": {"spec-writer"},
+    "control": {"breaker"},
+    "product": {"implementer"},
+    "recipe": {"implementer", "breaker"},
+    "item": {"spec-writer", "implementer"},
+}
+DBC_FILE = re.compile(r"^contracts/[^/]+/v[^/]+/([^/]+)$")
+PRODUCT = ("components/", "slime-root/", "boot-contracts/", "contracts/", "verification/dbc/")
+
+
+def classify(path: str, dbc_dirs: set[str]) -> str | None:
+    match = DBC_FILE.match(path)
+    if match and path.rsplit("/", 1)[0] in dbc_dirs:
+        name = match.group(1)
+        if name in {"clauses.zt", "oracle.zt", "fixture.zt", "schema.zt"}:
+            return "clause"
+        if name in {"bad-traces.zt", "mutations.zt"}:
+            return "control"
+    if path.startswith("scripts/check/"):
+        return "control"
+    if path.startswith(PRODUCT):
+        return "product"
+    if path == "Justfile" or path.startswith("just/"):
+        return "recipe"
+    if path.startswith(".tasks/") or re.fullmatch(r"specs/[^/]+\.zt", path):
+        return "item"
+    return None
+
+
+def dbc_directories(rev: str) -> set[str]:
+    listing = lib.git("ls-tree", "-r", "--name-only", rev, "contracts/", check=False).splitlines()
+    return {p.rsplit("/", 1)[0] for p in listing if re.fullmatch(r"contracts/[^/]+/v[^/]+/clauses\.zt", p)}
+
+
+def judge(base: str) -> list[str]:
+    merge_base = lib.git("merge-base", base, "HEAD").strip()
+    errors = []
+    for sha in lib.git("rev-list", "--no-merges", "--reverse", f"{merge_base}..HEAD").split():
+        dbc_dirs = dbc_directories(sha) | dbc_directories(f"{sha}^")
+        paths = [p for p in lib.git("diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--root", sha).splitlines() if p]
+        classes = {p: c for p in paths if (c := classify(p, dbc_dirs))}
+        if not classes:
+            continue
+        roles = [r.strip() for r in lib.git("log", "-1", "--format=%(trailers:key=Devloop-Role,valueonly,separator=%x0a)", sha).splitlines() if r.strip()]
+        subject = lib.git("log", "-1", "--format=%s", sha).strip()
+        where = f"{sha[:12]} {subject[:60]}"
+        if len(roles) != 1 or roles[0] not in ROLES:
+            errors.append(f"{where}: touches {sorted(set(classes.values()))} paths and needs exactly one Devloop-Role trailer in {ROLES}; found {roles}")
+            continue
+        refused = sorted(p for p, c in classes.items() if roles[0] not in ADMITS[c])
+        if refused:
+            errors.append(f"{where}: role {roles[0]} may not touch {', '.join(f'{p} ({classes[p]})' for p in refused)}")
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--base")
+    parser.add_argument("--classify", nargs="+")
+    args = parser.parse_args()
+    if args.classify:
+        dbc_dirs = dbc_directories("HEAD")
+        for path in args.classify:
+            kind = classify(path, dbc_dirs)
+            print(f"{path}: {kind or 'unclassified'} ({', '.join(sorted(ADMITS[kind])) if kind else 'any role'})")
+        return 0
+    if not args.base:
+        parser.error("--base or --classify is required")
+    errors = judge(args.base)
+    for error in errors:
+        print(f"error: roles {error}", file=sys.stderr)
+    if errors:
+        return 1
+    print("roles: every commit stays inside its declared role")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

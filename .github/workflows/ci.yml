@@ -215,10 +215,10 @@ jobs:
       - run: just sel4_gate_control_check
       - run: python3 scripts/check/check-generation-v5.py --check-controls
 
-  # The living specs (proposal/devloop-redesign/): schema, bound targets,
-  # reverse marks, the CLI's own end-to-end run, and on a pull request the
-  # grader-independence judgement against the base with the reviews that
-  # approved the head. The `spec` shell is a checkout plus just, python,
+  # The living specs and work items (docs/decisions/work-item-devloop.md):
+  # schema, bound targets, reverse marks, the CLI's own end-to-end run, and on
+  # a pull request owns coverage, commit roles, ratchets R1 and R4 and the
+  # work-item rules against the base, with the reviews that approved the head. The `spec` shell is a checkout plus just, python,
   # zutai-cli and gh; no product toolchain.
   spec:
     name: Living specs
@@ -256,12 +256,16 @@ jobs:
           approvers="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
             --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(",")')"
           echo "logins=$approvers" >> "$GITHUB_OUTPUT"
-      - name: Grader independence against the base
+      - name: Owns coverage against the base
         if: github.event_name == 'pull_request'
         run: >-
           nix develop .#spec --command
-          python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}"
-          --approvers "${{ steps.approvers.outputs.logins }}" --enforce-owns
+          python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}" --enforce-owns
+      - name: Commit roles against the base
+        if: github.event_name == 'pull_request'
+        run: >-
+          nix develop .#spec --command
+          python3 scripts/spec/roles --base "${{ github.event.pull_request.base.sha }}"
       - name: Ratchets R1 and R4 against the base
         if: github.event_name == 'pull_request'
         run: >-

@@ -78,20 +78,21 @@ nor `[metadata("inputs", ...)]`, so any product change invalidates it.
 
 ## What CI judges
 
-On a pull request, `scripts/spec/check --base <base>` asks for an approval
-from a login in `HUMAN_OWNERS` when the diff:
+On a pull request four checks run against the base. No person approves a
+grader change.
 
-1. changes any area's `invariants`;
-2. modifies or deletes a `contracts/**/schema.zt` that exists at the base;
-3. modifies, deletes or renames a file in the grader set of any target an
-   acceptance binds, or changes such a target's recipe closure. New checker
-   files enter freely.
-
-Rule 4, every touched product file under some area's `owns`, refuses the PR
-when a path has no owner; add the glob to the area that promises its
-behavior. Splitting a grader change and its implementation into two
-PRs does not avoid rule 3: it judges against every bound target at the base,
-enforced or not.
+- `scripts/spec/roles --base` refuses a commit that touches a checker, an
+  oracle, a fixture, product code, a recipe or an item without exactly one
+  `Devloop-Role:` trailer, or that touches a path its role does not admit.
+- `scripts/spec/ratchet --base` refuses fewer contract clauses (R1), fewer
+  covered clauses (R2), higher mutant survival (R3) or a lower
+  negative-control floor (R4), unless the PR adds a known limit and a login
+  in `HUMAN_OWNERS` approves.
+- `scripts/spec/tasks check --base` refuses closing an item that is not
+  done, and touching a failing item's `owns` without a fix or a known limit.
+- `scripts/spec/check --base --enforce-owns` refuses a touched product file
+  under no area's `owns`. Add the glob to the area that promises its
+  behavior.
 
 After the merge, the Evidence workflow resolves every bound target's closure
 digest, runs those without a record at that digest (in shards, by observed
