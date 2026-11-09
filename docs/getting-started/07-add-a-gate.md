@@ -137,7 +137,9 @@ python3 scripts/generate/generate-system-image-closures.py
 ```
 
 emits `contracts/system-image-closure/v3/closures/sel4-widget.zti` from the
-derivation map. Commit it. `just system_image_builder_check` refuses drift.
+derivation map in your checkout. Do not commit it: the Evidence workflow
+regenerates closure sources after the merge, and `scripts/spec/derived
+--base` refuses a pull request that carries one.
 
 ### 4. Checker
 

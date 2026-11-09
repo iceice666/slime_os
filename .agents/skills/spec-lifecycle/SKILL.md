@@ -69,6 +69,15 @@ current closure digest (T2). The PR either changes that closure, which
 re-runs the exam after the merge, or adds `h.knownLimit "failing"
 "<acceptance id>" ...` with an approval from `HUMAN_OWNERS`.
 
+An item tree is a track: an item with no parent and its descendants. At
+most three tracks are open at once. Two open tracks must not own an
+overlapping path, so the later UUIDv7 waits. No item may own
+`components/lib/` or `scripts/lib/`. `tasks check --base` also refuses a
+diff that touches a product path under no open item's `owns` (T3).
+
+`just tasks_status --weekly` prints the six numbers a person reviews each
+week, then every `agentDefault` rule a person may flip.
+
 `just tasks_check` refuses a malformed item, a slug that is not the file
 name, a repeated or non-UUIDv7 id, a broken `parent` or `depends`, an
 unknown area, an undeclared target, an empty milestone list, a known limit

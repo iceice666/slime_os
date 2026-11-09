@@ -243,6 +243,38 @@ def clauses(clone: Clone) -> None:
     ok(done.returncode == 1 and "R1 spawn-arguments: 7 -> 6" in done.stderr, f"R1: a deleted clause is refused: {done.stderr[-300:]}")
 
 
+def tracks(clone: Clone) -> None:
+    """Open trees: disjoint owns, at most three, no shared library; T3 and derived paths."""
+    def other(n: int, owns: str, extra: str = "") -> str:
+        text = item_text(slug=f"e2e-other{n}", uid=f"01a1c147-e2e0-7000-8000-00000000001{n}", extra=extra)
+        return text.replace('owns = { "components/e2e/**"; "docs/e2e/**"; };', f"owns = {{ {owns} }};")
+
+    clone.write(".tasks/items/e2e-item.zt", item_text())
+    clone.write(".tasks/items/e2e-other1.zt", other(1, '"components/e2e/src/**";'))
+    done = clone.spec("tasks", "check")
+    ok(done.returncode == 1 and "e2e-other1.zt: owns" in done.stderr and "overlaps" in done.stderr, f"overlapping owns in two trees are refused: {done.stderr[-300:]}")
+    clone.write(".tasks/items/e2e-other1.zt", other(1, '"components/e2e/src/**";', f'parent = "{I1}";'))
+    done = clone.spec("tasks", "check")
+    ok(done.returncode == 0, f"a child may share its tree's owns: {done.stderr[-300:]}")
+    clone.write(".tasks/items/e2e-other2.zt", other(2, '"components/lib/src/x.rs";'))
+    done = clone.spec("tasks", "check")
+    ok(done.returncode == 1 and "shared library" in done.stderr, "owning components/lib is refused")
+    for n in (2, 3, 4):
+        clone.write(f".tasks/items/e2e-other{n}.zt", other(n, f'"components/e2e{n}/**";'))
+    done = clone.spec("tasks", "check")
+    ok(done.returncode == 1 and "open tracks exceed" in done.stderr, "a fourth open track is refused")
+    (clone.root / ".tasks" / "items" / "e2e-other4.zt").unlink()
+    clone.commit("three tracks")
+    clone.write("components/unowned/lib.rs", "// no item owns this\n")
+    clone.commit("touch an unowned product path")
+    done = clone.spec("tasks", "check", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "T3: components/unowned/lib.rs" in done.stderr, "T3: a product path under no open item is refused")
+    clone.write("contracts/system-image-closure/v3/closures/e2e.zti", "{}\n")
+    clone.commit("carry a derived closure source")
+    done = clone.spec("derived", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "regenerated after the merge" in done.stderr, "a pull request may not carry a derived closure source")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--keep", action="store_true")
@@ -372,6 +404,7 @@ def main() -> int:
         item_status(clone)
         ratchets(clone)
         clauses(clone)
+        tracks(clone)
     finally:
         if args.keep:
             print(f"kept {temporary}")
