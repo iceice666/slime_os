@@ -3,7 +3,7 @@
 One page for a person who has not yet internalised the repository's habits.
 Every rule below is stated once, with the reason it exists and the program
 that enforces it; the pages it links to own the details. If you already know
-why a grader change needs a human approval, skip to the
+why a commit declares a role, skip to the
 [decision tree](#which-path-am-i-on).
 
 ## The one idea behind all of it
@@ -18,7 +18,7 @@ ceremony is there so one of those checks can be honest:
 |---|---|
 | A behavior change changes the spec | The promise and the code drift apart with nothing to notice |
 | Exam, spec diff and implementation in one PR | Reviewers read a diff without the promise it serves |
-| A grader change needs a human approval | The branch being graded could rewrite its own exam |
+| A commit declares one role, and ratchets guard exam strength | The commit being graded could rewrite its own exam |
 | Merge is not completion | A landed diff proves nothing about a QEMU run, a hardware boot, or a refusal |
 | Evidence keyed by a closure digest | A record would outlive the inputs it was taken on |
 | Closures regenerated with every source edit | A gate would prove a binary nobody can rebuild |
@@ -125,11 +125,11 @@ and an evidence class: *direct* (you ran it), *inherited* (a prior recorded
 run), or *inference* (not observed). Name the requirement ids the PR adds
 or changes.
 
-- **Judged by:** `scripts/spec/check --base`. Changing an area's
-  `invariants`, an existing `contracts/**/schema.zt`, or a file in the grader
-  set of any bound target needs an approval from a login in `HUMAN_OWNERS`.
-  Splitting the grader change into its own PR does not help: the rule judges
-  every bound target at the base.
+- **Judged by:** `scripts/spec/roles`, `scripts/spec/ratchet`,
+  `scripts/spec/tasks check` and `scripts/spec/check`, each with `--base`.
+  A checker change is a `breaker` commit, separate from the product commit.
+  A weaker exam needs a known limit and an approval from a login in
+  `HUMAN_OWNERS`.
 - **Never** write `Closes #123` to complete work: GitHub does not own
   completion here.
 
@@ -168,8 +168,8 @@ Two cases people misfile:
 - *"Substantial documentation"* is not trivial. A page that states a
   procedure or a limitation is project state; it changes with the spec or the
   architecture page that owns it.
-- *A checker that needs to change* is a grader change: it asks for a human
-  approval in ⑤, and the approval is the decision, not a formality.
+- *A checker that needs to change* is a `breaker` commit. If it weakens the
+  exam, a ratchet asks for a known limit and a human approval in ⑤.
 
 ## Working with an agent
 

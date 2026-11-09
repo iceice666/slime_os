@@ -71,12 +71,13 @@ fails.
 Answer directly:
 
 - Did this PR add or change the checker, marker chain, fixture, or recipe
-  that its own acceptances bind? Which files? `check --base` lists them as
-  rule 3. A change to the assertions that decide the PR's own acceptance
-  needs a reason in the PR, and that reason must be about the spec, not
-  about making the gate pass. The approval is a decision; record why.
-- Did it change an area's `invariants` (rule 1) or an existing contract
-  schema (rule 2)? Each is a human decision, not a formality.
+  that its own acceptances bind? Which files, in which commits? Each such
+  commit must carry the role `scripts/spec/roles` admits, and no commit may
+  change a checker and the product code it judges. A change to the
+  assertions that decide the PR's own acceptance needs a reason in the PR,
+  and that reason must be about the spec, not about making the gate pass.
+- Did a ratchet fall? `scripts/spec/ratchet --base` names it. A known limit
+  the PR adds is the only human decision left; record why.
 - Did it add `[metadata("inputs", ...)]` or remove one? A removed input
   stops staling the record it used to bind.
 - Did it change the expected count, bound, or marker in a way that matches

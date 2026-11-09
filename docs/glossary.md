@@ -110,9 +110,9 @@ evidence, or inference; recorded in PRs. Hardware claims bind
 to target, revision, and binary identity.
 
 **Exam** (also *grader*). What an acceptance is judged by: the `just` target
-it names, run under `scripts/spec/record`. A change inside the exam's grader
-set needs a human approval on the PR, so an implementation cannot quietly
-change its own exam. → `CONTRIBUTING.md` (Grader independence).
+it names, run under `scripts/spec/record`. A change to an exam is a `breaker`
+commit, never in the same commit as the product code it judges, and a weaker
+exam must pass the ratchets. → `CONTRIBUTING.md` (Roles, ratchets and owns).
 
 **Fabric.** The typed data plane: graph-declared routes between participants,
 stream/call/operation semantics, QoS, recording. → [typed data fabric](architecture/typed-data-fabric.md).

@@ -14,11 +14,11 @@ the unit of change is a work item under `.tasks/items/`.
 diff, the exam and the implementation together. A PR that changes what the
 system does without a diff under `specs/` does not merge.
 
-**A grader change needs a human approval.** CI runs
-`scripts/spec/check --base` on every pull request and asks for an approval
-from a login in `HUMAN_OWNERS` when the diff changes an area's `invariants`,
-an existing `contracts/**/schema.zt`, or a file in the grader set of any
-bound target. New checker files enter freely.
+**Machines guard the exams, not approvals.** Each commit declares a
+`Devloop-Role:` trailer (`spec-writer`, `implementer` or `breaker`), and CI
+refuses a commit that leaves its role's paths. Four ratchets refuse a pull
+request that weakens an exam. A login in `HUMAN_OWNERS` approves only a
+ratchet regression the pull request records as a known limit.
 
 **PR merged != requirement enforced.** After the merge, CI on `main` runs
 each bound target whose closure digest has no record yet and writes the
@@ -129,23 +129,21 @@ These guides own the tutorials; this document owns the contribution workflow.
 
 ## Pull requests
 
-### Grader independence
+### Roles, ratchets and owns
 
-`scripts/spec/check --base <base> --approvers <logins>` judges every pull
-request. The workflow passes the logins that approved the head; the check
-requires one of them to be in `HUMAN_OWNERS` when the diff:
+CI judges every pull request against its base with four checks:
+`scripts/spec/roles --base`, `scripts/spec/ratchet --base`,
+`scripts/spec/tasks check --base` and `scripts/spec/check --base
+--enforce-owns`. `.agents/skills/spec-lifecycle/SKILL.md` lists what each
+refuses and which paths each role may touch.
 
-1. changes any area's evaluated `invariants`;
-2. modifies or deletes a `contracts/**/schema.zt` that exists at the base;
-3. modifies, deletes or renames a file in the grader set of any target an
-   acceptance binds at the base, or changes such a target's recipe closure.
-
-The rule looks at every bound target at the base, enforced or not, and not at
-whether the PR carries a spec diff. Splitting the grader change and the
-implementation into two PRs triggers it on both. Rule 4 — every touched
-product file under some area's `owns` — refuses the PR; a new product path
-needs an `owns` glob in the area that promises its behavior. A chore that touches no area (rename, format, pure
-refactor) takes the same approval exit; there is no separate class.
+- A commit that touches a checker, an oracle, a fixture, product code, a
+  recipe or an item carries exactly one `Devloop-Role:` trailer. The same
+  commit cannot change a checker and the product code it judges.
+- A ratchet regression passes only with a new `h.knownLimit` in the PR's
+  item and an approval from a login in `HUMAN_OWNERS`.
+- Every touched product file falls under some area's `owns`. A new product
+  path needs an `owns` glob in the area that promises its behavior.
 
 Every `contracts/**/schema.zt` is compiled by `just contracts_check` whether
 or not a generator or checker names it yet, so a schema landed ahead of its
@@ -226,8 +224,8 @@ or an invariant does not.
 A genuine typo, broken link, format-only change, tiny wording correction, or
 mechanical maintenance with **no behavioral or project-state consequence**
 needs no spec diff. Judge semantics, not line count. When uncertain, write
-the requirement. This exception does not waive applicable checks or the
-grader-independence approval.
+the requirement. This exception does not waive applicable checks, roles or
+ratchets.
 
 ## Continuous integration
 
@@ -248,8 +246,10 @@ plain pinned toolchain and `Swatinem/rust-cache`.
 
 The spec job uses `nix develop .#spec`: a checkout plus `just`, Python,
 `zutai-cli`, `gh` and `ssh-keygen`, with no product toolchain. It runs
-`just spec_check`, the CLI's own end-to-end run, and on a pull request the
-grader-independence judgement with the head's approvers.
+`just spec_check`, `just tasks_check`, the CLI's own end-to-end run, and on
+a pull request owns coverage, commit roles, ratchets R1 and R4, and the
+work-item rules, with the head's approvers. The `ratchet_mutants` job runs
+ratchets R2 and R3 in the product dev shell.
 
 Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the
 seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in

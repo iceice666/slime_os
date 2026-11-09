@@ -1,0 +1,42 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+record :: Text = "docs/decisions/work-item-devloop.md";
+
+item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a5a5ae29fa3" "devloop-roles" "quality"
+  "Commit roles replace human approval of grader changes"
+  "A person approving a checker diff they cannot read gives the machine a false signal that someone looked. The separation that matters is that one context does not both set an exam and pass it, and CI can check that per commit.")
+  with {
+    parent = "01a1c147-34c7-71e6-a116-6a55619c63c1";
+    owns = { "scripts/spec/roles"; "scripts/spec/check"; };
+    requirements = {
+      (h.req "role-trailer"
+        "roles --base refuses a commit that touches a clause, control, product, recipe or item path without exactly one Devloop-Role trailer naming spec-writer, implementer or breaker."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "role-paths"
+        "roles --base refuses a commit whose role does not admit a classified path it touches, so one commit cannot change a checker and the product code it judges."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "no-grader-approval"
+        "check --base no longer asks HUMAN_OWNERS to approve a grader, invariant or contract-schema change; it keeps refusing a product path under no area's owns."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+    };
+    acceptance = {
+      h.observedWhere "spec_e2e" { h.count "casesFailed" 0; h.atLeast "casesObserved" 56; };
+    };
+    decisions = {
+      h.decided "item-two-roles"
+        "Both spec-writer and implementer may edit .tasks and specs area files."
+        "The proposal has the implementer record its reversible choices as item decisions, and ratchets catch a weakened acceptance floor."
+        h.agentDefault { "role-paths"; };
+      h.decided "checkers-are-controls"
+        "scripts/check/** belongs to the breaker role."
+        "A checker carries the negative controls of its assertions, and the proposal forbids both the spec writer and the implementer from writing them."
+        h.agentDefault { "role-paths"; };
+      h.decided "unclassified-free"
+        "A commit that touches only unclassified paths, such as docs, scripts/spec, scripts/lib and workflows, needs no trailer."
+        "Process tooling has no product behavior to grade, and requiring a role there adds a trailer with no separation behind it."
+        h.agentDefault { "role-trailer"; };
+    };
+  };
+
+item

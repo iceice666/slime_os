@@ -23,7 +23,7 @@ diff first for that reason.
 | Thing | Where | Owner |
 | --- | --- | --- |
 | spec | `specs/<area>.zt`, an `Area` of requirements | the area's `invariants`, `nonGoals`, `decisions` and `openQuestions` are human-owned; requirements are written by whoever carries the change |
-| exam | a `just` target, run under `scripts/spec/record` | the checker's author; the grader-independence rule protects it |
+| exam | a `just` target, run under `scripts/spec/record` | a `breaker` commit; roles and ratchets protect it |
 | evidence | branch `evidence`, `<target>/<closureDigest>.zt` | the Evidence workflow for CI targets; the signer for human and operator records |
 
 No file records a `done` state. `scripts/spec/status` computes every
@@ -178,23 +178,34 @@ published.
 
 ## What CI judges on a pull request
 
-`scripts/spec/check --base <base> --approvers <logins>` requires an approval
-from a login in `HUMAN_OWNERS` when the diff:
+No person approves a grader change. Four machine checks run instead
+(`docs/decisions/work-item-devloop.md`):
 
-1. changes any area's evaluated `invariants`;
-2. modifies or deletes a `contracts/**/schema.zt` that exists at the base;
-3. modifies, deletes or renames a file in the grader set of any target an
-   acceptance binds at the base, or changes such a target's recipe closure.
-   New checker files enter freely.
+| Check | Refuses |
+| --- | --- |
+| `scripts/spec/roles --base` | a commit that touches a classified path without exactly one `Devloop-Role:` trailer, or a path its role does not admit |
+| `scripts/spec/ratchet --base` | a fall in R1, R2 or R4, or a rise in R3, without a new known limit and a `HUMAN_OWNERS` approval |
+| `scripts/spec/tasks check --base` | an item entering `terminal/` while not done (T1); a touch on a failing item's `owns` (T2) |
+| `scripts/spec/check --base --enforce-owns` | a touched product file under no area's `owns` (rule 4) |
 
-Rule 4 — every touched product file (`components/`, `slime-root/`,
-`contracts/`, `boot-contracts/`) falls under some area's `owns` — refuses the
-PR on CI (`--enforce-owns`); a new product path needs an `owns` glob in the
-area that promises its behavior, in the same PR. The rule judges every bound
-target at the base, enforced or not, and ignores whether the PR carries a
-spec diff: splitting a grader change into its own PR triggers it twice. A
-chore that touches no area takes the same approval exit. An agent account
-never belongs in `HUMAN_OWNERS`; an approval from one satisfies nothing.
+Role path classes (`scripts/spec/roles --classify <path>` prints one):
+
+| Class | Paths | Roles |
+| --- | --- | --- |
+| clause | `clauses.zt`, `oracle.zt`, `fixture.zt`, `schema.zt` of an executable contract | spec-writer |
+| control | `bad-traces.zt`, `mutations.zt` of an executable contract; `scripts/check/**` | breaker |
+| product | `components/`, `slime-root/`, `boot-contracts/`, other `contracts/**`, `verification/dbc/**` | implementer |
+| recipe | `Justfile`, `just/**` | implementer, breaker |
+| item | `.tasks/**`, `specs/*.zt` | spec-writer, implementer |
+
+A commit that touches only unclassified paths (`docs/`, `scripts/spec/`,
+`scripts/lib/`, workflows) needs no trailer. One pull request may carry
+commits of every role. The only human approval left is a ratchet regression
+or a failing known limit. An agent account never belongs in `HUMAN_OWNERS`;
+an approval from one satisfies nothing.
+
+A new product path needs an `owns` glob in the area that promises its
+behavior, in the same PR.
 
 ## Evidence
 
