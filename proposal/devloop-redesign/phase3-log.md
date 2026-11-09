@@ -130,3 +130,35 @@
 | advisory | 83 | planned（含 `link_wake_check` 5 條）+ LiDAR human gate 1 條 |
 
 總數 406 → 399：F1 刪了 7 條。
+
+## 修 link_wake_check 與第二個真實功能（2026-11-08 到 11-09）
+
+### link_wake_check（`9e64618d`）
+
+原因在產品，不在 exam：#866（`ee3289c5`）讓三個 zenoh demo 節點的 `Host::write` 經過 `ConsoleLine::<256>`，但 `wire sent` 行約 400 bytes（`wire_line` 是 `Line<640>`）。record 拒收超長行，`emit()` 的 `false` 沒人看，行就消失；guest 實際送了 4 個 sample，listener 也收到 4 個。同一原因讓 `rpi5_ros2_zenoh_check`（其實是 AArch64 QEMU，不需要板子）失敗。
+
+修法：`zenoh_node::MAX_LINE_BYTES = 640`，三個節點的 console record 用它，`emit()` 被拒時節點 fail。5 條 requirement 從 planned 改回 `h.req`。`components/lib` 進每個 image，所以 Evidence 全量重跑（最長 shard 2 小時 22 分），4 個 LiDAR operator target 的 digest 也跟著變。
+
+操作者 record（`iceice666` 簽名，乾淨的 `9e64618d`）：`link_wake_check`、`rpi5_ros2_zenoh_check`，之後 LiDAR 四個重錄。**321/399 enforced，failing 與 claimed 歸零**。
+
+### 第二個真實功能：RP3，RPi 5 開機（`ab3818a1` 起）
+
+RP3（legacy `01a0724c-5400-7cb4-ab51-0bcb23a882b5`，blocked）卡在 USB-UART adapter。v2 用 Debug Probe 接 UART10、rpiboot 經 USB-C 送開機檔，已在同一塊板子上走通。人決定在 v1 做、走 rpiboot（選項 B）。
+
+| 步驟 | 內容 |
+| --- | --- |
+| spec diff | 新 area `specs/rpi5-board.zt`，6 條 requirement 都 supersedes RP3：4 條綁 `rpi5_boot_check`，2 條 planned |
+| exam | `check-rpi5-boot.py` 改走 rpiboot；14 個 marker 以描述從 `check-sel4-root-boot.py` 的 chain 挑出；timer 必須是 pin 住的 54 MHz。舊 gate 的 literal marker 已經對不上 root 的輸出（rot） |
+| 實作 | `config.txt` 加 `os_check=0`；`flake.nix` 加 `rpiboot`；recipe 宣告 `inputs`（bcm2712 image 沒有 system-image closure） |
+| 離線驗證 | 真實 QEMU transcript 14 個 marker 依序全中，只因 62.5 MHz 被拒 |
+| 上機 | 操作者跑 `record rpi5_boot_check --signer`，一次通過：`boardrev c04170`、BL31 `v2.6-243-ge4d6694234`、`SLIME_ROOT READY tasks=2`。publish 後 4 條 enforced |
+
+這是計畫離場條件「第二個真實功能從 spec diff 走到 enforced」的第一次完整走完：spec、exam、實作同一個 commit，CI 不能跑的 target 由操作者簽名補 record。
+
+之後把 firmware 那條 planned 改成 requirement：gate 要求 board revision、BL31 版本與 build 行、served `bootfiles.bin` 的 sha256 等於 pin，並在送檔前自驗 7 個變造。這改了 gate，digest 會變，要再上機一次。
+
+### 做的時候發現的事
+
+- **本機 build 目錄過期會擋 build**：`build/bcm2712-rpi5/`、`build/sel4-generation/` 是 8 月的殘留，`build-generation.py` 拒絕含 `boot-store.bin` 的 embedded-only 輸出目錄。乾淨 checkout 沒有這問題。
+- **閉包解析看不到 `importlib` 載入的 checker 與沒有 system-image closure 的 image**：`rpi5_boot_check` 用 `[metadata("inputs", …)]` 補。代價是任何產品改動都讓板子的 record 失效，要重上機。
+- **operator target 的 record 會被無關 commit 失效**：`components/lib` 一改，LiDAR 四個就要重錄。這是 D9 的成本，目前靠操作者手動補。
