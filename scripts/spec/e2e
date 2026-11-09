@@ -75,7 +75,7 @@ class Clone:
 EXAM = """import sys
 sys.path.insert(0, "scripts/lib")
 import devloop_observations
-devloop_observations.record(casesObserved={cases}, negativeControlsRefused=3)
+devloop_observations.record(casesObserved={cases}, negativeControlsRefused={controls})
 sys.exit({exit})
 """
 
@@ -156,7 +156,7 @@ def item_state(clone: Clone, local: bool = False) -> str:
 
 def item_status(clone: Clone) -> None:
     """tasks status computes done; T1 refuses an early close; T2 refuses touching a failing item's owns."""
-    clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+    clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=0))
     clone.write(".tasks/items/e2e-item.zt", item_text(acceptance='h.observedWhere "e2e_exam" { h.count "casesObserved" 3; }; h.human "looked" "Did a person look?";'))
     clone.commit("item with a human gate")
     clone.spec("record", "e2e_exam")
@@ -196,6 +196,32 @@ def item_status(clone: Clone) -> None:
     ok(done.returncode == 0, f"HUMAN_OWNERS approval admits the known limit: {done.stderr[-300:]}")
 
 
+def ratchets(clone: Clone) -> None:
+    """R4: dropping a negative control and its floor is refused without an approved known limit."""
+    def item(floor: int, limit: str = "") -> str:
+        acceptance = f'h.observedWhere "e2e_exam" {{ h.count "casesObserved" 3; h.count "negativeControlsRefused" {floor}; }};'
+        return item_text(acceptance=acceptance, extra=limit)
+
+    clone.write(".tasks/items/e2e-item.zt", item(3))
+    clone.commit("item pins three controls")
+    clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=2, cases=3, exit=0))
+    clone.write(".tasks/items/e2e-item.zt", item(2))
+    clone.commit("drop a negative control")
+    done = clone.spec("ratchet", "--base", "HEAD~1")
+    ok(done.returncode == 1 and "R4 e2e_exam: 3 -> 2" in done.stderr, f"R4: a dropped control is refused: {done.stderr[-300:]}")
+    limit = 'knownLimits = { h.knownLimit "R4" "e2e_exam" "the third control duplicated the second" h.agentDefault; };'
+    clone.write(".tasks/items/e2e-item.zt", item(2, limit))
+    clone.commit("accept the drop")
+    done = clone.spec("ratchet", "--base", "HEAD~2")
+    ok(done.returncode == 1 and "approval" in done.stderr, "R4: a known limit without approval is refused")
+    done = clone.spec("ratchet", "--base", "HEAD~2", "--approvers", "owner")
+    ok(done.returncode == 0, f"R4: an approved known limit admits the drop: {done.stderr[-300:]}")
+    clone.write(".tasks/items/e2e-item.zt", item(4, limit))
+    clone.commit("raise the floor")
+    done = clone.spec("ratchet", "--base", "HEAD~1")
+    ok(done.returncode == 0, "R4: raising a floor needs nobody")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--keep", action="store_true")
@@ -223,7 +249,7 @@ def main() -> int:
             if stale.name not in {"schema.zt", "helpers.zt"}:
                 stale.unlink()
         clone.write("specs/e2e.zt", area_text())
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=0))
         with (root / "Justfile").open("a") as handle:
             handle.write("\ne2e_exam:\n    python3 scripts/check/e2e-exam.py\n")
         clone.commit("e2e fixture")
@@ -250,7 +276,7 @@ def main() -> int:
         ok("nothing new" in done.stdout, "publish is idempotent")
         shutil.rmtree(root / "build" / "observations")
 
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0) + "# touched\n")
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=0) + "# touched\n")
         clone.commit("touch grader")
         ok(clone.state(R1) == "claimed", "grader edit stales the record")
         done = clone.spec("check", "--base", "HEAD~1")
@@ -289,22 +315,22 @@ def main() -> int:
         done = clone.spec("check", "--base", "HEAD~1")
         ok(done.returncode == 0, "rule 4 only reports without --enforce-owns")
 
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=2, exit=0))
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=2, exit=0))
         clone.commit("exam reports two")
         clone.spec("record", "e2e_exam")
         ok(clone.state(R1, local=True) == "failing", "predicate failure is failing")
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=1))
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=1))
         clone.commit("exam exits 1")
         done = clone.spec("record", "e2e_exam")
         ok(done.returncode == 1 and clone.state(R1, local=True) == "failing", "exit 1 is failing and propagates")
 
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=0))
         clone.commit("exam fixed")
         clone.spec("record", "e2e_exam")
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0) + "# dirty\n")
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=0) + "# dirty\n")
         done = clone.spec("publish")
         ok(done.returncode == 1 and "closure digest" in done.stderr, "a record whose digest is not HEAD's is refused")
-        clone.write("scripts/check/e2e-exam.py", EXAM.format(cases=3, exit=0))
+        clone.write("scripts/check/e2e-exam.py", EXAM.format(controls=3, cases=3, exit=0))
         clone.write("components/e2e/lib.rs", "// edited\n")
         done = clone.spec("record", "e2e_exam")
         ok("dirty" in done.stderr, "record from a dirty tree says so")
@@ -328,6 +354,7 @@ def main() -> int:
 
         items(clone)
         item_status(clone)
+        ratchets(clone)
     finally:
         if args.keep:
             print(f"kept {temporary}")

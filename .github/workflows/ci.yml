@@ -262,12 +262,51 @@ jobs:
           nix develop .#spec --command
           python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}"
           --approvers "${{ steps.approvers.outputs.logins }}" --enforce-owns
+      - name: Ratchet R4 against the base
+        if: github.event_name == 'pull_request'
+        run: >-
+          nix develop .#spec --command
+          python3 scripts/spec/ratchet --base "${{ github.event.pull_request.base.sha }}"
+          --only R4 --approvers "${{ steps.approvers.outputs.logins }}"
       - name: Work items against the base
         if: github.event_name == 'pull_request'
         run: >-
           nix develop .#spec --command
           python3 scripts/spec/tasks check --base "${{ github.event.pull_request.base.sha }}"
           --approvers "${{ steps.approvers.outputs.logins }}"
+
+  # Ratchet R3 (docs/decisions/work-item-devloop.md): `cargo mutants` over the
+  # files an item this PR adds or changes owns inside a crate listed in
+  # specs/targets.toml [mutants], at the base and at the head. A PR whose items
+  # own no such file measures nothing and passes in seconds.
+  ratchet_mutants:
+    name: Ratchet R3 (mutant survival)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - name: Approvals from HUMAN_OWNERS
+        id: approvers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          approvers="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique | join(",")')"
+          echo "logins=$approvers" >> "$GITHUB_OUTPUT"
+      - run: >-
+          nix develop --command
+          python3 scripts/spec/ratchet --base "${{ github.event.pull_request.base.sha }}"
+          --only R3 --approvers "${{ steps.approvers.outputs.logins }}"
 
   kani_proofs:
     name: Kani IO wire and device-boundary proofs
@@ -504,6 +543,7 @@ jobs:
       - scripts
       - docs_gates
       - spec
+      - ratchet_mutants
       - kani_proofs
       - sel4_product
       - sel4_rollback_runtime
@@ -526,6 +566,7 @@ jobs:
           ok "${{ needs.lint.result }}"
           ok "${{ needs.sel4_pins.result }}"
           ok "${{ needs.test_host.result }}"
+          ok "${{ needs.ratchet_mutants.result }}"
           ok "${{ needs.miri_packages.result }}"
           ok "${{ needs.miri.result }}"
           ok "${{ needs.deps.result }}"
