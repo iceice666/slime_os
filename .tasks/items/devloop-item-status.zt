@@ -1,0 +1,41 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+record :: Text = "docs/decisions/work-item-devloop.md";
+
+item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a57db662276" "devloop-item-status" "quality"
+  "Compute work-item state from evidence and close by moving the file"
+  "Items have no state field, so nothing yet says when one is done. Closing must be a file move that CI admits only for a done item, and a failing acceptance on main must not be ignored by the next pull request that touches the same paths.")
+  with {
+    parent = "01a1c147-34c7-71e6-a116-6a55619c63c1";
+    owns = { "scripts/spec/tasks"; "scripts/spec/ci"; "scripts/spec/lib.py"; };
+    requirements = {
+      (h.req "computed-state"
+        "tasks status reports an item done exactly when every mandatory acceptance is enforced on the evidence branch, and a mandatory human gate without a signed record keeps it claimed."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "close-by-move"
+        "tasks check --base refuses an item that enters .tasks/terminal/ while it is not done."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "failing-blocks-owns"
+        "tasks check --base refuses a diff that touches the owns of an item whose mandatory acceptance fails at the current closure digest, unless the item carries a failing known limit for it, and a new known limit needs a HUMAN_OWNERS approval."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      h.req "evidence-runs-items"
+        "The Evidence workflow schedules every target an item binds, as it does for areas."
+        { "spec_e2e"; };
+    };
+    acceptance = {
+      h.observedWhere "spec_e2e" { h.count "casesFailed" 0; h.atLeast "casesObserved" 50; };
+    };
+    decisions = {
+      h.decided "failing-limit"
+        "A known limit with ratchet failing and the acceptance id as subject admits a pull request that touches a failing item's owns."
+        "The proposal routes a failing acceptance through the known-limit approval, and the schema already names a ratchet and a subject."
+        h.agentDefault { "failing-blocks-owns"; };
+      h.decided "closure-change-is-a-fix"
+        "A diff that changes the failing target's closure passes T2, because the acceptance becomes claimed until the Evidence workflow re-runs it."
+        "A pull request cannot carry a trusted record for its own head, so a changed closure is the only fix attempt CI can observe."
+        h.agentDefault { "failing-blocks-owns"; };
+    };
+  };
+
+item

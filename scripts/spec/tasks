@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Work items under `.tasks/` (decision: docs/decisions/work-item-devloop.md).
 
-    scripts/spec/tasks check
+    scripts/spec/tasks check [--base <ref> --approvers a,b]
+    scripts/spec/tasks status [--local] [--json] [--item SLUG]
+    scripts/spec/tasks human <slug> <acceptance> yes|no --signer <principal> [--key K]
     scripts/spec/tasks new <task|bug|milestone> <slug> --area <area>
 
 `check` refuses: a file whose final value is not a `task/v1` Item, a slug
@@ -16,20 +18,36 @@ nothing, a `#decision` provenance whose page does not exist, a known limit
 outside R1-R4, a `.zti` under `.tasks/`, and a `terminal/` copy of
 `schema.zt` or `helpers.zt` that differs from `items/`.
 
+`check --base` also judges the diff merge-base..HEAD. T1: an item that
+enters `.tasks/terminal/` must be done. T2: if the diff touches the `owns`
+of an item whose mandatory acceptance is failing at the current closure
+digest, that item must carry a known limit `failing` naming the acceptance;
+a known limit the diff adds needs an approval from `HUMAN_OWNERS`.
+
+`status` computes each acceptance from the evidence branch, as
+`scripts/spec/status` does for areas. An item is done when every mandatory
+acceptance is enforced; otherwise it reports its worst mandatory state.
+It prints the `agentDefault` share of each item's rules.
+
+`human` signs an answer to an item's `h.human` acceptance; the record binds
+to the item's requirements digest.
+
 `new` prints a skeleton with a fresh UUIDv7; redirect it to the file.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import time
 import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
-RATCHETS = ("R1", "R2", "R3", "R4")
+RATCHETS = ("R1", "R2", "R3", "R4", "failing")
 MILESTONE_LISTS = ("owns", "nonGoals", "requirements", "acceptance", "invariants", "decisions")
 
 
@@ -112,6 +130,83 @@ def check(items: list[lib.Item], recipes: lib.Recipes) -> list[str]:
     return errors
 
 
+def statuses(items: list[lib.Item], evidence: lib.Evidence) -> list[dict]:
+    report = []
+    for item in items:
+        rows = []
+        for acceptance in item.value["acceptance"]:
+            state, detail = lib.item_acceptance_state(acceptance, item.value, evidence)
+            body = lib.payload(acceptance["check"])
+            rows.append({"id": acceptance["id"], "kind": lib.tag(acceptance["check"]), "target": body.get("justTarget", ""),
+                         "mandatory": acceptance["mandatory"], "state": state, "reason": detail})
+        agent, total = lib.provenance_share(item.value)
+        report.append({
+            "id": item.id, "slug": item.value["slug"], "kind": lib.tag(item.value["kind"]), "area": item.value["area"],
+            "title": item.value["title"], "parent": item.value["parent"], "terminal": item.terminal,
+            "state": lib.item_state([(r["mandatory"], r["state"]) for r in rows]),
+            "agentDefault": agent, "rules": total, "acceptances": rows,
+        })
+    return report
+
+
+def judge_base(base: str, approvers: set[str], items: list[lib.Item], errors: list[str]) -> None:
+    changed = lib.changed_files(base)
+    merge_base = lib.git("merge-base", base, "HEAD").strip()
+    before = {i.id: i for i in lib.load_items_at(merge_base)}
+    evidence = lib.Evidence()
+    by_id = {r["id"]: r for r in statuses(items, evidence)}
+    reasons: list[str] = []
+    for item in items:
+        row, old = by_id[item.id], before.get(item.id)
+        if item.terminal and not (old and old.terminal) and row["state"] != "done":
+            errors.append(f"T1: {item.where} enters terminal/ but its state is {row['state']}")
+        limits = {(k["ratchet"], k["subject"]) for k in item.value["knownLimits"]}
+        added = limits - {(k["ratchet"], k["subject"]) for k in (old.value["knownLimits"] if old else [])}
+        reasons += [f"known limit {r} {s} added to {item.value['slug']}" for r, s in sorted(added)]
+        if not any(lib.owns_match(p, item.value["owns"]) for p in changed):
+            continue
+        for acc in row["acceptances"]:
+            if acc["mandatory"] and acc["state"] == "failing" and ("failing", acc["id"]) not in limits:
+                errors.append(f"T2: the diff touches the owns of {item.value['slug']}, whose acceptance {acc['id']} is failing ({acc['reason']}); fix it or add h.knownLimit \"failing\" \"{acc['id']}\"")
+    humans = approvers & lib.human_owners()
+    for reason in reasons:
+        print(f"approval: {reason}", file=sys.stderr)
+    if reasons and not humans:
+        errors.append(f"approval: {len(reasons)} known limit(s) need an approval from HUMAN_OWNERS; approvers given: {sorted(approvers) or 'none'}")
+
+
+def human(slug: str, acceptance_id: str, value: str, signer: str, key: str, note: str) -> int:
+    item = next((i for i in lib.load_items() if i.value["slug"] == slug), None)
+    if item is None:
+        raise lib.SpecError(f"tasks human: no item {slug!r}")
+    gate = next((a for a in item.value["acceptance"] if a["id"] == acceptance_id and lib.tag(a["check"]) == "human"), None)
+    if gate is None:
+        raise lib.SpecError(f"tasks human: item {slug} has no h.human acceptance {acceptance_id!r}")
+    print(f"{lib.payload(gate['check'])['question']}\nanswer: {value}", file=sys.stderr)
+    observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    text = lib.human_record_text(item.value["area"], item.id, acceptance_id, lib.item_digest(item.value), value == "yes", note, signer, observed_at)
+    out = lib.OBSERVATIONS / lib.item_human_path(item.value, acceptance_id)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    lib.parse_record(out.read_bytes(), "HumanRecord")
+    signature = lib.sign(out, key)
+    ok = lib.verify_signature(out.read_bytes(), signature.read_bytes(), signer)
+    print(f"tasks human: wrote {out.relative_to(lib.ROOT)}" + ("" if ok else f" (WARNING: {signer!r} does not verify)"))
+    return 0 if ok else 1
+
+
+def print_status(report: list[dict], evidence: lib.Evidence, local: bool) -> None:
+    for row in report:
+        where = "terminal" if row["terminal"] else "open"
+        print(f"{row['state']:<9} {row['slug']} ({row['kind']}, {where}, area {row['area']}): {row['title']}")
+        print(f"          agentDefault {row['agentDefault']}/{row['rules']} rule(s)")
+        for acc in row["acceptances"]:
+            target = f" {acc['target']}" if acc["target"] else ""
+            print(f"          {acc['state']:<9} {acc['id']}{target}: {acc['reason']}")
+    done = sum(1 for row in report if row["state"] == "done")
+    print(f"evidence: {evidence.ref or 'none'}{' + local' if local else ''}; {done}/{len(report)} item(s) done")
+
+
 SKELETON = '''s ::= import "./schema.zt";
 h ::= import "./helpers.zt";
 
@@ -135,7 +230,20 @@ item
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("check")
+    checker = sub.add_parser("check")
+    checker.add_argument("--base")
+    checker.add_argument("--approvers", default="")
+    status = sub.add_parser("status")
+    status.add_argument("--local", action="store_true")
+    status.add_argument("--json", action="store_true")
+    status.add_argument("--item")
+    answer = sub.add_parser("human")
+    answer.add_argument("slug")
+    answer.add_argument("acceptance")
+    answer.add_argument("value", choices=("yes", "no"))
+    answer.add_argument("--signer", required=True)
+    answer.add_argument("--key", default=str(Path.home() / ".ssh" / "id_ed25519"))
+    answer.add_argument("--note", default="")
     new = sub.add_parser("new")
     new.add_argument("kind", choices=("task", "bug", "milestone"))
     new.add_argument("slug")
@@ -148,8 +256,21 @@ def main() -> int:
         print(SKELETON.format(kind=args.kind, id=uuid.uuid7(), slug=args.slug, area=args.area), end="")
         return 0
 
+    if args.command == "human":
+        return human(args.slug, args.acceptance, args.value, args.signer, args.key, args.note)
     items = lib.load_items()
+    if args.command == "status":
+        evidence = lib.Evidence(local=args.local)
+        report = statuses([i for i in items if not args.item or i.value["slug"] == args.item], evidence)
+        if args.json:
+            json.dump({"schema": "task-status/v1", "evidenceRef": evidence.ref, "items": report}, sys.stdout, indent=1, sort_keys=True)
+            print()
+        else:
+            print_status(report, evidence, args.local)
+        return 0
     errors = check(items, lib.Recipes.load())
+    if args.base:
+        judge_base(args.base, {a.strip() for a in args.approvers.split(",") if a.strip()}, items, errors)
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
     if errors:

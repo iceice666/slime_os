@@ -53,6 +53,22 @@ the types and `helpers.zt` the constructors. `just tasks_new task <slug>
   `schema.zt` and `helpers.zt`, because Zutai refuses an import above the
   entry file's directory.
 
+`just tasks_status` computes each item acceptance from the evidence branch.
+An item is done when every mandatory acceptance is enforced. A mandatory
+`h.human` gate without a signed record is claimed, so it blocks done.
+`scripts/spec/tasks human <slug> <acceptance> yes|no --signer <login>`
+signs an answer; the record binds to the item's requirement statements and
+acceptances, not to its provenance or prose. Status also prints each item's
+`agentDefault` share.
+
+Closing an item is a move from `.tasks/items/` to `.tasks/terminal/`, in the
+PR that finishes it or in a later chore commit. `tasks check --base` on CI
+refuses a move unless the item is done (T1). It also refuses a PR that
+touches the `owns` of an item whose mandatory acceptance is failing at its
+current closure digest (T2). The PR either changes that closure, which
+re-runs the exam after the merge, or adds `h.knownLimit "failing"
+"<acceptance id>" ...` with an approval from `HUMAN_OWNERS`.
+
 `just tasks_check` refuses a malformed item, a slug that is not the file
 name, a repeated or non-UUIDv7 id, a broken `parent` or `depends`, an
 unknown area, an undeclared target, an empty milestone list, a known limit

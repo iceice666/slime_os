@@ -459,6 +459,24 @@ def spec_marks(paths: list[str]) -> list[tuple[str, int, str, str]]:
     return found
 
 
+def owns_match(path: str, globs: list[str]) -> bool:
+    """`path` falls under one of the `owns` globs (`dir/**` covers the subtree)."""
+    from fnmatch import fnmatchcase  # noqa: PLC0415
+
+    return any((g.endswith("/**") and path.startswith(g[:-2])) or fnmatchcase(path, g) for g in globs)
+
+
+def changed_files(base: str) -> dict[str, str]:
+    """path -> status letter for merge-base(base, HEAD)...HEAD (renames report both paths)."""
+    merge_base = git("merge-base", base, "HEAD").strip()
+    changed: dict[str, str] = {}
+    for line in git("diff", "--name-status", "--find-renames", merge_base, "HEAD").splitlines():
+        parts = line.split("\t")
+        for path in parts[1:]:
+            changed[path] = parts[0][0]
+    return changed
+
+
 def tracked(pathspec: str = ".") -> list[str]:
     process = subprocess.run(["git", "ls-files", "--", pathspec], cwd=ROOT, check=True, text=True, capture_output=True)
     return process.stdout.splitlines()
@@ -666,7 +684,11 @@ def acceptance_state(tag: str, payload: dict, requirement: dict, evidence: Evide
             if failed:
                 return "failing", "; ".join(failed)
         return state, detail
-    path = human_path(requirement, payload["id"])
+    return human_state(human_path(requirement, payload["id"]), evidence)
+
+
+def human_state(path: str, evidence: Evidence) -> tuple[str, str]:
+    """State of the signed human record at `path` on the evidence ref."""
     data = evidence.blob(path)
     if data is None:
         return "advisory", "awaiting a signed human record"
@@ -677,3 +699,48 @@ def acceptance_state(tag: str, payload: dict, requirement: dict, evidence: Evide
     if not verify_signature(data, evidence.blob(path + ".sig"), record["signer"]):
         return "advisory", f"signature by {record['signer']} does not verify against specs/allowed_signers"
     return ("enforced", f"signed yes by {record['signer']}") if record["value"] else ("failing", f"signed no by {record['signer']}")
+
+
+def item_human_path(item: dict, acceptance_id: str) -> str:
+    return f"human/{item['id']}/{acceptance_id}/{item_digest(item)}.zt"
+
+
+def item_acceptance_state(acceptance: dict, item: dict, evidence: Evidence) -> tuple[str, str]:
+    """(enforced | failing | claimed | advisory, detail) for one item acceptance.
+
+    A non-mandatory acceptance reports advisory whatever its record says. A
+    mandatory human gate without a verified record is claimed: it blocks done.
+    """
+    kind, body = tag(acceptance["check"]), payload(acceptance["check"])
+    if kind == "observed":
+        state, detail = acceptance_state("observed", body, {}, evidence)
+    elif kind == "human":
+        state, detail = human_state(item_human_path(item, acceptance["id"]), evidence)
+        state = "claimed" if state == "advisory" else state
+    else:
+        state, detail = clause_state(body, evidence)
+    if not acceptance["mandatory"]:
+        return "advisory", f"not mandatory ({state}: {detail})"
+    return state, detail
+
+
+def clause_state(body: dict, evidence: Evidence) -> tuple[str, str]:
+    """A contract clause has no oracle until the clause registry exists."""
+    return "claimed", f"no oracle record for {body['interface']}/{body['contractId']}/{body['clauseId']}"
+
+
+ITEM_ORDER = {"failing": 0, "claimed": 1, "advisory": 2, "enforced": 3}
+
+
+def item_state(states: list[tuple[bool, str]]) -> str:
+    """done when every mandatory acceptance is enforced; else the worst mandatory state."""
+    mandatory = [state for required, state in states if required]
+    if mandatory and all(state == "enforced" for state in mandatory):
+        return "done"
+    return min(mandatory, key=ITEM_ORDER.get) if mandatory else "advisory"
+
+
+def provenance_share(item: dict) -> tuple[int, int]:
+    """(agentDefault count, total) over every rule that carries a provenance."""
+    rules = [*item["requirements"], *item["nonGoals"], *item["invariants"], *item["decisions"], *item["knownLimits"]]
+    return sum(1 for rule in rules if tag(rule["provenance"]) == "agentDefault"), len(rules)

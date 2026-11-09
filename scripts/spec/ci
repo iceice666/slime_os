@@ -34,17 +34,12 @@ DEFAULT_SECONDS = 600
 
 
 def claimed(include_failing: bool = False) -> list[str]:
-    """Bound targets with no record at their current digest; with `include_failing`, also those whose record failed."""
+    """Targets an area or an item binds with no record at their current digest; with `include_failing`, also those whose record failed."""
     evidence = lib.Evidence()
     wanted = {"claimed", "failing"} if include_failing else {"claimed"}
-    targets: set[str] = set()
-    for area in lib.load_areas():
-        for requirement in area.requirements:
-            if requirement["planned"]:
-                continue
-            for tag, payload in lib.acceptances(requirement):
-                if tag == "observed" and evidence.record(payload["justTarget"])[0] in wanted:
-                    targets.add(payload["justTarget"])
+    bound = {p["justTarget"] for a in lib.load_areas() for r in a.requirements if not r["planned"] for t, p in lib.acceptances(r) if t == "observed"}
+    bound |= {lib.payload(a["check"])["justTarget"] for i in lib.load_items() for a in i.value["acceptance"] if lib.tag(a["check"]) == "observed"}
+    targets = {t for t in bound if evidence.record(t)[0] in wanted}
     return sorted(targets)
 
 
