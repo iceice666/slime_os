@@ -1,0 +1,50 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+record :: Text = "docs/decisions/work-item-devloop.md";
+session :: Text = "pi session 2026-11-10, proposal/devloop-v1-redesign";
+
+item :: s.Item = (h.task "01a1c147-34c7-71e6-a116-6a5bfb784949" "devloop-tracks" "quality"
+  "Parallel tracks: disjoint owns, a track limit, and closure sources derived after the merge"
+  "Parallel pull requests collide when two tracks change the same paths or regenerate the same closure sources, and nothing measures whether the loop spends its commits on product code. Tracks need machine-checked boundaries, and the weekly numbers need a command.")
+  with {
+    parent = "01a1c147-34c7-71e6-a116-6a55619c63c1";
+    owns = { "scripts/spec/derived"; ".github/workflows/evidence.yml"; };
+    requirements = {
+      (h.req "disjoint-tracks"
+        "tasks check refuses more than three open item trees, an open item whose owns overlap another open tree's, and an owns glob that reaches components/lib or scripts/lib."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "product-under-item"
+        "tasks check --base refuses a diff that touches a product path under no open item's owns."
+        { "spec_e2e"; }) with { provenance = h.fromDecision record; };
+      (h.req "derived-after-merge"
+        "derived --base refuses a pull request that edits a system-image closure source, and the Evidence workflow regenerates and commits them before it records."
+        { "spec_e2e"; }) with { provenance = h.fromHuman "只搬 closure sources（建議）" session; };
+      h.req "weekly-numbers"
+        "tasks status --weekly prints the six section-7 numbers and every agentDefault rule."
+        { "spec_e2e"; };
+    };
+    acceptance = {
+      h.observedWhere "spec_e2e" { h.count "casesFailed" 0; h.atLeast "casesObserved" 62; };
+    };
+    decisions = {
+      h.decided "later-id-waits"
+        "When two open trees overlap, tasks check reports the item with the later UUIDv7."
+        "UUIDv7 orders by creation time, so the later id is the track that opened second."
+        h.agentDefault { "disjoint-tracks"; };
+      h.decided "open-item-owns"
+        "T3 accepts a product path under the owns of any open item, not only an item the diff edits."
+        "One item may need more than one pull request, and the owns of open trees are already disjoint."
+        h.agentDefault { "product-under-item"; };
+      h.decided "derive-in-evidence"
+        "The Evidence workflow regenerates closure sources in its first job and records the commit it pushed."
+        "A push made with GITHUB_TOKEN starts no workflow, so a separate workflow's commit would never be recorded."
+        h.agentDefault { "derived-after-merge"; };
+      h.decided "weekly-proxies"
+        "--weekly counts first-parent commits per closed item and commits that add a known limit, as offline stand-ins for pull requests per feature and approvals."
+        "Pull-request counts and approvals live on GitHub, and the tool reads only the repository."
+        h.agentDefault { "weekly-numbers"; };
+    };
+  };
+
+item

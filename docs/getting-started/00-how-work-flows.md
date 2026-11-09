@@ -107,7 +107,8 @@ source. Two things catch most newcomers:
   root or component code needs no regeneration. Rerun
   `python3 scripts/generate/generate-system-image-closures.py` only when a
   closure's input set changes, then run the narrowest gate that exercises the
-  change. [Your first change](04-first-change.md) shows what a resolved build
+  change. Leave the regenerated sources uncommitted: the Evidence workflow
+  commits them after the merge. [Your first change](04-first-change.md) shows what a resolved build
   records.
 
 Finish with the repository-wide checks that apply: `just fmt_check_all` and

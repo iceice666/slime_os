@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Derived closure sources: regenerated after the merge, never in a pull request.
+
+    scripts/spec/derived --base <ref>     refuse a diff that edits a derived path
+    scripts/spec/derived --regenerate     write them in this checkout, list what changed
+
+The derived paths are `lib.DERIVED`: the system-image closure sources and
+their negative cases. Parallel pull requests that add compositions would
+otherwise conflict on them. The Evidence workflow runs `--regenerate` on
+each push to `main` and commits the result before it records anything; CI
+runs it before any check reads a closure (docs/decisions/work-item-devloop.md,
+decision D1). Generated bindings are compile inputs and stay in the pull
+request.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+GENERATOR = "scripts/generate/generate-system-image-closures.py"
+
+
+def roots() -> list[str]:
+    return [glob.removesuffix("/**") for glob in lib.DERIVED]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--base")
+    parser.add_argument("--regenerate", action="store_true")
+    args = parser.parse_args()
+    if args.base:
+        touched = sorted(p for p in lib.changed_files(args.base) if lib.owns_match(p, list(lib.DERIVED)))
+        for path in touched:
+            print(f"error: derived {path} is regenerated after the merge; drop it from the pull request", file=sys.stderr)
+        if touched:
+            return 1
+        print("derived: the diff edits no derived path")
+        return 0
+    if args.regenerate:
+        done = subprocess.run([sys.executable, GENERATOR], cwd=lib.ROOT, check=False)
+        if done.returncode != 0:
+            print(f"error: derived {GENERATOR} exited {done.returncode}", file=sys.stderr)
+            return done.returncode
+        changed = lib.git("status", "--porcelain", "--untracked-files=all", "--", *roots()).splitlines()
+        for line in changed:
+            print(line[3:])
+        print(f"derived: {len(changed)} path(s) changed", file=sys.stderr)
+        return 0
+    parser.error("--base or --regenerate is required")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

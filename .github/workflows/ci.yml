@@ -261,6 +261,11 @@ jobs:
         run: >-
           nix develop .#spec --command
           python3 scripts/spec/check --base "${{ github.event.pull_request.base.sha }}" --enforce-owns
+      - name: Derived closure sources untouched
+        if: github.event_name == 'pull_request'
+        run: >-
+          nix develop .#spec --command
+          python3 scripts/spec/derived --base "${{ github.event.pull_request.base.sha }}"
       - name: Commit roles against the base
         if: github.event_name == 'pull_request'
         run: >-
@@ -469,9 +474,11 @@ jobs:
         with:
           build-partition: image
       - run: nix develop --command just sel4_qemu_image_check
-      # Closures are digests of source trees; a merge that touches one without
-      # regenerating them makes every plane gate refuse to resolve. Fail here,
-      # on the clean checkout, rather than in whichever QEMU job runs first.
+      # Closure sources are derived after the merge (scripts/spec/derived), so
+      # a pull request that adds a composition carries none. Regenerate them in
+      # this checkout first; the builder check then refuses only a generator
+      # that disagrees with itself.
+      - run: nix develop --command python3 scripts/spec/derived --regenerate
       - run: nix develop --command just system_image_builder_check
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()

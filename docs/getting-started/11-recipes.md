@@ -9,7 +9,8 @@ says *regenerate closures*, it means:
 python3 scripts/generate/generate-system-image-closures.py
 ```
 
-and where it says *the owning plane gate*, find the composition your component
+in your checkout, without committing the result (the Evidence workflow
+commits closure sources after the merge), and where it says *the owning plane gate*, find the composition your component
 is in (`grep -l '"<component>"' contracts/system-spec/v1/systems/*.zti`) and
 run the `just` recipe whose checker names that closure.
 

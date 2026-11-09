@@ -1,7 +1,9 @@
-# After every push to main: run each bound target that has no record at its
-# current closure digest, write the records, and commit them to the
-# `evidence` branch (proposal/devloop-redesign/, decision E4). No commit
-# ever lands on main from here.
+# After every push to main: regenerate the derived closure sources and commit
+# them to main when they changed (docs/decisions/work-item-devloop.md, D1),
+# then run each bound target that has no record at its current closure
+# digest, write the records, and commit them to the `evidence` branch
+# (proposal/devloop-redesign/, decision E4). The derive job is the only one
+# that writes main, and it writes only `lib.DERIVED` paths.
 #
 # `plan` resolves every bound target's closure and balances the claimed ones
 # over at most 8 shards by observed wall time (specs/wall-time.toml). Each
@@ -28,8 +30,44 @@ permissions:
   contents: write
 
 jobs:
+  # A push made with GITHUB_TOKEN starts no workflow, so this run records the
+  # derived commit itself: every later job checks out `needs.derive.outputs.sha`.
+  # If regeneration fails or main moved on, the jobs record the pushed commit
+  # as it is (decision Q6): a stale closure fails its gates, and the next pull
+  # request that touches their owns must fix it.
+  derive:
+    name: Regenerate derived closure sources
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - id: regenerate
+        continue-on-error: true
+        shell: bash
+        run: nix develop --command python3 scripts/spec/derived --regenerate | tee "$RUNNER_TEMP/derived.txt"
+      - id: commit
+        run: |
+          sha="$(git rev-parse HEAD)"
+          if [ "${{ steps.regenerate.outcome }}" = success ] && [ -s "$RUNNER_TEMP/derived.txt" ]; then
+            git add -A -- contracts/system-image-closure/v3/closures contracts/system-image-closure/v2/negative
+            git -c user.name="slime-evidence" -c user.email="evidence@users.noreply.github.com" \
+              commit -q -m "chore(derived): regenerate system-image closure sources for ${sha:0:12}"
+            if git push origin HEAD:refs/heads/main; then sha="$(git rev-parse HEAD)"; else echo "main moved on; recording ${sha:0:12} as pushed"; fi
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
   plan:
     name: Claimed targets
+    needs: [derive]
+    if: always()
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     outputs:
@@ -37,6 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.derive.outputs.sha || github.sha }}
           submodules: recursive
           fetch-depth: 0
       - uses: ./.github/actions/slime-env
@@ -52,8 +91,8 @@ jobs:
 
   record:
     name: Record shard ${{ matrix.shard }}
-    needs: [plan]
-    if: needs.plan.outputs.shards != '[]'
+    needs: [derive, plan]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.shards != '[]'
     runs-on: ubuntu-24.04-arm
     # The signing key lives in this environment, whose deployment branch
     # policy admits main only (decision E4): a workflow edited on a branch
@@ -69,6 +108,7 @@ jobs:
       # Full history: image_attestation_check attaches notes to HEAD's ancestors.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.derive.outputs.sha || github.sha }}
           submodules: recursive
           fetch-depth: 0
       - uses: ./.github/actions/slime-env
@@ -95,13 +135,14 @@ jobs:
 
   publish:
     name: Publish records
-    needs: [plan, record]
-    if: always() && needs.plan.outputs.shards != '[]'
+    needs: [derive, plan, record]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.shards != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.derive.outputs.sha || github.sha }}
           submodules: recursive
           fetch-depth: 0
       - uses: ./.github/actions/slime-env

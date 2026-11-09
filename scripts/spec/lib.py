@@ -49,6 +49,9 @@ SPEC_MARK = re.compile(r"(?:#|//)\s*spec:\s*([0-9a-f-]{36})/([A-Za-z0-9_.:-]+)")
 GRADER = ("scripts/spec/lib.py", "scripts/spec/record", "contracts/observation/v1/schema.zt")
 TOOLCHAIN = ("rust-toolchain.toml", "sel4/pins.toml", "flake.lock", "Cargo.lock")
 PRODUCT_ROOTS = ("components", "slime-root", "contracts", "boot-contracts")
+# Outputs the post-merge workflow regenerates on main; a pull request never
+# edits them (scripts/spec/derived, decision D1 of work-item-devloop.md).
+DERIVED = ("contracts/system-image-closure/v3/closures/**", "contracts/system-image-closure/v2/negative/**")
 CLOSURE_DIGEST_PREFIX = "slime-spec-closure-digest-v1\n"
 SCRIPT_TOKEN = re.compile(r"(?<![\w/.-])scripts/[\w./-]+\.(?:py|sh)\b")
 IMAGE_CLOSURE = re.compile(r'^CLOSURE\s*=\s*"([a-z][a-z0-9-]*)"', re.M)

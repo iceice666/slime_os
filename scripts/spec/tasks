@@ -24,10 +24,23 @@ of an item whose mandatory acceptance is failing at the current closure
 digest, that item must carry a known limit `failing` naming the acceptance;
 a known limit the diff adds needs an approval from `HUMAN_OWNERS`.
 
+T3: every product path the diff touches falls under the owns of an open
+item, or of an item the diff closes; derived closure sources are exempt.
+
+`check` also refuses more than three open item trees, an open item whose
+owns overlap another open tree's (the later id waits), and an owns glob
+that reaches `components/lib/` or `scripts/lib/`.
+
 `status` computes each acceptance from the evidence branch, as
 `scripts/spec/status` does for areas. An item is done when every mandatory
 acceptance is enforced; otherwise it reports its worst mandatory state.
-It prints the `agentDefault` share of each item's rules.
+It prints the `agentDefault` share of each item's rules. `--weekly` prints
+the six numbers of the proposal's section 7 since `--since` (default 7 days):
+product commit share, first-parent commits per closed item, human answers
+per closed item, the agentDefault share of invariants, the median hours from
+a push to its evidence commit, and the share of commits that add a known
+limit (an offline stand-in for PRs needing HUMAN_OWNERS). It then lists every
+agentDefault rule.
 
 `human` signs an answer to an item's `h.human` acceptance; the record binds
 to the item's requirements digest.
@@ -39,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import uuid
@@ -48,6 +62,55 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib  # noqa: E402
 
 RATCHETS = ("R1", "R2", "R3", "R4", "failing")
+SHARED = ("components/lib/", "scripts/lib/")
+MAX_TRACKS = 3
+PRODUCT_PREFIXES = ("components/", "slime-root/", "contracts/", "boot-contracts/")
+WILD = re.compile(r"[*?\[]")
+
+
+def literal(glob: str) -> str:
+    """The part of a glob before its first wildcard."""
+    match = WILD.search(glob)
+    return glob[: match.start()] if match else glob
+
+
+def overlap(a: str, b: str, files: list[str]) -> bool:
+    """Some path can match both globs: a tracked file does, or one literal path matches the other, or two subtree globs nest."""
+    if any(lib.owns_match(f, [a]) and lib.owns_match(f, [b]) for f in files):
+        return True
+    if not WILD.search(a) or not WILD.search(b):
+        path, glob = (a, b) if not WILD.search(a) else (b, a)
+        return lib.owns_match(path, [glob])
+    return a.endswith("/**") and b.endswith("/**") and (literal(a).startswith(literal(b)) or literal(b).startswith(literal(a)))
+
+
+def root_of(item: lib.Item, by_id: dict[str, lib.Item]) -> str:
+    seen = set()
+    while item.value["parent"] in by_id and item.id not in seen:
+        seen.add(item.id)
+        item = by_id[item.value["parent"]]
+    return item.id
+
+
+def check_tracks(items: list[lib.Item], errors: list[str]) -> None:
+    """Open trees: at most MAX_TRACKS, disjoint owns, no shared library owned."""
+    by_id = {i.id: i for i in items}
+    files = lib.tracked()
+    open_items = sorted((i for i in items if not i.terminal), key=lambda i: i.id)
+    for item in open_items:
+        for glob in item.value["owns"]:
+            if literal(glob).startswith(SHARED) or any(lib.owns_match(f, [glob]) for f in files if f.startswith(SHARED)):
+                errors.append(f"{item.where}: owns {glob!r} reaches a shared library ({', '.join(SHARED)}), which no item may own")
+    roots = sorted({root_of(i, by_id) for i in open_items})
+    if len(roots) > MAX_TRACKS:
+        errors.append(f"{len(roots)} open tracks exceed the limit of {MAX_TRACKS}: {', '.join(by_id[r].value['slug'] for r in roots)}")
+    for index, later in enumerate(open_items):
+        for earlier in open_items[:index]:
+            if root_of(earlier, by_id) == root_of(later, by_id):
+                continue
+            shared = [(a, b) for a in earlier.value["owns"] for b in later.value["owns"] if overlap(a, b, files)]
+            if shared:
+                errors.append(f"{later.where}: owns {shared[0][1]!r} overlaps {earlier.value['slug']}'s {shared[0][0]!r}; the later track waits")
 MILESTONE_LISTS = ("owns", "nonGoals", "requirements", "acceptance", "invariants", "decisions")
 
 
@@ -146,6 +209,7 @@ def check(items: list[lib.Item], recipes: lib.Recipes) -> list[str]:
         for named in [item.value["parent"]] * bool(item.value["parent"]) + item.value["depends"]:
             if named not in by_id:
                 errors.append(f"{item.where}: parent or depends names {named!r}, which is no item")
+    check_tracks(items, errors)
     return errors
 
 
@@ -187,6 +251,10 @@ def judge_base(base: str, approvers: set[str], items: list[lib.Item], errors: li
         for acc in row["acceptances"]:
             if acc["mandatory"] and acc["state"] == "failing" and ("failing", acc["id"]) not in limits:
                 errors.append(f"T2: the diff touches the owns of {item.value['slug']}, whose acceptance {acc['id']} is failing ({acc['reason']}); fix it or add h.knownLimit \"failing\" \"{acc['id']}\"")
+    owned = [g for i in items if not i.terminal or i.where in changed for g in i.value["owns"]]
+    for path in sorted(p for p in changed if p.startswith(PRODUCT_PREFIXES) and not lib.owns_match(p, list(lib.DERIVED))):
+        if not lib.owns_match(path, owned):
+            errors.append(f"T3: {path} is a product path under no open item's owns")
     humans = approvers & lib.human_owners()
     for reason in reasons:
         print(f"approval: {reason}", file=sys.stderr)
@@ -226,6 +294,51 @@ def print_status(report: list[dict], evidence: lib.Evidence, local: bool) -> Non
     print(f"evidence: {evidence.ref or 'none'}{' + local' if local else ''}; {done}/{len(report)} item(s) done")
 
 
+def median(values: list[float]) -> float | None:
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def weekly(items: list[lib.Item], evidence: lib.Evidence, since: str) -> dict:
+    """The six numbers of proposal/devloop-v1-redesign §7 over commits since `since`."""
+    commits = lib.git("log", "--no-merges", "--first-parent", f"--since={since}", "--format=%H").split()
+    product = [c for c in commits if any(p.startswith(PRODUCT_PREFIXES) for p in lib.git("diff-tree", "--no-commit-id", "--name-only", "-r", c).split())]
+    def adds_limit(commit: str) -> bool:
+        diff = lib.git("show", "--format=", "--unified=0", commit, "--", ".tasks/", ":!.tasks/*/helpers.zt", ":!.tasks/*/schema.zt", check=False)
+        return any(line.startswith("+") and "h.knownLimit" in line for line in diff.splitlines())
+
+    limited = [c for c in commits if adds_limit(c)]
+    closed = [i for i in items if i.terminal and lib.git("log", f"--since={since}", "--format=%H", "-1", "--", i.where).strip()]
+    pulls = [len(lib.git("log", "--first-parent", "--follow", "--format=%H", "--", i.where).split()) for i in closed]
+    answers = [sum(1 for r in [*i.value["requirements"], *i.value["nonGoals"], *i.value["invariants"], *i.value["decisions"]] if lib.tag(r["provenance"]) == "human") for i in closed]
+    invariants = [r for i in items for r in i.value["invariants"]]
+    defaults = [f"{i.value['slug']}: {kind} {r.get('id') or r.get('ratchet') or r['statement'][:60]}"
+                for i in items for kind in ("requirements", "nonGoals", "invariants", "decisions", "knownLimits")
+                for r in i.value[kind] if lib.tag(r["provenance"]) == "agentDefault"]
+    delays = []
+    if evidence.ref:
+        for line in lib.git("log", evidence.ref, f"--since={since}", "--format=%ct %s").splitlines():
+            stamp, _, subject = line.partition(" ")
+            source = subject.rsplit(" for ", 1)[-1] if subject.startswith("evidence:") else ""
+            when = lib.git("log", "-1", "--format=%ct", source, check=False).strip() if source else ""
+            if when:
+                delays.append((int(stamp) - int(when)) / 3600)
+    share = lambda part, whole: round(len(part) / len(whole), 3) if whole else None  # noqa: E731
+    return {
+        "since": since,
+        "productCommitShare": share(product, commits),
+        "pullRequestsPerClosedItem": median(pulls),
+        "humanAnswersPerClosedItem": median(answers),
+        "agentDefaultInvariantShare": round(sum(1 for r in invariants if lib.tag(r["provenance"]) == "agentDefault") / len(invariants), 3) if invariants else None,
+        "pushToRecordMedianHours": round(m, 1) if (m := median(delays)) is not None else None,
+        "knownLimitCommitShare": share(limited, commits),
+        "agentDefaults": defaults,
+    }
+
+
 SKELETON = '''s ::= import "./schema.zt";
 h ::= import "./helpers.zt";
 
@@ -256,6 +369,8 @@ def main() -> int:
     status.add_argument("--local", action="store_true")
     status.add_argument("--json", action="store_true")
     status.add_argument("--item")
+    status.add_argument("--weekly", action="store_true")
+    status.add_argument("--since", default="7 days ago")
     answer = sub.add_parser("human")
     answer.add_argument("slug")
     answer.add_argument("acceptance")
@@ -280,6 +395,19 @@ def main() -> int:
     items = lib.load_items()
     if args.command == "status":
         evidence = lib.Evidence(local=args.local)
+        if args.weekly:
+            numbers = weekly(items, evidence, args.since)
+            if args.json:
+                json.dump(numbers, sys.stdout, indent=1)
+                print()
+                return 0
+            for key, value in numbers.items():
+                if key != "agentDefaults":
+                    print(f"{key:<28} {'not measured' if value is None else value}")
+            print(f"agentDefault rules ({len(numbers['agentDefaults'])}); a person may flip any of them:")
+            for line in numbers["agentDefaults"]:
+                print(f"  {line}")
+            return 0
         report = statuses([i for i in items if not args.item or i.value["slug"] == args.item], evidence)
         if args.json:
             json.dump({"schema": "task-status/v1", "evidenceRef": evidence.ref, "items": report}, sys.stdout, indent=1, sort_keys=True)
