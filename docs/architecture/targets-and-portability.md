@@ -82,8 +82,8 @@ plane replay. Those omissions are not passing results.
 
 The named Milk-V Duo has retained physical evidence for its upstream-seL4
 architecture and product path. The Raspberry Pi 5 kernel, loader, and media build
-path exists, but no board boot was observed; its gate fails closed without serial
-evidence.
+path exists. Its boot claim is the `rpi5-board` area in `specs/rpi5-board.zt`,
+and `just spec_status` reports whether an operator record enforces it.
 
 Raspberry Pi construction uses `sel4/config/bcm2712-rpi5.cmake`, the
 `bcm2712_rpi5`/`observed_prefix_bcm2712_rpi5` pins, and a separate platform
@@ -100,8 +100,19 @@ serial debug facility needed for this qualification. It is not a verified-profil
 boot claim. The platform exposes 1019 MiB because upstream supplies no RPi5
 overlay above the VideoCore base. Memory, GIC-400/GICv2, the 54 MHz generic timer
 and UART10 at `0x107d001000` come from seL4's platform description and BootInfo,
-not a Slime-side board table. The physical gate binds media to the built image
-and fails closed without serial evidence; it never substitutes QEMU. P4's
+not a Slime-side board table.
+
+`just rpi5_boot_check` is an operator target. The board's EEPROM holds
+`BOOT_ORDER=0x3`, so each power-on asks the host for its boot files over the
+USB-C cable. The gate serves the verified `config.txt` and `kernel8.img`, plus
+the BCM2712 second stage `bootfiles.bin`, with the `rpiboot` the dev shell pins
+in `SLIME_RPIBOOT` and `SLIME_RPIBOOT_BOOTFILES`. It reads UART10 through the
+Raspberry Pi Debug Probe. It writes no block device.
+
+The gate requires 14 markers in order. Each one is named from the chain of
+`check-sel4-root-boot.py`, so the board gate follows the QEMU product's markers.
+The generic timer must run at the pinned 54 MHz, which a QEMU transcript cannot
+show. The gate fails closed without serial evidence; it never substitutes QEMU. P4's
 [serial rationale](../../roadmap/07-architecture-portability.md#why-serial-is-the-only-evidence-path)
 explains why display output or a debugger cannot replace its ordered transcript.
 

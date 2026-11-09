@@ -97,7 +97,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 12),
-    ("rpi5_boot", "check/check-rpi5-boot.py", 11),
+    ("rpi5_boot", "check/check-rpi5-boot.py", 14),
 )
 
 

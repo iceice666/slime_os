@@ -1,0 +1,57 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "rpi5-board" "Raspberry Pi 5 board boot over rpiboot with UART10 evidence" {
+    "sel4/config/bcm2712-rpi5.cmake";
+    "scripts/build/build-rpi5-media.py";
+  } {
+    -- RP3 (legacy 01a0724c-5400-7cb4-ab51-0bcb23a882b5, blocked) waited on a working USB-UART adapter.
+    -- The Raspberry Pi Debug Probe on the UART10 header replaces it, and rpiboot over the USB-C cable
+    -- replaces the removable medium: the board's EEPROM holds BOOT_ORDER=0x3, so every power-on asks the
+    -- host for config.txt and kernel8.img. slime_os-v2 proved this path on the same board on 2026-11-08.
+    -- This kernel is not the verified configuration: sel4/config/bcm2712-rpi5.cmake turns kernel printing
+    -- on so the root writes UART10 itself.
+    (h.req "01a1c0b2-61b1-7435-a734-499faf8cd081"
+      "The named Raspberry Pi 5 Model B boots the pinned bcm2712 image that rpiboot serves. Its root admits the generation, activates both fixture tasks, reclaims them, and reaches READY with nothing live on UART10."
+      "Without it, no Slime OS boot on this board is observed, and every RPi5 claim rests on QEMU."
+      {
+        h.observedWhere "board-boot-observed" "rpi5_boot_check" { h.count "casesObserved" 14; } "rpi5_boot_check matches 14 markers in order, each named from check-sel4-root-boot.py's chain, so a marker the QEMU product changes changes the board gate too. Any failure marker of that chain, or a kernel vector or init failure, fails the gate first. sel4_gate_control_check refuses the gate's mutated transcripts.";
+      }) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+    (h.req "01a1c0b2-61b1-7435-a734-49a085dc4cfe"
+      "On the board the root binds the generic timer at IRQ 30 and observes one delivered and acknowledged interrupt. The timer runs at the pinned 54000000 Hz."
+      "Without it, a transcript replayed from QEMU, whose timer runs at 62500000 Hz, could stand in for a board boot."
+      {
+        h.observedWhere "board-timer-observed" "rpi5_boot_check" { h.count "timerFrequencyHz" 54000000; } "The gate reads the frequency from the root's own timer marker and requires it to equal [bcm2712_rpi5] timer_frequency_hz in sel4/pins.toml. A QEMU qemu-arm-virt transcript passes every ordered marker and fails here.";
+      }) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+    (h.req "01a1c0b2-61b1-7435-a734-49a1def97d89"
+      "A fixture task that faults on the board is reported on UART10 as a write fault, is reclaimed, and the root still reaches READY."
+      "Without it, a fault on the board could wedge it silently, and no later evidence would arrive."
+      {
+        h.observedWhere "board-fault-observed" "rpi5_boot_check" h.noPredicates "The deliberate-fault task's activation, the root's VirtualMemory write-fault observation, its reclaim, and READY are ordered markers of the gate; a fault that wedges the board ends the run at its timeout.";
+      }) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+    (h.req "01a1c0b2-61b1-7435-a734-49a2146dbfe9"
+      "The board boots without a written block device. rpiboot serves config.txt and kernel8.img with the digests the identity checks approved, and its log shows both files read."
+      "Without it, a stale image or a leftover SD card could boot and be reported as this build's evidence."
+      {
+        h.observedWhere "board-served-observed" "rpi5_boot_check" h.noPredicates "The gate rebuilds the image, re-flattens it and compares kernel8.img digests, copies the verified files into the served directory and hashes the copy, and after the boot requires rpiboot's log to show config.txt and kernel8.img read. Nothing in the gate opens a block device.";
+      }) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+    (h.planned "01a1c0b2-61b1-7435-a734-49a340603875"
+      "A wrong board revision, an unsupported page, interrupt or timer profile, or an incompatible firmware handoff fails with a bounded diagnostic on UART10, not a hang."
+      "Without it, a board that differs from the pin could hang or boot a nearby profile without saying so."
+      "waits on a wrong-board exam; rpi5_boot_check judges one honest boot of the named board"
+      h.noAcceptance) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+    (h.planned "01a1c0b2-61b1-7435-a734-49a4aa5549f0"
+      "The gate records the board revision and the bootloader version the board prints on UART10 beside the image identity."
+      "Without it, a firmware update could change the boot path while the evidence still names the same board."
+      "waits on the bootloader's UART10 line format from the first observed boot"
+      h.noAcceptance) with { supersedes = { "01a0724c-5400-7cb4-ab51-0bcb23a882b5"; }; };
+  }) with {
+    nonGoals = {
+      "Replaying the AArch64 QEMU corpus on the board (P4, legacy 01a02f59-a800-78b6-9398-6b22bfbc6fdd).";
+      "Any device beyond UART10 and the generic timer.";
+      "Booting from an SD card or other removable medium.";
+      "The verified kernel configuration.";
+    };
+  };
+
+area

@@ -162,6 +162,8 @@
                 x86CC
                 sel4Python
                 mtools
+                # RP3's board gate serves the RPi 5's boot files over USB-C.
+                rpiboot
               ]
               # P6.2 assembles the EFI file tree with `grub-mkimage` and, for
               # P6.5's raw medium, writes FAT32 with mtools rather than
@@ -213,6 +215,11 @@
             # and says so, rather than verifying whatever is installed.
             SLIME_OVMF_DIR = if pc99BootHost then "${ovmfFirmware}/FV" else "";
             SLIME_GRUB_PREFIX = if pc99BootHost then "${grubEfi}" else "";
+
+            # RP3's board gate. `check-rpi5-boot.py` serves the BCM2712 second
+            # stage from this exact store path, never from a host install.
+            SLIME_RPIBOOT = "${pkgs.rpiboot}/bin/rpiboot";
+            SLIME_RPIBOOT_BOOTFILES = "${pkgs.rpiboot}/share/rpiboot/mass-storage-gadget64/bootfiles.bin";
 
             # Freestanding C components use Clang's target driver and LLD.
             # Do not inherit mkShell's ambient CC: on Linux it is GCC, which

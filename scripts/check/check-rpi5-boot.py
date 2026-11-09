@@ -1,37 +1,48 @@
 #!/usr/bin/env python3
 
-"""P4: qualify the named Raspberry Pi 5 by booting it and reading its UART.
+"""RP3: qualify the named Raspberry Pi 5 by booting it and reading its UART.
 
 This is a *physical* gate. It builds the pinned bcm2712 kernel, root task, and
-loader, flattens them into the removable-media boot files, proves the bytes it
-is about to boot are the ones its identity manifest describes, then reads the
-board's serial console and requires the same ordered evidence
-`check-sel4-root-boot.py` requires of the QEMU product.
+loader, flattens them into the boot files, proves the bytes it is about to boot
+are the ones its identity manifest describes, serves them to the board with
+`rpiboot`, then reads UART10 through the Raspberry Pi Debug Probe and requires
+a board subset of the ordered evidence `check-sel4-root-boot.py` requires of
+the QEMU product.
+
+The board's EEPROM holds `BOOT_ORDER=0x3`: every power-on asks the host for
+`config.txt` and `kernel8.img` over the USB-C cable, which also powers it. The
+gate serves exactly the verified media plus rpiboot's own BCM2712 second stage,
+`bootfiles.bin`, from the pinned shell.
 
 What it deliberately does not do:
 
-  * write to a block device. Copying onto removable media is the one step that
-    can destroy an unrelated disk, so the operator does it and this gate only
-    proves what was written matches what was built.
+  * write to a block device. The board boots from the host over USB, so no
+    removable medium and no SD card is written or read.
   * power-cycle the board. There is no admitted reset capability, so the
-    operator resets it; the gate waits for the boot it was told to expect.
+    operator plugs in the USB-C cable when the gate says it is serving.
   * fall back to QEMU. A QEMU pass cannot complete a physical milestone
-    (roadmap invariant 8), so a missing board, missing serial device, or
-    missing media is a failure and never a skip.
+    (roadmap invariant 8), so a missing board, probe, or rpiboot is a failure
+    and never a skip.
 
 Serial is read with `termios` rather than `pyserial`, which the pinned shell
 does not carry: a raw tty at the contract's baud is a dozen lines of POSIX and
-adds no dependency to a gate whose whole purpose is reproducibility.
+adds no dependency to a gate whose whole purpose is reproducibility. The
+reader drains UART10 from before rpiboot starts until the gate ends: the Debug
+Probe's USB serial stops for good when the host leaves its input unread while
+the board prints.
 """
 
 from __future__ import annotations
 
 import argparse
 import errno
+import glob
+import importlib.util
 import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import termios
@@ -44,6 +55,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import sha256_file  # noqa: E402
 
+import devloop_observations  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-bcm2712-rpi5.elf"
@@ -51,88 +64,82 @@ MANIFEST = ROOT / "build" / "slime-sel4-bcm2712-rpi5.identity.json"
 MEDIA = ROOT / "build" / "rpi5-media"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 MEDIA_SCRIPT = ROOT / "scripts" / "build" / "build-rpi5-media.py"
-DEMO_CONTRACT = ROOT / "contracts" / "rpi5-ros2-demo" / "v2" / "fixtures" / "valid.zti"
+SERVED = ROOT / "build" / "rpi5-rpiboot"
+LOGS = ROOT / "build" / "rpi5-boot"
+ROOT_BOOT_GATE = ROOT / "scripts" / "check" / "check-sel4-root-boot.py"
 PLATFORM = "bcm2712-rpi5"
 TARGET_PROFILE = "aarch64-rpi5"
+# The pinned shell exports both by store path, so the gate serves the second
+# stage the pin names rather than whichever rpiboot the host has on PATH.
+RPIBOOT_ENVIRONMENT = "SLIME_RPIBOOT"
+BOOTFILES_ENVIRONMENT = "SLIME_RPIBOOT_BOOTFILES"
+SERIAL_ENVIRONMENT = "RPI5_SERIAL"
+# The AArch64 EL1 physical timer: PPI 14 plus the PPI base of 16, the value
+# `slime-root/src/platform_timer.rs` binds on every AArch64 profile.
+TIMER_IRQ = 30
 
 # A board that never prints must fail loudly rather than hang the gate. This is
-# wall-clock from the moment the reader opens, so it also covers the operator's
-# reset: the board is expected to be reset after the gate says it is listening.
+# wall-clock from the moment rpiboot starts serving, so it also covers the
+# operator plugging in the board after the gate says it is serving.
 BOOT_TIMEOUT_SECONDS = 180
 
-# Ordered evidence, matched in this order. This is deliberately the QEMU root
-# gate's chain narrowed to what a board can establish without any peripheral
-# this milestone has not qualified: the root task admitted its generation, took
-# ownership of untyped memory, acquired the real generic-timer IRQ and observed
-# one delivered and acknowledged interrupt, staged and activated its children,
-# served a request, observed a clean exit and a real fault, reclaimed both, and
-# reached its ready state with nothing live.
-#
-# Numeric fields vary per build and are matched loosely; what is pinned is the
-# ordering, the identities, and the terminal `live=0`.
-REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
-    (
-        "allocator admitted nonzero kernel resources",
-        r"SLIME_ROOT allocator slots=[1-9]\d* untypeds=[1-9]\d* bytes=[1-9]\d*",
-    ),
-    (
-        "generation admitted",
-        r"SLIME_ROOT generation identity=[0-9a-f]{8}",
-    ),
-    (
-        "timer source acquired on the board's generic timer",
-        r"SLIME_TIMER acquired irq=\d+ freq_hz=[1-9]\d*",
-    ),
-    (
-        "timer interrupt delivered",
-        r"SLIME_TIMER delivered badge=0x1 polls=\d+",
-    ),
-    (
-        "timer expiry serviced and acknowledged",
-        r"SLIME_TIMER serviced events=1 programming=\S",
-    ),
-    (
-        "first child activated",
-        r"SLIME_ROOT task activated task=0",
-    ),
-    (
-        "second child activated",
-        r"SLIME_ROOT task activated task=1",
-    ),
-    (
-        "clean child reclaimed",
-        r"SLIME_ROOT task reclaimed task=0 source=generation",
-    ),
-    (
-        "faulted child reclaimed",
-        r"SLIME_ROOT task reclaimed task=1 source=generation",
-    ),
-    (
-        "graph drained with nothing live",
-        r"SLIME_ROOT cleanup tasks=2 slots=\d+ live=0",
-    ),
-    (
-        "root reached its ready state",
-        r"SLIME_ROOT READY",
-    ),
+
+def _root_boot_gate():
+    spec = importlib.util.spec_from_file_location("sel4_root_boot_for_rpi5", ROOT_BOOT_GATE)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"rpi5 boot check: cannot load {ROOT_BOOT_GATE.relative_to(ROOT)}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The QEMU root gate's chain narrowed to what RP3 claims of a board without any
+# peripheral it has not qualified: the root took ownership of untyped memory,
+# acquired the generic timer and observed one delivered and acknowledged
+# interrupt, admitted its generation, activated a child that printed and exited
+# cleanly and one that faulted, reclaimed both, and reached its ready state with
+# nothing live. Each entry names a description of `check-sel4-root-boot.py`'s
+# chain, so a marker the QEMU product changes changes here too; the patterns
+# and their order come from that chain and nowhere else.
+BOARD_SUBSET: tuple[str, ...] = (
+    "allocator admitted nonzero kernel resources",
+    "timer source acquired",
+    "timer interrupt delivered",
+    "timer expiry serviced and acknowledged",
+    "generation admitted",
+    "clean-exit task activated",
+    "child exited cleanly",
+    "root observed the clean exit",
+    "deliberate-fault task activated",
+    "root observed the child fault",
+    "the clean-exit task's arena-owned slots are accounted for",
+    "the faulted task's arena-owned slots are accounted for",
+    "both tasks reclaimed",
+    "root reached ready",
 )
 
+
+def _board_markers(chain: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    named = {description for description, _ in chain}
+    missing = [description for description in BOARD_SUBSET if description not in named]
+    if missing:
+        raise SystemExit(
+            "rpi5 boot check: the QEMU root gate no longer names "
+            + ", ".join(repr(description) for description in missing)
+        )
+    return tuple(entry for entry in chain if entry[0] in BOARD_SUBSET)
+
+
+_ROOT_BOOT = _root_boot_gate()
+REQUIRED_MARKERS: tuple[tuple[str, str], ...] = _board_markers(_ROOT_BOOT.REQUIRED_MARKERS)
+
 # Any of these in the transcript fails the gate before ordered matching runs, so
-# a board that reaches `READY` through a degraded path cannot pass.
+# a board that reaches `READY` through a degraded path cannot pass. The QEMU
+# root gate's list, plus the kernel's own early failures that QEMU never shows.
 FAILURE_MARKERS: tuple[str, ...] = (
-    r"SLIME_ROOT fatal",
-    r"SLIME_ROOT generation rejected",
-    r"SLIME_ROOT panic",
-    r"SLIME_ROOT allocator exhausted",
-    r"SLIME_TIMER timeout",
-    r"SLIME_TIMER unavailable",
-    r"SLIME_ROOT device page unavailable",
+    *_ROOT_BOOT.FAILURE_MARKERS,
     r"KERNEL INVALID VECTOR ENTRY",
     r"Kernel init failed",
-    r"seL4 called fail",
-    r"Caught cap fault",
-    r"Caught vm fault",
-    r"panicked at",
 )
 
 
@@ -155,7 +162,7 @@ def load_pins() -> dict[str, object]:
 def board_profile(pins: dict[str, object]) -> dict[str, object]:
     """The board's pinned facts, each required rather than defaulted."""
     profile = pins["bcm2712_rpi5"]
-    for key in ("board", "soc", "serial", "serial_baud", "boot_files"):
+    for key in ("board", "soc", "serial", "serial_baud", "boot_files", "timer_frequency_hz"):
         if key not in profile:
             fail(f"[bcm2712_rpi5] declares no {key}")
     return profile
@@ -262,8 +269,8 @@ def open_serial(device: Path, baud: int) -> int:
     """
     if not device.exists():
         fail(
-            f"serial device {device} does not exist; attach the USB-UART adapter "
-            "to the Pi 5 debug header and pass --serial"
+            f"serial device {device} does not exist; attach the Debug Probe "
+            "to the Pi 5 UART10 header"
         )
     try:
         fd = os.open(str(device), os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
@@ -301,59 +308,146 @@ def open_serial(device: Path, baud: int) -> int:
     return fd
 
 
-def capture(device: Path, baud: int, timeout: int) -> str:
-    """Read the board's console until terminal evidence, failure, or timeout.
+def serial_device(given: Path | None) -> Path:
+    """--serial, then RPI5_SERIAL, then the only Debug Probe serial device present."""
+    if given is not None:
+        return given
+    if named := os.environ.get(SERIAL_ENVIRONMENT):
+        return Path(named)
+    found = sorted(glob.glob("/dev/cu.usbmodem*")) + sorted(glob.glob("/dev/ttyACM*"))
+    if len(found) != 1:
+        fail(
+            f"cannot choose the Debug Probe's UART device; found {found or 'none'}. "
+            f"Attach the probe to UART10, or set {SERIAL_ENVIRONMENT} or pass --serial"
+        )
+    return Path(found[0])
+
+
+def rpiboot_inputs() -> tuple[Path, Path]:
+    """The pinned rpiboot binary and its BCM2712 second stage, from the shell."""
+    paths = []
+    for name in (RPIBOOT_ENVIRONMENT, BOOTFILES_ENVIRONMENT):
+        value = os.environ.get(name, "")
+        if not value:
+            fail(f"{name} is unset; run the gate from `nix develop`, which pins rpiboot")
+        path = Path(value)
+        if not path.is_file():
+            fail(f"{name} names {path}, which does not exist")
+        paths.append(path)
+    return paths[0], paths[1]
+
+
+def stage(profile: dict[str, object], media_digest: str, bootfiles: Path) -> dict[str, str]:
+    """The directory rpiboot serves: the verified boot files and the second stage.
+
+    Copied, then hashed again from the copy, so the bytes rpiboot serves are
+    the bytes the identity checks above approved.
+    """
+    if SERVED.exists():
+        shutil.rmtree(SERVED)
+    SERVED.mkdir(parents=True)
+    for name in profile["boot_files"]:
+        shutil.copyfile(MEDIA / name, SERVED / name)
+    shutil.copyfile(bootfiles, SERVED / "bootfiles.bin")
+    digests = {path.name: sha256_file(path, fail) for path in sorted(SERVED.iterdir())}
+    if digests["kernel8.img"] != media_digest:
+        fail("the staged kernel8.img differs from the verified media")
+    return digests
+
+
+def capture(device: Path, baud: int, timeout: int, rpiboot: Path) -> str:
+    """Serve the staged files and read UART10 until terminal evidence, failure, or timeout.
 
     The deadline is enforced by `select`, not checked after a blocking read, so
-    a board that prints nothing at all still fails on time.
+    a board that prints nothing at all still fails on time. rpiboot runs with
+    `-l`, so a board that resets is served again rather than left waiting; it
+    exiting before the board finishes is a failure.
     """
     fd = open_serial(device, baud)
     terminal = re.compile(REQUIRED_MARKERS[-1][1])
     failures = [re.compile(pattern) for pattern in FAILURE_MARKERS]
-    deadline = time.monotonic() + timeout
+    LOGS.mkdir(parents=True, exist_ok=True)
+    served_log = LOGS / "rpiboot.log"
+    serial_log = LOGS / "serial.log"
     pending = b""
     lines: list[str] = []
-    print(f"[serial] reading {device} at {baud} baud; reset the board now")
+    process = None
     try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
+        with served_log.open("w") as log:
             try:
-                ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+                process = subprocess.Popen(
+                    [str(rpiboot), "-l", "-v", "-d", str(SERVED)],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
             except OSError as error:
-                fail(f"waiting on {device} failed: {error}")
-            if not ready:
-                continue
-            try:
-                chunk = os.read(fd, 4096)
-            except OSError as error:
-                if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                fail(f"cannot start {rpiboot}: {error}")
+        deadline = time.monotonic() + timeout
+        print(
+            f"[rpiboot] serving {SERVED.relative_to(ROOT)}; power the RPi 5 through "
+            f"its USB-C cable now. Reading {device} at {baud} baud",
+            flush=True,
+        )
+        with serial_log.open("wb") as raw_log:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if process.poll() is not None:
+                    fail(f"rpiboot exited with status {process.returncode}; see {served_log.relative_to(ROOT)}")
+                try:
+                    ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+                except OSError as error:
+                    fail(f"waiting on {device} failed: {error}")
+                if not ready:
                     continue
-                fail(f"reading {device} failed: {error}")
-            if not chunk:
-                continue
-            pending += chunk
-            *complete, pending = pending.split(b"\n")
-            for raw in complete:
-                line = raw.decode("utf-8", "replace").rstrip("\r")
-                print(f"  {line}")
-                lines.append(line)
-            transcript = "\n".join(lines)
-            if terminal.search(transcript) is not None:
-                return transcript
-            if any(pattern.search(transcript) is not None for pattern in failures):
-                return transcript
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError as error:
+                    if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        continue
+                    fail(f"reading {device} failed: {error}")
+                if not chunk:
+                    continue
+                raw_log.write(chunk)
+                raw_log.flush()
+                pending += chunk
+                *complete, pending = pending.split(b"\n")
+                for raw in complete:
+                    line = raw.decode("utf-8", "replace").rstrip("\r")
+                    print(f"  {line}", flush=True)
+                    lines.append(line)
+                transcript = "\n".join(lines)
+                if terminal.search(transcript) is not None:
+                    return transcript
+                if any(pattern.search(transcript) is not None for pattern in failures):
+                    return transcript
     finally:
         os.close(fd)
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
     transcript = "\n".join(lines)
     if not lines:
         fail(
-            f"no bytes arrived on {device} within {timeout}s; check the adapter "
-            "wiring, that the board was reset, and that the media was written"
+            f"no bytes arrived on {device} within {timeout}s; check the Debug Probe "
+            "on UART10, that the board's EEPROM has BOOT_ORDER=0x3, and that its "
+            f"USB-C cable reaches this host (see {served_log.relative_to(ROOT)})"
         )
     report_transcript(transcript)
     fail(f"the board did not reach its terminal marker within {timeout}s")
+
+
+def check_served() -> None:
+    """rpiboot handed the board this image, not only some earlier boot's files."""
+    served = (LOGS / "rpiboot.log").read_text(encoding="utf-8", errors="replace")
+    for name in ("config.txt", "kernel8.img"):
+        if f"File read: {name}" not in served:
+            fail(f"the board finished, but rpiboot never served {name}; see build/rpi5-boot/rpiboot.log")
 
 
 def monitor(device: Path, baud: int, timeout: int) -> None:
@@ -417,14 +511,12 @@ def monitor(device: Path, baud: int, timeout: int) -> None:
     if total == 0:
         print()
         print("Nothing arrived. In order of likelihood:")
-        print("  1. TX/RX swapped. The Pi 5 debug header is pin 1 = board TX,")
-        print("     pin 2 = GND, pin 3 = board RX, with pin 1 nearest the")
-        print("     micro-HDMI ports. The adapter's RX goes to pin 1.")
-        print("  2. GND not connected between adapter and board.")
-        print("  3. The board is not running: no media, or wrong partition.")
-        print("     `config.txt` sets `uart_2ndstage=1`, so the *firmware*")
-        print("     should print before Slime does; silence means the link,")
-        print("     not the image.")
+        print("  1. The Debug Probe's UART cable is not on the Pi 5's UART10")
+        print("     header (the 3-pin JST between the micro-HDMI ports).")
+        print("  2. The board is not running: nothing served it, or its EEPROM")
+        print("     does not hold BOOT_ORDER=0x3. The EEPROM's BOOT_UART=1 and")
+        print("     `config.txt`'s `uart_2ndstage=1` make the *firmware* print")
+        print("     before Slime does; silence means the link, not the image.")
 
 
 def report_transcript(transcript: str) -> None:
@@ -435,7 +527,13 @@ def report_transcript(transcript: str) -> None:
     print("---- end of serial transcript ----")
 
 
-def check_transcript(transcript: str) -> None:
+def check_transcript(transcript: str, profile: dict[str, object]) -> tuple[int, int]:
+    """The ordered board subset, then the facts that tell this board from QEMU.
+
+    The generic timer's frequency is the board's own crystal, 54 MHz on the
+    BCM2712, where QEMU `virt` reports 62.5 MHz; a transcript replayed from a
+    QEMU boot fails here. Returns the markers matched and the observed frequency.
+    """
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
         if match is not None:
@@ -450,6 +548,17 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    timer = re.search(r"SLIME_TIMER acquired irq=(\d+) freq_hz=(\d+)", transcript)
+    if timer is None:
+        fail("the timer marker disappeared after marker matching")
+    if int(timer.group(1)) != TIMER_IRQ:
+        fail(f"the root bound timer IRQ {timer.group(1)}, expected {TIMER_IRQ}")
+    if int(timer.group(2)) != profile["timer_frequency_hz"]:
+        fail(
+            f"the generic timer runs at {timer.group(2)} Hz, but [bcm2712_rpi5] pins "
+            f"{profile['timer_frequency_hz']} Hz; this transcript is not from the board"
+        )
+    return len(REQUIRED_MARKERS), int(timer.group(2))
 
 
 def main() -> None:
@@ -458,8 +567,8 @@ def main() -> None:
         "--serial",
         type=Path,
         help=(
-            "the USB-UART device attached to the Pi 5 debug header, "
-            "e.g. /dev/cu.usbserial-0001"
+            f"the Debug Probe's UART device on UART10; defaults to ${SERIAL_ENVIRONMENT}, "
+            "then the only /dev/cu.usbmodem* or /dev/ttyACM* present"
         ),
     )
     parser.add_argument(
@@ -478,7 +587,8 @@ def main() -> None:
         action="store_true",
         help=(
             "print whatever the serial device emits and assert nothing; a "
-            "bring-up aid that builds no artifacts and qualifies no board"
+            "bring-up aid that builds no artifacts, serves nothing, and "
+            "qualifies no board"
         ),
     )
     arguments = parser.parse_args()
@@ -487,37 +597,34 @@ def main() -> None:
         fail(f"run from repository root: {ROOT}")
     pins = load_pins()
     profile = board_profile(pins)
+    device = serial_device(arguments.serial)
 
     if arguments.monitor:
         # Deliberately before the build and identity checks: when the wire is
         # silent, the question is whether anything reaches this host at all, and
         # rebuilding the image cannot answer it. Qualifies nothing.
-        if arguments.serial is None:
-            fail("--monitor needs --serial naming the USB-UART device")
-        monitor(arguments.serial, profile["serial_baud"], arguments.timeout)
+        monitor(device, profile["serial_baud"], arguments.timeout)
         return
 
+    rpiboot, bootfiles = rpiboot_inputs()
     if not arguments.no_build:
         build()
     media_digest = check_identity(profile)
     check_media_matches_image(media_digest)
+    digests = stage(profile, media_digest, bootfiles)
+    for name, digest in digests.items():
+        print(f"[served] {name} sha256={digest}")
 
-    if arguments.serial is None:
-        fail(
-            "no serial device given, so no board evidence can be observed; P4 "
-            "requires an observed boot on the named Raspberry Pi 5. Attach the "
-            "USB-UART adapter to the debug header and pass "
-            "`--serial /dev/cu.usbserial-XXXX`. The artifacts are built and "
-            "verified: copy build/rpi5-media/* onto the FAT32 boot partition first"
-        )
-    baud = profile["serial_baud"]
-    transcript = capture(arguments.serial, baud, arguments.timeout)
-    check_transcript(transcript)
+    transcript = capture(device, profile["serial_baud"], arguments.timeout, rpiboot)
+    matched, frequency = check_transcript(transcript, profile)
+    check_served()
+    devloop_observations.record(casesObserved=matched, timerFrequencyHz=frequency)
     print(
         f"rpi5 boot check: {profile['board']} ({profile['soc']}) booted the "
-        f"pinned {PLATFORM} image (media sha256 {media_digest[:16]}) and produced "
-        f"ordered generation, timer, task, fault, and ready evidence on "
-        f"{profile['serial']}"
+        f"pinned {PLATFORM} image (kernel8.img sha256 {media_digest[:16]}) served by "
+        f"rpiboot and produced {matched} ordered generation, timer, task, fault, and "
+        f"ready markers on {profile['serial']} at the board's "
+        f"{frequency} Hz generic timer"
     )
 
 

@@ -134,6 +134,9 @@ def render_config(load_addr: int, pins: dict[str, object]) -> str:
     `disable_commandline_tags=1` stops the firmware appending ATAGs over the
     image, and `device_tree=` disables firmware device-tree loading: this kernel
     carries its own description compiled from `deps/sel4/tools/dts/rpi5b.dts`.
+
+    `os_check=0` stops the firmware refusing an image that carries no Linux
+    image header and no matching device tree; this image has neither by design.
     """
     board = pins["bcm2712_rpi5"]
     return "\n".join(
@@ -146,6 +149,7 @@ def render_config(load_addr: int, pins: dict[str, object]) -> str:
             f"kernel_address={load_addr:#x}",
             "disable_commandline_tags=1",
             "device_tree=",
+            "os_check=0",
             "enable_uart=1",
             "uart_2ndstage=1",
             "",

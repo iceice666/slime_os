@@ -318,14 +318,18 @@ sel4_duo_image_check: sel4_pin_check
 rpi5_media_check: sel4_rpi5_image_check
     python3 scripts/build/build-rpi5-media.py
 
-# Physical gate: require ordered boot evidence from the pinned build on UART10.
-# Missing board, adapter, media, or serial evidence is a failure, never a skip.
-# Copy build/rpi5-media/* to FAT32, reset, then pass the serial device.
+# Physical gate: serve the pinned build to the RPi 5 with rpiboot and require
+# ordered boot evidence on UART10 through the Debug Probe. Missing board, probe,
+# rpiboot, or serial evidence is a failure, never a skip. Run from `nix develop`;
+# plug in the board's USB-C cable when the gate says it is serving. No system
+# image closure describes the bcm2712 image, so the inputs name what builds it,
+# and the QEMU root gate the board markers are named from.
 [group('hardware')]
+[metadata("inputs", "slime-root/**", "components/**", "boot-contracts/**", "contracts/**", "sel4/**", "scripts/build/**", "scripts/lib/**", "scripts/check/check-sel4-root-boot.py", "Cargo.toml")]
 rpi5_boot_check serial="": sel4_pin_check rpi5_artifact_check
     python3 scripts/check/check-rpi5-boot.py {{ if serial == "" { "" } else { "--serial " + serial } }}
 
-# Bring-up aid only: monitor debug UART without qualifying the board.
+# Bring-up aid only: monitor UART10 without serving or qualifying the board.
 # Exits after 10 seconds of quiet or the requested timeout.
 [group('hardware')]
 rpi5_serial_monitor serial timeout="120":
