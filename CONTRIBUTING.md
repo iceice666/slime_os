@@ -316,9 +316,11 @@ General CI lives in `.github/workflows/ci.yml`. Pushes to `main` and `develop`,
 and pull requests targeting any branch, run it; a newer run cancels the
 superseded one for the same ref. The workflow's aggregate `CI` job fails unless
 every gate job succeeded. The `Spec judge` workflow
-(`.github/workflows/spec-judge.yml`) is separate from `CI`. A repository
-ruleset requires it from `main`, so the copy a pull request carries does not
-judge that pull request.
+(`.github/workflows/spec-judge.yml`) is separate from `CI`. The `main`
+ruleset requires the `Devloop v1.5 judge` and `CI` checks and Code Owner
+review. A pull request could edit the judge's workflow or add one with the
+same check name, so [`.github/CODEOWNERS`](.github/CODEOWNERS) makes every
+change under `.github/` or `scripts/spec/` need another owner's approval.
 
 Host checks, Kani, and the aggregates run on `ubuntu-latest`; the seL4 image,
 root tests, rollback runtime, contract sources, and the four generation shards

@@ -4,11 +4,13 @@
 # scripts/spec/check against the head checkout, so a pull request cannot
 # rewrite the judge or the lists that judge it.
 #
-# This is the only judge of a pull request, and it blocks. A pull request
-# could edit this file, so a repository ruleset requires this workflow from
-# `main` ("Require workflows to pass before merging"); the copy a pull
-# request carries is not the one that judges it. On GitLab the equivalent is
-# a protected pipeline definition.
+# This is the only judge of a pull request, and it blocks: the `main`
+# ruleset requires its `Devloop v1.5 judge` status check. A personal-account
+# repository cannot require a workflow from `main`, so a pull request could
+# edit this file or add a workflow that reports a passing check of the same
+# name. .github/CODEOWNERS covers .github/, and the ruleset requires Code
+# Owner review, so such a pull request needs another owner's approval. On
+# GitLab a protected pipeline definition replaces both.
 name: Spec judge
 
 on:

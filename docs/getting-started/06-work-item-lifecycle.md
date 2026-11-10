@@ -230,8 +230,10 @@ a PR cannot change the judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or
 | V9 provenance | A `#human` quote shorter than 8 characters, a blanket answer, or a PR number as source. Warning only. |
 | V10 frozen promises | An added, changed or removed area requirement. |
 
-The `Spec judge` workflow runs on every PR push and after each review. A
-repository ruleset requires it from `main`. `just spec_e2e` is the judge's own
+The `Spec judge` workflow runs on every PR push and after each review. The
+`main` ruleset requires its `Devloop v1.5 judge` check. A PR that touches
+`.github/` or `scripts/spec/` also needs a Code Owner approval from another
+owner, because such a PR could replace the check. `just spec_e2e` is the judge's own
 exam: it walks a fixture repository through every stage.
 
 ## No GitHub projection
