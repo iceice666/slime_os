@@ -36,9 +36,10 @@ Three files answer most "where is..." questions:
   the index routing every kind of change to its owning module.
 - `Justfile` — every build, run, check, and regeneration command
   (`just --list`).
-- `just tasks_list` / `just tasks_next` — what is done, open, blocked, or
-  deferred, from the canonical work-item store in `.tasks/items/`. Open
-  backlog items come before milestone work; `just tasks_check` enforces it.
+- `just spec_tasks_status` — each work item's state, derived from the
+  `evidence` branch, and `just spec_status` — each area promise's state. Items
+  live in `.tasks/items/`, promises in `specs/<area>.zt`. Open backlog bugs
+  come before milestone work. `scripts/spec/check` enforces it (V7).
 - [`roadmap/README.md`](../../roadmap/README.md) — the file classification and
   residual-ownership index. It records no state and owns no problem statement;
   each item owns its own.

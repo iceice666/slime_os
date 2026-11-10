@@ -4,10 +4,10 @@ Terms the rest of the documentation uses without redefining. Each entry gives
 the working meaning and the page or file that owns the precise one. This page
 is a lookup aid, not a source: when it disagrees with an owner, the owner wins.
 
-**Acceptance.** One named requirement of a spec-driven item. It binds a gate
-(`just-target`, `just-observations`, or a human gate) and a predicate over the
-typed observations that gate reports; the item completes only when every
-mandatory acceptance has current passing evidence.
+**Acceptance.** One condition a work item or area requirement must meet.
+`h.observed` binds a `just` target and optional predicates over its record.
+`h.human` asks a person a question that a signed answer decides. An item is
+done when every mandatory acceptance is enforced.
 → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
 
 **Admission.** The root's judgment of a decoded generation before any
@@ -16,13 +16,17 @@ CSlot plan costed, every resource budget satisfiable. Failure is
 `SLIME_ROOT FATAL` or `SLIME_GRAPH FAIL`, never a partial boot.
 → `slime-root/src/generation.rs`; [boot walkthrough](getting-started/03-boot-walkthrough.md).
 
+**Area.** One file `specs/<area>.zt` that lists what one subsystem promises
+today: its owned paths, invariants and frozen requirements (**Promises**).
+Every work item names one. → `specs/schema.zt`.
+
 **Arm.** One scenario of a checker that can boot several (`--arm`); several
 `just` recipes may drive one checker with different arms.
 → [Add a gate](getting-started/07-add-a-gate.md).
 
-**Backlog.** Work items tagged `backlog`: known defects. Open ones are resolved,
-deferred, or blocked before new milestone work; `just tasks_check` enforces
-it. → `AGENTS.md`.
+**Backlog.** The open `#bug` items, those with intent `#planned` or
+`#active`, plus every failing promise. While any exists, no milestone work
+enters `#active` (V7). → [devloop v1.5 decision](decisions/work-item-devloop.md).
 
 **Badge.** The word seL4 attaches to a capability so the receiver knows which
 capability a message arrived on. The root mints a badge per task on its
@@ -44,16 +48,20 @@ Zero for every other component; readable via `boot_action()`.
 **Boot layout.** Init's resolved capability layout on a plane, frozen as a
 fixture and compared by `just sel4_boot_layout_check`. → `contracts/boot-layout/`.
 
-**BootState.** The two redundant 512-byte on-disk slots recording known-good
-and pending generation identities, attempt budget, and accepted release
-sequence. Committed older-slot-first. → [generation management](architecture/generation-management.md).
-
 **Boot selector.** The pre-admission path compiled only into
 `slime_boot_selector` images that reads BootState and a boot-store directory
 from disk to choose which generation to admit. → `slime-root/src/boot_selector.rs`.
 
+**BootState.** The two redundant 512-byte on-disk slots recording known-good
+and pending generation identities, attempt budget, and accepted release
+sequence. Committed older-slot-first. → [generation management](architecture/generation-management.md).
+
 **Bootstrap instance.** The one instance the root activates itself (`init` in
 every current composition). Everything else is spawned by a userspace owner.
+
+**Bound target.** A `just` target that an open, not cancelled work item, a
+terminal item nobody superseded, or an area requirement binds. The
+`Evidence` workflow records it once it is claimed. → [devloop v1.5 decision](decisions/work-item-devloop.md).
 
 **Capability.** An unforgeable reference to an object plus a rights mask.
 Narrowing-only, explicitly transferred, never ambient. → [concepts/capabilities](concepts/capabilities.md), [capability matrix](capability-matrix.md).
@@ -61,10 +69,11 @@ Narrowing-only, explicitly transferred, never ambient. → [concepts/capabilitie
 **Chain.** An ordered list of serial markers a gate requires; markers within a
 chain must appear in order, chains are independent. → `scripts/lib/sel4_gate_markers.py`.
 
-**Closeout.** Moving a spec-driven item to done. `myque-closeout.yml` runs
-`just devloop complete` on `main` for each item whose recorded evidence devloop
-still accepts and opens a `.tasks`-only PR; merging an implementation never
-closes its item by itself. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md#closeout-prs).
+**Closeout.** The PR that moves a work item from `.tasks/items/` to
+`.tasks/terminal/` byte for byte. The **closeout bot** (`scripts/spec/closeout`,
+run by the `Evidence` workflow with its own GitHub App token) opens one per item
+that has a **Done witness** or is `#cancelled`. V6 refuses any other move.
+→ [work-item lifecycle](getting-started/06-work-item-lifecycle.md#closeout-prs).
 
 **Closure** (system-image closure). The generated record naming, by digest,
 every input an image is built from. Re-resolved before every build; a stale
@@ -91,28 +100,36 @@ boundary. Bindings are generated, never hand-written. → [concepts/contracts](c
 The root plans every task's CSpace before activation; grant slots are the
 component's own numbering from 0.
 
-**Devloop.** The pinned tool that admits, validates, gates, and completes
-spec-driven work items. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+**Devloop.** The work-item process: planning, implementation, evidence
+and closeout, judged by `scripts/spec/check` under the rules V1 to V10.
+→ [devloop v1.5 decision](decisions/work-item-devloop.md).
+
+**Done witness.** A record signed by `ci` on the **Evidence branch** at
+`done/<item id>/<digest>.zt`. The `Evidence` workflow writes it when every
+mandatory acceptance of an `#active` item is enforced. V6 accepts a
+**Closeout** only with one. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
 
 **Epoch.** An IO0 ring generation counter: a driver reset settles every lease
 and advances the epoch, and a client holding the old one is refused.
 → [I/O substrate](architecture/io-substrate.md).
 
-**Evidence** (devloop evidence). A recorded gate result for one acceptance,
-bound to the requirements, helpers, code closure, policy, execution inputs,
-target, image, and run epoch that were tested; changing any of them stales it,
-and the newest entry decides. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+**Evidence.** The **Records**, human answers and **Done witnesses** on the
+**Evidence branch**. A record decides an `h.observed` acceptance while its
+target's closure digest is unchanged. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+
+**Evidence branch.** The `evidence` branch. It holds **Records** at
+`<target>/<closureDigest>.zt`, signed human answers under `human/`, and
+**Done witnesses** under `done/`. Only the `Evidence` workflow and
+`scripts/spec/publish` write it. → `.github/workflows/evidence.yml`.
 
 **Evidence class.** Whether a claim rests on direct observation, inherited
 evidence, or inference; recorded in PRs and work items. Hardware claims bind
 to target, revision, and binary identity.
 
-**Exam** (also *grader*). What an acceptance is judged by. For a recipe gate:
-the execution inputs file, the recipe it names, and the checker and
-`scripts/lib` judge that recipe runs; for a human gate: the gate's declaration
-in `.devloop/policy.json` and the typed observations a person supplies. It
-lands in a planning PR before the implementation, so an implementation cannot
-change its own exam. → `CONTRIBUTING.md` (Spec-driven items).
+**Exam** (also *grader*). What an acceptance is judged by: the recipe it
+names and that recipe's **Grader set**. It lands in a planning PR before the
+implementation, so an implementation cannot change its own exam (V3).
+→ [devloop v1.5 decision](decisions/work-item-devloop.md).
 
 **Fabric.** The typed data plane: graph-declared routes between participants,
 stream/call/operation semantics, QoS, recording. → [typed data fabric](architecture/typed-data-fabric.md).
@@ -135,10 +152,11 @@ The unit of deployment and rollback. → [concepts/generations](concepts/generat
 **Generation manifest.** The derived `.zti` rendering of a system spec that the
 generation builder consumes. An output, never edited. → `contracts/generation-manifest/v1/`.
 
-**Grader closure.** An exam's recipe, every recipe in its dependency chain, and
-the scripts and `scripts/lib` modules they run. Completion refuses unless all
-of it matches `origin/main` byte for byte. Not the system-image **Closure**.
-→ [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+**Grader set.** The recipes in a target's dependency chain and the checker
+and `scripts/lib` files they run. An implementation PR that touches the grader
+set of a **Bound target** is refused (V3). A planning PR that changes it needs
+a V4 approval. `just spec_closure --explain` lists it. Not the system-image
+**Closure**. → [devloop v1.5 decision](decisions/work-item-devloop.md).
 
 **Grant.** A system-spec declaration that a holder receives a capability of a
 kind, from a source, with exact rights and a transferability flag.
@@ -152,12 +170,21 @@ completed= failed=` line; gates pin every number.
 **Instance.** One placement of an executable in a composition, with owner,
 autostart, dependencies, and health class.
 
+**Intent.** A work item's only hand-written state: `#planned`, `#active`,
+`#blocked`, `#deferred` or `#cancelled`. `EDGES` in `scripts/spec/lib.py`
+lists the legal transitions (V5). Done is not an intent. → [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
+
 **Interposition.** A fabric hop inserted between participants for policy or
 recording; `just sel4_fault_check` boots a plane whose hop is compiled to die.
 
 **IO0 / IO1 / IO2 …** The numbered I/O substrate layers: IO0 is the shared
 ring (queue/epoch/lease), higher numbers add device, DMA, link, and block
 authority. → [I/O substrate](architecture/io-substrate.md).
+
+**Judge.** `scripts/spec/check`, the only program that decides whether a PR
+is legal under V1 to V10. CI runs the base commit's copy, so a PR cannot change
+the judge that judges it. `just spec_check --base origin/main` runs it
+locally. → [devloop v1.5 decision](decisions/work-item-devloop.md).
 
 **Lease.** A bounded loan of a buffer slice to a driver for one request,
 settled on completion or reset.
@@ -172,9 +199,6 @@ emitter and the gate together. → [boot walkthrough](getting-started/03-boot-wa
 **Mechanism vs policy.** Mechanism (object allocation, IPC, supervision, admission)
 lives in `slime-root`; policy (who spawns what, when, with which grants) lives
 in userspace components and the system spec.
-
-**MyQue.** The tool managing `.tasks/`, the canonical work-item store; allocates
-UUIDs and writes relationships. → `AGENTS.md`.
 
 **Native endpoint.** An seL4 endpoint object the root creates from an
 `endpoint` grant and installs in both holders' CSpaces; traffic on it is
@@ -191,29 +215,30 @@ system spec (`slotPins`); or a marker count in `check-sel4-gate-controls.py`.
 **Plane.** One QEMU-bootable composition plus the checker that asserts its
 markers, named `sel4-<domain>`. → [add a gate](getting-started/07-add-a-gate.md).
 
-**Planning PR.** The PR class that carries a work item and its exam, plus any
-new schema the exam binds to, and no product code; it lands before the
-implementation PR. The other classes are implementation, evidence-only, and
-process. → `.agents/skills/work-item-lifecycle/SKILL.md`.
+**Planning PR.** The PR class that carries a work item with intent
+`#planned` and its exam, and no product code. It lands before the
+implementation PR. The other classes are implementation, closeout and process.
+→ [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
 
 **Private memory.** A component's fixed-base, growable, non-shareable,
 non-executable region, bounded by a generation quota. → [private memory](architecture/private-memory.md).
 
-**Receipt** (diagnostic receipt). The Zutai record a gate writes beside the
-bounded output of a recipe run, naming the run's identity, recipe, run key, and
-output digest so a failure's output can be found and attributed. It is not
-acceptance evidence. → `contracts/devloop-diagnostics/README.md`.
+**Promise.** An area requirement, or a terminal work item nobody
+superseded. V10 freezes area requirements. An item's `supersedes` replaces
+one. A failing promise blocks milestone work (V7). → [devloop v1.5 decision](decisions/work-item-devloop.md).
 
 **Recipe.** A `just` target, defined under `just/` or in the root `Justfile`. A
 recipe that verifies something is a **Gate**; every public recipe is listed in
 [`just` targets](reference/just-targets.md).
 
+**Record.** An `observation/v1` file that `scripts/spec/record` writes for one
+run of a `just` target: target, closure digest, `passed` from the exit
+status, and the counts and flags the checker reported. Keyed by closure
+digest. → `contracts/observation/v1/schema.zt`.
+
 **Release.** The detached, threshold-signed record binding a generation
 identity, parent, sequence, and target; verified by selector images before
 candidate bytes are read. → `contracts/release/v1/`.
-
-**Retired item.** A done or cancelled work item reduced to a minimal terminal
-record after its final bytes are retained in Git.
 
 **Rights.** The bit set on a capability, one bit per root-checked operation;
 vocabulary generated from `contracts/generation/v5/schema.zt`.
@@ -221,20 +246,11 @@ vocabulary generated from `contracts/generation/v5/schema.zt`.
 **Root** (`slime-root`). The initial task; owns all dynamic mechanism and is
 part of the trusted computing base. → [trust model](architecture/trust-model.md).
 
-**Run key.** The hash of an execution identity, gate, and target: a cache key
-shared by every run of the same identity, not the name of one attempt. Each
-capture gets its own diagnostic receipt, so attempts are told apart by
-receipt path. → `contracts/devloop-diagnostics/README.md`.
-
 **Shared buffer.** Root-minted, budget-bounded pages mappable by several
 holders; the only runtime object mint. → `slime-root/src/shared_buffer.rs`.
 
 **Slot pin.** A `slotPins` entry fixing a grant's slot for a holder, with a
 reason (`componentAbi`, `bootLayout`, `encodedLayout`, `allocatorOrder`).
-
-**Spec-driven item.** A work item whose body is a fenced `dev-spec/v1` Zutai
-payload with bound acceptance gates; mandatory for identities after
-2026-10-01. → [decision](decisions/mandatory-spec-driven-work-items.md).
 
 **Supervision handle.** The opaque capability a spawner receives for a child,
 through which it observes termination as a typed status. Collecting a terminal
@@ -259,11 +275,12 @@ payloads too large to ride inline in an IPC message.
 badges, endpoint slots, and a timer, dispatched in bounded order.
 → [runtime authority](architecture/runtime-authority.md).
 
-**Work item.** The canonical unit of planned work, with a UUID identity and
-managed by **MyQue**: a live item is `.tasks/items/<UUID>.md`, and a retired
-one survives as `.tasks/terminal/<UUID>.json`. An ordinary prose item closes
-by `myque close`; a **Spec-driven item** closes through devloop.
-→ `CONTRIBUTING.md` (Where work lives).
+**Work item.** A `task/v2` Zutai file built from `contracts/task/v2/helpers.zt`:
+`.tasks/items/<slug>.zt` while open, `.tasks/terminal/<slug>.zt` once closed.
+Its UUIDv7 never changes. It names an **Area**, `owns` path globs,
+requirements and **Acceptances**. Its only hand-written state is its
+**Intent**. `specs/legacy.zt` indexes the items of the earlier store.
+→ [work-item lifecycle](getting-started/06-work-item-lifecycle.md).
 
 **Zutai.** The schema and generation language every contract is written in
 (`.zt` sources, `.zti` instances), pinned as a submodule under `deps/zutai`.

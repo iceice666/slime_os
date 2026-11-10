@@ -1,389 +1,247 @@
 # Carrying a work item
 
-Two ways to carry work, one identity model. An **ordinary item** closes on an
-observation a person records. A **spec-driven item** closes only against
-evidence bound to the exact inputs that were tested, and refuses otherwise.
-
-**New work takes the spec-driven path.** Every item created on or after
-`2026-10-01T00:00:00Z` must carry a devloop record, and `just tasks_check`
-refuses the store otherwise. The ordinary path below remains authoritative for
-the items created before that instant, which stay valid and never become
-subject — not even when reopened. Read the shared model first, then the path
-your item's identity puts it on.
+A work item is a `task/v2` Zutai file. It is `.tasks/items/<slug>.zt` while
+open and `.tasks/terminal/<slug>.zt` once closed. Its only hand-written state
+is `intent`. The `evidence` branch decides whether it is done, and the
+closeout bot moves it. `scripts/spec/check` judges every step. The rationale
+is [the devloop v1.5 decision](../decisions/work-item-devloop.md).
 
 ## Who decides what
 
-Three programs own disjoint decisions, and none of them is reimplemented here.
-
 | Owner | Decides |
 |---|---|
-| [MyQue](https://github.com/mozufu/myque) | Identity, state, hierarchy, dependencies, storage, retirement, recovery |
-| [devloop](https://github.com/mozufu/devloop) | The requirements body, its helper semantics, evidence validity, completion eligibility |
-| This repository | That a spec-driven body is one fenced `zti` block, which gates exist and what they observe, and the approval rules |
+| The item file | Scope (`owns`), requirements, acceptances, `intent` |
+| Area files `specs/<area>.zt` | The frozen promises: what a subsystem guarantees today |
+| `scripts/spec/check`, from the base commit | Whether a PR is legal under V1 to V10 |
+| The `Evidence` workflow on `main` | Records, keyed by closure digest, and done witnesses |
+| The closeout bot | The PR that moves a witnessed or cancelled item to `.tasks/terminal/` |
+| `HUMAN_OWNERS` | V4 approvals, and answers to `#human` acceptances |
 
-`just tasks_check` is where the third row is enforced: it delegates store
-validity to `myque check`, keeps backlog-first, and hands every item that
-carries a `devloop` record to devloop for validation.
-[`docs/decisions/spec-driven-work-item-bodies.md`](../decisions/spec-driven-work-item-bodies.md)
-records why the split sits there.
+Nobody runs a command that marks an item done.
 
-## The shared model
+## Anatomy of an item
 
-Canonical identity is the UUID MyQue allocates. Human keys such as `C9.4` are
-display aliases: optional, renameable, and never resolved by a checker, a
-dependency edge, or a generated view.
+Print a skeleton with a fresh UUIDv7, then fill it in:
 
-```text
-myque new / devloop admit        →  .tasks/items/<UUID>.md   (open)
-myque start / devloop start      →  active
-close                            →  done | cancelled
-myque retire                     →  .tasks/terminal/<UUID>.json
-myque reopen                     →  .tasks/items/<UUID>.md   (open)
+```sh
+python3 scripts/spec/tasks new <task|bug|milestone> <slug> --area <area> > .tasks/items/<slug>.zt
 ```
 
-Retirement is a storage transition, not a state. After it, the item's identity,
-relationships, readiness and `myque check` still resolve **offline** from the
-terminal record; only the body is gone from the live tree, retained in a Git
-commit under `refs/myque/retained/*`.
+The skeleton imports the schema and helpers from copies beside it.
+`.tasks/items/` and `.tasks/terminal/` carry byte-identical copies of
+`contracts/task/v2/schema.zt` and `helpers.zt`, because Zutai refuses an
+import above the entry file's directory. A filled item looks like this:
 
-## An ordinary item
+```text
+item :: s.Item = (h.task "<uuid>" "<slug>" "<area>" "<title>" "<problem>")
+  with {
+    intent = #planned;
+    owns = { "components/services/widget/**"; };
+    requirements = {
+      h.req "refuses-oversize" "<statement>" { "widget_check"; };
+    };
+    acceptance = {
+      h.observed "widget_check";
+    };
+  };
+```
 
-For pre-cutoff items only. New work cannot enter this way; `just tasks_check`
-refuses a post-cutoff item that carries no devloop record.
+| Field | Meaning |
+|---|---|
+| `id` | A UUIDv7. It never changes. |
+| `slug` | The file name without `.zt`. |
+| `kind` | `#task`, `#bug` or `#milestone`. An open `#bug` is a backlog bug. |
+| `area` | The area file whose invariants bind the item. |
+| `intent` | The only hand-written state. See [intents](#intents-and-legal-transitions). |
+| `owns` | Path globs an implementation PR of this item may change (V2). |
+| `requirements` | `h.req <id> <statement> { <acceptance ids> }`. |
+| `acceptance` | `h.observed "<target>"`, `h.observedWhere "<target>" { <predicates> }`, or `h.human "<id>" "<question>"`. `h.advisory` makes one non-mandatory. |
+| `parent`, `depends` | Item ids. A child of a milestone falls under V7. |
+| `supersedes` | A terminal item, `<item id>/<requirement id>`, or an area requirement it replaces. |
+| `nonGoals`, `invariants`, `decisions`, `knownLimits` | Each entry carries a provenance: `h.agentDefault`, `h.fromHuman`, `h.fromDecision` or `h.acceptedDefault`. |
 
-1. **Propose.** MyQue allocates the id; never invent one or pick the next
-   number.
+An `h.observed` acceptance holds when the target's record at its current
+closure digest passed and meets every predicate. An `h.human` acceptance holds
+when a person in `specs/allowed_signers` signed yes.
 
-   ```sh
-   myque new "Describe the work" --kind task
-   ```
+`just spec_tasks_check` refuses a malformed item or area, a schema copy that
+differs from `contracts/task/v2/`, and a broken link.
 
-   Use `--kind bug --tag backlog` for a defect. Fill in the problem, scope and
-   observable exit conditions, then relate it if needed (`myque parent`,
-   `myque depend`).
+## Intents and legal transitions
 
-2. **Land the planning change.** A work-item-only PR merges into `main` before
-   any implementation PR. `just tasks_check` enforces backlog-first while you
-   are there; `just tasks_next` lists what is actionable.
+`EDGES` in `scripts/spec/lib.py` lists the legal transitions. V5 refuses any
+other. Done is not an intent: the closeout bot moves the file.
 
-3. **Start and implement.** `myque start <ITEM>`, then the implementation PR,
-   which names the landed UUID in its description. Merging does not complete
-   anything.
+```mermaid
+stateDiagram-v2
+    [*] --> planned
+    planned --> active
+    planned --> deferred
+    planned --> cancelled
+    active --> blocked
+    active --> deferred
+    active --> cancelled
+    blocked --> active
+    blocked --> cancelled
+    deferred --> planned
+    deferred --> cancelled
+    active --> terminal: closeout bot, with a done witness
+    cancelled --> terminal: closeout bot
+```
 
-4. **Close on what you observed.** Record the exact commands, results, scope
-   and limits in one unique `## Closure evidence` section, then:
+| Intent | Use |
+|---|---|
+| `#planned` | The item and its exam are on `main`. Its targets are never recorded. |
+| `#active` | Work has started. The `Evidence` workflow claims its targets. |
+| `#blocked` | Work started and stopped on something outside the repository. |
+| `#deferred` | Postponed. A deferred item is planned again before it starts. |
+| `#cancelled` | Not done. The closeout bot moves it without a witness. |
 
-   ```sh
-   myque close <ITEM>
-   ```
+Entering `#deferred` or `#cancelled` needs a V4 approval.
 
-5. **Retire it through a maintenance PR.** A done item can leave the live tree
-   after its evidence and exact history have been verified. Retirement never
-   proves completion and is separate from closure. See the automated path below;
-   ordinary `work-item/v1` and `work-item/v2` items retire directly through
-   MyQue, without envelope migration.
+## The pull requests of one feature
 
-## A spec-driven item
+Every PR has one class, judged from its paths (V1).
 
-Same skeleton, with the requirements as data and completion enforced against
-evidence. Everything below runs through `just devloop`, which supplies the
-pinned Zutai toolchain; see [`.devloop/policy.json`](../../.devloop/policy.json)
-for this repository's gates.
+| PR | Carries | Rules that bind it |
+|---|---|---|
+| Planning | The item with `intent = #planned`, and its exam: the recipe and checkers its acceptances name | V1. V4 if it changes an existing grader or area invariant. |
+| Implementation | `intent = #active` and the product change, inside `owns` | V2: every implementation path is under `owns` of an item that is on base and `#active` on head. V3: no path in the grader set of a bound target. |
+| Closeout | The item file moved to `.tasks/terminal/` byte for byte | V6: a signed done witness, or `#cancelled`. |
+| Process | `docs/`, `.agents/`, `.github/`, `scripts/spec/`, top-level `*.md` | V4 for a change to `scripts/spec/`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or `specs/allowed_signers`. |
 
-1. **Author the payload.** A `dev-spec/v1` document: problem, scope, non-goals,
-   requirements with stable local ids, acceptance obligations, and predicates
-   over declared observations. Write it as inert `.zti`, or as a `.zt` input
-   that computes it — a shared constant, a helper that builds a predicate.
+The planning PR merges first. An implementation PR that changes only an item's
+`intent` beside product paths is still one implementation PR. One item may
+carry several implementation PRs. A planning PR may edit the exam of an open
+item directly, with a V4 approval.
 
-2. **Admit it.** MyQue still allocates the id; devloop renders the body and
-   records its own frontmatter record.
+## Areas and frozen promises
 
-   ```sh
-   just devloop admit spec.zti --title "Describe the work" --admission <token> --policy .devloop/policy.json --kind task
-   ```
+An area file `specs/<area>.zt` lists what one subsystem promises today. Each
+requirement is a promise with a UUIDv7 and its own acceptances. A requirement
+marked planned has no bound exam yet and reports `advisory`.
 
-   A `.zt` input is evaluated exactly once, here: imported constants are pinned
-   into the stored payload, helpers are applied and disappear, and a result
-   that is not first-order data — or an import that does not resolve — is
-   refused. The `.zt` source is an authoring input, not a second spec. Re-running
-   with the same `--admission` token returns the same item; the same token with
-   a different payload is refused.
+V10 freezes area requirements. A PR that adds, changes or removes one is
+refused. An item replaces a promise through its `supersedes` field. The
+superseded requirement stays in the file and is no longer claimed. A terminal
+item that nobody superseded is a promise too.
 
-3. **Start it.** Approval runs first and refuses work whose item is not yet on
-   canonical `main`, and refuses while open backlog defects exist.
+`specs/legacy.zt` indexes every work item of the earlier store: its id, last
+state, kind, title, and `frozenAt` commit. The full text of each one is in Git
+at that commit.
 
-   ```sh
-   just devloop start <ITEM> --policy .devloop/policy.json
-   ```
+## Bound targets and the grader set
 
-   Starting rotates a run epoch before the state transition, so an eligibility
-   decision cannot be overtaken by a competing write.
+A **bound target** is a `just` target that one of these binds: an open item
+that is not cancelled, a terminal item nobody superseded, or an area
+requirement. Its **grader set** is the recipe chain and the checker files that
+decide its result. `just spec_closure --explain` lists the composition of
+every bound target's closure digest.
 
-4. **Record evidence.** A gate identity resolves through policy to existing
-   `just` targets; requirement text never carries a command. `just-target` is
-   the general gate: name the recipe in the execution inputs
-   (`{"justTarget": "sel4_qos_check"}`) and it reports one `passed` boolean.
-   devloop binds the inputs digest into the evidence identity, so evidence
-   recorded for one target never transfers to another. Completion needs every
-   acceptance's evidence under the same inputs, so acceptances that share one
-   qualification recipe each gate it; `just-target` runs the recipe once per
-   execution identity and answers the others from that run for up to an hour,
-   failures included, from `build/devloop-gate-runs/`. Gate them one after
-   another, and delete that directory to force a fresh run.
+| Change | Rule |
+|---|---|
+| A file in the grader set of a bound target, in an implementation PR | V3 refuses. |
+| The same file, in a planning PR | V4 approval. |
+| A grader of a target bound by a promise | A new item, with V4 approval. |
 
-   `just-observations` is the same recipe run with a typed answer. The
-   checker the recipe invokes reports what it counted with
-   `devloop_observations.record(...)` from `scripts/lib`; outside the gate
-   that call is inert, so the checker behaves the same for a person. The gate
-   deletes any earlier report before the recipe starts, adds `passed` and
-   `transcriptDigest` itself, and refuses an id the policy does not declare
-   for it or a value of the wrong kind — as a gate that could not run, never
-   as evidence. A predicate then reads one observation by id: `equal` for
-   the exact number a fixture produces, `bounds` for a floor. A passing
-   recipe that reported nothing is refused too: the recipe is not wired to
-   report, which is a harness fault, not a failed check.
-   [`.devloop/examples/stale-handle-rejection.zti`](../../.devloop/examples/stale-handle-rejection.zti)
-   and its `.inputs.json` are a complete worked example. A check needing an
-   observation the policy does not yet declare adds it to the gate's list in
-   [`.devloop/policy.json`](../../.devloop/policy.json) in the planning PR.
+## Evidence
 
-   ```sh
-   just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
-   ```
+The `Evidence` workflow runs after every push to `main`. It claims each target
+that has no record at its current closure digest and that one of these binds:
+an area requirement that is neither planned nor superseded, an `#active` item,
+or a terminal item nobody superseded.
 
-   A human obligation is recorded only from a real observation:
+1. It runs each claimed target under `scripts/spec/record`, sharded by the
+   wall times in `specs/targets.toml`.
+2. It signs each record as `ci` and commits it to the `evidence` branch at
+   `<target>/<closureDigest>.zt`.
+3. It signs a done witness at `done/<item id>/<digest>.zt` for each `#active`
+   item whose mandatory acceptances are all enforced.
+4. It runs the closeout bot.
 
-   ```sh
-   just devloop human <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image> --observations <observed>.json --observer <who>
-   ```
+A record stays valid until an input of its target changes the closure digest.
+`passed` comes from the exit status, never from the checker's own report.
+A record from a dirty tree cannot be published.
 
-   Each entry is bound to the requirements digest, helper identity, code
-   closure, policy, execution inputs, target, image and run epoch. Change any
-   of them and that evidence no longer applies.
+Run the same steps locally:
 
-5. **Complete it.** Eligibility is checked, then the item closes under the
-   revision that was checked. Approval runs again here with the execution
-   context, and refuses unless the inputs file is tracked under
-   `.devloop/inputs/` and it, the recipe closure it names, and the scripts
-   and `scripts/lib` modules that recipe runs all match `origin/main`
-   exactly — the branch being graded may not have changed its own grader.
+| Command | Does |
+|---|---|
+| `just spec_record <target>` | Runs the target and writes `build/observations/<target>.zt`. |
+| `just spec_closure` | Prints the closure digest of every bound target. |
+| `just spec_status` | Prints each area requirement's state: enforced, failing, claimed, advisory or superseded. `--local` also reads `build/observations/`. |
+| `just spec_tasks_status` | Prints each item's state from the `evidence` branch. |
 
-   ```sh
-   just devloop complete <ITEM> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
-   ```
+A target under `operator` in `specs/targets.toml` needs hardware CI does not
+have. An operator in `specs/allowed_signers` runs it and signs the record:
 
-   Use `just devloop eligible …` to ask without closing. You rarely run
-   `complete` yourself: once the implementation PR merges,
-   `myque-closeout.yml` runs it on `main` for every item whose recorded
-   evidence devloop still accepts and proposes the transition as a
-   `.tasks`-only PR (see [Closeout PRs](#closeout-prs)). Evidence expires a
-   day after it is recorded, so merge promptly or re-gate on `main`.
+```sh
+python3 scripts/spec/record <target> --signer <principal> --key <ssh key>
+```
 
-6. **Retire it.** As for any item, plus the identity fields worth keeping
-   outside history — the body profile, schemas, helper identity, requirements
-   digest and admission identity — supplied as the retained consumer record.
+## Human acceptances
+
+A person answers an `h.human` question in a signed record:
+
+```sh
+python3 scripts/spec/human item <item id> <acceptance id> yes --signer <principal> --key <ssh key> --note "<what they saw>"
+python3 scripts/spec/human area <area> <requirement id> <acceptance id> yes --signer <principal>
+```
+
+The record binds to the item's requirements digest. Rewording a statement or
+an acceptance asks the question again. The principal must be in
+`specs/allowed_signers`. Record an answer only when the person gave it.
+Automation never infers one. `scripts/spec/publish` carries the record to the
+`evidence` branch.
 
 ## Closeout PRs
 
-`myque-closeout.yml` runs on every push to `main` that touches `.tasks/`
-or the grader closure. In a fresh clone of canonical `main` it runs
-`just tasks_check`, then for every open or active spec-driven item whose
-`devloop` record carries evidence it reads the inputs digest, target and
-image from that evidence, finds the tracked `.devloop/inputs` file with that
-digest, and asks `just devloop eligible`. Each item devloop accepts is closed
-with `just devloop complete`; the changed `.tasks/items` files — and nothing
-else — are committed by the bot on top of that exact `main`, pushed as
-`automation/myque-closeout/<main>` and opened as one PR. Items devloop
-refuses are listed in the PR body with the reason and stay open: expired
-evidence, a code closure that no longer matches, an acceptance still unmet.
+The closeout bot runs on `main` after the `Evidence` workflow. For each item
+that is `#cancelled` or has a valid done witness at its current digest, it
+creates the branch `closeout/<slug>`. That branch moves the item file to
+`.tasks/terminal/` unchanged. The bot pushes the branch and asks the host to
+open the PR and merge it once V6 passes.
 
-The workflow decides nothing devloop does not; it is the same command you
-would run, executed where approval allows it. It never writes `main` and a
-human merges the PR after normal CI. A dispatch without `publish` previews
-in a throwaway clone; the push trigger publishes only while the
-`MYQUE_CLOSEOUT_ENABLED` repository variable is `true`.
+The bot uses a GitHub App token, minted per run from the repository variable
+`CLOSEOUT_APP_ID` and the secret `CLOSEOUT_APP_PRIVATE_KEY`. A PR opened with
+the workflow's built-in token triggers no checks, so V6 would never run. With
+no `CLOSEOUT_APP_ID`, the job skips closeout.
 
-## Retirement maintenance PRs
+A terminal item is immutable. V6 refuses any later change to it and any
+deletion.
 
-The separate `myque-retire.yml` workflow proposes storage-only changes from a
-recorded full revision of canonical `origin/main`. It accepts no arbitrary
-source ref or executable item content. Only live `done` items are candidates,
-with no additional age threshold: unfinished, cancelled, and already retired
-items are excluded. An empty batch succeeds without a branch or PR.
+## What the judge checks
 
-### Evidence is historical, not inferred
+`just spec_check` judges the store alone. `just spec_check --base origin/main`
+judges your branch as CI does. CI runs the base commit's copy of the judge, so
+a PR cannot change the judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or
+`specs/allowed_signers` that judge it.
 
-For an ordinary prose item, use exactly one unambiguous `## Closure evidence`
-section outside code fences. Its content extends to the next heading of the
-same or higher level, or the end of the body. The content is passed verbatim,
-including whitespace and nested subsections, without summarizing or truncating
-it. Record observed commands/results, revision and target identities, scope,
-and limits; an `Exit conditions` list is a plan, not evidence. A missing, empty,
-or ambiguous closure section is a reported skip. Do not backfill invented
-observations to make historical items eligible.
-Unfenced HTML blocks or comments are refused as ambiguous rather than treating
-hidden/example headings as evidence; use plain Markdown or retire manually.
+| Rule | Refuses |
+|---|---|
+| V1 class | A PR with more than one class, or a path the class table does not list. |
+| V2 planning first | An implementation path under no `owns` of an item that is on base and `#active` on head. |
+| V3 no self-grading | An implementation PR that touches the grader set of any bound target. |
+| V4 grader approval | A grader change, area invariant change, existing contract schema change, or judge change without one approval on the head from `HUMAN_OWNERS` by someone other than the author. |
+| V5 legal intent | An `intent` change outside `EDGES`. Entering `#deferred` or `#cancelled` without a V4 approval. |
+| V6 closeout | A move to `terminal/` without a signed done witness, unless the item is `#cancelled`. Any later change to a terminal item. |
+| V7 backlog first | A milestone, or an item under one, entering `#active` while a backlog bug is `#planned` or `#active`, or while a promise fails. |
+| V8 R4 floor | A lowered `negativeControlsRefused` predicate without an approved R4 known limit. Milestone M5: the judge does not enforce it yet. |
+| V9 provenance | A `#human` quote shorter than 8 characters, a blanket answer, or a PR number as source. Warning only. |
+| V10 frozen promises | An added, changed or removed area requirement. |
 
-For a devloop item, the existing adapter uses the pinned consumer parser and
-generated bindings. Retirement describes the recorded evidence identities and
-gate results; it neither reruns gates nor applies today's evidence expiry.
-Recorded `passed` values are not a new predicate or eligibility decision, and
-there is no invented completion receipt. The retained consumer entry preserves
-`recordSchema`, `schema`, `bodyProfile`, `helper`, `requirementsDigest`, and
-`admission`; the full body, epoch, and evidence stay in exact retained history.
-Missing records/evidence, unsupported versions or evidence types, and unknown
-consumer namespaces are reported skips, never silently discarded.
-
-### Preview and publication
-
-In the pinned tool environment, preview with:
-
-```sh
-python3 scripts/lib/work_item_retirement_publish.py
-```
-
-Preview uses an isolated checkout and does not alter the source store or
-remote refs, branches, or PRs. Both preview and publication run
-`just tasks_check` before and after MyQue retirement: a terminal-only check cannot
-validate a body after it leaves the live store. Only MyQue mutates canonical
-records. The batch verifier checks exact retained bytes and the restricted
-diff: each selected Markdown deletion plus its same-UUID terminal addition,
-with envelope identity, timestamps, state, and graph preserved.
-
-`--apply` is reserved for the trusted, isolated GitHub workflow; it is not a
-local publication shortcut. Its remote guards require fixed canonical
-`origin/main` and merge protection, and refuse unexpected remote state. GitHub
-still enforces PR creation permission when publication is attempted. This
-batch's retained refs must be pushed and verified **before**
-its maintenance branch or PR is published. A failed history push blocks PR
-publication. At most one retirement PR may be open, and an existing PR stops
-a new batch instead of rewriting a branch under review. Interrupted publication
-resumes only after verifying the existing bot-owned result; never overwrite
-unexpected commits or delete retained history to undo a partial publication.
-
-The report identifies the source revision, UUIDs, titles, evidence sources,
-retained commits, verification, and skipped items. Normal CI and a human merge
-remain required: no direct `main` write and no automatic merge.
-
-### Qualification before enabling the schedule
-
-Manual dispatch defaults to preview; publishing requires an explicit apply
-choice. The daily schedule is guarded by repository variable
-`MYQUE_RETIRE_ENABLED=true`. **Do not set it until a real manual GitHub run and
-maintenance PR have qualified the workflow**, retained refs, restricted diff,
-recovery, and actual CI approval path. Local simulations are not qualification;
-this guide does not claim that the workflow has been tested or enabled.
-
-Before publication, repository rules must require pull requests with no
-automation bypass and require the `Canonical work-item store` status check
-from GitHub Actions (integration `15368`) with strict/current-base enforcement.
-This freshness boundary must prevent
-merging a retirement result after its item is edited or reopened on `main`;
-workflow concurrency or a one-time pre-push comparison does not suffice.
-The ordinary `CI` aggregate remains required as appropriate to the repository's
-merge policy. Observe the stale-base race on GitHub before enabling the schedule.
-The workflow token cannot inspect private bypass-actor configuration. After
-configuring the rules, an administrator with ruleset-write access runs:
-
-```sh
-python3 scripts/lib/work_item_retirement_publish.py --approve-rules
-```
-
-This read-only command requires visible, empty bypass lists and prints a digest
-of the applicable ruleset IDs and update timestamps. Set repository variable
-`MYQUE_RETIRE_RULES_APPROVAL` to that exact value before manual publication.
-The workflow checks current public rules plus this approval; any ruleset change
-invalidates it and requires fresh administrator review. This is separate from
-`MYQUE_RETIRE_ENABLED`, which must remain unset until remote qualification passes.
-
-
-GitHub Actions must be allowed to create pull requests (the repository setting
-is “Allow GitHub Actions to create and approve pull requests”). The workflow
-uses only required `GITHUB_TOKEN` contents/pull-request write permissions.
-Token-created PRs do not imply unattended downstream CI: GitHub may suppress
-events or require approval. Observe the real triggering/approval path and have
-a maintainer approve or trigger checks through the supported GitHub path when
-needed; do not substitute a personal token, privileged item execution, or a
-merge bypass.
-
-These prerequisites are operator-owned settings, not settings the workflow
-changes. An administrator must establish them and approve the qualification
-path before schedule enablement;
-the workflow token may not have permission to inspect the administrative
-setting in advance, so a successful protection preflight does not promise
-that GitHub will accept PR creation.
-
-### Retained history and recovery
-
-Retained refs do not travel with an ordinary branch push or clone. For manual
-retirement, push the relevant `refs/myque/retained/*` refs before publishing the
-terminal records. A fresh clone that needs bodies must explicitly fetch them:
-
-```sh
-git fetch origin 'refs/myque/retained/*:refs/myque/retained/*'
-myque reopen <ITEM>
-```
-
-MyQue verifies the retained digest before restoring the original body under
-the same UUID. Missing history is a recovery error, not permission to recreate
-an item or invent its evidence. Preserve refs during recovery and inspect a
-partially published branch/PR before retrying; never prune history automatically.
-
-## What the gate checks
-
-`just tasks_check` runs offline and reports
-`N items, M validated through devloop`:
-
-1. `myque check` — schema, graph, aliases, identity.
-2. Backlog-first ordering.
-3. Terminal records readable as finished items; a corrupt or non-terminal
-   record is a finding, never counted as done.
-4. `devloop validate` for every **active** item carrying a `devloop` record.
-5. Profile refusals: a duplicated block, a missing block, editable prose beside
-   the block, an unknown profile, and a payload that no longer matches its
-   digest.
-
-`M` counts active spec-driven items only, so a store with none reads
-`0 validated through devloop` rather than looking covered.
-
-## Boundaries worth knowing before you hit them
-
-- **Approval refuses unlanded work.** Land the planning change first; this is
-  the same rule as for ordinary items, enforced by a program.
-- **The newest entry decides an obligation.** An earlier passing run never
-  rescues a later failing one.
-- **Evidence expires.** Each gate declares a lifetime in policy.
-- **A human obligation stays pending** until an operator supplies a real
-  observation. Nothing here may synthesize one.
-- **`myque close` bypasses eligibility.** It stays supported for items with no
-  `devloop` record; do not use it to finish a spec-driven item.
-- **Validation compiles.** devloop builds and links a native validator per
-  call — seconds, not milliseconds, and no cached fast path.
-- **Retirement is not deletion, and not a saving.** Removing active files does
-  not shrink Git history, and `refs/myque/retained/*` needs the explicit
-  fetch/push refspecs above to travel between clones.
-- **Reopening verifies first.** `myque reopen <ITEM>` retrieves the retained
-  bytes and checks their digest before restoring the item under the same UUID;
-  missing history or a mismatch leaves it retired with an actionable failure.
-- **Failure diagnostics are a separate qualification.**
-  `just devloop_diagnostics_check` grades the real pinned CLI in an isolated
-  fixture store against [diagnostic receipts](../../contracts/devloop-diagnostics/README.md).
-  The operator entrypoint reports local diagnostic receipts even when the
-  pinned CLI captures adapter stderr; retained output is bounded and cached
-  receipts are validated before reuse.
-  `just devloop_diagnostics_controls` qualifies only the judge's refusals,
-  never the repair; neither command records evidence on a real item.
+The `Spec judge` workflow runs on every PR push and after each review. A
+repository ruleset requires it from `main`. `just spec_e2e` is the judge's own
+exam: it walks a fixture repository through every stage.
 
 ## No GitHub projection
 
 Work items are not projected into GitHub Issues or milestones
 ([decision](../decisions/no-github-issue-projection.md)). `.tasks/` is the only
-work-item state. `just devloop render <UUID>` prints a spec-driven item as
-readable Markdown, and `just tasks_list` and `just tasks_graph` render the
-store. Never use GitHub auto-close keywords to complete work.
+work-item state. Never use a GitHub auto-close keyword to complete work.
 [`CONTRIBUTING.md`](../../CONTRIBUTING.md) owns the full PR workflow.
 
 ## Next
 
-[Add a gate](07-add-a-gate.md) — the evidence a spec-driven item binds to is a
-plane gate; this is how one is built.
+[Add a gate](07-add-a-gate.md) — an `h.observed` acceptance binds a gate. This
+page shows how one is built.

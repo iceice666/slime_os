@@ -162,10 +162,13 @@ breakpoint.
 - **`just docs_check` names an absent recipe** — a `just <name>` literal in
   documentation, a task requirement, a script, or CI does not exist. Recipe
   names are contract surface for docs; rename both.
-- **`just tasks_check` refuses a tracked file no `codePaths` entry covers** —
-  a checker or fixture you touched is bound to a work item's evidence. Add
-  the path to the item's spec, or the change is staling evidence it does not
-  claim.
+- **`just spec_check --base origin/main` prints a `V2` finding** — an
+  implementation path sits under no `owns` glob of an item that is on base and
+  `#active` on head. Set the owning item to `#active`, or land a planning PR
+  that adds the glob first.
+- **The same command prints a `V3` finding** — the implementation PR touches
+  a checker or recipe that grades a bound target. Move that change to a
+  planning PR.
 
 ## 6. When you have found it
 
