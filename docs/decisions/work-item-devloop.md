@@ -106,10 +106,14 @@ recipes. `scripts/spec/check` became the only judge, and it blocks.
 - The evidence signing key stays in the `evidence` environment, which only
   `main` pushes reach. A key rotation adds a line to `specs/allowed_signers`
   and keeps the old one, so old records still verify.
-- A pull request can edit the workflow that runs the judge. So the host runs
-  it from a trusted definition. On GitHub, a repository ruleset requires
-  `.github/workflows/spec-judge.yml` from `main`. On GitLab, a protected
-  pipeline definition does the same.
+- A pull request can edit the workflow that runs the judge, or add one that
+  reports a passing check of the same name. A personal-account GitHub
+  repository cannot require a workflow from `main`; only an organization
+  ruleset can. So the `main` ruleset requires the `Devloop v1.5 judge` and
+  `CI` status checks and Code Owner review, and `.github/CODEOWNERS` lists
+  `.github/`, `scripts/spec/` and the owner lists. A pull request that
+  touches them needs an approval from a person in `HUMAN_OWNERS` other than
+  its author. On GitLab, a protected pipeline definition replaces both.
 
 ## Revisit when
 
