@@ -9,6 +9,13 @@
 # shard records and signs its targets; `publish` gathers them and pushes
 # once, serialised by the concurrency group, retrying once after a
 # non-fast-forward.
+#
+# `witness` then signs a done witness for every #active item whose
+# mandatory acceptances are all enforced, and `closeout` opens one pull
+# request per witnessed or cancelled item that moves it to
+# `.tasks/terminal/`. V6 trusts the witness and nothing else. The closeout
+# bot pushes and opens with its own token, CLOSEOUT_TOKEN: a pull request
+# opened with the built-in token triggers no checks, so V6 would never run.
 name: Evidence
 
 on:
@@ -127,3 +134,64 @@ jobs:
           done
           exit 1
       - run: nix develop --command python3 scripts/spec/status --unenforced
+
+  witness:
+    name: Done witnesses
+    needs: [plan, publish]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    environment: evidence
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - name: Sign and publish witnesses
+        env:
+          EVIDENCE_SIGNING_KEY: ${{ secrets.EVIDENCE_SIGNING_KEY }}
+        run: |
+          if [ -z "$EVIDENCE_SIGNING_KEY" ]; then echo "no signing key in this environment; no witness"; exit 0; fi
+          install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
+          printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
+          for attempt in 1 2; do
+            rm -rf build/observations
+            nix develop --command python3 scripts/spec/ci --witness --signer ci --key "$RUNNER_TEMP/evidence-key"
+            nix develop --command python3 scripts/spec/ci --publish
+            git rev-parse -q --verify refs/heads/evidence >/dev/null || exit 0
+            git push origin refs/heads/evidence:refs/heads/evidence && exit 0
+            git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence
+            git update-ref -d refs/heads/evidence
+          done
+          exit 1
+
+  closeout:
+    name: Closeout pull requests
+    needs: [witness]
+    if: always() && needs.witness.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Closeout token
+        env:
+          CLOSEOUT_TOKEN: ${{ secrets.CLOSEOUT_TOKEN }}
+        run: |
+          if [ -z "$CLOSEOUT_TOKEN" ]; then echo "no CLOSEOUT_TOKEN; the closeout bot is not configured"; else echo "CLOSEOUT_READY=1" >> "$GITHUB_ENV"; fi
+      - uses: actions/checkout@v7
+        if: env.CLOSEOUT_READY == '1'
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CLOSEOUT_TOKEN }}
+      - uses: nixbuild/nix-quick-install-action@v35
+        if: env.CLOSEOUT_READY == '1'
+      - if: env.CLOSEOUT_READY == '1'
+        run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - if: env.CLOSEOUT_READY == '1'
+        env:
+          CLOSEOUT_TOKEN: ${{ secrets.CLOSEOUT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix develop .#projection --command python3 scripts/spec/closeout --forge github

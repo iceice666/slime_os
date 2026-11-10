@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Open one closeout pull request per item that is done or cancelled.
+
+    scripts/spec/closeout [--forge github|local] [--remote origin] [--dry-run]
+
+Runs on `main` after the evidence workflow. An item in `.tasks/items/` is
+ready when its intent is #cancelled or the evidence ref carries a valid
+done witness for its current digest. For each ready item without an open
+branch, this creates `closeout/<slug>` from HEAD with the file moved to
+`.tasks/terminal/` byte for byte, pushes it, and asks the forge to open
+the pull request and merge it once V6 passes. The pull request changes
+nothing else, so it is a closeout pull request and nothing more.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import forge  # noqa: E402
+import lib  # noqa: E402
+
+IDENTITY = {"GIT_AUTHOR_NAME": "closeout", "GIT_AUTHOR_EMAIL": "closeout@slime-os", "GIT_COMMITTER_NAME": "closeout", "GIT_COMMITTER_EMAIL": "closeout@slime-os"}
+
+
+def ready(items: list[lib.Item], ref: str | None) -> list[tuple[lib.Item, str]]:
+    found = []
+    for item in items:
+        if item.terminal:
+            continue
+        if item.intent == "cancelled":
+            found.append((item, "cancelled"))
+            continue
+        ok, detail, _ = lib.witness_state(item.id, lib.item_digest(item.value), lambda p: lib.read_blob(ref, p) if ref else None)
+        if ok:
+            found.append((item, detail))
+    return found
+
+
+def move(item: lib.Item, branch: str) -> str:
+    """Commit the move on top of HEAD without touching the working tree."""
+    source = item.where
+    destination = f".tasks/terminal/{item.path.name}"
+    with tempfile.TemporaryDirectory(prefix="slime-closeout-") as temporary:
+        env = os.environ | {"GIT_INDEX_FILE": str(Path(temporary) / "index")}
+        lib.git("read-tree", "HEAD", env=env)
+        blob = lib.git("rev-parse", f"HEAD:{source}").strip()
+        lib.git("update-index", "--remove", "--force-remove", source, env=env)
+        lib.git("update-index", "--add", "--cacheinfo", f"100644,{blob},{destination}", env=env)
+        tree = lib.git("write-tree", env=env).strip()
+    message = f"chore(repo/tasks): close {item.value['slug']}\n\nMoves {source} to {destination} unchanged (V6)."
+    commit = lib.git("commit-tree", tree, "-p", "HEAD", "-m", message, env=os.environ | IDENTITY).strip()
+    lib.git("update-ref", f"refs/heads/{branch}", commit)
+    return commit
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--forge", choices=sorted(forge.FORGES))
+    parser.add_argument("--remote", default="origin")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    ref = lib.evidence_ref()
+    host = forge.get(args.forge)
+    opened = 0
+    for item, detail in ready(lib.load_items(), ref):
+        branch = f"closeout/{item.value['slug']}"
+        if lib.git("ls-remote", "--heads", args.remote, branch, check=False).strip():
+            print(f"closeout: {branch} already exists")
+            continue
+        commit = move(item, branch)
+        print(f"closeout: {item.where} ({detail}) -> {branch} @ {commit[:12]}")
+        if args.dry_run:
+            continue
+        lib.git("push", args.remote, f"refs/heads/{branch}:refs/heads/{branch}")
+        slug = item.value["slug"]
+        body = f"Closes work item `{item.id}` ({slug}): {detail}.\n\nThis pull request only moves the item file to `.tasks/terminal/`; V6 judges it.\n"
+        print(f"closeout: opened {host.open_closeout(branch, f'chore(repo/tasks): close {slug}', body)}")
+        opened += 1
+    print(f"closeout: {opened} pull request(s) opened")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
