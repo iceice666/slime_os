@@ -1,0 +1,36 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.task "01a0e60f-4ca9-74e6-906e-31f32f3ff683" "ci-cache-budget" "quality"
+  "Keep CI caches within the repository budget so main runs stay warm"
+  "Main CI runs keep going cold because GitHub evicts their caches. The repository's live cache set is about 13.8 GB against a 10 GB budget. The seL4 build-output caches account for about 8.9 GB of that, in eight per-job partitions: four generation shards at 1.36 to 1.44 GB each, the product job at 1.53 GB, and three 0.52 to 0.58 GB image-only jobs. The Nix store, Kani, MyQue, projection and rust-cache entries add about 4.9 GB. Every build-output key also carries the commit SHA, so each main run writes a new copy of every partition. Least-recently-used eviction then removes entries the next run needs, the Zutai evaluation stores and the 2 GB Nix store among them. Of the three main runs after 35ca61d that ran the seL4 jobs, one was warm (19 minutes), one was fully cold (30 minutes, at d0ec4ee), and one lost its contract-source evaluation store within 45 minutes of saving it. The change: share build-output partitions among seL4 jobs whose cached outputs come from the same build, and have exactly one job save each shared partition. Stop writing a new build-output copy on every commit; a partition is saved at most once per UTC day unless its key inputs change, so the restored outputs are never more than one day behind. Keep the Zutai evaluation-store partitions per job, and keep Cargo, the pinned artifact hashes and each job's own checks responsible for correctness.")
+  with {
+    intent = #active;
+    owns = {
+      ".github/workflows/**";
+      ".github/actions/**";
+    };
+    nonGoals = {
+      h.nonGoal "Removing a job's restore, a check or the pinned image build, or changing what any check asserts." h.agentDefault;
+      h.nonGoal "Changing the Nix, Kani, MyQue, projection or rust-cache caches, or the Zutai evaluation store's key recipe." h.agentDefault;
+      h.nonGoal "Buying cache storage or moving caches off GitHub Actions." h.agentDefault;
+    };
+    requirements = {
+      h.req "shared-partitions"
+        "Jobs whose cached build outputs come from the same build restore one shared partition, and exactly one job saves it, so no two jobs race to save the same key. The four generation shards share one partition at the least. Every seL4 job still restores the build outputs it used to restore, so no job becomes a cold build."
+        { "ci_critical_path_check"; "retention-observed"; };
+      h.req "bounded-writes"
+        "A build-output partition's key binds its existing inputs (runner, toolchain and lockfiles, pins, seL4 configuration, linker scripts, submodule gitlinks) and the UTC date instead of the commit SHA. A run whose exact key already exists saves nothing for that partition. The first run of a day restores the previous day's entry by prefix and saves the new day's."
+        { "ci_critical_path_check"; "retention-observed"; };
+      h.req "within-budget"
+        "Once a main run has finished and GitHub's eviction has settled, the repository's caches total at most 9000 MB, so one day's rotation fits without evicting entries the next run needs."
+        { "retention-observed"; };
+    };
+    acceptance = {
+      h.observed "ci_critical_path_check";
+      h.human "retention-observed"
+        "Reading the main-branch CI runs after the implementation merged: did 3 consecutive qualifying runs (seL4 jobs succeeded, not cancelled, head commit changed no build-output key input, Nix key input or contracts .zt file since the preceding qualifying run) each restore every seL4 build-output partition, the Nix store and both contract jobs' Zutai evaluation stores, did the slowest of them take at most 1320 s from its first job starting to the CI aggregate finishing, and was the Actions cache usage at most 9000 MB after the last of them? Note the last counted run's URL.";
+    };
+  };
+
+item
