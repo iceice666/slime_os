@@ -22,6 +22,15 @@ that only holds while nothing durable depends on one. Callers match ``UUID``
 and test membership in ``identities()`` directly: the two failures are
 distinct — a malformed reference and an absent item — and a resolver that
 returned one answer for both would hide which happened.
+
+Devloop v1.5 adds two more sources, read here so the same questions keep one
+answer across its cutover. A task/v2 item is ``.tasks/items/<slug>.zt`` while
+open and ``.tasks/terminal/<slug>.zt`` once closed; its id, kind and intent are
+read from the helper call and the ``intent`` field, and ``scripts/spec/tasks
+check`` owns its validation. ``specs/legacy.zt`` indexes every work item of the
+retired V1 store with its last state; an indexed item whose V1 file is gone is
+*retired*: its identity resolves, and its text lives in Git at ``frozenAt``. A
+V1 file present in the tree wins over its index row, whose state may be older.
 """
 
 from __future__ import annotations
@@ -36,6 +45,7 @@ from harness import ROOT
 TASKS = ROOT / ".tasks"
 ITEMS = TASKS / "items"
 TERMINAL = TASKS / "terminal"
+LEGACY = ROOT / "specs" / "legacy.zt"
 
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -54,6 +64,17 @@ OWNED_SEQUENCES = frozenset({"tags", "depends", "blocks", "related", "supersedes
 # The terminal schema devloop-independent consumers may rely on. MyQue owns it;
 # this module reads only the envelope fields a policy check needs.
 TERMINAL_SCHEMA = "terminal-item/v1"
+
+# A task/v2 item names its id, slug and area in the helper call that builds it
+# (`h.task "<uuid>" "<slug>" "<area>"`); `intent` is absent while `#planned`.
+TASK_V2_HEAD = re.compile(r'\bh\.(?P<kind>task|bug|milestone)\s+"(?P<id>[0-9a-f-]{36})"')
+TASK_V2_INTENT = re.compile(r"\bintent\s*=\s*#(?P<intent>[a-z]+)\s*;")
+# A task/v2 intent as the V1 state vocabulary the policy checks compare.
+INTENT_STATE = {"planned": "open", "active": "active", "blocked": "blocked", "deferred": "deferred", "cancelled": "cancelled"}
+# One row of `specs/legacy.zt`. The generated index writes each row on one line.
+LEGACY_ROW = re.compile(
+    r'\{ id = "(?P<id>[0-9a-f-]{36})"; state = "(?P<state>[a-z]+)"; kind = "(?P<kind>[a-z]+)";'
+)
 
 
 def _record(text: str, *, identity: str, retired: bool, source: Path) -> dict[str, object]:
@@ -106,12 +127,61 @@ def _terminal() -> tuple[list[dict[str, object]], list[str]]:
     return found, corrupt
 
 
+def _bare(identity: str, kind: str | None, state: str | None, *, retired: bool) -> dict[str, object]:
+    return {"id": identity, "key": None, "kind": kind, "state": state, "tags": [], "retired": retired, "consumers": []}
+
+
+@lru_cache(maxsize=1)
+def _task_v2() -> tuple[dict[str, object], ...]:
+    """Every task/v2 item, open or terminal. Its source file is its body, so none is retired."""
+    found: list[dict[str, object]] = []
+    for directory, terminal in ((ITEMS, False), (TERMINAL, True)):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.zt")):
+            text = path.read_text()
+            head = TASK_V2_HEAD.search(text)
+            if head is None:
+                continue  # the schema and helper copies beside the items
+            intent = (match.group("intent") if (match := TASK_V2_INTENT.search(text)) else "planned")
+            state = INTENT_STATE.get(intent)
+            if terminal:
+                state = "cancelled" if intent == "cancelled" else "done"
+            found.append(_bare(head.group("id"), head.group("kind"), state, retired=False))
+    return tuple(found)
+
+
+@lru_cache(maxsize=1)
+def _legacy() -> tuple[dict[str, object], ...]:
+    """Every row of the V1 store's index, retired: its body is in Git history only."""
+    if not LEGACY.is_file():
+        return ()
+    return tuple(
+        _bare(row.group("id"), row.group("kind"), row.group("state"), retired=True)
+        for row in LEGACY_ROW.finditer(LEGACY.read_text())
+    )
+
+
+def _indexed_only() -> list[dict[str, object]]:
+    """Index rows whose item no V1 file or task/v2 item carries any more."""
+    records, _ = _terminal()
+    present = (
+        frozenset(path.stem for path in ITEMS.glob("*.md"))
+        | frozenset(str(item["id"]) for item in records)
+        | frozenset(str(item["id"]) for item in _task_v2())
+    )
+    return [row for row in _legacy() if row["id"] not in present]
+
+
 @lru_cache(maxsize=1)
 def identities() -> frozenset[str]:
-    """Every canonical work-item id in the store, active or retired."""
+    """Every canonical work-item id: V1 file, task/v2 item, or index row."""
     records, _ = _terminal()
-    return frozenset(path.stem for path in ITEMS.glob("*.md")) | frozenset(
-        str(item["id"]) for item in records
+    return (
+        frozenset(path.stem for path in ITEMS.glob("*.md"))
+        | frozenset(str(item["id"]) for item in records)
+        | frozenset(str(item["id"]) for item in _task_v2())
+        | frozenset(str(item["id"]) for item in _legacy())
     )
 
 
@@ -130,14 +200,18 @@ def items() -> list[dict[str, object]]:
     ]
     records, _ = _terminal()
     found.extend(records)
+    found.extend(_task_v2())
+    found.extend(_indexed_only())
     return sorted(found, key=lambda item: str(item["id"]))
 
 
 @lru_cache(maxsize=1)
 def retired() -> frozenset[str]:
-    """Ids whose body left the active tree for a terminal record."""
+    """Ids whose body left the tree: a V1 terminal record, or an index row alone."""
     records, _ = _terminal()
-    return frozenset(str(item["id"]) for item in records)
+    return frozenset(str(item["id"]) for item in records) | frozenset(
+        str(item["id"]) for item in _indexed_only()
+    )
 
 
 def corrupt_terminal_records() -> list[str]:
@@ -204,6 +278,8 @@ def open_backlog() -> list[dict[str, object]]:
 def cache_clear() -> None:
     """Drop every memoized read of the store, for checks that mutate a fixture."""
     _terminal.cache_clear()
+    _task_v2.cache_clear()
+    _legacy.cache_clear()
     identities.cache_clear()
     items.cache_clear()
     retired.cache_clear()
