@@ -63,9 +63,9 @@ judges on every boundary it claims:
   with no control is unproven. A product judge asserts something about
   Slime OS behavior or a format, wire, or boundary it owns or reads; the
   gate-control suite that supplies the plane gates' controls counts as one.
-  An assertion about verification or process tooling itself (devloop and
-  MyQue adapters, work-item closeout, retirement, and publication automation,
-  CI selection, any test of a checker) needs no control. Adding one is a new
+  An assertion about verification or process tooling itself (the
+  `scripts/spec/` judge, evidence recording, closeout and publication
+  automation, CI selection, any test of a checker) needs no control. Adding one is a new
   exam and a human decision; see
   `docs/decisions/negative-controls-for-product-judges.md`.
 - A gate that runs a subset of an exam (a `--slice`, an `--arm`) still runs
@@ -105,14 +105,18 @@ change confined to other checker or library files leaves the closures
 current. Confirm either way with
 `python3 scripts/generate/generate-system-image-closures.py --check`.
 
-A checker, recipe, pin, or fixture under `.devloop/policy.json` `codePaths`
-stales the evidence recorded against it. Where it lands depends on its
-`scripts/lib/pr_scope.py` class:
+A checker, recipe, pin, or fixture in a target's closure changes that
+target's closure digest, so the evidence recorded at the old digest no
+longer counts. `just spec_closure --explain` lists what each bound target's
+closure covers. Where the change lands depends on its `scripts/spec/check`
+class:
 
-- A grader path (`scripts/`, `just/`, `Justfile`, `.devloop/`) is a planning
-  change that lands with its item, and the item's acceptances bind only
-  closures the change does not edit (see `work-item-lifecycle`).
-- Any other `codePaths` entry — a product pin or fixture such as
-  `sel4/pins.toml` or `verification/zenoh-xcheck/Cargo.lock` — is product:
-  `scripts/check/check-pr-scope.py` refuses it beside a new item, so it
-  implements an item already on `main`.
+- A grader file of a bound target (a `scripts/check/` or `scripts/lib/`
+  file in its grader set, or a recipe in its closure) is a planning change.
+  It needs a V4 approval, and an implementation PR may not touch it (V3). A
+  grader that grades a promise changes only from a new item.
+- A product pin or fixture such as `sel4/pins.toml` or
+  `verification/zenoh-xcheck/Cargo.lock` is an implementation path. It
+  ships under the `owns` of an item that is on `main` and `#active`.
+- A `scripts/check/` or `scripts/lib/` file outside every grader set is a
+  process path and needs no item.

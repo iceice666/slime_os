@@ -1,0 +1,131 @@
+--| Work-item schema (task/v2).
+--|
+--| A work item is `.tasks/items/<slug>.zt` while open and
+--| `.tasks/terminal/<slug>.zt` once closed. Its final expression is an
+--| `Item`. A feature takes three pull requests: planning lands the item
+--| with `intent = #planned` and its exam; implementation sets
+--| `intent = #active` and lands the product change; closeout moves the
+--| file to `terminal/` without changing a byte.
+--|
+--| `done` is not written anywhere in an item. `scripts/spec/tasks status`
+--| derives it from the `evidence` branch, and the closeout judge (V6)
+--| trusts the signed done witness there.
+--|
+--| Zutai refuses an import above the entry file's directory, so
+--| `.tasks/items/` and `.tasks/terminal/` carry byte-identical copies of
+--| this file and `helpers.zt`; `scripts/spec/tasks check` refuses a copy
+--| that differs from `contracts/task/v2/`.
+
+Kind :: type { #task; #bug; #milestone; };
+
+--| The only hand-written state. The legal transitions are the `EDGES`
+--| table in `scripts/spec/lib.py`; entering `#deferred` or `#cancelled`
+--| needs an approval from `HUMAN_OWNERS`. `#blocked` is for an item whose
+--| work has started; an item stopped by something outside the repository
+--| before it starts is `#deferred`.
+Intent :: type { #planned; #active; #deferred; #blocked; #cancelled; };
+
+--| Where a rule came from. `#human` quotes a concrete decision or example
+--| a person gave, and `source` is a commit sha or a repository path.
+--| `#decision` names a `docs/decisions/` page. `#acceptedDefault` records
+--| that a person accepted a default as a whole ("as default"), which is
+--| not a decision on this rule. `#agentDefault` is a choice no person made.
+Provenance :: type {
+  #human: { quote : Text; source : Text; };
+  #decision: { page : Text; };
+  #acceptedDefault: { source : Text; };
+  #agentDefault;
+};
+
+--| Conditions on a machine record beyond `passed = true`. A list of
+--| predicates is their conjunction.
+Predicate :: type {
+  #count: { key : Text; equals : Int; };
+  #atLeast: { key : Text; min : Int; };
+  #atMost: { key : Text; max : Int; };
+  #flag: { key : Text; };
+};
+
+--| A backend that can emit a typed trace for an oracle.
+Backend :: type { #hostSim; #qemu; #board; };
+
+--| `#observed`: the target's record at its current closure digest passed
+--| and satisfies every predicate.
+--| `#human`: a person answered yes to `question` in a signed record.
+--| `#clause`: reserved for a contract oracle; no reader enforces it yet.
+Check :: type {
+  #observed: { justTarget : Text; predicates : List Predicate; };
+  #human: { question : Text; };
+  #clause: { interface : Text; contractId : Text; clauseId : Text; backends : List Backend; };
+};
+
+--| `mandatory = false` reports `advisory` and never blocks done.
+Acceptance :: type { id : Text; mandatory : Bool; check : Check; };
+
+--| `acceptance` names acceptance ids of the same item.
+Requirement :: type {
+  id : Text;
+  statement : Text;
+  acceptance : List Text;
+  provenance : Provenance;
+};
+
+NonGoal :: type { statement : Text; provenance : Provenance; };
+
+Invariant :: type { id : Text; statement : Text; provenance : Provenance; };
+
+--| `Decision: <decision>. Because <because>.` `binds` names requirement or
+--| acceptance ids of the same item.
+Decision :: type {
+  id : Text;
+  decision : Text;
+  because : Text;
+  provenance : Provenance;
+  binds : List Text;
+};
+
+--| An accepted ratchet regression. `ratchet` is `R4` only; `subject` is
+--| the just target whose `negativeControlsRefused` may drop. Adding one
+--| needs an approval from `HUMAN_OWNERS`.
+KnownLimit :: type {
+  ratchet : Text;
+  subject : Text;
+  reason : Text;
+  provenance : Provenance;
+};
+
+--| `id` is a UUIDv7 and never changes. `slug` is the file name without
+--| `.zt`. `area` names `specs/<area>.zt`, whose invariants bind this item.
+--| `parent` is "" or an item id; `depends` are item ids. `owns` are path
+--| globs an implementation pull request of this item may change (V2).
+--| `supersedes` names a terminal item id, `<item id>/<requirement id>`,
+--| or an area requirement UUID; what it names leaves the current promises
+--| `tasks_spec` prints, and its file stays as it is.
+Item :: type {
+  schema : Text;
+  id : Text;
+  slug : Text;
+  kind : Kind;
+  intent : Intent;
+  supersedes : List Text;
+  area : Text;
+  title : Text;
+  problem : Text;
+  parent : Text;
+  depends : List Text;
+  owns : List Text;
+  nonGoals : List NonGoal;
+  requirements : List Requirement;
+  acceptance : List Acceptance;
+  invariants : List Invariant;
+  decisions : List Decision;
+  knownLimits : List KnownLimit;
+};
+
+schemaVersion :: Text = "task/v2";
+
+{
+  Kind =; Intent =; Provenance =; Predicate =; Backend =; Check =;
+  Acceptance =; Requirement =; NonGoal =; Invariant =; Decision =;
+  KnownLimit =; Item =; schemaVersion =;
+}

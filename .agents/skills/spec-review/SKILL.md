@@ -1,28 +1,34 @@
 ---
 name: spec-review
-description: Adversarial review of an implementation PR against its landed spec-driven work item. Use after implementation and before gating or completing a devloop item, or when asked to audit whether a checker actually asserts what the spec's rationale claims. Reads the spec and the diff only, never the implementer's conversation.
+description: Adversarial review of an implementation PR against its landed task/v2 work item. Use after implementation and before the item's evidence is recorded on `main`, or when asked to audit whether a checker actually asserts what the item's requirements claim. Reads the item and the diff only, never the implementer's conversation.
 ---
 
 # Adversarial spec review
 
 You are the reviewer, not the implementer. Your job is to find where the
-implementation, its checker, and the spec disagree — and to say so with a
+implementation, its checker, and the work item disagree — and to say so with a
 file and line, not an impression. A clean tool run is not a finding of
-correctness; a passing gate proves only that the recipe exited zero under the
-recorded identity.
+correctness; a passing record proves only that the recipe exited zero at the recorded
+closure digest.
 
 ## Inputs you take, and inputs you refuse
 
 Take:
 
-- The work item: `myque api get <UUID>` and `just devloop render` for the
-  `dev-spec/v1` body — problem, scope, non-goals, requirements, acceptance
-  rationale, predicates.
-- The execution inputs the acceptances bind (`.devloop/inputs/<name>.json`
-  or the file named on the command line): which `just` recipe answers.
-- The diff: `git diff origin/main...HEAD`, plus the checker and recipe that
-  the inputs name, read in full.
-- `.devloop/policy.json` for gate declarations and `codePaths`.
+- The work item: `.tasks/items/<slug>.zt`, read in full as Zutai source —
+  problem, area, `owns`, `nonGoals`, requirements, acceptances, predicates,
+  invariants, and decisions. The item's area file `specs/<area>.zt` adds the
+  invariants that bind it.
+- The item's state: `just spec_tasks_status` prints each acceptance as
+  enforced, failing, claimed, or advisory, read from the `evidence` branch.
+- The targets the acceptances bind and their composition:
+  `just spec_closure --explain` lists, per bound target, the recipe
+  definitions, grader files, declared inputs, and image derivations that
+  decide its closure digest.
+- The diff: `git diff origin/main...HEAD`, plus the checker and recipe each
+  bound target runs, read in full.
+- The judge's verdict: `just spec_check --base origin/main` prints the PR's
+  class and any V2 or V3 refusal.
 
 Refuse:
 
@@ -36,20 +42,22 @@ Refuse:
 Work the four tables below in order and write them out. A row you cannot fill
 is a finding.
 
-### 1. Rationale → assertion
+### 1. Requirement → assertion
 
-For every acceptance, list each concrete claim in its `rationale` and the
-exact line in the checker that asserts it. Claims are things like "compares
+For every requirement, list each concrete claim in its `statement`, and in
+any `decisions` entry that binds it, with the exact line in the checker that
+asserts it. Claims are things like "compares
 exact bidirectional payload bytes", "negative controls fail when bytes are
 absent", "normal shutdown alone cannot satisfy this", "rejects stale
 completions and then exchanges new bytes".
 
-| acceptance | claim in rationale | checker file:line that asserts it | how it would fail |
+| requirement | claim in statement | checker file:line that asserts it | how it would fail |
 
-A claim with no asserting line is **drift**: the spec promised it and the
-gate does not observe it. A claim asserted only by the recipe's exit code
-inherits every weakness of that checker. When the acceptance binds
-`just-observations`, check that the reported observation is *counted* from
+A claim with no asserting line is **drift**: the item promised it and the
+target does not observe it. A claim asserted only by the recipe's exit code
+inherits every weakness of that checker. When the acceptance carries
+predicates (`h.observedWhere`), check that the reported observation is
+*counted* from
 transcript or output evidence, not assigned from a literal or from a
 configuration value the fixture already knows.
 
@@ -67,22 +75,22 @@ fails.
 Answer directly:
 
 - Did this PR add or change the checker, marker chain, fixture, or recipe
-  that its own acceptances bind? Which files? A change to the assertions
-  that decide the PR's own acceptance needs a reason in the PR that the
-  planning item did not already provide, and that reason must be about the
-  spec, not about making the gate pass.
-- Did it change `.devloop/policy.json`? If `codePaths` grew, was every new
-  entry something the gate reads; if it shrank, what evidence stops being
-  bound?
+  that its own acceptances bind? Which files? `scripts/spec/check` refuses
+  a bound grader file in an implementation PR (V3). A recipe or checker
+  outside every grader set escapes V3, so ask whether the item's targets
+  reach it through `just spec_closure --explain`.
+- Did it change the item's `owns`, requirements, or acceptances? Only an
+  `intent` change may ride in an implementation PR. Any other item edit is
+  a planning change.
 - Did it change the expected count, bound, or marker in a way that matches
   what the implementation happens to produce? Ask for the fixture-side
   reason the number is what it is.
-- Does the spec's `nonGoals` list anything the diff does anyway?
+- Does the item's `nonGoals` list anything the diff does anyway?
 
 ### 4. Scope and ownership
 
-- Every file in the diff maps to a `scope` line or a requirement. List the
-  ones that do not.
+- Every implementation file in the diff sits under the item's `owns` (V2)
+  and maps to a requirement. List the ones that do not map.
 - Generated outputs (`@generated`, `boot-contracts/src/generated/`, derived
   manifests, `contracts/system-image-closure/v2/`) changed only alongside
   their sources, and the closures were regenerated after the last source
@@ -158,8 +166,8 @@ or "not touched by this diff".
 ## Report
 
 Write findings first, ordered by severity, each with file:line and the
-spec line it contradicts. Then the four tables. Then what you did not
+item line it contradicts. Then the four tables. Then what you did not
 verify. Do not write "looks good"; write what you checked and what remains
 unproven. A review that produces no findings should still list every
-rationale claim and its asserting line, because that table is the record the
+requirement claim and its asserting line, because that table is the record the
 next reviewer starts from.

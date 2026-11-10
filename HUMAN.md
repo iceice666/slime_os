@@ -65,7 +65,7 @@ Merge only what you can describe in one sentence to a teammate.
   [`docs/glossary.md`](docs/glossary.md). Ask for an entry of at most two
   sentences; if it cannot be explained that briefly, the thing it names may be
   over-built.
-- Over a week, more PRs touch `scripts/`, `.tasks/`, `.devloop/` or `.agents/`
+- Over a week, more PRs touch `scripts/`, `.tasks/`, `specs/` or `.agents/`
   than touch `slime-root/` and `components/`.
 - You merged something last week and cannot say what it does.
 

@@ -63,7 +63,6 @@ For how the planes work and how to add one, read
 | --- | --- |
 | `just ci_critical_path_check` | Every recipe the CI contract-source, Miri and host-test jobs run, with closure freshness asserted here directly: restructuring those jobs or removing a duplicated check must not drop an assertion unnoticed. |
 | `just deny` | cargo-deny: advisories, bans, licenses, and source pinning. |
-| `just devloop ARGS` | Run the pinned devloop against this repository's Zutai toolchain and gate policy: `just devloop validate <UUID>`, `just devloop admit <spec.zti> …`. |
 | `just docs_check` | Local links, fragments, canonical UUIDs, and every `just` literal in docs, task requirements, scripts, and CI. |
 | `just fmt` | `cargo fmt --all`. |
 | `just fmt_boot_contracts` | `cd boot-contracts && cargo fmt` |
@@ -96,29 +95,18 @@ For how the planes work and how to add one, read
 | `just private_memory_phase3_check` | One recipe covering every phase-3 acceptance. |
 | `just private_memory_phase4_check` | One recipe covering the phase-4 surface: the adaptive planes on both reference architectures, their over-guaranteed negative control, and the whole fixed and demand-backed surface underneath them. |
 | `just private_memory_phase5_check` | MEM-ADAPTIVE's qualification: the inventory matrix on both reference architectures over the whole phase-4 surface. |
-| `just pr_scope_check` | The pull-request scope classes and their refusals on synthetic diffs, then a compile of every `contracts/**/schema.zt`; CI judges a real base..head with the same classes. |
 | `just private_memory_policy_check` | Formatting, lint, and host tests plus the private-memory policy planes. |
 | `just ruff` | `ruff check scripts/` |
 | `just ruff_fix` | `ruff check scripts/ --fix` |
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
-| `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
 | `just spec_e2e` | The devloop v1.5 exam: M1 to M3 on a throwaway fixture repository, judged by the base commit's judge; reports `casesObserved` and `negativeControlsRefused`. |
-| `just spec_check ARGS` | The devloop v1.5 judge: the store alone, or with `--base REV` the pull request under V1 to V10 (`--forge github` reads the author and the approvals); reports only until cutover. |
+| `just spec_check ARGS` | The devloop v1.5 judge: the store alone, or with `--base REV` the pull request under V1 to V10 (`--forge github` reads the author and the approvals). The `Spec judge` workflow runs the base commit's copy on every pull request and blocks. |
 | `just spec_tasks_check ARGS` | `task/v2` items and the frozen area files: format, links and schema copies; with `--base` also V5, V7 and V10 (`scripts/spec/tasks check`). |
 | `just spec_status ARGS` | Each area requirement's state from the `evidence` branch: enforced, failing, claimed, advisory or superseded. |
 | `just spec_tasks_status ARGS` | Each `task/v2` item's state from the `evidence` branch; `--claimed` lists what the Evidence workflow would run, `--weekly` the seven v1.5 metrics. |
 | `just spec_record TARGET ARGS` | Run one target under the record wrapper and write `build/observations/<target>.zt`, keyed by its closure digest. |
 | `just spec_closure ARGS` | Closure digest of every bound target; `--explain` lists its recipes, grader set, inputs, images and toolchain. |
-| `just issue_projection_retired_check` | Work items are not projected into GitHub Issues: refuses while `myque-project.yml` exists, policy names it, a workflow or script runs `myque-gh apply`, or contributor guidance asks for `myque-gh pr link`; fails until the projection retirement lands. |
-| `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
-| `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |
-| `just devloop_diagnostics_controls` | The diagnostics judge's corrupted-result and actual-CLI transport controls; passing controls do not qualify the repair. |
-| `just devloop_observation_capacity_check` | Explicit Linux real-CLI raw stderr capacity, replay, filesystem mutation and measured-memory qualification, using strace from locked nixpkgs; runs `tasks_check` first. |
-| `just devloop_observation_capacity_controls` | Receipt, filesystem monitor and bounded/unbounded collector controls; never qualifies the implementation. |
-| `just tasks_graph` | `myque graph`. |
-| `just tasks_list` | `myque list` — generated view, never authoritative. |
-| `just tasks_next` | `myque next` — actionable items. |
 | `just test` | Aggregate: `sel4_root_boot_check`, `sel4_component_graph_check`, `sel4_gate_control_check`. |
 | `just test_host` | Override the components bare-metal default with the actual host target; host-only build-support tests need no target override. |
 | `just test_sel4_root` | Run shipped root mechanism modules on the host. |

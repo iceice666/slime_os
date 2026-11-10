@@ -1,7 +1,8 @@
 # Development history and evidence
 
 Current architecture, operation and limitations remain in this product repository.
-`.tasks/items/` is the only live work-state store. Historical investigations and
+`.tasks/items/` is the only live work-state store, and `specs/legacy.zt`
+indexes the V1 work items. Historical investigations and
 large raw captures are preserved in a private repository, not a build, test,
 submodule or documentation-check dependency.
 
@@ -90,9 +91,9 @@ that every historical environment is reconstructible.
 
 `just docs_check` checks current local links/fragments, canonical UUID references,
 and current commands. Historical prose is not validated against today's recipes;
-its original checker stays at the archive revision. `just tasks_check` runs real
-MyQue integrity checks and backlog-first policy without a frozen index. Neither
-requires history checkout or network access.
+its original checker stays at the archive revision. `just spec_tasks_check`
+checks the work items and the backlog-first rule (V7). Neither requires history
+checkout or network access.
 
 The archive's `verify-archive.py` compares every candidate original with its Git
 blob and rejects missing/mismatched bytes; it never deletes files. Local complete

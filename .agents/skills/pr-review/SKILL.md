@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Rules that bound any review of a Slime OS pull request and any answer to one — what counts as a finding, how severity is assigned, one review per head, consistency across rounds, and how an author reproduces, fixes, or declines a finding. Use when asked to review a PR, to triage or answer review threads (including Codex findings), or to decide whether a PR is ready. For the adversarial procedure against a spec-driven item, use `spec-review` alongside this.
+description: Rules that bound any review of a Slime OS pull request and any answer to one — what counts as a finding, how severity is assigned, one review per head, consistency across rounds, and how an author reproduces, fixes, or declines a finding. Use when asked to review a PR, to triage or answer review threads (including Codex findings), or to decide whether a PR is ready. For the adversarial procedure against a task/v2 work item, use `spec-review` alongside this.
 ---
 
 # PR review
@@ -9,7 +9,7 @@ These rules bind every reviewer of a PR — a person, a review bot such as
 Codex, or an agent asked to review — and the author answering the review.
 `AGENTS.md` carries the summary that review bots read; this skill is the full
 text. `.agents/skills/spec-review/SKILL.md` is the procedure for an
-implementation PR against a spec-driven item; the rules here bound what any
+implementation PR against its task/v2 work item; the rules here bound what any
 review posts.
 
 A review's job is to find where the diff, the checker it binds, and the
@@ -17,17 +17,17 @@ landed work item disagree, and to say so with a file and line.
 
 ## The item bounds the review
 
-Read the work item (requirements, acceptance rationale, `scope`,
-`nonGoals`), the PR description, and the existing review threads before
+Read the work item (`.tasks/items/<slug>.zt`: requirements, acceptances,
+`owns`, `nonGoals`), the PR description, and the existing review threads before
 reading the diff.
 
-A process PR — CI workflows outside `codePaths`, `CONTRIBUTING.md`,
-`AGENTS.md`, `.agents/`, `docs/` — has no item. There the bound is the rules
+A process PR — `.github/`, `CONTRIBUTING.md`, `AGENTS.md`, `.agents/`,
+`docs/`, and the other process paths in the `scripts/spec/check` class
+table — has no item. There the bound is the rules
 in `AGENTS.md` the PR claims to follow and the claims its description makes:
 a finding names the rule or claim the diff contradicts, with the file and
 line, and the input or reader that would be misled. The absence of an
-acceptance rationale neither makes such a PR unreviewable nor excuses a
-defect in it.
+item neither makes such a PR unreviewable nor excuses a defect in it.
 
 - A finding names what the diff breaks — a requirement or acceptance of the
   landed item, an invariant the code or its contract states, or a
@@ -36,9 +36,9 @@ defect in it.
   refusal case, a pinned count) grounds a finding on its own; no
   repository-wide rule needs to be broken as well.
 - An exam's case count and control floor belong to the planning item: "this
-  boundary could also be exercised" is not a finding unless the acceptance
-  rationale claims that boundary, because every added case re-admits the
-  item.
+  boundary could also be exercised" is not a finding unless a requirement
+  statement claims that boundary, because every added case is a planning
+  change to the item.
 - A missing scenario the reviewer believes matters goes in one comment that
   proposes a follow-up item, not in one comment per case.
 - A limit the PR description declares under known limits or invariants is a
@@ -62,7 +62,8 @@ require — is a **suggestion**, labelled as one; it never blocks a merge and
 is not raised again on a later head.
 
 A finding that would require the PR to carry what
-`scripts/check/check-pr-scope.py` refuses, or what the landed item excludes,
+`scripts/spec/check` refuses (another class, a path outside `owns`, a
+bound grader file), or what the landed item excludes,
 is addressed to the planning process in one comment, not to the PR.
 
 ## One review per head, bounded in size
@@ -104,10 +105,10 @@ Before posting, read every open and resolved thread.
   fix. Fixes follow in the same push.
 - **One push per round.** Answer every thread of a round in one push rather
   than one push per finding, since each push starts another round.
-- **Re-admit once.** Do not re-admit the item to satisfy a suggestion;
-  collect scope changes and re-admit once, or open a follow-up item. A
-  blocking finding against an exam whose pinned count must move does
-  re-admit the item; say so in the reply.
+- **Revise the item once.** Do not revise the item to satisfy a suggestion;
+  collect scope changes into one planning PR, or open a follow-up item. A
+  blocking finding against an exam whose pinned count must move does need
+  a planning PR that revises the item; say so in the reply.
 - **Know when you are done.** When a round yields nothing blocking, the PR is
   ready and the author does not request another round.
 - **Threads hold the history.** The PR description describes the head as it
@@ -126,7 +127,7 @@ linking [`HUMAN.md`](../../../HUMAN.md), when either holds:
   require storage to equal the declared configuration instead of bounding it
   from below).
 - A non-blocking finding (Codex P2) lands on process or verification text or
-  code: `scripts/`, `.tasks/`, `.devloop/`, `.agents/`, `AGENTS.md`, or
+  code: `scripts/`, `.tasks/`, `specs/`, `.agents/`, `AGENTS.md`, or
   `docs/` outside `docs/architecture/`. These are collected into one
   follow-up comment for the human to accept or drop, not fixed in the PR.
 

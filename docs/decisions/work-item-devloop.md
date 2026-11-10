@@ -1,8 +1,10 @@
 # Work-item devloop v1.5
 
 **Status:** Accepted
-**Related work item:** `devloop-v1.5-bootstrap` (the last V1 item; its UUID is in `.tasks/items/`)
-**Supersedes at cutover:** [`mandatory-spec-driven-work-items.md`](mandatory-spec-driven-work-items.md)
+**Related work item:** `devloop-v1.5-bootstrap`, UUID
+`01a1c46a-3c32-7055-aea0-ad0435d4c181`, closed (the last V1 item; its row is in
+[`specs/legacy.zt`](../../specs/legacy.zt))
+**Supersedes:** [`mandatory-spec-driven-work-items.md`](mandatory-spec-driven-work-items.md)
 and [`spec-driven-work-item-bodies.md`](spec-driven-work-item-bodies.md)
 
 ## Decision
@@ -84,33 +86,30 @@ On GitHub, agents have no account of their own, and `AGENT_ACCOUNTS` is empty.
 The person whose account an agent session pushes with is the author, and
 cannot approve that pull request. This is a known limit until M6.
 
-## Until cutover
+## Cutover
 
-V1 judges `main` until cutover: `just tasks_check`, `check-pr-scope.py` and
-`just devloop`. Two judges that both block would make every pull request
-satisfy two classifications. So M0 to M3 land under V1 rules, as one V1 item,
-`devloop-v1.5-bootstrap`. Its exam is `just spec_e2e`. `scripts/spec/check`
-runs in CI from M2 and reports without blocking.
-
-Before cutover, `task/v2` items exist only in the `spec_e2e` fixture.
-`.tasks/items/` holds no `.zt` file.
+Cutover landed under the V1 item `devloop-v1.5-bootstrap`. It moved the V1
+store into `specs/legacy.zt` and removed the `myque` and `devloop` pins,
+`.devloop/`, the MyQue closeout and retirement workflows, `check-pr-scope.py`,
+`check-work-items.py`, the work-item-lifecycle skill and the V1 `just`
+recipes. `scripts/spec/check` became the only judge, and it blocks.
 
 ## Consequences
 
-- Cutover removes the `myque` and `devloop` pins, `.devloop/`, the MyQue
-  closeout and retirement workflows, `check-pr-scope.py`,
-  `check-work-items.py` and the work-item-lifecycle skill. It makes
-  `scripts/spec/check` a required check.
-- The closeout bot needs its own token: a GitHub App or machine user now, a
-  GitLab project access token after the move. A pull request opened with the
-  workflow's built-in token triggers no checks, so V6 would never run.
+- `scripts/spec/check` is a required check, and no V1 tool remains. The
+  [Cutover](#cutover) section names what cutover removed.
+- The closeout bot needs its own token. On GitHub, each run mints one from a
+  GitHub App: repository variable `CLOSEOUT_APP_ID`, secret
+  `CLOSEOUT_APP_PRIVATE_KEY`. After the move, a GitLab project access token
+  replaces it. A pull request opened with the workflow's built-in token
+  triggers no checks, so V6 would never run.
 - The evidence signing key stays in the `evidence` environment, which only
   `main` pushes reach. A key rotation adds a line to `specs/allowed_signers`
   and keeps the old one, so old records still verify.
-- A pull request can edit the workflow that runs the judge. Before `check`
-  blocks, the host must run it from a trusted definition: a ruleset-required
-  workflow or `pull_request_target` on GitHub, a protected pipeline
-  definition on GitLab.
+- A pull request can edit the workflow that runs the judge. So the host runs
+  it from a trusted definition. On GitHub, a repository ruleset requires
+  `.github/workflows/spec-judge.yml` from `main`. On GitLab, a protected
+  pipeline definition does the same.
 
 ## Revisit when
 

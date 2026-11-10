@@ -1,6 +1,8 @@
 # Spec-driven work-item bodies and external contract ownership
 
-**Status:** Accepted
+**Status:** Superseded by [`work-item-devloop.md`](work-item-devloop.md)
+**Removed at cutover:** the MyQue and devloop tools, recipes and paths this record
+names. They remain in Git at commit `81a0c9ea8d0a646574eb1ba49045bcf00011a25d`.
 **Related work item:** `01a0a546-55e5-734d-ac6b-6a8659cf3363`
 **Amended by:** [Work items are not projected into GitHub Issues](no-github-issue-projection.md):
 the repository no longer uses myque-gh for projection.
@@ -39,7 +41,7 @@ Slime OS owns four things and nothing more.
    repository's own preconditions — the item is already on canonical `main`, and
    backlog defects come first — and says nothing about whether an acceptance was
    observed.
-4. **Which items are subject.** `just tasks_check` decides that from the
+4. **Which items are subject.** `tasks_check` decides that from the
    presence of a `devloop` record and reports what devloop refused.
 
 Everything else is deferred to the owning project. No MyQue or devloop schema is
@@ -67,7 +69,7 @@ repository's checks honest about where their authority comes from.
   epoch that were tested; the newest entry for an obligation decides it.
 - A human obligation stays pending until an operator supplies a real
   observation. Nothing in this repository may synthesize one.
-- `just tasks_check` requires the pinned devloop whenever an item carries a
+- `tasks_check` requires the pinned devloop whenever an item carries a
   `devloop` record, exactly as it already requires `myque`. Each validation
   compiles and links a native binary, so it costs seconds, not milliseconds;
   there is no cached fast path.
@@ -84,7 +86,7 @@ repository's checks honest about where their authority comes from.
 
 Revisit if an external release stops publishing a contract this repository
 depends on, if devloop's compiler pin and `deps/zutai` cannot be kept equal, if
-native validation cost makes `just tasks_check` impractical as a routine gate,
+native validation cost makes `tasks_check` impractical as a routine gate,
 or if a second consumer in this repository needs a different body profile.
 
 ## References

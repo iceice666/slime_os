@@ -210,15 +210,36 @@ public recipe has one; a recipe that should not be listed is private
   to a looser regex, not to an optional marker. If the order genuinely is not
   causal, move the marker to `EXPECTED_UNORDERED`.
 
+## Bind it to a work item
+
+A gate is evidence only when an item or an area requirement binds it. Name the
+recipe in an acceptance, `h.observed "widget_check"`, and land the checker,
+the recipe and the item together in a planning PR. From that merge the
+recipe is a bound target. Its grader set is frozen for implementation PRs
+(V3), and a later change to it needs a V4 approval. See
+[Carrying a work item](06-work-item-lifecycle.md).
+
+A checker may report counts and flags beside its exit status. It calls
+`record(...)` in
+[`scripts/lib/devloop_observations.py`](../../scripts/lib/devloop_observations.py),
+and `scripts/spec/record` copies the values into the record. An acceptance
+reads them through predicates:
+`h.observedWhere "widget_check" { h.atLeast "negativeControlsRefused" 3; }`.
+
 ## Where CI fits
 
-CI does not boot the QEMU planes. It runs the pins, host tests, formatting,
-clippy, contract and closure drift checks, `sel4_gate_control_check`, and
-`docs_check`. The plane gates run locally (or through `just devloop gate`,
-which records typed observations against the work item); the PR's
-verification section states which ones ran and what they observed. That is
-why the gate-control row matters: it is the only part of your gate CI can
-exercise without hardware time.
+The PR workflow does not boot the QEMU planes. It runs the pins, host tests,
+formatting, clippy, contract and closure drift checks,
+`sel4_gate_control_check`, `docs_check`, and the spec judge. That is why the
+gate-control row matters: it is the only part of your gate a PR run exercises.
+
+After the planning PR merges and the item is `#active`, the `Evidence`
+workflow runs the bound recipe on `main`. It writes a signed record to the
+`evidence` branch, keyed by the recipe's closure digest. Locally,
+`just spec_record widget_check` runs the recipe the same way and writes
+`build/observations/widget_check.zt`. A target listed under `operator` in
+`specs/targets.toml` needs hardware CI does not have. An operator runs it with
+`scripts/spec/record <target> --signer <principal> --key <key>`.
 
 ## Next
 

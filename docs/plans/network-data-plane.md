@@ -157,7 +157,7 @@ python3 scripts/check/check-sel4-io-network-plane.py --arm http-public --allow-p
 ```
 
 `just io_http_qualification_check` combines current network regression, controlled
-HTTP and a fresh public smoke for one devloop execution identity. No recorded
+HTTP and a fresh public smoke for one qualification identity. No recorded
 body string or fixed status is required for the public response. The maintained
 work item must remain active until every required observation is qualified;
 adding these entry points is not completion evidence.
@@ -203,7 +203,7 @@ The goal is the widest applicable surface of a **pinned smoltcp release**, not
 all Cargo features enabled together or a promise to implement every future
 upstream feature. The [support matrix](#smoltcp-support-matrix) below is the
 complete inventory of that release's protocols, sockets, media, configuration
-and resource options; implementation state and dependency edges stay in MyQue. Each matrix row must name its upstream feature/source, applicable
+and resource options; implementation state and dependency edges stay in the work items. Each matrix row must name its upstream feature/source, applicable
 backend/target, authority mapping, quantitative bounds, implementation slice and
 verification. Distinguish supported, planned, excluded for a concrete authority
 conflict, and not applicable/not provided by the pinned release. Unfinished
@@ -786,4 +786,5 @@ runtime behavior, and no generic green recipe substitutes for the stated tests.
 - [`../architecture/io-substrate.md`](../architecture/io-substrate.md)
 - `contracts/{link-device,network-destination,network-service,io-queue}/v1/`
 - `components/services/{virtio-net-driver,network-service}/`
-- `.tasks/items/01a08ff0-0b99-7315-99b0-7e7f340fa6f9.md`
+- Work item `01a08ff0-0b99-7315-99b0-7e7f340fa6f9` (closed; its row is in
+  [`specs/legacy.zt`](../../specs/legacy.zt))

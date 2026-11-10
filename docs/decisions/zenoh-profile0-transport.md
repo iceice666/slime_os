@@ -109,7 +109,7 @@ failure-marker mutations cover it.
 - The Rust slices must use the module paths the recipes filter on:
   `zenoh_profile0::`, `ros_cdr::` and `zenoh_link::`. A runtime placed elsewhere
   runs no test and fails rather than reporting zero.
-- Under `just devloop gate` every recipe in the aggregate inherits the observation
+- Under `just spec_record <target>` every recipe in the aggregate inherits the observation
   target. The arm runs last and replaces any earlier report, so the arm's counts
   are the ones recorded.
 

@@ -21,5 +21,5 @@ A record with another `formatVersion`, a group of another size, an odd or non-he
 over the bound, or a field the contract does not name, at the top level or in any entry and however it is
 laid out, is refused: the decoder closes the field set itself, because the derived `decode` ignores a
 field it does not know. The Rust reader is part of the implementation, not this planning contract; the
-scope is the undeclaration item in `.tasks/items/` named by
+scope is the undeclaration work item named by
 [`docs/decisions/zenoh-stock-undeclare.md`](../../docs/decisions/zenoh-stock-undeclare.md).

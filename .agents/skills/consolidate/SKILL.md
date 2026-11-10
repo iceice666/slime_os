@@ -23,13 +23,13 @@ digest, so a person can see that the same-PR rule was missed.
 | consolidated | `docs/architecture/`, `docs/glossary.md`, `docs/decisions/` | this skill proposes; a person merges |
 | schema | `AGENTS.md`, `HUMAN.md`, this file | people only |
 
-A spec-driven item's body is not kept current after it closes. What it
-established survives here or in a test, contract, or decision record. The
-item itself stays in the store as history.
+A terminal item never changes after it closes. What it established
+survives here or in a test, contract, or decision record. The item itself
+stays in `.tasks/terminal/` as history.
 
 ## What this skill never does
 
-- Edit code, tests, `scripts/`, `.tasks/`, `.devloop/`, `AGENTS.md`,
+- Edit code, tests, `scripts/`, `.tasks/`, `specs/`, `AGENTS.md`,
   `HUMAN.md`, any skill, or any `docs/` file outside `docs/architecture/`,
   `docs/glossary.md`, and `docs/decisions/`. Stale text elsewhere is
   reported under "Needs a person" with the one-line fix it needs.
@@ -61,9 +61,9 @@ BASE=$(git log origin/main --grep='^docs(repo/consolidate)' -1 --format=%H)
 # no previous run: BASE=$(git rev-list -1 --before='14 days ago' origin/main)
 git log --first-parent --format='%h %ad %s' --date=short "$BASE"..origin/main   # merged PRs
 
-# items whose state changed in the window, one line per item with its new state
-git log -p --format= "$BASE"..origin/main -- .tasks/items/ \
-  | awk '/^\+\+\+ b\//{f=substr($2,3)} /^\+state: (done|cancelled)/{print $2, f}' | sort -u
+# items that closed in the window: each closeout PR moves one file to .tasks/terminal/
+git log --format= --name-status -M --diff-filter=R "$BASE"..origin/main -- .tasks/items/ .tasks/terminal/ \
+  | awk '$3 ~ /^\.tasks\/terminal\//{print $3}' | sort -u
 
 # review threads, per PR; --paginate fetches every page, --jq emits one JSON
 # object per line (read the whole stream with `jq -s`)
@@ -78,52 +78,41 @@ gh api --paginate "repos/iceice666/slime_os/pulls/<n>/reviews?per_page=100" \
 Review bodies can carry findings that sit outside the diff. Skip the ones
 that only repeat an inline finding or are tool boilerplate.
 
-**Closed items.** An item closes when its `state` in `.tasks/items/` becomes
-`done` or `cancelled`. Retirement into `.tasks/terminal/` is a separate,
-later workflow, so new files there do not show what closed in this window.
-Retirement runs daily and deletes the item file, keeping only a summary
-in the terminal record. Its `history.commit` points into the history
-archive, not this repository. To read a retired item's requirements and
-evidence, recover the file from `main` as it was just before retirement:
+**Closed items.** An item closes when the closeout bot's pull request moves
+it unchanged from `.tasks/items/` to `.tasks/terminal/`. Read the terminal
+file directly. Its `intent` tells the two kinds apart:
 
-```sh
-c=$(git log -1 --format=%H --diff-filter=D origin/main -- "$path")
-git show "$c^:$path"
-```
-
-- A `done` spec-driven item has completed through devloop, and its
+- An item whose intent is `#active` closed through a signed done witness:
+  every mandatory acceptance was enforced on the `evidence` branch. Its
   requirements are candidates for claims (Pass 1).
-- A `done` legacy prose item (pre-cutoff, with no spec-driven body) closed
-  through `myque close` with no acceptances. Its `## Closure evidence`
-  section is what it observed. A property stated there is a candidate claim
-  only if the section names the test or recipe that observed it; otherwise
-  it goes under "Needs a person" as unverified.
-- A `cancelled` item never completed. It produces no claim, even if it
-  recorded passing evidence before it was cancelled. List it under "Not
-  done" with the item that superseded it, if any.
-- Re-admissions are linked by the `supersedes:` field in an item's front
-  matter; copies with the same title are a hint, not the proof. Count the
-  chain once, at its newest item, and name the cancelled copies in a single
-  "Not done" line. If the newest item is still open, the chain produces
-  nothing this window; say so on that line.
+- A `#cancelled` item never completed. It produces no claim, even if
+  evidence for its targets exists. List it under "Not done" with the item
+  that superseded it, if any.
+- A replacement item names what it replaces in `supersedes`. Copies with
+  the same title are a hint, not the proof. Count the chain once, at its
+  newest item, and name the cancelled copies in a single "Not done" line.
+  If the newest item is still open, the chain produces nothing this window;
+  say so on that line.
 - An item that closed in the window whose implementing PR merged before
   `BASE` is still ingested. Its PR's threads are read like a window PR's.
+- A V1 item has no task/v2 file. `specs/legacy.zt` indexes it by UUID and
+  names the commit (`frozenAt`) that holds its text, at
+  `.tasks/items/<uuid>.md` or `.tasks/terminal/<uuid>.json`
+  (`git show <frozenAt>:<path>`).
 
-**Product or process.** An item closes on `main` through a
-`chore(repo/tasks)` closeout PR, which is a process PR. Judge an item by its
-implementing PR, not by the closeout PR. Search merged PR bodies for the UUID (`gh pr list --state merged --search
-<UUID>`). PRs merged before the projection was retired may also carry a
-`myque:implements=<UUID>` trailer. Planning PRs that mention the UUID also match; the implementing PR
-is the match whose diff touches product paths.
+**Product or process.** An item closes on `main` through a closeout PR
+that the closeout bot opens. Judge an item by its implementing PR, not by
+the closeout PR. Search merged PR bodies for the slug and the UUID
+(`gh pr list --state merged --search <slug>`). Planning PRs that mention
+the item also match; the implementing PR is the match whose diff touches
+product paths.
 
 Product paths are the shipped OS tree: `slime-root/`, `components/`,
 `boot-contracts/`, `sel4/`, and the `contracts/` that define formats the OS
-reads or writes. `codePaths` in `.devloop/policy.json` is broader: it also
-covers CI workflows, devloop contracts, and `verification/`, which is right
-for staling evidence but not for this. A product PR is a window PR whose
-diff touches product paths, whatever its title scope. An older trailer is an
-HTML comment in the PR body (`<!-- myque:implements=<UUID> -->`), not a commit
-trailer, so read it with `gh pr view <n> --json body`, not `git log`.
+reads or writes. The implementation class in `scripts/spec/check` is
+broader: it also covers `nix/`, `scripts/build/`, `verification/`, and build
+files, which is right for V2 but not for this. A product PR is a window PR
+whose diff touches product paths, whatever its title scope.
 
 **Thread budget.** Read the inline threads and conversation of every product
 PR in full, including the author's replies. A reply that says what was
@@ -143,7 +132,7 @@ token, which is reserved for a human's answer in a thread.
 
 ## Pass 1: ingest
 
-For each `done` item and each product PR in the window:
+For each witnessed terminal item and each product PR in the window:
 
 1. **Find the owning page.** Take the code paths that carry the item's or
    PR's behavior change. Skip paths changed only mechanically (a renamed
@@ -163,21 +152,17 @@ For each `done` item and each product PR in the window:
    changes no state; a queue never holds more than its declared capacity)
    becomes a claim on the page. Claims come from three sources, and all
    must be owned:
-   - a requirement of a `done` item whose acceptance has passing evidence,
-     owned by the recipe that evidence ran. An evidence entry names its gate
-     and an `inputs:` digest, not the recipe: the digest is the SHA-256 of
-     a `.devloop/inputs/*.json` file
-     (`shasum -a 256 .devloop/inputs/*.json | grep <digest>`), and that
-     file's `justTarget` is the recipe. A passing recipe proves only that it
+   - a requirement of a witnessed terminal item, whose acceptance has passing evidence,
+     owned by the recipe that evidence ran. An evidence record sits at
+     `<target>/<closure digest>.zt` on the `evidence` branch, and its
+     `target` is the recipe (`just spec_closure --explain` lists what the
+     digest covers). A passing recipe proves only that it
      exited successfully. Before citing it, find where it asserts this
      property: a host test, a serial marker or chain in the plane script or
      `scripts/lib/sel4_gate_markers.py`, or a check in the judge it runs.
      Cite that assertion with the recipe. If nothing in the recipe asserts
      it, the requirement is not a claim; it goes under "Needs a person" as
      unverified;
-   - a property a `done` legacy prose item's `## Closure evidence` states,
-     owned by the test or recipe that section names, once you have found
-     where that test or recipe asserts the property, as above;
    - a review finding fixed with a test, owned by that test. Decide whether
      it states a lasting property or a one-off defect, and promote only the
      lasting ones.
@@ -333,4 +318,4 @@ in the same PR:
 - a claim the person drops stays out of the page, or is removed if it was
   already there;
 - a claim the person keeps but no one can own stays out of the page, and
-  becomes a follow-up item they choose whether to admit.
+  becomes a follow-up item they choose whether to plan.

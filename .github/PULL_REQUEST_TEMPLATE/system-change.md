@@ -53,10 +53,11 @@
 ## Evidence / decisions
 
 - Existing evidence or decision:
-- Work item (UUID from `.tasks/items/`):
+- Work item (slug or UUID of a task/v2 item under `.tasks/items/`):
 
-<!-- Name the implemented work item by its canonical UUID. Work items are not
+<!-- Name the implemented work item by its slug or UUID. Work items are not
      projected into GitHub Issues, so do not use GitHub auto-close keywords.
-     Merging a PR does not complete its item; use myque close only after
-     recording the observed exit evidence, its identity, scope, and limits in
-     the item, or let the closeout workflow run devloop complete. -->
+     Merging a PR does not complete its item. After merge, the Evidence
+     workflow records the item's targets and signs a done witness once every
+     mandatory acceptance is enforced; its closeout bot then opens the PR that
+     moves the item to `.tasks/terminal/`. -->

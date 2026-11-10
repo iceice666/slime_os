@@ -138,13 +138,14 @@ The product composition is `contracts/system-spec/v1/systems/sel4.zti`, not
 
 1. `scripts/lib/` is shared mechanism; `scripts/check/` is per-gate
    expectations. Prefer extending the library over copying into a checker.
-2. `just ruff`. If the file is under a work item's `codePaths`,
-   `just tasks_check` will tell you the change stales that item's evidence —
-   add it to the spec you are working under.
+2. `just ruff`. If the file is in the grader set of a bound target, the
+   change is a planning change: `just spec_check --base origin/main` prints a
+   `V3` finding for it in an implementation PR, and it needs a V4 approval.
+   `just spec_closure --explain` shows which targets a file grades.
 3. If a marker table changed: `just sel4_gate_control_check`.
-4. A new `--check`-style rule in `check-docs.py`, `check-work-items.py`, or
-   a contract checker is behavioral — it needs a landed work item first, like
-   any other non-trivial change.
+4. A new rule in a contract checker is behavioral. It needs a landed work
+   item first, like any other non-trivial change. A change to `scripts/spec/`
+   changes the judge and needs a V4 approval.
 
 ## Change documentation
 
@@ -176,6 +177,9 @@ A CPU boot qualifies no device.
 
 ## Close a work item
 
-[Work-item lifecycle](06-work-item-lifecycle.md). Record what was *observed*
-(evidence class, target, image identity, limits), then `just devloop
-complete` (spec-driven) or `myque close` (pre-cutoff). `just tasks_check`.
+Nobody closes an item by hand ([work-item lifecycle](06-work-item-lifecycle.md#closeout-prs)).
+After the implementation PR merges, the `Evidence` workflow records the
+item's targets and signs a done witness once every mandatory acceptance is
+enforced. Answer each `h.human` acceptance with `scripts/spec/human`. The
+closeout bot then opens the PR that moves the item to `.tasks/terminal/`.
+`just spec_tasks_status` shows what is still missing.

@@ -6,11 +6,8 @@ is `.tasks/items/<slug>.zt` while open and `.tasks/terminal/<slug>.zt` once
 closed. The only hand-written state is `intent`; `done` is derived from the
 `evidence` branch.
 
-Until the v1.5 cutover, `task/v2` items exist only in the
-`scripts/spec/e2e` fixture: `.tasks/` still holds the V1 MyQue store. At
-cutover, `.tasks/items/` and `.tasks/terminal/` receive byte-identical copies
-of both files, because Zutai refuses an import above the entry file's
-directory. `scripts/spec/tasks check` refuses a copy that differs from this
+`.tasks/items/` and `.tasks/terminal/` hold byte-identical copies of both
+files, because Zutai refuses an import above the entry file's directory. `scripts/spec/tasks check` refuses a copy that differs from this
 directory.
 
 `task/v2` is `task/v1` from the living-spec experiment plus three fields:

@@ -206,4 +206,4 @@ jobs:
         env:
           CLOSEOUT_TOKEN: ${{ steps.app.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix develop .#projection --command python3 scripts/spec/closeout --forge github
+        run: nix develop .#spec --command python3 scripts/spec/closeout --forge github

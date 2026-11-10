@@ -1,249 +1,199 @@
 # How work flows
 
-One page for a person who has not yet internalised the repository's habits.
-Every rule below is stated once, with the reason it exists and the program
-that enforces it; the pages it links to own the details. If you already know
-why a planning PR lands before an implementation PR, skip to the
+Project state is data that one program judges: `scripts/spec/check`. This page
+gives a newcomer the timeline that rule produces, the reason for each step,
+and the rule that enforces it. The pages it links to own the details. If you
+already know why a planning PR lands before an implementation PR, skip to the
 [decision tree](#which-path-am-i-on).
 
 ## The one idea behind all of it
 
-Project state is data that programs check, not prose that people remember.
-The canonical record of *what work exists, what state it is in, and what
-counted as finishing it* lives in `.tasks/` under
-[MyQue](https://github.com/mozufu/myque), and a growing set of checks —
-`just tasks_check`, [devloop](https://github.com/mozufu/devloop) approval,
-CI — refuse a tree that contradicts that record. Almost every convention that
-looks like ceremony is there so one of those checks can be honest:
+A work item is a `task/v2` Zutai file under `.tasks/items/`. It names what
+must become true and the `just` targets that prove it. The judge
+`scripts/spec/check` runs on every PR from the base commit, so a PR cannot
+change the judge that grades it. The rules V1 to V10 in
+[the devloop v1.5 decision](../decisions/work-item-devloop.md#rules) refuse a
+tree that contradicts the store.
 
-| Convention | What would break without it |
-|---|---|
-| Work item before implementation | Nothing to bind evidence or a PR to; "done" becomes an opinion |
-| Planning PR merges before implementation PR | The branch being graded could rewrite its own exam (see below) |
-| Backlog defects first | A milestone built on a known-red suite records evidence nobody trusts |
-| Merge is not completion | A landed diff proves nothing about an exit condition that needs a QEMU run, a hardware boot, or a refusal |
-| Closures regenerated with every source edit | A gate would prove a binary nobody can rebuild |
-
-The rest of this page is the timeline those conventions produce.
+| Convention | What breaks without it | Rule |
+|---|---|---|
+| Work item before implementation | Nothing binds evidence or a PR to a claim. "Done" becomes an opinion. | V2 |
+| Planning PR merges before implementation PR | The branch under grading could rewrite its own exam. | V2, V3 |
+| Backlog bugs first | A milestone built on a red suite records evidence nobody trusts. | V7 |
+| Merge is not done | A landed diff proves nothing about a QEMU run, a hardware boot or a refusal. | V6 |
+| Area promises are frozen | A shipped behavior could quietly lose its exam. | V10 |
 
 ## The timeline
 
-```text
-  idea / bug report
-        │
-        ▼
-  ① check the backlog ─── open backlog defects?  → resolve, defer, or block them first
-        │
-        ▼
-  ② admit a work item ─── just devloop admit spec.zti ...   (.tasks/items/<UUID>.md)
-        │
-        ▼
-  ③ planning PR ────────── .tasks/ + .devloop/inputs/ only; merges to main
-        │
-        ▼
-  ④ start & implement ─── just devloop start <UUID>; edit; regenerate closures; run the gate
-        │
-        ▼
-  ⑤ implementation PR ─── template; item UUID in the body; CI green; merge
-        │
-        ▼
-  ⑥ record evidence ────── just devloop gate / human ...; just devloop complete <UUID>
-        │
-        ▼
-  ⑦ (later) retire ─────── maintenance PR moves the done item to .tasks/terminal/
+```mermaid
+flowchart TD
+    A["Step 1: check the backlog"] --> B["Step 2: write the item with scripts/spec/tasks new"]
+    B --> C["Step 3: planning PR carries the item as planned, with its exam"]
+    C --> D["Step 4: set the intent to active and implement"]
+    D --> E["Step 5: implementation PR, judged under V1 to V10"]
+    E --> F["Step 6: Evidence workflow writes records and done witnesses"]
+    F --> G["Step 7: closeout bot PR moves the item to .tasks/terminal/"]
 ```
 
-### ① Check the backlog
+### 1. Check the backlog
 
-Items tagged `backlog` are known defects. Every open one is resolved,
-`deferred` (postponed by a recorded decision), or `blocked` (waiting on
-something outside this repository) before new milestone work starts.
+An open backlog bug is an item of kind `bug` with intent `#planned` or
+`#active`. A failing promise counts as one. While either exists, no milestone,
+and no item under one, may enter `#active`.
 
 - **Why:** a milestone that starts on a red suite closes on evidence nobody
-  can distinguish from the pre-existing failures.
-- **Enforced by:** `just tasks_check` refuses the store; `just devloop start`
-  refuses while an open backlog defect exists.
-- **Look:** `just tasks_next` lists what is actionable.
+  can tell apart from the earlier failures.
+- **Enforced by:** V7 in `scripts/spec/check`.
+- **Look:** `just spec_tasks_status` lists every item's state.
+  `just spec_status` lists every area promise, failing ones first.
 
-### ② Admit a work item
+### 2. Write the item
 
-Every non-trivial change implements a canonical item. From
-`2026-10-01T00:00:00Z` every new item is *spec-driven*: its body is a
-`dev-spec/v1` requirements payload, and its acceptances name gates from
-[`.devloop/policy.json`](../../.devloop/policy.json).
+Every implementation path needs an item that owns it. Print a skeleton with a fresh
+UUIDv7 and fill it in:
 
 ```sh
-just devloop admit spec.zti --title "Describe the work" --admission <token> --policy .devloop/policy.json --kind task
-echo '{"justTarget": "<recipe>"}' > .devloop/inputs/<UUID>.json
-just tasks_check
+python3 scripts/spec/tasks new task <slug> --area <area> > .tasks/items/<slug>.zt
+just spec_tasks_check
 ```
 
-- **Why:** an item written as data can be *checked* for completion; prose
-  can only be asserted. The recipe that grades the work is named in the
-  inputs file, never in requirement text, so the same requirement cannot be
-  quietly re-pointed at an easier check.
-- **Enforced by:** `just tasks_check` refuses a post-cutoff item without a
-  `devloop` record, and refuses a tracked file no `codePaths` entry covers.
-- **Never:** invent a UUID, pick "the next number" for a human key, or use
-  `myque new` for new work. Human keys such as `B92` are display aliases;
-  every persistent reference is the UUID.
-- **Read:** [Carrying a work item](06-work-item-lifecycle.md) walks the
-  commands; [`.devloop/examples/`](../../.devloop/examples/) is a complete
-  worked spec.
+The kind is `task`, `bug` or `milestone`. The area names a file under
+`specs/`. The item lists `owns` path globs, requirements, and acceptances.
+Each acceptance is `h.observed "<just target>"` or `h.human "<id>" "<question>"`.
 
-### ③ Planning PR first
+- **Why:** an item written as data can be judged complete. Prose can only be
+  asserted.
+- **Never:** invent or reuse a UUID. The UUID never changes. The slug is the
+  file name.
+- **Read:** [Carrying a work item](06-work-item-lifecycle.md) walks every
+  field.
 
-Open a PR that contains only the item and its inputs file, and merge it
-before opening an implementation PR.
+### 3. Planning PR first
 
-- **Why:** at `eligible` and `complete`, devloop approval refuses unless the
-  inputs file, the recipe it names, every recipe in that recipe's dependency
-  chain, the scripts they run, and the `scripts/lib` modules those import are
-  byte-for-byte what `origin/main` carries. The exam has to be on `main`
-  before the answer is graded; an implementation branch may add checkers for
-  *other* work but cannot rewrite the one that decides its own acceptance.
-  Combining item and implementation in one PR would defeat that.
-- **Enforced by:** `scripts/check/devloop-approval.py`, run inside
-  `just devloop start | eligible | complete`.
-- **Scope:** one landed item can cover several implementation PRs within its
-  scope; a new planning item is not required for every PR.
+Open a PR that carries the item with `intent = #planned` and its exam: the
+recipe and checker that the acceptances name. Merge it before the
+implementation PR.
 
-### ④ Start and implement
+- **Why:** the exam must be on `main` before the answer is graded. An
+  implementation PR that touches the grader set of any bound target fails V3.
+- **Enforced by:** V1 (one class per PR), V2, V3. A change to an existing
+  grader also needs a V4 approval.
+- **Scope:** one item may carry several implementation PRs inside its `owns`.
 
-```sh
-just devloop start <UUID> --policy .devloop/policy.json
-```
+### 4. Set #active and implement
 
-Then route the change through [`docs/task-to-file.md`](../task-to-file.md)
-— read the named module root, not a grep across the tree — and edit the
-owning source. Two things catch most newcomers:
+Change only `intent = #active` in the item. The judge classes an intent-only
+item change as implementation, so it rides in the implementation PR.
 
-- **Generated outputs are not sources.** Anything beginning with
-  `@generated`, `boot-contracts/src/generated/`, derived manifests, and the
-  system-image closures are outputs of a `schema.zt`, a system spec, or a
-  generator. Change the source and rerun the generator
-  ([AGENTS.md](../../AGENTS.md#generated-code-rule) lists them).
-- **Closures name their inputs; the checkout supplies the digests.** A closure
-  source under `contracts/system-image-closure/v3/closures/` names each input
-  tree by path only. Every seL4 gate resolves it in your checkout, so an edit to
-  root or component code needs no regeneration. Rerun
+Route the change through [`docs/task-to-file.md`](../task-to-file.md). Read
+the named module root, not a grep across the tree. Two rules catch most
+newcomers:
+
+- **Generated outputs are not sources.** Change the `schema.zt`, system spec
+  or generator source, and rerun the generator.
+  [AGENTS.md](../../AGENTS.md#generated-code-rule) lists them.
+- **Closures name their inputs. The checkout supplies the digests.** An edit
+  to root or component code needs no closure regeneration. Rerun
   `python3 scripts/generate/generate-system-image-closures.py` only when a
-  closure's input set changes, then run the narrowest gate that exercises the
-  change. [Your first change](04-first-change.md) shows what a resolved build
-  records.
+  closure's input set changes. [Your first change](04-first-change.md) shows
+  what a resolved build records.
 
-Finish with the repository-wide checks that apply: `just fmt_check_all` and
-`just lint_all` for Rust, `just docs_check` and `just typos` for
-documentation, `just tasks_check` if `.tasks/` changed.
+Run the narrowest gate that exercises the change. `just spec_record <target>`
+runs it and writes the record CI would write. Finish with `just fmt_check_all`
+and `just lint_all` for Rust, `just docs_check` and `just typos` for
+documentation, and `just spec_check --base origin/main` for the whole branch.
 
-### ⑤ Implementation PR
+### 5. Implementation PR
 
 Use the [change](../../.github/PULL_REQUEST_TEMPLATE/change.md) or
 [system-change](../../.github/PULL_REQUEST_TEMPLATE/system-change.md)
 template. Its `Verification` table wants exact commands, the observed result,
-and an evidence class: *direct* (you ran it), *inherited* (a prior recorded
-run), or *inference* (not observed). Name the implemented item by its canonical
-UUID in the description.
+and an evidence class: *direct*, *inherited* or *inference*. Name the item by
+its slug and UUID.
 
-- **Never** write `Closes #123` / `Fixes #123` / `Resolves #123` to complete
-  work: GitHub does not own completion here, and the auto-close would lie.
-- **Why no Issue link:** work items are not projected into GitHub Issues
-  ([decision](../decisions/no-github-issue-projection.md)). `.tasks/` is the
-  only work-item state, so there is no second copy to keep in step.
+- **Enforced by:** the `Spec judge` workflow runs V1 to V10 on every push and
+  after each review. Every implementation path must sit under the `owns` of an
+  item that is on base and `#active` on head (V2).
+- **Approvals:** a grader change, an area invariant change, an existing
+  contract schema change, or a change to `scripts/spec/`, `HUMAN_OWNERS`,
+  `AGENT_ACCOUNTS` or `specs/allowed_signers` needs one approval on the head.
+  The approver is in `HUMAN_OWNERS` and is not the author (V4).
+- **Never** write `Closes #123` or `Fixes #123`. GitHub does not own
+  completion here ([decision](../decisions/no-github-issue-projection.md)).
 
-### ⑥ Record evidence, then complete
+### 6. Evidence workflow
 
-Merging landed the diff. The item closes only when its acceptances hold
-against evidence recorded on the exact inputs that were tested:
+After each push to `main`, the `Evidence` workflow runs every claimed target.
+It writes each record to the `evidence` branch, keyed by the target's closure
+digest and signed by `ci`. It then signs a done witness for each `#active`
+item whose mandatory acceptances are all enforced. Nobody records evidence on
+a PR branch.
 
-```sh
-just devloop gate  <UUID> <ACCEPTANCE> --policy .devloop/policy.json --inputs .devloop/inputs/<UUID>.json --target <target> --image <image>
-just devloop human <UUID> <ACCEPTANCE> ... --observations <observed>.json --observer <who>   # operator-only obligations
-just devloop complete <UUID> --policy .devloop/policy.json --inputs .devloop/inputs/<UUID>.json --target <target> --image <image>
-```
+- **Why:** a record keyed by closure digest stays valid until an input of that
+  target changes. No re-record is needed for an unrelated change.
+- **Human acceptances:** a person answers each `h.human` question with
+  `scripts/spec/human`. An answer binds to the item's requirements digest, so
+  rewording the question asks it again.
+- **Look:** `just spec_tasks_status` shows which acceptances are still
+  claimed, failing or advisory.
 
-- **Why:** evidence is bound to the requirements digest, code closure, policy,
-  inputs, target, image, and run epoch. Change any of them and it no longer
-  applies; the newest entry for an obligation decides it, so a later failing
-  run is never rescued by an earlier pass. A human obligation (a physical
-  Framework boot, for example) stays pending until an operator records a
-  real observation — nothing synthesises one.
-- **Enforced by:** `just devloop complete` refuses while any mandatory
-  obligation is unmet. `myque close` is the pre-cutoff path and bypasses this
-  by design; never use it on a spec-driven item.
-- You record the gate evidence on the branch; `complete` runs on `main`.
-  After the implementation PR merges, `myque-closeout.yml` runs
-  `just devloop complete` there for every item devloop accepts and opens a
-  `.tasks`-only PR with the transition; merge it and the projector closes
-  the Issue. Details in
-  [Carrying a work item](06-work-item-lifecycle.md#closeout-prs).
+### 7. Closeout bot PR
 
-### ⑦ Retire (optional, later)
-
-A done item may leave the live tree for a minimal
-`.tasks/terminal/<UUID>.json` record through a maintenance PR, after its
-final bytes are retained in Git. Retirement is storage housekeeping, proves
-nothing, and is covered in [Carrying a work item](06-work-item-lifecycle.md#retirement-maintenance-prs).
+The closeout bot opens one PR per witnessed or cancelled item. The PR moves the
+file from `.tasks/items/` to `.tasks/terminal/` byte for byte. V6 accepts the
+move only with a signed done witness or intent `#cancelled`. Nobody runs a
+"complete" command.
 
 ## Which path am I on?
 
 ```text
-Is the change a genuine typo, broken link, format-only edit, or mechanical
-maintenance with no behavioural or project-state consequence?
-├─ yes → TRIVIAL: no item; open the PR; applicable checks still run.
-│        Judge semantics, not line count. When unsure, it is not trivial.
-└─ no
-   ├─ Is there an open item on main whose scope already covers it?
-   │  └─ yes → EXISTING: skip ② ③; `just devloop start` (or `myque start`
-   │            for a pre-cutoff item), then ④ ⑤ ⑥ under that UUID.
+Does the PR change only process paths: docs/, .agents/, .github/,
+scripts/spec/, a top-level *.md file?
+├─ yes → PROCESS: no item. A change to scripts/spec/ needs a V4 approval.
+└─ no: every implementation path needs an #active item whose owns covers it (V2).
+   ├─ Does an open item on main already own the paths?
+   │  └─ yes → EXISTING: skip 2 and 3. Set #active if it is #planned, then 4 to 7.
    ├─ Is it a defect?
-   │  └─ yes → BUG: ② with `--kind bug --tag backlog`, then ③ ④ ⑤ ⑥.
-   │            It joins the backlog, so it blocks new milestone work until
-   │            resolved, deferred, or blocked — which is the point.
-   └─ otherwise → FEATURE / REFACTOR / DOCS: the full ① – ⑥.
+   │  └─ yes → BUG: `tasks new bug`, then 3 to 7. It blocks milestone
+   │            work until it is closed, blocked, deferred or cancelled.
+   └─ otherwise → FEATURE or REFACTOR: the full 1 to 7.
 ```
 
 Two cases people misfile:
 
-- *"Substantial documentation"* is not trivial. A page that states a
-  procedure or a limitation is project state; it takes an item.
-- *A checker that needs to change* is a planning change, not an
-  implementation detail, because it is the exam. Land it in ③.
+- *A checker that grades a bound target* is part of the exam. Change it in a
+  planning PR, with a V4 approval.
+- *A promise that must change* is frozen in its area file (V10). A new item
+  with `supersedes` replaces it.
 
 ## Working with an agent
 
-Much of this repository's day-to-day work is done by telling a coding agent
-what you want and letting it follow the conventions above.
-[AGENTS.md](../../AGENTS.md) is the compressed, agent-facing statement of
-the same rules plus the code map; it is written for density, not for a
-first read. You do not need to read it to contribute — this page and
-[CONTRIBUTING.md](../../CONTRIBUTING.md) are the human versions — but it is
-worth knowing what an agent is doing when it goes quiet after "add X":
+An agent follows the same timeline. [AGENTS.md](../../AGENTS.md) states the
+rules for agents in compressed form. You do not need to read it to
+contribute: this page and [CONTRIBUTING.md](../../CONTRIBUTING.md) are the
+versions for people. After "add X", an agent does the following:
 
-1. It runs `just tasks_next` and reads the `backlog`-tagged items (①).
-2. It looks for an existing item covering the request; failing that it
-   drafts a `dev-spec/v1` payload and admits it (②), and proposes a planning
-   PR before writing code (③).
-3. It routes through `docs/task-to-file.md`, edits the owning source,
-   regenerates closures, and runs the narrowest gate (④).
-4. It fills the PR template with a verification table and separates what it
-   observed from what it inferred (⑤).
+1. It runs `just spec_tasks_status` and checks for open bugs (1).
+2. It looks for an open item whose `owns` covers the request. Otherwise it
+   writes one and proposes a planning PR before code (2, 3).
+3. It sets `#active`, routes through `docs/task-to-file.md`, edits the owning
+   source, and runs the narrowest gate (4).
+4. It fills the PR template and separates what it observed from what it
+   inferred (5).
 
-Review an agent's work against that list, not against the diff alone. The
-usual failure modes are the same as a person's: editing a generated file,
-skipping the planning PR "because it is small", presenting a green unrelated
-gate as evidence, or calling a merged PR done. The checks catch most of
-these; the ones they do not catch are ⑤'s evidence classes and ⑥'s judgement
-that an exit condition was actually observed.
+On GitHub an agent pushes with a person's account. That person is the author
+and cannot give the V4 approval on that PR. Review an agent's work against the
+list above, not against the diff alone. The judge catches a skipped planning
+PR or a self-graded exam. It does not judge the PR's evidence classes, or
+whether a `#human` question was asked of a person.
 
 ## Where the details live
 
 | Question | Page |
 |---|---|
-| The rules that bind a PR, exactly | [CONTRIBUTING.md](../../CONTRIBUTING.md) |
-| Every `devloop` and `myque` command, in order | [Carrying a work item](06-work-item-lifecycle.md) |
+| The rules that bind a PR, exactly | [CONTRIBUTING.md](../../CONTRIBUTING.md), [devloop v1.5 decision](../decisions/work-item-devloop.md) |
+| Every field and command of a work item | [Carrying a work item](06-work-item-lifecycle.md) |
 | Which file owns my change | [Task-to-file index](../task-to-file.md), [Recipes](11-recipes.md) |
 | What a gate is and how to add one | [Add a gate](07-add-a-gate.md) |
-| Why the requirements body is data | [Spec-driven work-item bodies](../decisions/spec-driven-work-item-bodies.md) |
-| Why the commit, item, and docs own different records | [Development record ownership](../decisions/development-record-ownership.md) |
+| Why the commit, item and docs own different records | [Development record ownership](../decisions/development-record-ownership.md) |
 | A term I do not recognise | [Glossary](../glossary.md) |
