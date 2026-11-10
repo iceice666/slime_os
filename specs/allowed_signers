@@ -1,0 +1,5 @@
+# Principals allowed to sign evidence records (`ssh-keygen -Y sign -n slime-spec`).
+# One line per key: <principal> namespaces="slime-spec" <key type> <key>.
+# A principal is a GitHub login for a person, or `ci` for the evidence workflow.
+iceice666 namespaces="slime-spec" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBv4wUd0xFUa2wRlXbB2f2IntFxTGsxwNAhGQIyxfso8
+ci namespaces="slime-spec" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICwHcFm7hxRRl2fJiDHr+vxv5JBRvgnLUOjUW7ut8PAI

@@ -294,6 +294,7 @@
     "verification/zenoh-xcheck/src",
     "sel4",
     "scripts/spec",
+    "specs",
     "HUMAN_OWNERS",
     "AGENT_ACCOUNTS",
     "just",

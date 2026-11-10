@@ -1,0 +1,20 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+-- The rpiboot boot gate this area promised (ab3818a, 698e0a6) left main with the
+-- rollback to 76766fd. Its requirements return with the rpiboot pilot item of the
+-- v1.5 devloop (docs/decisions/work-item-devloop.md), not as area requirements.
+area :: s.Area = (h.area "rpi5-board" "Raspberry Pi 5 board boot with UART10 evidence" {
+    "sel4/config/bcm2712-rpi5.cmake";
+    "scripts/build/build-rpi5-media.py";
+  } {;
+  }) with {
+    nonGoals = {
+      "Replaying the AArch64 QEMU corpus on the board (P4, legacy 01a02f59-a800-78b6-9398-6b22bfbc6fdd).";
+      "Any device beyond UART10 and the generic timer.";
+      "Booting from an SD card or other removable medium.";
+      "The verified kernel configuration.";
+    };
+  };
+
+area

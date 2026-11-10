@@ -1,0 +1,7 @@
+# Zutai toolchain pin. Like rustc it is record metadata, not part of any
+# closure digest: bumping Zutai does not stale evidence. `scripts/spec/check`
+# refuses a checkout where this rev, the deps/zutai submodule gitlink and the
+# flake.nix `zutai` input disagree (decision D1; the flake input goes away
+# with the GitLab move, when the submodule becomes the only truth).
+url = "https://github.com/iceice666/zutai.git"
+rev = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"

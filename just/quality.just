@@ -132,6 +132,34 @@ tasks_check:
 spec_e2e:
     python3 scripts/spec/e2e
 
+# task/v2 items and the frozen area files: format, links, schema copies, and
+# with BASE the V5, V7 and V10 judgements against that commit. The V1
+# `tasks_check` still judges the store until cutover.
+[group('quality')]
+spec_tasks_check *ARGS:
+    python3 scripts/spec/tasks check {{ARGS}}
+
+# What the evidence branch says about every area requirement (enforced,
+# failing, claimed, advisory, superseded); `--local` also reads build/observations/.
+[group('quality')]
+spec_status *ARGS:
+    python3 scripts/spec/status {{ARGS}}
+
+# Each task/v2 item's state from the evidence branch; `--claimed`, `--weekly`.
+[group('quality')]
+spec_tasks_status *ARGS:
+    python3 scripts/spec/tasks status {{ARGS}}
+
+# Run one target under the record wrapper and write build/observations/<target>.zt.
+[group('quality')]
+spec_record TARGET *ARGS:
+    python3 scripts/spec/record {{TARGET}} {{ARGS}}
+
+# Closure digest of every bound target, with its composition under `--explain`.
+[group('quality')]
+spec_closure *ARGS:
+    python3 scripts/spec/closure --bound {{ARGS}}
+
 # Work items are not projected into GitHub Issues: refuses while the projection
 # workflow exists, policy names it, a workflow or script runs `myque-gh apply`,
 # or contributor guidance still asks for `myque-gh pr link`.

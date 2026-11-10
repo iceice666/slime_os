@@ -1,0 +1,88 @@
+--| Evidence records (observation/v1). Never committed to `main`.
+--|
+--| A machine record is what one `just` target observed under one closure
+--| digest. Locally it is `build/observations/<target>.zt`; on the
+--| `evidence` branch it is `<target>/<closureDigest>.zt`.
+--|
+--| A human record is one person's signed answer to one human acceptance.
+--| On the `evidence` branch it is
+--| `human/<owner>/<acceptance>/<requirementsDigest>.zt`, where `<owner>`
+--| is an area requirement id or a work-item id.
+--|
+--| A done witness says that every mandatory acceptance of one work item
+--| was enforced at one `main` commit. On the `evidence` branch it is
+--| `done/<item id>/<itemDigest>.zt`. Only the evidence workflow writes it,
+--| and the closeout judge (V6) trusts it without recomputing it.
+--|
+--| Every record may carry an `ssh-keygen -Y sign -n slime-spec` signature
+--| in `<record>.sig` beside it. Each record file is
+--| `o ::= import "./schema.zt"; r :: o.<Kind> = {...}; r`, so Zutai
+--| type-checks it against this file and no reader keeps a second copy of
+--| the shape.
+
+--| One counted observation: `casesObserved = 12`.
+Count :: type { key : Text; value : Int; };
+
+--| One boolean observation other than `passed`: `tasksCheckPassed = true`.
+Flag :: type { key : Text; value : Bool; };
+
+--| Toolchain identity is metadata. It is not part of `closureDigest`.
+Tool :: type { name : Text; version : Text; };
+
+--| `closureDigest` is the digest `scripts/spec` computed for `target` at
+--| the commit the record was taken from. `passed` is the recipe's exit
+--| status; the checker cannot vouch for itself. `runner` names who ran it
+--| (`ci`, or an operator principal for hardware targets), followed by
+--| ` dirty` when the tree differed from its commit.
+Record :: type {
+  schema : Text;
+  target : Text;
+  closureDigest : Text;
+  passed : Bool;
+  exitCode : Int;
+  counts : List Count;
+  flags : List Flag;
+  observedAt : Text;
+  runner : Text;
+  toolchain : List Tool;
+};
+
+--| `requirementsDigest` binds the answer to the acceptance's wording.
+--| `area` is the area id, or `""` for a work item.
+HumanRecord :: type {
+  schema : Text;
+  area : Text;
+  requirement : Text;
+  acceptance : Text;
+  requirementsDigest : Text;
+  value : Bool;
+  note : Text;
+  signer : Text;
+  observedAt : Text;
+};
+
+--| One target of a done item, as the witness saw it. `negativeControlsRefused`
+--| is the record's count, or -1 when the record carries none; R4 (V8)
+--| compares later records against it.
+WitnessTarget :: type {
+  target : Text;
+  closureDigest : Text;
+  negativeControlsRefused : Int;
+};
+
+--| `itemDigest` is the item's requirements digest at `mainSha`. A witness
+--| stays valid after `main` moves on: V6 binds it to the item's bytes,
+--| not to the commit.
+Witness :: type {
+  schema : Text;
+  item : Text;
+  itemDigest : Text;
+  mainSha : Text;
+  targets : List WitnessTarget;
+  signer : Text;
+  observedAt : Text;
+};
+
+schemaVersion :: Text = "observation/v1";
+
+{ Count =; Flag =; Tool =; Record =; HumanRecord =; WitnessTarget =; Witness =; schemaVersion =; }

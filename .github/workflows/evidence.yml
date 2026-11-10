@@ -1,0 +1,129 @@
+# After every push to main: run each claimed target, sign its record, and
+# commit it to the `evidence` branch (docs/decisions/work-item-devloop.md).
+# No commit ever lands on main from here, and no pull request is opened.
+#
+# A target is claimed when it has no record at its current closure digest
+# and an area requirement, an #active item or a terminal item binds it. A
+# #planned item's exam is never run. `plan` balances the claimed targets
+# over at most 8 shards by observed wall time (specs/targets.toml). Each
+# shard records and signs its targets; `publish` gathers them and pushes
+# once, serialised by the concurrency group, retrying once after a
+# non-fast-forward.
+name: Evidence
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      include-failing:
+        description: Also re-run targets whose record at the current digest failed
+        type: boolean
+        default: false
+
+concurrency:
+  group: evidence
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    name: Claimed targets
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - id: plan
+        run: |
+          nix develop --command python3 scripts/spec/ci --plan 8 --out "$RUNNER_TEMP/shards.json" \
+            ${{ inputs.include-failing && '--include-failing' || '' }}
+          cat "$RUNNER_TEMP/shards.json"
+          echo "shards=$(cat "$RUNNER_TEMP/shards.json")" >> "$GITHUB_OUTPUT"
+
+  record:
+    name: Record shard ${{ matrix.shard }}
+    needs: [plan]
+    if: needs.plan.outputs.shards != '[]'
+    runs-on: ubuntu-24.04-arm
+    # The signing key lives in this environment, whose deployment branch
+    # policy admits main only: a workflow edited on a branch cannot reach it.
+    environment: evidence
+    # sel4_large_image_check alone takes 131 minutes after a 10-minute setup.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      # Full history: image_attestation_check attaches notes to HEAD's ancestors.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - name: Signing key
+        env:
+          EVIDENCE_SIGNING_KEY: ${{ secrets.EVIDENCE_SIGNING_KEY }}
+        run: |
+          if [ -z "$EVIDENCE_SIGNING_KEY" ]; then echo "no signing key in this environment; records stay unsigned"; exit 0; fi
+          install -m 600 /dev/null "$RUNNER_TEMP/evidence-key"
+          printf '%s\n' "$EVIDENCE_SIGNING_KEY" > "$RUNNER_TEMP/evidence-key"
+          echo "SPEC_SIGN=--signer ci --key $RUNNER_TEMP/evidence-key" >> "$GITHUB_ENV"
+      # Produces build/sel4-prefix, which test_sel4_root and every plane expect.
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command python3 scripts/spec/ci --runner ci $SPEC_SIGN --targets ${{ matrix.targets }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: observations-${{ matrix.shard }}
+          path: build/observations/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish records
+    needs: [plan, record]
+    if: always() && needs.plan.outputs.shards != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Publishing re-derives each record's closure digest, which resolves
+      # system-image closures, so this job needs the submodules and the shell.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/slime-env
+        with:
+          build-save: 'false'
+      - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: observations-*
+          path: build/observations/
+          merge-multiple: true
+      - run: nix develop --command python3 scripts/spec/ci --publish
+      - name: Push the evidence branch
+        run: |
+          git rev-parse -q --verify refs/heads/evidence >/dev/null || { echo "nothing to push"; exit 0; }
+          for attempt in 1 2; do
+            git push origin refs/heads/evidence:refs/heads/evidence && exit 0
+            git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence
+            git update-ref -d refs/heads/evidence
+            nix develop --command python3 scripts/spec/ci --publish
+          done
+          exit 1
+      - run: nix develop --command python3 scripts/spec/status --unenforced

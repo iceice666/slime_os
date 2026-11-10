@@ -104,6 +104,11 @@ For how the planes work and how to add one, read
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
 | `just spec_e2e` | The devloop v1.5 exam: M1 to M3 on a throwaway fixture repository, judged by the base commit's judge; reports `casesObserved` and `negativeControlsRefused`. |
+| `just spec_tasks_check ARGS` | `task/v2` items and the frozen area files: format, links and schema copies; with `--base` also V5, V7 and V10 (`scripts/spec/tasks check`). |
+| `just spec_status ARGS` | Each area requirement's state from the `evidence` branch: enforced, failing, claimed, advisory or superseded. |
+| `just spec_tasks_status ARGS` | Each `task/v2` item's state from the `evidence` branch; `--claimed` lists what the Evidence workflow would run, `--weekly` the seven v1.5 metrics. |
+| `just spec_record TARGET ARGS` | Run one target under the record wrapper and write `build/observations/<target>.zt`, keyed by its closure digest. |
+| `just spec_closure ARGS` | Closure digest of every bound target; `--explain` lists its recipes, grader set, inputs, images and toolchain. |
 | `just issue_projection_retired_check` | Work items are not projected into GitHub Issues: refuses while `myque-project.yml` exists, policy names it, a workflow or script runs `myque-gh apply`, or contributor guidance asks for `myque-gh pr link`; fails until the projection retirement lands. |
 | `just closeout_checkout_check` | The tree the closeout script runs devloop in covers every `.devloop/policy.json` `codePaths` entry, and a checkout without submodules is refused; clones canonical main, so it needs the network and is not in CI. |
 | `just devloop_diagnostics_check` | Explicit end-to-end failed-gate diagnostics qualification through the pinned CLI: retained receipt/output, attribution, failure-cache reuse, truncation and capture refusals; runs `tasks_check` first. |

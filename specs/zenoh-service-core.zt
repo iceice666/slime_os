@@ -1,0 +1,440 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "zenoh-service-core" "Zenoh service core: one session served to local holders, over a link, as a component" {
+    "components/services/zenoh-service/**";
+    "components/lib/src/zenoh_service.rs";
+    "components/lib/src/zenoh_service/**";
+    "components/lib/src/zenoh_service_link*";
+    "components/lib/src/zenoh_service_server*";
+  } {
+    -- legacy 01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8 (done): Zenoh service core: one session served to local holders by their grants
+    -- A Zenoh service core does not exist, and nothing says what serving a holder means. Four rules are
+    -- undecided in code. The keys that holders may subscribe to are declared to the peer once the session
+    -- is open. A publication reaches every local holder with a subscribe grant, and goes to the peer only
+    -- if the peer declared the key. A peer's sample reaches every holder subscribed to its key and no
+    -- other. A holder that does not drain its ring never blocks another and never grows a queue. The
+    -- session cannot support this yet, because it holds one subscription of its own and does not say which
+    -- subscription matched a sample. This item judges the core on the host before any component exists.
+    (h.req "01a1b49c-acba-7098-b20d-82cc1552e1de"
+      "The core is declared with three holders, four ring slots, 12 sample bytes, three local subscriptions and five rows."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82cd11c6fbc2"
+      "The Rust test prints the size of a slot, a row, a holder and the core. Each is at most the matching overhead constant in the grants contract."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82ced4d68e17"
+      "After the session opens, the core writes subscription 1 for `k1` and subscription 2 for `k2`, and the peer takes both."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82cf40cc10d4"
+      "The host reference reproduces both declaration frames and both publication frames byte for byte."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d025b69711"
+      "A publication by `a` on `k1` before the peer declares it reaches `a` and `b` and is reported as not subscribed."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d1557ff84d"
+      "After the peer declares `k1` and `k3`, a publication by `a` on `k1` reaches `a` and `b` and is sent to the peer."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d271a61721"
+      "A publication by `b` on `k3` reaches no holder, because none subscribes to `k3`, and is sent to the peer."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d305cec639"
+      "A publication by `b` on `k1` is refused as `not-granted`, because `b` may only subscribe."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d43f0a9573"
+      "A publication by `c` on `k3` is refused as `not-granted`, because `c` has no row for `k3`."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d557bd707c"
+      "A publication by an unknown holder is refused as `unknown-holder`."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d6191b55f7"
+      "A 13-byte payload in 12-byte slots is refused as `too-large`."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d7721a98d3"
+      "A refused publication reaches no ring and writes nothing to the peer."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d8a95be4a0"
+      "The peer's sample on `k1` reaches `a` and `b`, and its sample on `k2` reaches `a` and `c`."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82d93ae8790f"
+      "A Put that the peer sends for `k3`, which no holder subscribed to, is refused as `undeclared-key`."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82da22c45bc9"
+      "While `b` never takes, six samples reach `a` in order."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82db405e6b32"
+      "`b` keeps its newest four samples and counts two lost."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82dc9b947848"
+      "`b`'s next take reports a loss of 2 once and then returns the four samples, and its ring then holds nothing and counts nothing."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82dd51f11de1"
+      "A take by an unknown holder is refused as `unknown-holder`."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82de426a8ead"
+      "Construction refuses a row that names a holder beyond the declared holders."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82df45d42391"
+      "Construction refuses the same holder and key twice, and a row with neither right."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82e00cb53a21"
+      "Construction refuses four distinct subscribe keys for three local subscriptions."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82e1b6d87cba"
+      "Construction refuses no rows, and a slot size that differs from the session's payload bound."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82e293b8aa44"
+      "The subscribers, links and stock-peer exams pass unchanged beside the new slice."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82e34708a3d7"
+      "The Rust test prints the nine constants it reads from `slime_proto::zenoh_service_grants`. Each equals the value in the grants contract's schema."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_check" { h.count "casesObserved" 59; } "The checker counts 47 lines that the Rust test printed. They are sizes, constants, frames, scenarios, publications, deliveries, counts and losses. It also counts 12 refusals by name and class. The total is 59. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acba-7098-b20d-82e4dd2dcb4c"
+      "The judge refuses a constant one more than the schema states and a transcript with the constant lines missing or the last one missing."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_check" { h.count "negativeControlsRefused" 155; } "The checker refuses exactly 155 corruptions before it runs any Rust. They are 136 transcripts, 3 declarations put through the grants contract's decoder, 5 size lines and 11 constant lines. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acbb-73af-84e2-391e9e351f90"
+      "The judge refuses a slot, row, holder or core size one byte over its overhead constant, and refuses the size lines out of order."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_check" { h.count "negativeControlsRefused" 155; } "The checker refuses exactly 155 corruptions before it runs any Rust. They are 136 transcripts, 3 declarations put through the grants contract's decoder, 5 size lines and 11 constant lines. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acbb-73af-84e2-391fafed3eac"
+      "The judge refuses exactly 155 corruptions before the real run is judged."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_check" { h.count "negativeControlsRefused" 155; } "The checker refuses exactly 155 corruptions before it runs any Rust. They are 136 transcripts, 3 declarations put through the grants contract's decoder, 5 size lines and 11 constant lines. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    (h.req "01a1b49c-acbb-73af-84e2-39207c67b12a"
+      "`just zenoh_service_check` passes as the gate adapter observes it, and it fails naming the test that did not pass until the core lands."
+      "Zenoh service core: one session served to local holders by their grants"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself.";
+      }) with { supersedes = { "01a15d1f-2e50-7f0f-9721-ce4b3b5f5aa8"; }; };
+    -- legacy 01a17dad-f158-7efd-bea7-dfdf0288432b (done): Run the Zenoh service core over a link
+    -- The Zenoh service core borrows a bare session, and a component cannot use that. A component owns a
+    -- link, and the link owns the session, one send slot, retries and keep-alives. Four rules are
+    -- undecided in code. A declaration or a publication must go through the link's single send slot. A
+    -- second call while the slot is taken must be refused, with nothing changed. This holds for the same
+    -- operation and for the other one. Local copies of a publication must reach the rings only after the
+    -- link handed the frame to the byte stream. A peer's sample must reach the holders by the subscription
+    -- that matched. A byte stream can take a frame and then reset, and the core cannot know whether the
+    -- peer received it. This item judges the core over a link on the host before any component exists.
+    (h.req "01a1b49c-ad53-701c-816c-88c155775b14"
+      "The core is declared with three holders, four ring slots, 12 sample bytes and three local subscriptions. The link holds eight notices. The core has the five grant rows of the service core."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c22fc98261"
+      "The Rust test prints the size of a slot, a row, a holder and the core. Each is at most the matching overhead constant in the grants contract."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c319af5649"
+      "The core queues subscription 1, then finds the send slot taken. It refuses a second declaration and a publication as `busy`. It counts subscription 1 as declared only after the flush. Subscription 2 follows the same way."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c4a1ff9c60"
+      "After the link flushed a frame and before `settle` ran, the core refuses a declaration and a publication as `busy`. This holds after a declaration and after a publication."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c58ca706b3"
+      "The two declarations and the two publications that the link wrote equal the frames that the host reference writes. The reference uses the same keys, sequence numbers and payloads."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c6c0063f80"
+      "Before the peer declares `k1`, a publication by `a` on `k1` reaches `a` and `b` at once. The core reports it as not subscribed and queues nothing."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c7b8bc8298"
+      "After the peer declares `k1` and `k3`, a publication by `a` on `k1` is queued and the rings of `a` and `b` stay empty. After the flush both rings hold it, and it names subscription 1."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c84aedbb9b"
+      "A keep-alive that the link queued holds the send slot while the core has nothing pending. A publication and a declaration are each refused as `busy`, and no ring changes. After the stream takes the keep-alive, a publication is queued."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88c9d2a2e31e"
+      "While a publication waits, a second publication and a declaration are each refused as `busy`. After the first publication settled, the second is queued and then settles with no local copy."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88cacd0c5909"
+      "A publication without a publish right, for a key with no row, by an unknown holder or over the sample size is refused by class. No ring changes and nothing is queued."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88cbe1161e24"
+      "A Put from the peer on `k1` reaches `a` and `b` with subscription 1. A Put on `k2` reaches `a` and `c` with subscription 2. The core routes two samples."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88cc23fcb5be"
+      "The peer sends 20 Puts on `k1` while the service drains nothing, and the link queues eight notices. After the service drains everything, the ring of `a` holds four samples and counts 16 lost."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88cd976f1659"
+      "A stream accepts a queued frame and then resets. The pump reports the reset, `settle` returns `link-closed`, and the rings of `a` and `b` stay empty. The scripted peer received the frame."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88ce8f390e8e"
+      "The recipe runs the subscribers exam, the links exam and the stock-peer exam. A change to the link that they do not accept fails the recipe. The service slice keeps its 59 cases and 155 controls."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_link_check" { h.count "casesObserved" 61; } "The checker counts 44 lines that the Rust test printed. They are sizes, frames, scenarios, publications, deliveries, counts and losses. It also counts 17 refusals by name and class. The total is 61. The count is exact, and it is reported only after the subscribers, links and stock-peer exams pass.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88cf71907181"
+      "The judge refuses 151 corruptions before it runs any Rust. They are 140 transcripts, 6 corrupted declarations and 5 size lines."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_link_check" { h.count "negativeControlsRefused" 151; } "The checker refuses exactly 151 corruptions before it runs any Rust. They are 140 transcripts, 6 corrupted declarations and 5 size lines. A declaration is corrupted in the grants record or in the limits and rows the exam prints. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    (h.req "01a1b49c-ad53-701c-816c-88d05a40ce75"
+      "`just zenoh_service_link_check` exits zero and reports its observations through the gate adapter."
+      "Run the Zenoh service core over a link"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_link_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself.";
+      }) with { supersedes = { "01a17dad-f158-7efd-bea7-dfdf0288432b"; }; };
+    -- legacy 01a19c28-f3cf-729b-bd18-d0a116e1ca91 (done): Plan the Zenoh service server half of the client protocol
+    -- The Zenoh service client adapter exists and nothing answers it. The service side of the protocol
+    -- must take a holder's request, ask the service core, and return the completion the client checks.
+    -- This item plans that server half as plain Rust in the component library, so a host test can drive
+    -- it. It adds the exam that grades the server half against bytes the judge writes itself. The exam
+    -- fails until the implementation lands.
+    (h.req "01a1b49c-ae34-74d2-baf4-ab1d30356c73"
+      "Each completion the server returns equals the bytes that `struct` writes from `completionLayout`. Each sample header in the data page equals the bytes written from `sampleHeaderLayout`. The server stamps the timestamp from the time it is given."
+      "Plan the Zenoh service server half of the client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_server_check" { h.count "casesObserved" 39; } "The checker counts 39 lines. Twenty-four are honest answers and 15 are refusals. The count is exact. It is reported only after every line matched the bytes the judge wrote. The Rust test prints what the server answered, and the judge never reads the Rust.";
+      }) with { supersedes = { "01a19c28-f3cf-729b-bd18-d0a116e1ca91"; }; };
+    (h.req "01a1b49c-ae34-74d2-baf4-ab1e50236979"
+      "A publication on a key reaches every holder with a subscribe row on it, the publisher included. A holder with no publish row on the key is denied, and so is a holder with no rows. A refused publication reaches no ring. A holder that attaches twice is denied."
+      "Plan the Zenoh service server half of the client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_server_check" { h.count "casesObserved" 39; } "The checker counts 39 lines. Twenty-four are honest answers and 15 are refusals. The count is exact. It is reported only after every line matched the bytes the judge wrote. The Rust test prints what the server answered, and the judge never reads the Rust.";
+      }) with { supersedes = { "01a19c28-f3cf-729b-bd18-d0a116e1ca91"; }; };
+    (h.req "01a1b49c-ae34-74d2-baf4-ab1fe3015eed"
+      "A full ring drops its oldest sample and says so once, before the samples that remain. A take into a buffer smaller than the next sample is refused and the sample stays. After a detach or an abort the holder has no session."
+      "Plan the Zenoh service server half of the client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_server_check" { h.count "casesObserved" 39; } "The checker counts 39 lines. Twenty-four are honest answers and 15 are refusals. The count is exact. It is reported only after every line matched the bytes the judge wrote. The Rust test prints what the server answered, and the judge never reads the Rust.";
+      }) with { supersedes = { "01a19c28-f3cf-729b-bd18-d0a116e1ca91"; }; };
+    (h.req "01a1b49c-ae34-74d2-baf4-ab208d112e7b"
+      "No completion the exam lists is one the client refuses. A failure carries its status and nothing else. A request outside the protocol is answered with the operation it names and changes nothing."
+      "Plan the Zenoh service server half of the client protocol"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_server_check" { h.count "casesObserved" 39; } "The checker counts 39 lines. Twenty-four are honest answers and 15 are refusals. The count is exact. It is reported only after every line matched the bytes the judge wrote. The Rust test prints what the server answered, and the judge never reads the Rust.";
+      }) with { supersedes = { "01a19c28-f3cf-729b-bd18-d0a116e1ca91"; }; };
+    (h.req "01a1b49c-ae34-74d2-baf4-ab21afa0707a"
+      "The exam refuses 104 inputs. Eighty-five remove or change one line of the transcript. Fifteen break a rule the client applies to a completion, and that includes a publish refusal that does not echo its row. Four corrupt the schema's layout, and the honest transcript must then be refused."
+      "Plan the Zenoh service server half of the client protocol"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_server_check" { h.count "negativeControlsRefused" 104; } "The checker refuses exactly 104 inputs. Each one changes the transcript, the client's rules or the layout, and the judge must refuse it. The unaltered transcript is accepted first.";
+      }) with { supersedes = { "01a19c28-f3cf-729b-bd18-d0a116e1ca91"; }; };
+    (h.req "01a1b49c-ae34-74d2-baf4-ab2220b92f5d"
+      "`just zenoh_service_server_check` exits zero and reports its observations through the gate adapter. It fails on `main` until the implementation lands."
+      "Plan the Zenoh service server half of the client protocol"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_server_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes only after the implementation pull request merges, because the full run needs the Rust test.";
+      }) with { supersedes = { "01a19c28-f3cf-729b-bd18-d0a116e1ca91"; }; };
+    -- legacy 01a19c28-fbe6-72f4-ae88-b6d4f0d9b2e4 (done): Plan the Zenoh service component crate and its registration
+    -- The Zenoh service has a core, a client adapter and a grants table, and the server half is planned.
+    -- No component hosts them. This item plans the crate `zenoh-service`. It reads its grants from the
+    -- root, owns the link through the network service, and runs the core's loop. It adds the exam that
+    -- requires the crate and its registration. The exam fails until the implementation lands.
+    (h.req "01a1b49c-ae43-72dc-95af-58f5a8d10fe5"
+      "The package `slime-component-zenoh-service` has the binary `zenoh-service`, the standard build script, the entry macro and a release profile stanza. A component spec record names the same binary and a test recipe."
+      "Plan the Zenoh service component crate and its registration"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_component_check" { h.count "casesObserved" 16; } "The checker counts 16 declarations that the files must hold. A pattern shows that a call appears in a file and does not show that the loop uses it. The booted arm in the composition item shows the behaviour. The count is exact.";
+      }) with { supersedes = { "01a19c28-fbe6-72f4-ae88-b6d4f0d9b2e4"; }; };
+    (h.req "01a1b49c-ae43-72dc-95af-58f61ab5f3df"
+      "The crate's `main.rs` reads the grants with `zenoh_grants_read` and decodes them with `Table::decode`. It builds the core and opens the link with `LinkOf::with_params` over `NetworkIo::attach`. It calls the server half."
+      "Plan the Zenoh service component crate and its registration"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_component_check" { h.count "casesObserved" 16; } "The checker counts 16 declarations that the files must hold. A pattern shows that a call appears in a file and does not show that the loop uses it. The booted arm in the composition item shows the behaviour. The count is exact.";
+      }) with { supersedes = { "01a19c28-fbe6-72f4-ae88-b6d4f0d9b2e4"; }; };
+    (h.req "01a1b49c-ae43-72dc-95af-58f741aaada4"
+      "`components/lib` exports `zenoh_service_server` without a feature gate, and the module holds the test `the_server_exam`."
+      "Plan the Zenoh service component crate and its registration"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_component_check" { h.count "casesObserved" 16; } "The checker counts 16 declarations that the files must hold. A pattern shows that a call appears in a file and does not show that the loop uses it. The booted arm in the composition item shows the behaviour. The count is exact.";
+      }) with { supersedes = { "01a19c28-fbe6-72f4-ae88-b6d4f0d9b2e4"; }; };
+    (h.req "01a1b49c-ae43-72dc-95af-58f8a31bf9c3"
+      "The exam refuses 16 file sets. Each removes one declaration from a synthetic file set, and the refusal must name it. An example that another pattern also matched would be accepted, and the exam would not run."
+      "Plan the Zenoh service component crate and its registration"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_component_check" { h.count "negativeControlsRefused" 16; } "The checker refuses exactly 16 file sets. Each declaration is removed in turn from a synthetic file set, and the refusal must name it. The unaltered set is accepted first.";
+      }) with { supersedes = { "01a19c28-fbe6-72f4-ae88-b6d4f0d9b2e4"; }; };
+    (h.req "01a1b49c-ae43-72dc-95af-58f9f04b8002"
+      "`just zenoh_service_component_check` exits zero and reports its observations through the gate adapter. It fails on `main` until the implementation lands."
+      "Plan the Zenoh service component crate and its registration"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_component_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes only after the implementation pull request merges, because the full run reads the crate.";
+      }) with { supersedes = { "01a19c28-fbe6-72f4-ae88-b6d4f0d9b2e4"; }; };
+    -- legacy 01a19c29-056e-79a2-81a5-7d833c275b40 (done): Plan the Zenoh service composition and its booted exchange
+    -- No composition runs the Zenoh service, and the demo nodes each run their own session. This item
+    -- plans the composition `sel4-zenoh-service`. It holds the service, its holders and the grants between
+    -- them, derived from a system spec. The arm that boots it under QEMU and its judge land in this
+    -- planning change. The exam fails until the composition lands.
+    (h.req "01a1b49c-ae50-71fd-a429-4b462d73b4ad"
+      "A system spec `sel4-zenoh-service` declares an instance `zenoh-service` with its executable, a network application row for it, a grants list and the grants object. The manifest derived from it holds the same. One entry of the composition inventory names the composition and the owning gate `zenoh_service_booted_check`, and a test-run record names its closure."
+      "Plan the Zenoh service composition and its booted exchange"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_booted_check" { h.count "casesObserved" 19; } "The checker counts 19 cases. 18 are declarations that the files must hold, and one is the booted run. The count is exact. Only the booted run shows the holders exchanging through the service.";
+      }) with { supersedes = { "01a19c29-056e-79a2-81a5-7d833c275b40"; }; };
+    (h.req "01a1b49c-ae50-71fd-a429-4b473b2bf634"
+      "`RELEASE_INPUTS` lists `scripts/lib/zenoh_grants_table.py` and the directory `contracts/zenoh-service-grants-table/v1`. An edit to either changes a closure identity, so a generation that carries grants cannot change without its closure changing."
+      "Plan the Zenoh service composition and its booted exchange"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_booted_check" { h.count "casesObserved" 19; } "The checker counts 19 cases. 18 are declarations that the files must hold, and one is the booted run. The count is exact. Only the booted run shows the holders exchanging through the service.";
+      }) with { supersedes = { "01a19c29-056e-79a2-81a5-7d833c275b40"; }; };
+    (h.req "01a1b49c-ae50-71fd-a429-4b4852f0e576"
+      "`check-sel4-io-network-plane.py` offers the arm `zenoh-service` and imports the judge `zenoh_service_arm`. The marker chains require a holder to attach and the holders to exchange samples. They require a denial of class `not-granted` with `refused=1` for a key a holder lacks. The judge requires every publication to reach as many holders as it says."
+      "Plan the Zenoh service composition and its booted exchange"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_booted_check" { h.count "casesObserved" 19; } "The checker counts 19 cases. 18 are declarations that the files must hold, and one is the booted run. The count is exact. Only the booted run shows the holders exchanging through the service.";
+      }) with { supersedes = { "01a19c29-056e-79a2-81a5-7d833c275b40"; }; };
+    (h.req "01a1b49c-ae50-71fd-a429-4b4935c6f2e6"
+      "The arm boots the image of the composition under QEMU, and its marker chains match in order with no failure marker. The test-run record bounds the run by a timeout."
+      "Plan the Zenoh service composition and its booted exchange"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_booted_check" { h.count "casesObserved" 19; } "The checker counts 19 cases. 18 are declarations that the files must hold, and one is the booted run. The count is exact. Only the booted run shows the holders exchanging through the service.";
+      }) with { supersedes = { "01a19c29-056e-79a2-81a5-7d833c275b40"; }; };
+    (h.req "01a1b49c-ae50-71fd-a429-4b4adfe35cab"
+      "The exam refuses 63 inputs. 18 remove one declaration from a synthetic file set, and the refusal must name it. The other 45 mutate an honest transcript of the service. The judge must refuse each."
+      "Plan the Zenoh service composition and its booted exchange"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_booted_check" { h.count "negativeControlsRefused" 63; } "The checker refuses exactly 63 inputs. Each declaration is removed in turn from a synthetic file set, and the refusal must name it. The honest transcript is accepted first, and then each mutation of it is refused. The marker chains are held to the shared controls of the gate checker, which the pin of 261 markers covers.";
+      }) with { supersedes = { "01a19c29-056e-79a2-81a5-7d833c275b40"; }; };
+    (h.req "01a1b49c-ae50-71fd-a429-4b4be578466d"
+      "`just zenoh_service_booted_check` exits zero and reports its observations through the gate adapter. It fails on `main` until the implementation lands."
+      "Plan the Zenoh service composition and its booted exchange"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_booted_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes only after the implementation pull request merges and someone runs it under QEMU.";
+      }) with { supersedes = { "01a19c29-056e-79a2-81a5-7d833c275b40"; }; };
+  }) with {
+    nonGoals = {
+      "The component that wraps the core, the client interface, the path of the grants from the system spec to the service, and a booted composition. A later item owns them, and it cannot be graded until this one lands.";
+      "A holder that names a topic and a type. Lazy declaration on the first subscribe. Reliable delivery with credits. A per-row option to exclude a holder's own publications. The decision record lists each as not taken.";
+      "More than one peer, discovery, queryables, wildcard keys, and anything that the Profile 0 decoder refuses today.";
+      "Any product change in the planning PR. The core, the event change and the Rust test module belong to the implementation.";
+      "The client protocol and the client library in `components/lib`. The path of the grants from the system spec to the service. The component and a booted composition. Later items own them.";
+      "Removing or changing the session-based core and its exam. They stay as merged.";
+      "An acknowledgement from the peer. Profile 0 has none, so the core can know that the link took the bytes and no more.";
+      "A bound on the notice queue other than the one the exam observes. The exam observes eight notices and records what a burst does to them.";
+      "Any product change in the planning PR. The Rust modules and the link change belong to the implementation.";
+      "A check that the implementation's test drives the server. The test prints the transcript, and the judge reads what it prints. A test that printed the 39 expected lines without calling the server would pass. The implementation pull request is reviewed for that, and a checker-owned harness would close it.";
+      "The server half. It is a module in `components/lib` that the implementation pull request adds with the component and the reader.";
+      "The IO0 ring and the loans. The component owns them. The server half takes request bytes and returns completion bytes and the data page.";
+      "The clock. The server half takes the time as an argument, and the exam advances it by one for each publication.";
+      "What the component does when a holder faults or never detaches. The exam grades detach and abort as the protocol states them.";
+      "A holder with more than two rows or a ring with more than two slots. The exam uses two holders with rows, one holder without, and a ring of two samples.";
+      "The crate. The implementation pull request adds it with the server half and the grants reader.";
+      "The holders' endpoints, the composition and the booted run. The composition item owns them.";
+      "The stack size and the memory of the core and the link at real sizes. Nobody has computed them. The implementation states them in the component spec, and the exam does not check the values.";
+      "The component's reaction to a holder that faults. The exam shows that the crate exists and does not show what its loop does.";
+      "The composition and the generated outputs. The implementation pull request adds them.";
+      "A boot of the arm. No image exists for it, and the marker chains have never matched a real transcript. The implementation pull request is the first to boot it and may need to tune the chains in a separate planning change.";
+      "The choice of holders. The exam requires the service instance, the grants object and the arm's markers. It does not name the holders.";
+      "A stock peer or an external network. The composition uses the network service's loopback backend.";
+      "A CI job for the booted run. The owner decides that after the run has a measured duration.";
+      "The closure sources. The implementation pull request adds the two closure inputs and regenerates every closure source in a derived commit, because it changes the closure input set.";
+    };
+  };
+
+area

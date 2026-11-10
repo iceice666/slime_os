@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Compute each area requirement's state from the evidence branch.
+
+    scripts/spec/status [--local] [--json] [--unenforced] [--claimed] [--area ID]
+
+Area requirements are frozen promises (V10); items are reported by
+`scripts/spec/tasks status`. States:
+
+  enforced   a passing record exists at the target's current closure digest
+             (human: a signed yes), and every predicate holds
+  failing    a record exists and failed, a predicate does not hold, or a
+             person signed no
+  claimed    bound to a target, no record at the current digest
+  advisory   no exam decides it yet: the requirement is planned, or the
+             human gate has no verified record
+
+A requirement is enforced when every acceptance is. A requirement an
+item supersedes is listed as `superseded` and never claimed.
+`--local` also reads build/observations/ (records this machine ran that
+CI has not published). `--claimed` prints the targets CI should run.
+`--unenforced` lists the backlog. `--json` is the reader interface
+(docs/decisions/work-item-devloop.md).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+ORDER = {"failing": 0, "claimed": 1, "advisory": 2, "enforced": 3, "superseded": 4}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--local", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--unenforced", action="store_true")
+    parser.add_argument("--claimed", action="store_true")
+    parser.add_argument("--area")
+    args = parser.parse_args()
+
+    evidence = lib.Evidence(local=args.local)
+    areas = [a for a in lib.load_areas() if not args.area or a.id == args.area]
+    gone = lib.superseded(lib.load_items())
+    report = []
+    claimed_targets: set[str] = set()
+    for area in areas:
+        rows = []
+        for requirement in area.requirements:
+            acceptances = []
+            for tag, payload in lib.area_acceptances(requirement):
+                if requirement["id"] in gone:
+                    state, detail = "superseded", "an item supersedes this requirement"
+                elif requirement["planned"]:
+                    state, detail = "advisory", f"planned: {requirement['note']}"
+                else:
+                    state, detail = lib.area_acceptance_state(tag, payload, requirement, evidence)
+                if state == "claimed" and tag == "observed":
+                    claimed_targets.add(payload["justTarget"])
+                acceptances.append({
+                    "id": payload["id"],
+                    "kind": tag,
+                    "target": payload.get("justTarget", ""),
+                    "state": state,
+                    "reason": detail,
+                })
+            if requirement["planned"] and not acceptances:
+                acceptances.append({"id": "", "kind": "none", "target": "", "state": "advisory", "reason": f"planned: {requirement['note']}"})
+            worst = min((a["state"] for a in acceptances), key=ORDER.get, default="advisory")
+            rows.append({
+                "id": requirement["id"],
+                "statement": requirement["statement"],
+                "planned": requirement["planned"],
+                "depends": requirement["depends"],
+                "supersedes": requirement["supersedes"],
+                "state": worst,
+                "acceptances": acceptances,
+            })
+        report.append({"id": area.id, "title": area.value["title"], "requirements": rows})
+
+    if args.claimed:
+        for target in sorted(claimed_targets):
+            print(target)
+        return 0
+    if args.json:
+        json.dump({"schema": "spec-status/v1", "evidenceRef": evidence.ref, "areas": report}, sys.stdout, indent=1, sort_keys=True)
+        print()
+        return 0
+
+    for area in report:
+        shown = [r for r in area["requirements"] if not args.unenforced or r["state"] != "enforced"]
+        if not shown:
+            continue
+        print(f"{area['id']}: {area['title']}")
+        for row in shown:
+            print(f"  {row['state']:<9} {row['id']}  {row['statement'][:88]}")
+            for acc in row["acceptances"]:
+                if acc["state"] != "enforced" or not args.unenforced:
+                    where = f" {acc['target']}" if acc["target"] else ""
+                    print(f"             {acc['state']:<9} {acc['id']}{where}: {acc['reason']}")
+    total = sum(len(a["requirements"]) for a in report)
+    enforced = sum(1 for a in report for r in a["requirements"] if r["state"] == "enforced")
+    print(f"evidence: {evidence.ref or 'none'}{' + local' if args.local else ''}; {enforced}/{total} requirement(s) enforced")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

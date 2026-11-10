@@ -1,0 +1,408 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+area :: s.Area = (h.area "zenoh-service-grants" "Zenoh service grants and limits: table, builder, root reader" {
+    "components/proto/src/zenoh_service_grants*.rs";
+    "components/proto/src/zenoh_service_limits*.rs";
+    "contracts/zenoh-service-grants/**";
+    "contracts/zenoh-service-grants-table/**";
+    "contracts/zenoh-service-limits/**";
+    "slime-root/src/zenoh_grants*.rs";
+  } {
+    -- legacy 01a15d1f-26d2-7653-924b-a3f113a718e6 (done): Zenoh service grants: what each holder may publish and subscribe to
+    -- The Zenoh service owns one link and serves several local holders, so it needs an authority model of
+    -- its own. The fabric grants a route by a participant grant, and `network-application/v3` grants a
+    -- destination by a row. Neither names a Zenoh key. A key string in a request must grant nothing, so a
+    -- record must say which holder may publish or subscribe to which key. `contracts/zenoh-service-
+    -- grants/v1` is that record, and no exam has exercised it yet.
+    (h.req "01a1b49c-acad-760a-9132-55881bc7d324"
+      "The contract takes the honest record of three holders, four 12-byte ring slots, three local subscriptions and five rows."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-55890d00fd62"
+      "The contract takes a stack of exactly what the declaration needs and refuses a stack one byte short."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-558adbc1502b"
+      "The contract holds each count and size on both sides of its bound. It takes the record at each upper bound and refuses the record one over."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-558b0cfa8f46"
+      "Each of four contracts with an exclusive upper bound refuses the record at that bound, which the real contract takes."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "controls-refused" "zenoh_grants_check" { h.count "negativeControlsRefused" 77; } "The checker refuses exactly 77 corruptions before it checks anything generated. They are 42 records through the decoder, 10 weakened contracts and 4 contracts with an exclusive upper bound. They also include 2 drifted constants. The last 19 are binding files that differ from the rendered text by one edit. Four of those are read from disk as bytes. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-558c8818c167"
+      "The contract refuses a key with a wildcard, a query mark, a fragment mark, an empty segment or a non-ASCII character."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-558d6373808a"
+      "The contract refuses a holder name that is empty, over 32 characters, in capitals or outside the allowed characters."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-558e87207b6a"
+      "The contract refuses a row with neither right and two rows for the same holder and key."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-558fd06811f3"
+      "The contract refuses more holders named than declared and more subscribe keys than local subscriptions."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-559034ca73da"
+      "The contract refuses an unknown field at the top, in the limits and in a row."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-5591eb2a80bd"
+      "The nine constants in the schema equal the Rust constants that the implementation generates."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "cases-observed" "zenoh_grants_check" { h.count "casesObserved" 68; } "The checker counts 17 declarations that the contract takes, 42 that it refuses and 9 constants, 68 in all. The count is exact, because a bound that is not held changes it. It is reported only after the generated constants equal the schema's.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-5592958fc647"
+      "Each of ten weakened contracts takes the record that its removed check refuses."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "controls-refused" "zenoh_grants_check" { h.count "negativeControlsRefused" 77; } "The checker refuses exactly 77 corruptions before it checks anything generated. They are 42 records through the decoder, 10 weakened contracts and 4 contracts with an exclusive upper bound. They also include 2 drifted constants. The last 19 are binding files that differ from the rendered text by one edit. Four of those are read from disk as bytes. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-559311efbdf9"
+      "A weakened contract whose removed text does not appear exactly once in the schema is itself refused."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "controls-refused" "zenoh_grants_check" { h.count "negativeControlsRefused" 77; } "The checker refuses exactly 77 corruptions before it checks anything generated. They are 42 records through the decoder, 10 weakened contracts and 4 contracts with an exclusive upper bound. They also include 2 drifted constants. The last 19 are binding files that differ from the rendered text by one edit. Four of those are read from disk as bytes. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-5594ef107404"
+      "The exam refuses a binding file that differs from the rendered text by one edit. The edits include a constant behind an attribute, in a comment or in a string. They also include a duplicate, an extra item, another value, another type, a missing header, CRLF line endings and a swapped pair. The exam also reads a file from disk as bytes. It refuses CRLF, a lone carriage return, a byte order mark and bytes that are not UTF-8."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "controls-refused" "zenoh_grants_check" { h.count "negativeControlsRefused" 77; } "The checker refuses exactly 77 corruptions before it checks anything generated. They are 42 records through the decoder, 10 weakened contracts and 4 contracts with an exclusive upper bound. They also include 2 drifted constants. The last 19 are binding files that differ from the rendered text by one edit. Four of those are read from disk as bytes. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-559507b7e9d1"
+      "The exam refuses a drift in an overhead constant, in the schema or in its own restatement."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "controls-refused" "zenoh_grants_check" { h.count "negativeControlsRefused" 77; } "The checker refuses exactly 77 corruptions before it checks anything generated. They are 42 records through the decoder, 10 weakened contracts and 4 contracts with an exclusive upper bound. They also include 2 drifted constants. The last 19 are binding files that differ from the rendered text by one edit. Four of those are read from disk as bytes. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-5596fc7f7937"
+      "The exam refuses exactly 77 corruptions before it checks anything generated."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "controls-refused" "zenoh_grants_check" { h.count "negativeControlsRefused" 77; } "The checker refuses exactly 77 corruptions before it checks anything generated. They are 42 records through the decoder, 10 weakened contracts and 4 contracts with an exclusive upper bound. They also include 2 drifted constants. The last 19 are binding files that differ from the rendered text by one edit. Four of those are read from disk as bytes. A dropped or invented control changes the count and re-admits the item.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    (h.req "01a1b49c-acad-760a-9132-55973870e3d7"
+      "`just zenoh_grants_check` passes as the gate adapter observes it, and it fails naming the missing file until the generated constants land."
+      "Zenoh service grants: what each holder may publish and subscribe to"
+      {
+        h.observedWhere "recipe-passed" "zenoh_grants_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself.";
+      }) with { supersedes = { "01a15d1f-26d2-7653-924b-a3f113a718e6"; }; };
+    -- legacy 01a18804-02b0-73f3-a2c8-1200b39844f1 (done): Encode, generate and decode the Zenoh service grants table
+    -- The Zenoh service has no way to receive its grants. The grants contract is a text record with no
+    -- byte layout. The root serves a table to a component in whole rows through a window of fixed size.
+    -- Without a table form, the next step has nothing to encode, serve or decode. Two readers would then
+    -- each write the offsets by hand, and a misread layout would pass on both. This item fixes the table's
+    -- layout, encodes it from a list of rows, and decodes it in Rust. A judge writes the same bytes again
+    -- with Python's struct and compares all three.
+    (h.req "01a1b49c-add6-7514-a83e-ed1f986d529b"
+      "Eight row sets are each encoded to bytes equal to what `struct` writes from the pinned layout. They cover one publisher, a publisher and a subscriber of one key, and both rights on one row. They cover the longest and the shortest key and name. They cover rows given out of order, one holder on several keys, and a name of hyphens, underscores and digits. Each decodes back to its rows in table order."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_table_check" { h.count "casesObserved" 40; } "The checker counts 9 lines that the Rust test printed and 31 refusals by name. The 9 are the 8 honest tables and the closing line. The 31 are the corrupted tables the decoder refused. The total is 40. The count is exact. It is reported only after the judge accepted every line. The judge compares each line with bytes it wrote with struct and with its own decoder.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed20013facc6"
+      "The Rust test decodes 39 tables the slice writes. The eight honest tables decode to the same rows as Python. The 31 corrupted tables are each refused. The test prints one line for each, and the judge compares the lines with its own."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_table_check" { h.count "casesObserved" 40; } "The checker counts 9 lines that the Rust test printed and 31 refusals by name. The 9 are the 8 honest tables and the closing line. The 31 are the corrupted tables the decoder refused. The total is 40. The count is exact. It is reported only after the judge accepted every line. The judge compares each line with bytes it wrote with struct and with its own decoder.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed21971955c0"
+      "Rows are in strictly ascending order of holder name and then key, so a repeated pair is impossible. A table with two rows swapped, a row repeated, or the same key under the same holder with other rights is refused."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_table_check" { h.count "casesObserved" 40; } "The checker counts 9 lines that the Rust test printed and 31 refusals by name. The 9 are the 8 honest tables and the closing line. The 31 are the corrupted tables the decoder refused. The total is 40. The count is exact. It is reported only after the judge accepted every line. The judge compares each line with bytes it wrote with struct and with its own decoder.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed228c6e661b"
+      "The encoder refuses 27 inputs. Some concern the rows as a whole: no rows, a row that grants nothing, and a repeated pair. Two concern the closed record: a field the grants record does not have, and a missing field. Some concern a holder name: zero bytes, 33 bytes, a capital, a dot, a space or a non-ASCII character. Some concern a key: zero bytes, 130 bytes, a star, a double star, a dollar or a question mark. A key may also hold a hash, a space or a non-ASCII character. Others are a leading, trailing or doubled slash, and rights that are not booleans."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_table_check" { h.count "negativeControlsRefused" 367; } "The checker refuses exactly 367 corruptions before it runs any Rust. Every field of every transcript line is changed alone, so a judge that stopped comparing one field fails. Four wrong decoders are written by name. One accepts a corrupted table, one refuses an honest table, one reads the rights swapped and one reads the rows reordered.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed23ceb5f8a0"
+      "Over all 128 ASCII characters, the encoder accepts exactly the characters the grants contract lists as `nameChars` and `keyChars`. A character added to or removed from either list is refused by the judge."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_table_check" { h.count "negativeControlsRefused" 367; } "The checker refuses exactly 367 corruptions before it runs any Rust. Every field of every transcript line is changed alone, so a judge that stopped comparing one field fails. Four wrong decoders are written by name. One accepts a corrupted table, one refuses an honest table, one reads the rights swapped and one reads the rows reordered.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed24124d3358"
+      "The committed `components/proto/src/zenoh_service_grants_table_wire.rs` equals the renderer's output byte for byte. Twelve edits are each refused. Some move an offset or change a length, a bound or the magic. Some narrow a field or drop a decode length check or an encode statement. Others remove the header comment or a trailing newline, add a line, or empty the file."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_table_check" { h.count "negativeControlsRefused" 367; } "The checker refuses exactly 367 corruptions before it runs any Rust. Every field of every transcript line is changed alone, so a judge that stopped comparing one field fails. Four wrong decoders are written by name. One accepts a corrupted table, one refuses an honest table, one reads the rights swapped and one reads the rows reordered.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed257439c003"
+      "`components/proto/src/lib.rs` holds the two export lines once each, with no attribute directly above them. The Rust test imports the decoder through the crate, includes no source by path and reads the tables file the slice writes. Twenty-nine corrupted files are each refused."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_table_check" { h.count "negativeControlsRefused" 367; } "The checker refuses exactly 367 corruptions before it runs any Rust. Every field of every transcript line is changed alone, so a judge that stopped comparing one field fails. Four wrong decoders are written by name. One accepts a corrupted table, one refuses an honest table, one reads the rights swapped and one reads the rows reordered.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed26e0ba7b4a"
+      "The slice runs the Rust test a second time on a file in which one honest table is replaced by another. A test that read the file prints the new table's line and no other line changes. A test that prints constants prints the first run's line again, and the slice refuses it. The judge refuses eleven wrong second runs, and the controls total counts them."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_table_check" { h.count "casesObserved" 40; } "The checker counts 9 lines that the Rust test printed and 31 refusals by name. The 9 are the 8 honest tables and the closing line. The 31 are the corrupted tables the decoder refused. The total is 40. The count is exact. It is reported only after the judge accepted every line. The judge compares each line with bytes it wrote with struct and with its own decoder.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed27a37b98ce"
+      "The slice runs `every_table_decodes_to_its_rows_or_is_refused` alone with `--exact` and fails unless that test is the only one that passed and the target ran one test. Another test cannot supply the lines."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_table_check" { h.count "casesObserved" 40; } "The checker counts 9 lines that the Rust test printed and 31 refusals by name. The 9 are the 8 honest tables and the closing line. The 31 are the corrupted tables the decoder refused. The total is 40. The count is exact. It is reported only after the judge accepted every line. The judge compares each line with bytes it wrote with struct and with its own decoder.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed28a9405d67"
+      "The schema's constants and both layouts are compared with a copy held in the judge. Each layout must add up to its size and list the fields of its record in order. Twenty-four edits to the schema are each refused. They change a constant, widen or reorder a field, or drop a field from only the layout or only the record. They also state a constant twice or add a line that is not a field."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_table_check" { h.count "negativeControlsRefused" 367; } "The checker refuses exactly 367 corruptions before it runs any Rust. Every field of every transcript line is changed alone, so a judge that stopped comparing one field fails. Four wrong decoders are written by name. One accepts a corrupted table, one refuses an honest table, one reads the rights swapped and one reads the rows reordered.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed29b7a0bdcf"
+      "The judge refuses 367 corruptions before it runs any Rust. They are 24 schema edits, 27 refused inputs and 31 corrupted tables. They are also 4 alphabet edits, 4 encoder edits and 225 transcript edits. The last are 12 generated-file edits, 29 corrupted exports and 11 corrupted second runs. The judge fails if two controls of any kind share a label or corrupt the same input the same way."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_table_check" { h.count "negativeControlsRefused" 367; } "The checker refuses exactly 367 corruptions before it runs any Rust. Every field of every transcript line is changed alone, so a judge that stopped comparing one field fails. Four wrong decoders are written by name. One accepts a corrupted table, one refuses an honest table, one reads the rights swapped and one reads the rows reordered.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    (h.req "01a1b49c-add6-7514-a83e-ed2a92164e2e"
+      "`just zenoh_service_grants_table_check` exits zero and reports its observations through the gate adapter."
+      "Encode, generate and decode the Zenoh service grants table"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_grants_table_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe fails until the generated file, the decoder and the test land.";
+      }) with { supersedes = { "01a18804-02b0-73f3-a2c8-1200b39844f1"; }; };
+    -- legacy 01a195e7-b4e9-708e-a266-6cf708d4f35a (done): Build the Zenoh service grants table in the generation builder
+    -- The Zenoh service grants table has an encoder, and nothing calls it. The generation builder turns a
+    -- system spec into a generation, and it has no step that builds the table from the grants a spec
+    -- declares. Without that step, the table cannot reach the root. The first system spec to declare
+    -- grants would also be the first test of the code that carries them. This item adds the builder step
+    -- and the spec admission that runs it. It also adds a judge that grades both against the encoder's
+    -- bytes and an independent writer.
+    (h.req "01a1b49c-adfd-7183-9e8c-8df8f106c335"
+      "From a manifest with three rows and a `zenoh-service` instance, the builder emits the bytes that `zenoh_grants_table.encode` emits. They equal the bytes that the table judge's struct writer emits, and they decode to the declared rows. Reversing the rows and the instances gives the same bytes."
+      "Build the Zenoh service grants table in the generation builder"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_builder_check" { h.count "casesObserved" 7; } "The checker counts seven checks that the builder's output must pass. Four compare the output with the encoder, with the independent writer, with a decode back to the rows and with a reversed order. Three follow a valid spec through admission. The count is exact. It is reported only after all seven held.";
+      }) with { supersedes = { "01a195e7-b4e9-708e-a266-6cf708d4f35a"; }; };
+    (h.req "01a1b49c-adfd-7183-9e8c-8df936a1932e"
+      "The builder refuses eleven manifests. Four concern the manifest: no rows, no reader instance, a holder that is not an instance, and the reader as a holder. Seven concern a row: it grants nothing, its key has a wildcard or is 130 bytes, or it repeats a pair. A row may also hold a field the grants record lacks, lack its key, or carry rights that are not booleans. Each is refused at the boundary that owns it."
+      "Build the Zenoh service grants table in the generation builder"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_builder_check" { h.count "negativeControlsRefused" 14; } "The checker refuses exactly 14 inputs. Eleven are manifests and three are specs. Each names the boundary that must refuse it, so an input refused by another boundary fails the exam. A one-line mutation of each builder check was run against the slice. One removed check, the empty table, is also refused by the encoder, so removing it from the builder changes the message and not the verdict.";
+      }) with { supersedes = { "01a195e7-b4e9-708e-a266-6cf708d4f35a"; }; };
+    (h.req "01a1b49c-adfd-7183-9e8c-8dfa2a85b707"
+      "A real spec with a `zenoh-service` instance added and three grants set is admitted. The manifest it derives holds the three rows as declared and a `zenoh-grants` object. The table built from that manifest equals the encoder's bytes for the rows. A derivation that dropped every row, or kept only the first, fails the slice."
+      "Build the Zenoh service grants table in the generation builder"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_builder_check" { h.count "casesObserved" 7; } "The checker counts seven checks that the builder's output must pass. Four compare the output with the encoder, with the independent writer, with a decode back to the rows and with a reversed order. Three follow a valid spec through admission. The count is exact. It is reported only after all seven held.";
+      }) with { supersedes = { "01a195e7-b4e9-708e-a266-6cf708d4f35a"; }; };
+    (h.req "01a1b49c-adfe-7113-80ba-20c4788e2131"
+      "The system spec refuses three specs. They are grants without their object, a holder the spec does not admit and an object with no grants. The two new keys default in, so every existing spec is accepted as before."
+      "Build the Zenoh service grants table in the generation builder"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_builder_check" { h.count "negativeControlsRefused" 14; } "The checker refuses exactly 14 inputs. Eleven are manifests and three are specs. Each names the boundary that must refuse it, so an input refused by another boundary fails the exam. A one-line mutation of each builder check was run against the slice. One removed check, the empty table, is also refused by the encoder, so removing it from the builder changes the message and not the verdict.";
+      }) with { supersedes = { "01a195e7-b4e9-708e-a266-6cf708d4f35a"; }; };
+    (h.req "01a1b49c-adfe-7113-80ba-20c5885fda60"
+      "The slice passes seven checks and refuses fourteen inputs. The exam stops at the first check that does not hold, and a run that returns has passed every one."
+      "Build the Zenoh service grants table in the generation builder"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_builder_check" { h.count "negativeControlsRefused" 14; } "The checker refuses exactly 14 inputs. Eleven are manifests and three are specs. Each names the boundary that must refuse it, so an input refused by another boundary fails the exam. A one-line mutation of each builder check was run against the slice. One removed check, the empty table, is also refused by the encoder, so removing it from the builder changes the message and not the verdict.";
+      }) with { supersedes = { "01a195e7-b4e9-708e-a266-6cf708d4f35a"; }; };
+    (h.req "01a1b49c-adfe-7113-80ba-20c61a2c9b6d"
+      "`just zenoh_service_grants_builder_check` exits zero and reports its observations through the gate adapter."
+      "Build the Zenoh service grants table in the generation builder"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_grants_builder_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes when the pull request that lands the builder step merges, because that pull request carries the builder and the exam together.";
+      }) with { supersedes = { "01a195e7-b4e9-708e-a266-6cf708d4f35a"; }; };
+    -- legacy 01a19c28-eaeb-7f64-846a-502f03dc2688 (done): Plan the Zenoh grants reader: the read label, the schema fields, the root reader and the wrapper
+    -- The Zenoh grants table is built by the generation builder and nothing in the root reads it. A Zenoh
+    -- service component needs the root to serve the table to it, and a spec author needs the two spec keys
+    -- in the schema. Both are product changes, so this item plans them and a later pull request implements
+    -- them. This item adds the exam that grades the product side. The exam fails until the implementation
+    -- lands.
+    (h.req "01a1b49c-ae26-71d0-984f-71474e5d13e1"
+      "The contract declares `ZENOH_GRANTS_READ` as capability table label 75, the highest used label being 74. Its Rust and C outputs and its documentation row carry it. The manifest schema declares `ZenohGrantEntry` with `holder`, `key`, `publish` and `subscribe`, and the optional field `zenohGrants`. The system spec schema declares the same record, the field `zenohGrants`, the flag `zenohGrantsObject` and the bound `maxZenohGrants` of 64. The bound reaches the generated Python constant and the ceiling entry."
+      "Plan the Zenoh grants reader: the read label, the schema fields, the root reader and the wrapper"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_reader_check" { h.count "casesObserved" 36; } "The checker counts 36 cases. Thirty-five are declarations that the product files must hold. One is the filtered run of the two reader tests. The count is exact and is reported only after all of them held. The declarations are text and show that the code exists. The tests show what the reader does.";
+      }) with { supersedes = { "01a19c28-eaeb-7f64-846a-502f03dc2688"; }; };
+    (h.req "01a1b49c-ae26-71d0-984f-7148dca09a3a"
+      "The `slime-root` reader locates the resource object by the table's magic and serves 168-byte rows only to the instance named `zenoh-service`. A dispatch arm, a route entry and a route test entry carry the label. The wrapper in `components/runtime` calls the label and returns the count of rows."
+      "Plan the Zenoh grants reader: the read label, the schema fields, the root reader and the wrapper"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_reader_check" { h.count "casesObserved" 36; } "The checker counts 36 cases. Thirty-five are declarations that the product files must hold. One is the filtered run of the two reader tests. The count is exact and is reported only after all of them held. The declarations are text and show that the code exists. The tests show what the reader does.";
+      }) with { supersedes = { "01a19c28-eaeb-7f64-846a-502f03dc2688"; }; };
+    (h.req "01a1b49c-ae26-71d0-984f-714939c805d4"
+      "Two `slime-root` tests run alone and pass. One shows the rows go only to `zenoh-service`. The other shows paging by row cursor within the staged bound of 1024 bytes, which is 6 rows per call. The run filters out exactly 363 tests, and the pin in `just/quality.just` is 365."
+      "Plan the Zenoh grants reader: the read label, the schema fields, the root reader and the wrapper"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_grants_reader_check" { h.count "casesObserved" 36; } "The checker counts 36 cases. Thirty-five are declarations that the product files must hold. One is the filtered run of the two reader tests. The count is exact and is reported only after all of them held. The declarations are text and show that the code exists. The tests show what the reader does.";
+      }) with { supersedes = { "01a19c28-eaeb-7f64-846a-502f03dc2688"; }; };
+    (h.req "01a1b49c-ae26-71d0-984f-714aa4e823b6"
+      "The exam refuses 41 inputs. Thirty-five remove one declaration from a synthetic file set, and the exam must refuse by naming that declaration. Six alter the transcript of the filtered run. The six are a run of no test, a third test, a failed test and a test of another name. The last two are a count that does not add up and two runs in one output."
+      "Plan the Zenoh grants reader: the read label, the schema fields, the root reader and the wrapper"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_grants_reader_check" { h.count "negativeControlsRefused" 41; } "The checker refuses exactly 41 inputs. Each declaration is removed from a synthetic file set in turn, and the refusal must name it. A declaration that another one also matches would be accepted, and the exam would not run. Six alterations of the test transcript are refused as well. The unaltered corpus and transcript are accepted first.";
+      }) with { supersedes = { "01a19c28-eaeb-7f64-846a-502f03dc2688"; }; };
+    (h.req "01a1b49c-ae26-71d0-984f-714be4b4dd88"
+      "`just zenoh_service_grants_reader_check` exits zero and reports its observations through the gate adapter. It fails on `main` until the implementation lands."
+      "Plan the Zenoh grants reader: the read label, the schema fields, the root reader and the wrapper"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_grants_reader_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes only after the implementation pull request merges, because the full run reads the product files.";
+      }) with { supersedes = { "01a19c28-eaeb-7f64-846a-502f03dc2688"; }; };
+    -- legacy 01a1af02-029f-7e62-a3b4-91b37d965b84 (done): Plan the Zenoh service limits record and the sizes it checks
+    -- The Zenoh service sizes its core with constants of its own, two holders and two rows, and the core
+    -- refuses any table of another size. The grants record declares six limits, and the generation carries
+    -- none of them. This item plans a limits record that the generation carries and the root serves. The
+    -- service checks the record against what it was built to hold. The exam fails until the implementation
+    -- lands.
+    (h.req "01a1b49c-aec1-760f-a2b8-9a015acc6fe4"
+      "The contract states a 48-byte record of the six limits. The exam writes the same bytes with struct from a layout pinned in the exam. It requires the generated Rust binding to equal the renderer's output. It refuses 17 edits of the schema, 3 edits that move a field the encoder reads and 11 edits of the binding."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_check" { h.count "casesObserved" 36; } "The checker counts ${CASES} cases: 7 honest limit sets, 25 declarations the files must hold and 4 bounds on optional fields. A pattern shows that a call appears in a file and does not show what the code does. Behaviour is checked in the implementation review and by the booted composition.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a0233b6cce1"
+      "The encoder refuses each limit of zero and each limit above its bound. It refuses a negative limit, a boolean, text or a float in a limit, a missing limit, an extra field and no fields. The exam refuses 19 such inputs."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_limits_check" { h.count "negativeControlsRefused" 113; } "The checker refuses exactly ${CONTROLS} inputs. Each is applied alone, and the unaltered input is accepted first. No two controls corrupt the same input in the same way. The stack has no above-bound record.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a03db01b103"
+      "A decoder written in the exam refuses 20 corruptions of an honest record. They cover its length, magic, version, size and flags. They also cover each limit at zero and each limit but the stack above its bound. The stack bound is the largest value four bytes hold, so no record is above it."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_limits_check" { h.count "negativeControlsRefused" 113; } "The checker refuses exactly ${CONTROLS} inputs. Each is applied alone, and the unaltered input is accepted first. No two controls corrupt the same input in the same way. The stack has no above-bound record.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a049b07d259"
+      "The system spec and the manifest declare all six limits on the service's instance. The system spec carries them to the manifest instance and derives the object from them, so it has no flag. It refuses limits on any other instance. The generation builder installs the object `zenoh-limits`. The closure release inputs, and the closure schema checker's list, carry the exact names `zenoh-limits-contract`, `zenoh-limits-encoder` and `generation-resources`."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_check" { h.count "casesObserved" 36; } "The checker counts ${CASES} cases: 7 honest limit sets, 25 declarations the files must hold and 4 bounds on optional fields. A pattern shows that a call appears in a file and does not show what the code does. Behaviour is checked in the implementation review and by the booted composition.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a050a11b9d3"
+      "The root locates the object. The dispatch in `graph_runtime/services.rs` has its own branch for the cursor 4294967295 and returns the 48-byte record, and no row. The exam requires the locate and the branch by pattern."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_check" { h.count "casesObserved" 36; } "The checker counts ${CASES} cases: 7 honest limit sets, 25 declarations the files must hold and 4 bounds on optional fields. A pattern shows that a call appears in a file and does not show what the code does. Behaviour is checked in the implementation review and by the booted composition.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a06c739aad4"
+      "The service reads the record before the rows and decodes it with the generated binding. The exam requires the read by pattern. What the service does with an over-ceiling record, and what the core accepts, are for the implementation review."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_check" { h.count "casesObserved" 36; } "The checker counts ${CASES} cases: 7 honest limit sets, 25 declarations the files must hold and 4 bounds on optional fields. A pattern shows that a call appears in a file and does not show what the code does. Behaviour is checked in the implementation review and by the booted composition.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a070f34561f"
+      "The exam refuses ${CONTROLS} inputs. 59 are in the encoder and the record, and 11 are in the binding. 8 are imports in the encoder. 25 each remove one declaration from a synthetic file set. 10 each add a field to one record."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_limits_check" { h.count "negativeControlsRefused" 113; } "The checker refuses exactly ${CONTROLS} inputs. Each is applied alone, and the unaltered input is accepted first. No two controls corrupt the same input in the same way. The stack has no above-bound record.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    (h.req "01a1b49c-aec1-760f-a2b8-9a0852adf7b7"
+      "`just zenoh_service_limits_check` exits zero and reports its observations through the gate adapter. It fails on `main` until the implementation lands."
+      "Plan the Zenoh service limits record and the sizes it checks"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_limits_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes only after the implementation pull request merges, because the full run reads the files it names.";
+      }) with { supersedes = { "01a1af02-029f-7e62-a3b4-91b37d965b84"; }; };
+    -- legacy 01a1af02-1d8b-7a48-9b9f-84747d5a4f72 (done): Plan the Zenoh limits builder checks and the rows they hold to the record
+    -- The generation builder encodes the Zenoh service limits record and never compares the rows with it.
+    -- A manifest whose limits declare one holder, or short keys, is accepted beside rows that name more
+    -- holders and longer keys. The service then serves more than the declaration says. This item plans the
+    -- builder's checks and the exam that grades them. The exam fails until the implementation lands.
+    (h.req "01a1b49c-aecf-703a-b540-2c6abecf3591"
+      "The builder emits the encoder's bytes for a manifest's limits. The exam requires the independent struct writer's bytes and a decode back to the declared limits, whatever order the rows and instances come in."
+      "Plan the Zenoh limits builder checks and the rows they hold to the record"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_builder_check" { h.count "casesObserved" 13; } "The checker counts ${CASES} honest checks. Four are the record's bytes, three ways and one reorder. Six hold the limits at the rows. Three are exact. One has a key that is not subscribed, one has two holders on one key, and one has a stack below the executable's. Three are of the record a spec derives. A builder that emits other bytes or refuses at a limit fails.";
+      }) with { supersedes = { "01a1af02-1d8b-7a48-9b9f-84747d5a4f72"; }; };
+    (h.req "01a1b49c-aecf-703a-b540-2c6b53163abc"
+      "The builder refuses rows that name more holders than the record declares. It refuses rows that subscribe to more distinct keys than it declares, or hold a key longer than it declares. The exam holds each limit exactly at the rows, and with a key that is published and not subscribed."
+      "Plan the Zenoh limits builder checks and the rows they hold to the record"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_builder_check" { h.count "casesObserved" 13; } "The checker counts ${CASES} honest checks. Four are the record's bytes, three ways and one reorder. Six hold the limits at the rows. Three are exact. One has a key that is not subscribed, one has two holders on one key, and one has a stack below the executable's. Three are of the record a spec derives. A builder that emits other bytes or refuses at a limit fails.";
+      }) with { supersedes = { "01a1af02-1d8b-7a48-9b9f-84747d5a4f72"; }; };
+    (h.req "01a1b49c-aecf-703a-b540-2c6c18ed229a"
+      "A spec that declares the service and its limits derives a manifest whose service instance holds the limits as declared and the object `zenoh-limits`. The record built from it equals the encoder's bytes."
+      "Plan the Zenoh limits builder checks and the rows they hold to the record"
+      {
+        h.observedWhere "cases-observed" "zenoh_service_limits_builder_check" { h.count "casesObserved" 13; } "The checker counts ${CASES} honest checks. Four are the record's bytes, three ways and one reorder. Six hold the limits at the rows. Three are exact. One has a key that is not subscribed, one has two holders on one key, and one has a stack below the executable's. Three are of the record a spec derives. A builder that emits other bytes or refuses at a limit fails.";
+      }) with { supersedes = { "01a1af02-1d8b-7a48-9b9f-84747d5a4f72"; }; };
+    (h.req "01a1b49c-aecf-703a-b540-2c6d1cf6d094"
+      "The exam refuses 15 manifests and 5 specs, and each refusal must come from the boundary that owns it. The refusal names its reason, and a refusal at another boundary fails the exam."
+      "Plan the Zenoh limits builder checks and the rows they hold to the record"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_limits_builder_check" { h.count "negativeControlsRefused" 20; } "The checker refuses exactly ${CONTROLS} inputs: 15 manifests and 5 specs. Each is applied alone, and the honest input is accepted first. The refusal must name the reason of the boundary that owns it.";
+      }) with { supersedes = { "01a1af02-1d8b-7a48-9b9f-84747d5a4f72"; }; };
+    (h.req "01a1b49c-aecf-703a-b540-2c6e3059a9a7"
+      "A composition with an instance named `zenoh-service` declares its limits. A spec without them is refused at admission."
+      "Plan the Zenoh limits builder checks and the rows they hold to the record"
+      {
+        h.observedWhere "controls-refused" "zenoh_service_limits_builder_check" { h.count "negativeControlsRefused" 20; } "The checker refuses exactly ${CONTROLS} inputs: 15 manifests and 5 specs. Each is applied alone, and the honest input is accepted first. The refusal must name the reason of the boundary that owns it.";
+      }) with { supersedes = { "01a1af02-1d8b-7a48-9b9f-84747d5a4f72"; }; };
+    (h.req "01a1b49c-aecf-703a-b540-2c6fb80479b3"
+      "`just zenoh_service_limits_builder_check` exits zero and reports its observations through the gate adapter. It fails on `main` until the implementation lands."
+      "Plan the Zenoh limits builder checks and the rows they hold to the record"
+      {
+        h.observedWhere "recipe-passed" "zenoh_service_limits_builder_check" h.noPredicates "The gate adapter reports the recipe's exit code, so the checker cannot vouch for itself. The recipe passes only after the implementation pull request merges, because the full run reads the builder it names.";
+      }) with { supersedes = { "01a1af02-1d8b-7a48-9b9f-84747d5a4f72"; }; };
+  }) with {
+    nonGoals = {
+      "How the grants reach the service at run time. That is a list in the system spec, a generation resource kind, a root-served read and a decoder in the service. The component item owns it.";
+      "The service core, the client interface and any Zenoh behaviour. The core item judges those against a record of this contract.";
+      "Wildcard keys, key aliases, and a holder that names a topic and a type for the service to turn into a key. A grant is one exact full key.";
+      "Any product change in the planning PR. The generated Rust file and the system-spec grammar belong to the implementation.";
+      "Any product change in the planning PR.";
+      "The read label, the manifest and system spec fields, the `slime-root` reader and the runtime wrapper. They change existing schemas and product code, so a planning PR cannot carry them. A later item owns them.";
+      "The builder's use of the encoder. The encoder takes a list of rows, and this item does not wire it to a manifest field.";
+      "The Zenoh service component and a booted composition.";
+      "A change to `contracts/zenoh-service-grants/v1`. The record is landed. This item reads its alphabets.";
+      "A row holder identity or a hash. The root serves the whole table to one named instance, so a row needs only the holder's name.";
+      "Isolating two decoder guards. The row-count bound is reachable only by a buffer of 11 megabytes, and the total-length check refuses a header that claims more rows. The key-length guard is covered by the empty-segment check, because an empty key splits into one empty segment. Removing either guard changes no verdict the judge can show. Both stay in the decoder and are recorded as known limits.";
+      "A system spec or a composition that declares grants. No composition has a `zenoh-service` instance, and the schema does not declare the two keys, so a `.zti` spec cannot carry them yet. A later item owns the schema fields.";
+      "The read label, the manifest and system spec schema fields, the `slime-root` reader and the runtime wrapper. They change existing schemas and product code.";
+      "A check that each holder has an endpoint to the service. The endpoint grants do not exist until the component does, so a later item owns it.";
+      "A change to the `4096` object size the spec writes. Nothing checks it against a payload, and the table's size is its payload length.";
+      "Adding the encoder and the table schema to the release inputs in `scripts/generate/generate-system-image-closures.py`. The builder runs `scripts/lib/zenoh_grants_table.py` and reads the table schema, and neither is a release input. The same holds for the entropy and network encoders in `scripts/build/generation_resources.py` and for `boot_contracts.py`. No composition declares grants, so no image can differ yet. A later item that enables a composition owns the release inputs for all of them.";
+      "A change to the 363 tests that `just test_sel4_root` pins. CI runs that recipe, so raising the count before the tests exist would fail every pull request.";
+      "A check that the two tests exercise the reader. The exam reads their names and counts from the run. Two empty tests with those names would pass. The implementation pull request is reviewed for that, and a checker-owned fixture would close it.";
+      "The implementation. It is a separate pull request that carries every product change together, because `slime-root` cannot compile before the label exists in `slime-proto`.";
+      "The documentation row for label 75 and the pin of 365. `check-syscall-abi` fails when the document and the contract disagree, and `just test_sel4_root` fails when the pin and the count disagree. Both land with the implementation.";
+      "The ceiling entry in `scripts/lib/system_spec.py`. It reads a generated constant that does not exist until the schema declares it.";
+      "A run of the reader through a booted root. No component reads the table, and the exam grades the reader by its host tests.";
+      "A compile of the runtime wrapper. `just test_host` does not build that crate, so the exam reads the wrapper as text. The entropy wrapper is graded the same way.";
+      "The Zenoh service component, its endpoint grants and a booted composition.";
+      "Adding the encoder and the table schema to the release inputs. The decision record names this limit and a later item that enables a composition owns it.";
+      "A third test. The exam requires exactly two. A test added later raises the count here and the pin in the same pull request.";
+      "The system spec and manifest fields, the builder, the root's read, the service and the core. The implementation pull request adds them.";
+      "A new version of the grants table. The record is separate so that the table and its 367 controls stay as they are.";
+      "A syscall or a label. The record uses the cursor of the existing read, and the pinned wrapper in `syscall.rs` keeps its comment, which names the table version.";
+      "The stack arithmetic. `zenoh-service-grants/v1` states it. The builder does not evaluate that contract, so the contract is not a generation input. The builder checks the stack against its own bound, and the service checks it against its storage.";
+      "Holders other than the two the composition has. This item makes a larger table possible and does not add one.";
+      "A test of the proto decoder, the core, the builder or the service. The implementation adds them, and its review checks that each one fails when the code is wrong.";
+      "The builder, the spec derivation and the service. The implementation pull request adds them, and it is already written.";
+      "The stack against the rows. The service checks the declared stack against the storage it was built with.";
+      "What the service does with a limit above its ceilings, and what the root serves. The limits item and the implementation review own them.";
+      "A mutation harness as a gate. The implementation pull request reports one run of it, and the exam is the gate.";
+    };
+  };
+
+area

@@ -267,6 +267,11 @@ jobs:
 
       - run: nix develop .#projection --command just tasks_check
 
+      # Devloop v1.5 (docs/decisions/work-item-devloop.md): the task/v2 and
+      # area store, and the bootstrap item's exam. V1 above still judges.
+      - run: nix develop .#projection --command just spec_tasks_check
+      - run: nix develop .#projection --command just spec_e2e
+
       - name: Checkout trusted retirement verifier
         if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
         uses: actions/checkout@v7

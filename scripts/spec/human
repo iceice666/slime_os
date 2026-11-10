@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Answer a human acceptance and sign the answer.
+
+    scripts/spec/human item <item id> <acceptance id> yes|no --signer <principal> [--key K] [--note TEXT]
+    scripts/spec/human area <area> <requirement id> <acceptance id> yes|no --signer <principal> ...
+
+Writes build/observations/human/<owner>/<acceptance>/<digest>.zt and signs
+it with `ssh-keygen -Y sign -n slime-spec`. An item record binds to the
+item's requirements digest, an area record to the requirement's: rewording
+a statement or an acceptance asks the question again. <principal> must be
+listed in specs/allowed_signers. Record an answer only when the person
+said it; automation never infers one. `scripts/spec/publish` carries the
+record to the evidence branch.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("owner", choices=("item", "area"))
+    parser.add_argument("names", nargs="+", help="<item id> <acceptance> | <area> <requirement> <acceptance>")
+    parser.add_argument("value", choices=("yes", "no"))
+    parser.add_argument("--signer", required=True)
+    parser.add_argument("--key", default=str(Path.home() / ".ssh" / "id_ed25519"))
+    parser.add_argument("--note", default="")
+    args = parser.parse_args()
+
+    if args.owner == "item":
+        if len(args.names) != 2:
+            parser.error("item takes <item id> <acceptance id>")
+        item = next((i for i in lib.load_items() if args.names[0] in (i.id, i.value["slug"])), None)
+        if item is None:
+            raise lib.SpecError(f"human: no item {args.names[0]!r}")
+        gate = next((a for a in item.value["acceptance"] if a["id"] == args.names[1] and lib.tag(a["check"]) == "human"), None)
+        if gate is None:
+            raise lib.SpecError(f"human: item {item.where} has no human acceptance {args.names[1]!r}")
+        area, owner, acceptance, digest = "", item.id, gate["id"], lib.item_digest(item.value)
+        question = lib.payload(gate["check"])["question"]
+    else:
+        if len(args.names) != 3:
+            parser.error("area takes <area> <requirement id> <acceptance id>")
+        found = next((a for a in lib.load_areas() if a.id == args.names[0]), None)
+        if found is None:
+            raise lib.SpecError(f"human: no area {args.names[0]!r}")
+        requirement = next((r for r in found.requirements if r["id"] == args.names[1]), None)
+        if requirement is None:
+            raise lib.SpecError(f"human: area {found.id} has no requirement {args.names[1]}")
+        gate = next((p for t, p in lib.area_acceptances(requirement) if t == "human" and p["id"] == args.names[2]), None)
+        if gate is None:
+            raise lib.SpecError(f"human: requirement {requirement['id']} has no human acceptance {args.names[2]!r}")
+        area, owner, acceptance, digest = found.id, requirement["id"], gate["id"], lib.requirement_digest(requirement)
+        question = gate["question"]
+    print(f"{question}\nanswer: {args.value}", file=sys.stderr)
+
+    observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    text = lib.human_record_text(area, owner, acceptance, digest, args.value == "yes", args.note, args.signer, observed_at)
+    out = lib.OBSERVATIONS / lib.human_path(owner, acceptance, digest)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    lib.parse_record(out.read_bytes(), "HumanRecord")
+    signature = lib.sign(out, args.key)
+    ok = lib.verify_signature(out.read_bytes(), signature.read_bytes(), args.signer)
+    print(f"human: wrote {out.relative_to(lib.ROOT)}" + ("" if ok else f" (WARNING: {args.signer!r} does not verify against specs/allowed_signers)"))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

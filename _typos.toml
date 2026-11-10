@@ -66,3 +66,5 @@ ser2net = "ser2net"
 # Zutai's typed high-level IR, and the crate named after it (`zutai-thir`),
 # which devloop locks by name in its Cargo lock.
 thir = "thir"
+# Zenoh FRAME messages, plural, as a rehomed requirement wrote it.
+FRAMEs = "FRAMEs"

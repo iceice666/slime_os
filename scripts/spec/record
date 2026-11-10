@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Run a `just` target and write its observation record.
+
+    scripts/spec/record <target> [-- <command>...]
+
+Runs `just <target>` (or the given command) with `DEVLOOP_JUST_TARGET` set,
+so a checker that calls `devloop_observations.record(...)` writes its typed
+report exactly as it does under the old gate. Afterwards the report and the
+exit status become `build/observations/<target>.zt`, an `observation/v1`
+Record keyed by the target's closure digest. The process exits with the
+command's status, so a recipe wrapped by `record` fails when its exam fails.
+
+`passed` comes from the exit status, never from the report: a checker
+cannot vouch for itself. The record names `dirty` in its runner field
+when the closure was resolved from a tree that differs from HEAD;
+`publish` refuses such a record. `negativeControlsRefused`, when the
+checker reports it, is what R4 (V8) compares later records against.
+
+`--signer <principal> --key <ssh key>` signs the record (docs/decisions/work-item-devloop.md): an
+operator running a hardware target attests it this way, and `publish`
+carries the signature beside the record.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+OBSERVATIONS = lib.ROOT / "build" / "observations"
+REPORTS = lib.ROOT / "build" / "devloop-observations"
+ENVIRONMENT = "DEVLOOP_JUST_TARGET"
+INT_BOUND = 1 << 63
+
+
+def text(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def toolchain() -> list[tuple[str, str]]:
+    tools = []
+    rust = lib.ROOT / "rust-toolchain.toml"
+    for line in rust.read_text().splitlines() if rust.is_file() else []:
+        if line.startswith("channel"):
+            tools.append(("rustc", line.split("=", 1)[1].strip().strip('"')))
+    pin = lib.SPECS / "zutai.toml"
+    if pin.is_file():
+        import tomllib
+
+        tools.append(("zutai", tomllib.loads(pin.read_text()).get("rev", "")))
+    return tools
+
+
+def render(target: str, digest: str, passed: bool, code: int, report: dict, runner: str) -> str:
+    counts = [(k, v) for k, v in sorted(report.items()) if isinstance(v, int) and not isinstance(v, bool)]
+    flags = [(k, v) for k, v in sorted(report.items()) if isinstance(v, bool)]
+    lines = [
+        'o ::= import "./schema.zt";',
+        "r :: o.Record = {",
+        "  schema = o.schemaVersion;",
+        f"  target = {text(target)};",
+        f"  closureDigest = {text(digest)};",
+        f"  passed = {'true' if passed else 'false'};",
+        f"  exitCode = {code};",
+        "  counts = {" + ("".join(f" {{ key = {text(k)}; value = {v}; }};" for k, v in counts) + " }" if counts else ";}") + ";",
+        "  flags = {" + ("".join(f" {{ key = {text(k)}; value = {'true' if v else 'false'}; }};" for k, v in flags) + " }" if flags else ";}") + ";",
+        f"  observedAt = {text(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))};",
+        f"  runner = {text(runner)};",
+        "  toolchain = {" + ("".join(f" {{ name = {text(n)}; version = {text(v)}; }};" for n, v in toolchain()) + " }" if toolchain() else ";}") + ";",
+        "};",
+        "r",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("target")
+    parser.add_argument("command", nargs="*")
+    parser.add_argument("--runner", default=os.environ.get("SPEC_RUNNER", "local"))
+    parser.add_argument("--signer")
+    parser.add_argument("--key", default=str(Path.home() / ".ssh" / "id_ed25519"))
+    args = parser.parse_args()
+    target = args.target
+    if not target or "/" in target or target.startswith("."):
+        parser.error(f"not a recipe name: {target!r}")
+
+    recipes = lib.Recipes.load()
+    closure = lib.resolve(target, recipes)
+    digest = closure.digest()
+
+    report_path = REPORTS / f"{target}.json"
+    report_path.unlink(missing_ok=True)
+    command = args.command or ["just", target]
+    started = time.monotonic()
+    done = subprocess.run(command, cwd=lib.ROOT, env=os.environ | {ENVIRONMENT: target}, check=False)
+    elapsed = time.monotonic() - started
+
+    report: dict = {}
+    if report_path.is_file():
+        try:
+            loaded = json.loads(report_path.read_text())
+            report = loaded if isinstance(loaded, dict) else {}
+        except json.JSONDecodeError:
+            report = {}
+    report = {k: v for k, v in report.items() if isinstance(v, (bool, int)) and (isinstance(v, bool) or -INT_BOUND <= v < INT_BOUND)}
+
+    runner = (args.signer or args.runner) + (" dirty" if closure.dirty else "")
+    OBSERVATIONS.mkdir(parents=True, exist_ok=True)
+    # Records import the schema beside them: Zutai refuses imports above the entry file.
+    shutil.copyfile(lib.OBSERVATION_SCHEMA, OBSERVATIONS / "schema.zt")
+    out = OBSERVATIONS / f"{target}.zt"
+    out.write_text(render(target, digest, done.returncode == 0, done.returncode, report, runner), encoding="utf-8")
+    lib.zutai_json(out)  # type-check against contracts/observation/v1
+    out.with_name(out.name + ".sig").unlink(missing_ok=True)
+    if args.signer:
+        signature = lib.sign(out, args.key)
+        if not lib.verify_signature(out.read_bytes(), signature.read_bytes(), args.signer):
+            print(f"[record] WARNING: {args.signer!r} does not verify against specs/allowed_signers", file=sys.stderr)
+    print(f"[record] {target} {'passed' if done.returncode == 0 else f'failed ({done.returncode})'} in {elapsed:.0f}s -> {out.relative_to(lib.ROOT)} @ {digest[:12]}{' dirty' if closure.dirty else ''}", file=sys.stderr)
+    return done.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

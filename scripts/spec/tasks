@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""Work items under `.tasks/` (task/v2; docs/decisions/work-item-devloop.md).
+
+    scripts/spec/tasks check [--base REV] [--author LOGIN] [--approvers a,b]
+    scripts/spec/tasks status [--json] [--claimed] [--weekly] [--local]
+    scripts/spec/tasks new <task|bug|milestone> <slug> --area <area>
+
+`check` refuses a malformed item or area, a schema copy that differs from
+contracts/task/v2, and broken links. With `--base` it also judges what
+changed since base: V5 (intent transitions, and the approval entering
+#deferred or #cancelled needs), V7 (backlog first), V10 (frozen area
+requirements). V9 reports weak `#human` provenance.
+
+`status` derives each item's state from the `evidence` branch: done when
+every mandatory acceptance of an #active item is enforced. `--claimed`
+prints the targets the evidence workflow should run: those of #active
+items and of terminal items nobody superseded. A #planned item's exam is
+never claimed. `--weekly` prints the seven v1.5 metrics.
+
+`new` prints a skeleton with a fresh UUIDv7; redirect it to the file.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import statistics
+import sys
+import time
+import uuid
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+import rules  # noqa: E402
+
+ORDER = {"failing": 0, "claimed": 1, "advisory": 2, "enforced": 3}
+
+
+def failing_promises(items: list[lib.Item], areas: list[lib.Area]):
+    """A callable listing promises (area requirements, terminal items) whose state is failing."""
+
+    def compute() -> list[str]:
+        evidence = lib.Evidence()
+        gone = lib.superseded(items)
+        failing = []
+        for area in areas:
+            for requirement in area.requirements:
+                if requirement["planned"] or requirement["id"] in gone:
+                    continue
+                for kind, body in lib.area_acceptances(requirement):
+                    if lib.area_acceptance_state(kind, body, requirement, evidence)[0] == "failing":
+                        failing.append(f"{area.id}/{requirement['id']}")
+        for item in items:
+            if item.terminal and item.id not in gone:
+                for target in item.targets():
+                    if evidence.record(target)[0] == "failing":
+                        failing.append(f"{item.where} ({target})")
+        return sorted(set(failing))
+
+    return compute
+
+
+def check(args: argparse.Namespace) -> int:
+    findings = rules.Findings()
+    items = lib.load_items()
+    areas = lib.load_areas()
+    recipes = lib.Recipes.load()
+    rules.check_sources(lib.ROOT, findings)
+    rules.check_store(items, areas, recipes, findings)
+    rules.check_provenance_quality(items, findings)
+    if args.base:
+        base_items = lib.load_items_at(args.base)
+        rules.check_transitions(base_items, items, findings)
+        rules.check_backlog(base_items, items, failing_promises(items, areas), findings)
+        rules.check_frozen_areas(lib.load_areas_at(args.base), areas, findings)
+        approvers = {a.strip() for a in args.approvers.split(",") if a.strip()}
+        rules.judge_approvals(findings, args.author, approvers, set(lib.names(lib.ROOT / "HUMAN_OWNERS")))
+    for warning in findings.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    for error in findings.errors:
+        print(f"error: {error}", file=sys.stderr)
+    if findings.errors:
+        return 1
+    terminal = sum(1 for i in items if i.terminal)
+    print(f"tasks check: {len(items) - terminal} open, {terminal} terminal item(s), {len(areas)} area(s)")
+    return 0
+
+
+def item_rows(items: list[lib.Item], evidence: lib.Evidence) -> list[dict]:
+    rows = []
+    gone = lib.superseded(items)
+    for item in items:
+        acceptances = []
+        for acceptance in item.value["acceptance"]:
+            state, detail = lib.item_acceptance_state(item, acceptance, evidence)
+            body = lib.payload(acceptance["check"])
+            acceptances.append({"id": acceptance["id"], "target": body.get("justTarget", ""), "state": state, "reason": detail})
+        mandatory = [a for a, raw in zip(acceptances, item.value["acceptance"], strict=True) if raw["mandatory"]]
+        if item.terminal:
+            state = "superseded" if item.id in gone else "terminal"
+        elif item.intent != "active":
+            state = item.intent
+        elif mandatory and all(a["state"] == "enforced" for a in mandatory):
+            state = "done"
+        else:
+            state = min((a["state"] for a in mandatory), key=ORDER.get, default="advisory")
+        rows.append({"id": item.id, "slug": item.value["slug"], "kind": item.kind, "intent": item.intent, "state": state, "digest": lib.item_digest(item.value), "acceptances": acceptances})
+    return rows
+
+
+def claimed(items: list[lib.Item], evidence: lib.Evidence, include_failing: bool = False) -> set[str]:
+    wanted = {"claimed", "failing"} if include_failing else {"claimed"}
+    gone = lib.superseded(items)
+    targets: set[str] = set()
+    for item in items:
+        if (item.terminal and item.id not in gone) or (not item.terminal and item.intent == "active"):
+            targets.update(t for t in item.targets() if evidence.record(t)[0] in wanted)
+    return targets
+
+
+def weekly(items: list[lib.Item], evidence: lib.Evidence) -> list[tuple[str, str]]:
+    """The seven numbers of the v1.5 metrics table. A number that needs the
+    code host's review history comes from `forge.py review-changes`."""
+    log = lib.git("log", "-200", "--first-parent", "--format=%H", "HEAD", check=False).split()
+    bookkeeping = 0
+    for commit in log:
+        paths = lib.git("diff-tree", "--no-commit-id", "--name-only", "-r", commit, check=False).split()
+        if paths and all(p.startswith(".tasks/") for p in paths):
+            bookkeeping += 1
+    features = [i for i in items if i.kind != "milestone"]
+    rerecords, prs, planning, latency = [], [], [], []
+    for item in features:
+        for target in item.targets():
+            listing = lib.git("ls-tree", "--name-only", f"{evidence.ref}:{target}", check=False).split() if evidence.ref else []
+            rerecords.append(max(0, len([n for n in listing if n.endswith(".zt")]) - 1))
+        touching = lib.git("log", "--first-parent", "--format=%H", "--", f".tasks/items/{item.value['slug']}.zt", f".tasks/terminal/{item.value['slug']}.zt", check=False).split()
+        prs.append(len(touching))
+        planned = 0
+        for commit in touching:
+            text = lib.read_blob(commit, f".tasks/items/{item.value['slug']}.zt") or b""
+            planned += b"intent = #planned" in text or (b"intent" not in text and bool(text))
+        planning.append(planned)
+        if item.terminal and evidence.ref:
+            ok, _, witness = lib.witness_state(item.id, lib.item_digest(item.value), lambda p: lib.read_blob(evidence.ref, p))
+            if ok and witness and len(touching) >= 2:
+                active = touching[-2] if len(touching) >= 2 else touching[-1]
+                latency.append(int(lib.git("rev-list", "--count", f"{active}..{witness['mainSha']}", check=False).strip() or 0))
+    open_items = [i for i in items if not i.terminal]
+    invariants = [inv for i in open_items for inv in i.value["invariants"]]
+    defaults = sum(1 for inv in invariants if lib.tag(inv["provenance"]) in {"agentDefault", "acceptedDefault"})
+
+    def median(values: list[int]) -> str:
+        return f"{statistics.median(values):g}" if values else "n/a"
+
+    return [
+        ("bookkeeping commits in the last 200 main commits", str(bookkeeping)),
+        ("evidence re-records per feature (median)", median(rerecords)),
+        ("pull requests per feature (median)", median(prs)),
+        ("planning pull requests per feature (median)", median(planning)),
+        ("grader approvals with a requested change, last 10", "n/a offline; scripts/spec/forge.py review-changes"),
+        ("#agentDefault + #acceptedDefault share of open invariants", f"{defaults}/{len(invariants)}"),
+        ("main pushes from #active to witness (median)", median(latency)),
+    ]
+
+
+def status(args: argparse.Namespace) -> int:
+    items = lib.load_items()
+    evidence = lib.Evidence(local=args.local)
+    if args.claimed:
+        for target in sorted(claimed(items, evidence)):
+            print(target)
+        return 0
+    if args.weekly:
+        for label, value in weekly(items, evidence):
+            print(f"{value:>12}  {label}")
+        return 0
+    rows = item_rows(items, evidence)
+    if args.json:
+        json.dump({"schema": "task-status/v2", "evidenceRef": evidence.ref, "items": rows}, sys.stdout, indent=1, sort_keys=True)
+        print()
+        return 0
+    for row in rows:
+        print(f"{row['state']:<10} {row['intent']:<9} {row['slug']}")
+        for acceptance in row["acceptances"]:
+            print(f"           {acceptance['state']:<9} {acceptance['id']}: {acceptance['reason']}")
+    print(f"evidence: {evidence.ref or 'none'}{' + local' if args.local else ''}; {sum(r['state'] == 'done' for r in rows)} done of {len(rows)} item(s)")
+    return 0
+
+
+def uuid7() -> str:
+    """RFC 9562 UUIDv7: 48-bit milliseconds, version 7, variant 10, random rest."""
+    if hasattr(uuid, "uuid7"):
+        return str(uuid.uuid7())
+    value = (time.time_ns() // 1_000_000) << 80 | int.from_bytes(os.urandom(10), "big")
+    value = value & ~(0xF << 76) | (7 << 76)
+    value = value & ~(0x3 << 62) | (0x2 << 62)
+    return str(uuid.UUID(int=value))
+
+
+SKELETON = '''s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.{kind} "{id}" "{slug}" "{area}"
+  "<title>"
+  "<problem: what is wrong or missing today, in two or three sentences>")
+  with {{
+    owns = {{ "<path glob>"; }};
+    requirements = {{
+      h.req "<requirement id>" "<statement>" {{ "<just target>"; }};
+    }};
+    acceptance = {{
+      h.observed "<just target>";
+    }};
+  }};
+
+item
+'''
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    checking = sub.add_parser("check")
+    checking.add_argument("--base")
+    checking.add_argument("--author", default="")
+    checking.add_argument("--approvers", default="")
+    reporting = sub.add_parser("status")
+    reporting.add_argument("--json", action="store_true")
+    reporting.add_argument("--claimed", action="store_true")
+    reporting.add_argument("--weekly", action="store_true")
+    reporting.add_argument("--local", action="store_true")
+    new = sub.add_parser("new")
+    new.add_argument("kind", choices=("task", "bug", "milestone"))
+    new.add_argument("slug")
+    new.add_argument("--area", required=True)
+    args = parser.parse_args()
+    if args.command == "new":
+        if not lib.SLUG.match(args.slug):
+            parser.error(f"slug must match {lib.SLUG.pattern}")
+        print(SKELETON.format(kind=args.kind, id=uuid7(), slug=args.slug, area=args.area), end="")
+        return 0
+    return check(args) if args.command == "check" else status(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""The evidence workflow's body: run claimed targets, publish their records.
+
+    scripts/spec/ci                       # claimed -> record each -> publish
+    scripts/spec/ci --plan N --out FILE [--include-failing]
+    scripts/spec/ci --targets a b ...     # record these only, no publish
+    scripts/spec/ci --publish             # publish build/observations only
+    scripts/spec/ci --witness --signer ci --key K
+
+Claimed targets are those with no record at their current closure digest
+among: area requirements that are neither planned nor superseded, items
+whose intent is #active, and terminal items nobody superseded. A #planned
+item's exam is never run, so a planning merge leaves no failing record on
+the evidence branch.
+
+`--witness` writes a signed done witness to build/observations/done/ for
+every #active item whose mandatory acceptances are all enforced on the
+evidence ref and that has no witness yet; run `--publish` after it. The
+witness records each target's closure digest and `negativeControlsRefused`.
+
+Host-neutral: the workflow fetches the evidence ref before and pushes
+`refs/heads/evidence` after. `--plan` balances claimed targets over at
+most N shards by recorded wall time (`specs/targets.toml`, else 600 s
+each) and skips the operator targets listed there.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+import tomllib
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lib  # noqa: E402
+
+HERE = Path(__file__).resolve().parent
+TARGETS = lib.SPECS / "targets.toml"
+DEFAULT_SECONDS = 600
+
+
+def claimed(include_failing: bool = False) -> list[str]:
+    evidence = lib.Evidence()
+    wanted = {"claimed", "failing"} if include_failing else {"claimed"}
+    items = lib.load_items()
+    gone = lib.superseded(items)
+    candidates: set[str] = set()
+    for area in lib.load_areas():
+        for requirement in area.requirements:
+            if requirement["planned"] or requirement["id"] in gone:
+                continue
+            candidates.update(p["justTarget"] for t, p in lib.area_acceptances(requirement) if t == "observed")
+    for item in items:
+        if (item.terminal and item.id not in gone) or (not item.terminal and item.intent == "active"):
+            candidates.update(item.targets())
+    return sorted(t for t in candidates if evidence.record(t)[0] in wanted)
+
+
+def plan(targets: list[str], shards: int) -> list[dict[str, str]]:
+    """Greedy longest-first bin packing over at most `shards` bins."""
+    facts = tomllib.loads(TARGETS.read_text()) if TARGETS.is_file() else {}
+    seconds = facts.get("wall_time", {})
+    operator = set(facts.get("operator", []))
+    targets = [t for t in targets if t not in operator]
+    weighted = sorted(targets, key=lambda t: (-int(seconds.get(t, DEFAULT_SECONDS)), t))
+    bins: list[list] = [[0, []] for _ in range(max(1, min(shards, len(targets))))]
+    for target in weighted:
+        slot = min(bins, key=lambda b: b[0])
+        slot[1].append(target)
+        slot[0] += int(seconds.get(target, DEFAULT_SECONDS))
+    return [{"shard": str(i), "targets": " ".join(members)} for i, (_, members) in enumerate(bins) if members]
+
+
+def record(targets: list[str], runner: str, signer: str | None, key: str | None) -> dict[str, int]:
+    outcomes = {}
+    for target in targets:
+        command = [sys.executable, str(HERE / "record"), target, "--runner", runner]
+        if signer and key:
+            command += ["--signer", signer, "--key", key]
+        outcomes[target] = subprocess.run(command, cwd=lib.ROOT, check=False).returncode
+    for target, code in outcomes.items():
+        print(f"[ci] {target}: {'passed' if code == 0 else f'failed ({code})'}", flush=True)
+    return outcomes
+
+
+def witness(signer: str, key: str) -> int:
+    """Write and sign a done witness for every done #active item that has none."""
+    evidence = lib.Evidence()
+    if not evidence.ref:
+        print("[ci] witness: no evidence ref", flush=True)
+        return 0
+    head = lib.git("rev-parse", "HEAD").strip()
+    written = 0
+    for item in lib.load_items():
+        if item.terminal or not lib.item_done(item, evidence):
+            continue
+        digest = lib.item_digest(item.value)
+        if lib.read_blob(evidence.ref, lib.witness_path(item.id, digest)) is not None:
+            continue
+        rows = []
+        for target in sorted(set(item.targets())):
+            _, _, found = evidence.record(target)
+            closure = evidence.closure(target)
+            counts = {c["key"]: c["value"] for c in found["counts"]} if found else {}
+            rows.append((target, closure.digest() if closure else "", counts.get("negativeControlsRefused", -1)))
+        out = lib.OBSERVATIONS / lib.witness_path(item.id, digest)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(lib.witness_text(item.id, digest, head, rows, signer, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), encoding="utf-8")
+        lib.parse_record(out.read_bytes(), "Witness")
+        signature = lib.sign(out, key)
+        if not lib.verify_signature(out.read_bytes(), signature.read_bytes(), signer):
+            print(f"[ci] witness: {signer!r} does not verify against specs/allowed_signers", file=sys.stderr)
+            return 1
+        print(f"[ci] witness: {item.where} done at {head[:12]}", flush=True)
+        written += 1
+    print(f"[ci] witness: {written} new", flush=True)
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--plan", type=int, metavar="N")
+    parser.add_argument("--out")
+    parser.add_argument("--include-failing", action="store_true", help="also re-run targets whose record at this digest failed")
+    parser.add_argument("--targets", nargs="*")
+    parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--witness", action="store_true")
+    parser.add_argument("--runner", default="ci")
+    parser.add_argument("--signer")
+    parser.add_argument("--key")
+    args = parser.parse_args()
+
+    if args.witness:
+        if not (args.signer and args.key):
+            parser.error("--witness needs --signer and --key")
+        return witness(args.signer, args.key)
+    if args.publish:
+        return subprocess.run([sys.executable, str(HERE / "publish")], cwd=lib.ROOT, check=False).returncode
+    if args.targets is not None:
+        record(args.targets, args.runner, args.signer, args.key)
+        return 0
+    targets = claimed(args.include_failing)
+    if args.plan:
+        shards = plan(targets, args.plan)
+        if args.out:
+            Path(args.out).write_text(json.dumps(shards) + "\n", encoding="utf-8")
+        else:
+            json.dump(shards, sys.stdout)
+            print()
+        print(f"[ci] plan: {len(shards)} shard(s) for {len(targets)} claimed target(s)", file=sys.stderr)
+        return 0
+    print(f"[ci] claimed: {' '.join(targets) or 'none'}", flush=True)
+    if not targets:
+        return 0
+    record(targets, args.runner, args.signer, args.key)
+    return subprocess.run([sys.executable, str(HERE / "publish")], cwd=lib.ROOT, check=False).returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
