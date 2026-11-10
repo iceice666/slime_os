@@ -1,6 +1,8 @@
 # Mandatory spec-driven work items after a fixed identity cutoff
 
-**Status:** Accepted
+**Status:** Superseded by [`work-item-devloop.md`](work-item-devloop.md)
+**Removed at cutover:** the MyQue and devloop tools, recipes and paths this record
+names. They remain in Git at commit `81a0c9ea8d0a646574eb1ba49045bcf00011a25d`.
 **Related work item:** `01a0aef9-4c68-7251-8b66-291fe9f8cf4f`
 **Amends:** [`spec-driven-work-item-bodies.md`](spec-driven-work-item-bodies.md)
 (points 2 and 4 of its decision)
@@ -8,7 +10,7 @@
 ## Context
 
 [`spec-driven-work-item-bodies.md`](spec-driven-work-item-bodies.md) established
-an enforceable-completion path and made it optional: `just tasks_check` decides
+an enforceable-completion path and made it optional: `tasks_check` decides
 which items are subject purely from the presence of a `devloop` frontmatter
 record, and nothing requires a new item to carry one.
 
@@ -39,7 +41,7 @@ Two changes, both inside the ownership the earlier record claims.
 
 1. **A fixed identity cutoff.** An item whose canonical UUIDv7 timestamp is at
    or after `1790812800000` ms (`2026-10-01T00:00:00Z`) must carry a
-   `devloop` consumer record; `just tasks_check` fails otherwise. Enforcement is
+   `devloop` consumer record; `tasks_check` fails otherwise. Enforcement is
    hard — no exemption by `kind`, `tag`, or state.
 
    The cutoff is an announced future date rather than the identity of the
@@ -89,7 +91,7 @@ Two changes, both inside the ownership the earlier record claims.
 
 - New work costs more up front: a `dev-spec/v1` payload must be authored and
   admitted before implementation, for defects and small tasks alike.
-- `just tasks_check` stops being free. Each spec-driven validation compiles and
+- `tasks_check` stops being free. Each spec-driven validation compiles and
   links a native binary, so its cost grows linearly with the number of **live**
   spec-driven items. The current live spec-driven count is zero, which makes
   this the cheapest possible moment to start; keeping retirement current is now
@@ -108,7 +110,7 @@ Two changes, both inside the ownership the earlier record claims.
 
 ## Revisit conditions
 
-Revisit if `just tasks_check` becomes impractical as a routine gate as the live
+Revisit if `tasks_check` becomes impractical as a routine gate as the live
 spec-driven count grows; if authoring overhead measurably suppresses the
 recording of small defects, which would trade one honesty problem for another;
 if the generic gate's pass/fail reduction proves too coarse to express real

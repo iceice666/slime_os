@@ -8,8 +8,8 @@
 A product or grader change implements a work item already on `main`, so the
 item and its exam land in a planning pull request before any implementation.
 That ordering is what makes the grader independent of the code it grades:
-`devloop-approval.py` pins the recipe closure to `origin/main`, and an
-implementation branch cannot rewrite the checker.
+`scripts/spec/check` runs the base commit's judge, and V3 refuses an
+implementation pull request that touches its own grader set.
 
 The grader has to bind to something observable. For a plane checker that is a
 composition name and a marker vocabulary; for anything that crosses a
@@ -98,10 +98,9 @@ interface, and how much.
 
 ## References
 
-- `scripts/lib/pr_scope.py` — the classes; `INTERFACE`, `NEW_SCHEMA`,
-  `CONTRACT_README`.
-- `scripts/check/check-pr-scope.py` — the synthetic-diff controls.
+- `scripts/spec/check` — the path classes: an added `contracts/**/schema.zt`
+  is planning, a modified one is implementation and needs a V4 approval.
 - `scripts/check/check-contracts.py` — the schema sweep.
-- `just pr_scope_check` — the recipe the item's acceptance binds.
+- `just spec_check` — runs the judge locally.
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md) "Pull request scope" — the class
   table contributors read.

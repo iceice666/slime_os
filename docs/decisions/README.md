@@ -3,7 +3,7 @@
 This directory owns important long-lived cross-module choices whose rationale
 must survive any one implementation or review system. It is not a tracker and
 not a per-PR diary; canonical work identity, state, hierarchy, dependencies, and
-observed exit conditions remain in `.tasks/items/`.
+observed exit conditions remain in `.tasks/items/` and on the `evidence` branch.
 
 Each decision record states:
 
@@ -25,20 +25,21 @@ readable and link to the decision that replaced them.
 - [Development record ownership](development-record-ownership.md) — accepted;
   separates current knowledge, work state, change evidence, durable rationale,
   and retained history during the repository split.
-- [Spec-driven work-item bodies](spec-driven-work-item-bodies.md) — accepted;
-  what Slime OS owns once MyQue, devloop, and myque-gh publish the envelope,
-  requirements, evidence, and projection contracts it pins.
-  Its projection part is amended by the record below.
+- [Spec-driven work-item bodies](spec-driven-work-item-bodies.md) —
+  superseded by [Work-item devloop v1.5](work-item-devloop.md); what Slime OS
+  owned while MyQue, devloop, and myque-gh published the envelope,
+  requirements, evidence, and projection contracts it pinned.
 - [Work items are not projected into GitHub Issues](no-github-issue-projection.md)
   — accepted; `.tasks/` is the only work-item surface, and the Issue projection
   workflow is retired after it duplicated 468 Issues during a GitHub outage.
 - [Work-item devloop v1.5](work-item-devloop.md) — accepted; keeps V1's
   stages and pull-request classes, moves evidence to a signed `evidence`
   branch keyed by closure digests, judges pull requests from the base
-  commit, and supersedes the two spec-driven records at cutover.
+  commit, and supersedes the two spec-driven records.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
-  accepted; makes a devloop body compulsory for items created after a fixed
-  UUIDv7 cutoff, and scales gate identities through a generic target gate.
+  superseded by [Work-item devloop v1.5](work-item-devloop.md); made a devloop
+  body compulsory for items created after a fixed UUIDv7 cutoff, and scaled
+  gate identities through a generic target gate.
 - [Negative controls for product judges](negative-controls-for-product-judges.md)
   — accepted; a negative control is required for every assertion about Slime OS
   itself, and not for assertions about verification or process tooling.

@@ -5,7 +5,8 @@ qualification requirements that are specific enough to guide future work but do
 not describe current behavior.
 
 Plans are not a tracker. Identity, state, priority, hierarchy, dependencies, and
-observed exit conditions live only in `.tasks/items/`. A plan links canonical
+observed exit conditions live only in `.tasks/items/` and on the `evidence`
+branch; `specs/legacy.zt` indexes the V1 items. A plan names canonical
 work-item UUIDs when work exists; editing a plan never creates, starts, closes,
 or reorders an item.
 

@@ -34,8 +34,8 @@ suite (`scripts/check/check-sel4-gate-controls.py`) that supplies the controls
 for the plane gates.
 
 A negative control is **not required** when the assertion is about the
-repository's own verification or process tooling: the devloop and MyQue
-adapters, work-item closeout, retirement, and publication automation, CI
+repository's own verification or process tooling: the `scripts/spec/`
+judge, evidence recorder and closeout bot, work-item publication automation, CI
 selection logic, and any other test of a checker rather than of the product.
 Adding such a control is a new exam. Under [`HUMAN.md`](../../HUMAN.md)
 ("Process") that is a human decision, not something a work item adds by

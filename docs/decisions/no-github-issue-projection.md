@@ -14,7 +14,7 @@ open item into a GitHub Issue and every milestone item into a native milestone
 with `myque-gh apply`. It ran on every CI completion, on pull-request events and
 every 30 minutes, with issue write permission.
 
-Nothing in the repository read those Issues. devloop, `just tasks_check`, the
+Nothing in the repository read those Issues. devloop, the `tasks_check` recipe, the
 closeout workflow and the retirement workflow read `.tasks/` only. The owner
 did not read them either.
 
@@ -41,9 +41,9 @@ Work items are not projected into GitHub Issues or milestones.
   header.
 - The 43 open native milestones were closed, each with a note in its
   description that points to this record.
-- The myque-gh flake input and the `.#projection` nix shell stay. The closeout
-  and retirement workflows run their Python scripts in that shell, and its
-  name is part of the shared tool cache key.
+- The myque-gh flake input and the `.#projection` nix shell stayed for the
+  closeout and retirement workflows. The devloop v1.5 cutover removed both
+  workflows and myque-gh, and renamed the shell `.#spec`.
 
 ## Alternatives
 
@@ -59,8 +59,7 @@ Work items are not projected into GitHub Issues or milestones.
 
 - A GitHub outage no longer changes repository-visible state.
 - There is no GitHub view of the item hierarchy or milestone progress.
-  `just tasks_list`, `just tasks_graph` and `just devloop render <UUID>` render
-  the store.
+  `just spec_tasks_status` reports each item's state from the store.
 - Pull requests merged before this decision may still carry a
   `myque:implements` trailer. Nothing reads it.
 
