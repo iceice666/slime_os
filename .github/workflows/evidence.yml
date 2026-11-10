@@ -14,8 +14,11 @@
 # mandatory acceptances are all enforced, and `closeout` opens one pull
 # request per witnessed or cancelled item that moves it to
 # `.tasks/terminal/`. V6 trusts the witness and nothing else. The closeout
-# bot pushes and opens with its own token, CLOSEOUT_TOKEN: a pull request
-# opened with the built-in token triggers no checks, so V6 would never run.
+# bot pushes and opens with its own token: a pull request opened with the
+# built-in token triggers no checks, so V6 would never run. That token is a
+# GitHub App installation token, minted per run from the repository variable
+# CLOSEOUT_APP_ID and the repository secret CLOSEOUT_APP_PRIVATE_KEY; with
+# no CLOSEOUT_APP_ID the job skips closeout and succeeds.
 name: Evidence
 
 on:
@@ -176,22 +179,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # An installation token expires after an hour, so it is minted per run
+      # and never stored as a secret.
       - name: Closeout token
+        id: app
+        if: vars.CLOSEOUT_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CLOSEOUT_APP_ID }}
+          private-key: ${{ secrets.CLOSEOUT_APP_PRIVATE_KEY }}
+      - name: Closeout bot configured
         env:
-          CLOSEOUT_TOKEN: ${{ secrets.CLOSEOUT_TOKEN }}
+          CLOSEOUT_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          if [ -z "$CLOSEOUT_TOKEN" ]; then echo "no CLOSEOUT_TOKEN; the closeout bot is not configured"; else echo "CLOSEOUT_READY=1" >> "$GITHUB_ENV"; fi
+          if [ -z "$CLOSEOUT_TOKEN" ]; then echo "no CLOSEOUT_APP_ID; the closeout bot is not configured"; else echo "CLOSEOUT_READY=1" >> "$GITHUB_ENV"; fi
       - uses: actions/checkout@v7
         if: env.CLOSEOUT_READY == '1'
         with:
           fetch-depth: 0
-          token: ${{ secrets.CLOSEOUT_TOKEN }}
+          token: ${{ steps.app.outputs.token }}
       - uses: nixbuild/nix-quick-install-action@v35
         if: env.CLOSEOUT_READY == '1'
       - if: env.CLOSEOUT_READY == '1'
         run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
       - if: env.CLOSEOUT_READY == '1'
         env:
-          CLOSEOUT_TOKEN: ${{ secrets.CLOSEOUT_TOKEN }}
+          CLOSEOUT_TOKEN: ${{ steps.app.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: nix develop .#projection --command python3 scripts/spec/closeout --forge github
