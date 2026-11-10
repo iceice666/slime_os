@@ -113,13 +113,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for GitHub intake, planning-before-implem
 naming the implemented item, and evidence-based completion. See [HUMAN.md](HUMAN.md) for the
 decisions the people on the project own and how to read an agent-written PR.
 
-Work-item identity, state, hierarchy, dependencies, and observed closure evidence live in `.tasks/items/`, one Markdown file per item under a canonical UUID, managed by [MyQue](https://github.com/mozufu/myque). Human keys such as `C9.4`, `IO4`, and `B92` are display aliases: optional, mutable, and never resolved through by a checker or dependency edge.
+Work-item identity, intent, hierarchy, dependencies, and acceptances live in `.tasks/items/`, one task/v2 Zutai file per open item, named by its slug and identified by a canonical UUID. Closed items move unchanged to `.tasks/terminal/`. Area files under `specs/` hold the frozen promises, and [`specs/legacy.zt`](specs/legacy.zt) indexes the 448 V1 items by UUID and names the commit that holds their full text. Human keys such as `C9.4`, `IO4`, and `B92` in older text are display aliases that no checker resolves. Signed observation records live on the `evidence` branch.
 
 ```sh
-just tasks_list    # every item with its key, kind, and state
-just tasks_next    # what is actionable right now
-just tasks_graph   # the dependency graph
-just tasks_check   # validate the store and the repository's ordering policy
+just spec_tasks_status   # each item's state from the evidence branch
+just spec_status         # each area requirement's state from the evidence branch
+just spec_tasks_check    # validate items, area files, and schema copies
+just spec_check          # the judge; add --base origin/main to judge a branch
 ```
 
 Current ownership, invariants, and limitations live in
@@ -131,7 +131,7 @@ accepted or proposed status. [`docs/`](docs/README.md) is the entry point.
 The [roadmap classification](roadmap/README.md) identifies each retained source,
 its extracted owner, and detailed requirements not yet extracted. Historical
 chronology and devlogs are preserved in the [private archive](docs/history.md). Open backlog
-items precede milestone work under `just tasks_check`; this page does not carry
+bugs precede milestone work under rule V7 of `scripts/spec/check`; this page does not carry
 a second priority or completion table.
 
 ## Current repository layout
@@ -143,14 +143,15 @@ slime-root/      The seL4 root task: generation admission, tasks, allocation, sh
 components/      Rust no_std userspace components, one crate per component under system/, services/, applications/, and testkit/, plus the syscall runtime (`runtime`), shared helpers (`lib`), and generated protocols (`proto`)
 boot-contracts/  Shared Rust boot, generation, storage, recovery, and admission contract decoders
 contracts/       Versioned Zutai schemas for every persisted, IPC, and boot format, plus generation fixtures
-scripts/         Host tooling grouped as build/, check/, generate/, and lib/
+scripts/         Host tooling grouped as build/, check/, generate/, lib/, and spec/ (the work-item judge)
 tools/           Developer-facing helpers such as LLDB attachment
 docs/            Current architecture, operation, references, decisions, plans, and exploration
 roadmap/         Explicitly unextracted requirements and retained surrounding context
 docs/history.md  Immutable private archive locator and evidence/restoration boundary
 assets/          Boot/runtime assets
 deps/            Pinned seL4, rust-sel4, and Zutai submodules
-.tasks/          Canonical work-item store (`items/`)
+.tasks/          Canonical work-item store (`items/` open, `terminal/` closed)
+specs/           Area files holding frozen promises, the V1 item index, and evidence signers
 Justfile         Build, run, test, format, lint, generation, contract, and debug commands
 ```
 

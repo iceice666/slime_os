@@ -3,29 +3,31 @@
 ## The short version
 
 Slime OS uses GitHub for collaboration, but canonical project state lives in
-MyQue under `.tasks/items/`. GitHub Issues are intake for bugs and proposals.
-Work items are not projected into Issues or milestones; see
+task/v2 work items under `.tasks/` and area files under `specs/`. GitHub
+Issues are intake for bugs and proposals. Work items are not projected into
+Issues or milestones; see
 [the decision](docs/decisions/no-github-issue-projection.md).
 
-**For a product or grader change, first land a dedicated work-item PR. Only
-after the item exists on `main` may you open an implementation PR.** Do not
-combine a new item and its implementation, or stack implementation on
-unmerged planning; CI refuses a pull request that does both. A work-item
-proposal PR is the bootstrap exception: it needs no existing item. A pull
-request that touches neither the product tree nor the grader closure — CI
-workflows outside `codePaths`, this file, `AGENTS.md`, `docs/` — needs no work item at all; see
+**For a product change, first land a planning PR that adds or edits the work
+item. Only after the item is on `main` may you open an implementation PR.**
+`scripts/spec/check` refuses a pull request that carries more than one class,
+so a new item and its implementation cannot share a pull request. A pull
+request confined to process paths — `.github/`, `docs/`, `.agents/`, this
+file, `AGENTS.md` — needs no work item; see
 [Pull request scope](#pull-request-scope).
 
-**PR merged != work item done.** Completion requires the item's exit conditions
-to be observed and recorded, not just an implementation to land. For a
-spec-driven item that recorded its gate evidence, a workflow on `main` runs
-`just devloop complete` and proposes the transition as a `.tasks`-only PR;
-a human merges it.
+**PR merged != work item done.** After each push to `main`, the Evidence
+workflow records every claimed target and signs a done witness for each
+`#active` item whose mandatory acceptances are enforced. Its closeout bot then
+opens one pull request per witnessed item that moves the item to
+`.tasks/terminal/`. Nobody runs a completion command.
 
-If those two rules read as ceremony, start with
+If those rules read as ceremony, start with
 [How work flows](docs/getting-started/00-how-work-flows.md): the same process
 as a timeline, with the reason and the enforcing check beside each step. This
 file owns the exact rules; that page explains them.
+[`docs/decisions/work-item-devloop.md`](docs/decisions/work-item-devloop.md)
+owns the rules V1 to V10 and their reasons.
 
 ## Where work lives
 
@@ -34,155 +36,132 @@ file owns the exact rules; that page explains them.
 Open a [GitHub Issue](https://github.com/iceice666/slime_os/issues) for a bug,
 proposal, question, or discussion. For bugs, include the target, revision,
 reproduction steps, expected result, and observed output when available.
-Ordinary reporters do **not** need to install MyQue or edit `.tasks`.
-Accepted work is later represented as a canonical MyQue item. The Issue does
-not track that item; the item's file under `.tasks/` is its only state.
+Ordinary reporters do **not** edit `.tasks`.
+Accepted work later becomes a task/v2 item. The Issue does not track that
+item; the item's file under `.tasks/` is its only state.
 
 ### Bot Issues are retired projections
 
 Issues created by `github-actions[bot]` whose body begins with
 `<!-- myque:id=<UUID> -->` came from the retired projection. They are closed
-and no longer track their item. Read the item under `.tasks/` instead.
+and no longer track their item. Look the UUID up in
+[`specs/legacy.zt`](specs/legacy.zt), which indexes every V1 item and names
+the commit that holds its full text.
 
 ### Work-item hierarchy
 
-Create children only for independently trackable work with observable exit
-conditions. Admit one with `just devloop admit spec.zti --title "Describe the
-work" --kind task`, then `myque parent <CHILD_UUID> <PARENT_UUID>` and
-`just tasks_check`; follow the planning-PR process below. Do not change kinds
-or parent relationships merely to populate a progress bar. `just tasks_graph`
-and `just tasks_list` render the hierarchy from the store.
+An item has one `kind`: `#task`, `#bug`, or `#milestone`. Its `parent` names
+a milestone or other item by UUID, and `depends` lists the items it waits
+for. Create a child only for independently trackable work with observable
+acceptances. Do not change kinds or parents to populate a progress bar.
 
-### MyQue is canonical
+### The store is canonical
 
 | Surface | Owns |
 |---|---|
-| `.tasks/items/<UUID>.md` | Problem, scope, state, exit conditions, hierarchy, dependencies, and observed closure evidence |
-| GitHub | Intake, collaboration, reviews, projected work |
-| PR | Reviewable change, claim, risk, verification, limits, and related canonical work |
+| `.tasks/items/<slug>.zt` | Open work: problem, area, intent, `owns`, requirements, acceptances, hierarchy, dependencies |
+| `.tasks/terminal/<slug>.zt` | Closed work, moved there unchanged by a closeout PR |
+| `specs/<area>.zt` | Frozen promises: area requirements and invariants (V10) |
+| `specs/legacy.zt` | Index of the 448 V1 items and the commit that holds their text |
+| `evidence` branch | Signed observation records and done witnesses |
+| GitHub | Intake, collaboration, reviews |
+| PR | Reviewable change, claim, risk, verification, limits, and related work item |
 | Owning docs/contracts | Current architecture, behavior, procedures, and limitations |
-| [History archive](docs/history.md) | Historical investigations and raw evidence; optional exceptional reusable investigations, never a product build dependency |
+| [History archive](docs/history.md) | Historical investigations and raw evidence; never a product build dependency |
 
-UUIDs are canonical identities. Optional human keys are mutable display aliases,
-not persistent references. Generated lists and `roadmap/` are not state stores.
+UUIDs are canonical identities. A slug is the file name. Human keys such as
+`C9.4` in older text are display aliases that no checker resolves. Generated
+lists and `roadmap/` are not state stores.
 
 ## Proposing work
 
-Discuss bugs and ideas in Issues first when useful. **New canonical work must be
-spec-driven**: every item created on or after `2026-10-01T00:00:00Z` carries a
-devloop requirements body, so propose it with `just devloop admit` as described
-under [Spec-driven items](#spec-driven-items) below, not with `myque new`.
-`just tasks_check` refuses a store where a post-cutoff item lacks that record,
-and the rule admits no exemption by kind, tag, or state — defects included.
-
-MyQue allocates the UUID either way; never invent one or allocate a numbered key
-by scanning the store. Fill in the item's problem, scope, observable exit
-conditions, and use MyQue commands for any parent/dependency relationships.
-Follow [AGENTS.md](AGENTS.md)'s backlog-first and work-item rules; run
-`just tasks_check`.
-
-Items created before that instant stay valid as prose and never become subject,
-even if reopened. For one of those, and only for one of those, the older form
-applies:
+Discuss bugs and ideas in Issues first when useful. Start an item from the
+skeleton, which carries a fresh UUIDv7:
 
 ```sh
-myque new "Describe the work" --kind task   # pre-cutoff items only
+python3 scripts/spec/tasks new task <slug> --area <area> > .tasks/items/<slug>.zt
 ```
 
-Submit a **work-item-only planning PR**, and merge it before opening an
-implementation PR. An already-landed item can cover another implementation PR
-within its scope; a new planning item is not required for every PR.
+The kind is `task`, `bug`, or `milestone`. `<area>` names a file under
+`specs/`, whose invariants bind the item. Never invent a UUID. Fill in the
+problem, `owns`, `nonGoals`, requirements, and acceptances, then run
+`just spec_tasks_check`.
 
-### Spec-driven items
+A new item enters as `#planned`. Submit it in a **planning PR**, and merge
+that PR before opening an implementation PR. A landed item covers every
+implementation PR within its `owns`; a new item is not required per PR.
 
-An item carries its requirements as structured data, which makes its
-completion enforceable rather than asserted.
+### Requirements, acceptances, and the exam
+
+An item carries its requirements as Zutai data, so `scripts/spec/check`
+enforces completion instead of trusting a claim.
 [Carrying a work item](docs/getting-started/06-work-item-lifecycle.md) walks
-both lifecycles command by command; the rules that bind a pull request are
-here. Author the payload as a `dev-spec/v1` `.zti` file — or as a `.zt` input
-that computes it — and admit it:
+the lifecycle command by command; the rules that bind a pull request are
+here. [`.tasks/items/ci-cache-budget.zt`](.tasks/items/ci-cache-budget.zt) is
+a complete item.
 
-```sh
-just devloop admit spec.zti --title "Describe the work" --admission <token> --policy .devloop/policy.json --kind task
-```
+| Field | Meaning |
+|---|---|
+| `owns` | Path globs an implementation PR of this item may change (V2) |
+| `requirements` | `h.req <id> <statement> { <target or acceptance id>; ... }`: one observable statement, bound to `just` targets or human acceptances |
+| `acceptance` | `h.observed "<target>"`, `h.observedWhere` with predicates, or `h.human <id> <question>` |
+| `intent` | `#planned`, `#active`, `#blocked`, `#deferred`, or `#cancelled` |
+| `supersedes` | A terminal item, an item requirement, or an area requirement this item replaces |
 
-[devloop](https://github.com/mozufu/devloop) allocates nothing: MyQue assigns
-the UUID, the body becomes one fenced `zti` block, and the `devloop`
-frontmatter record carries the profile, pins, digest, and admission identity.
-Repeating the same token is idempotent. From then on `just tasks_check`
-validates that body, and work proceeds by canonical UUID:
+The **exam** is the set of targets the acceptances bind, plus every grader
+file in their closure. `just spec_closure --explain` lists that composition:
+recipe definitions, grader files, declared inputs, image derivations, and
+toolchain files. An evidence record is keyed by the closure digest, so a
+change to any grader file makes a new record necessary.
 
-```sh
-just devloop start <ITEM> --policy .devloop/policy.json
-just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
-just devloop human <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image> --observations <observed>.json --observer <who>
-just devloop complete <ITEM> --policy .devloop/policy.json --inputs <inputs>.json --target <target> --image <image>
-```
-
-Approval applies this repository's rules before anything starts: the item must
-already be on canonical `main`, and open backlog defects come first. Gate
-identities resolve through [`.devloop/policy.json`](.devloop/policy.json) to
-existing `just` targets; a gate reports the typed observations that policy
-declares, and the item's own predicates decide whether they satisfy an
-acceptance.
-
-Most acceptances bind the general `just-target` gate, which runs one declared
-recipe and reports a single `passed` boolean. Name the recipe in the execution
-inputs, never in requirement text, and commit the inputs file under
-`.devloop/inputs/` in the planning PR:
-
-```sh
-echo '{"justTarget": "sel4_qos_check"}' > .devloop/inputs/<item>.json
-just devloop gate <ITEM> <ACCEPTANCE> --policy .devloop/policy.json --inputs .devloop/inputs/<item>.json --target sel4-qos --image qemu-arm-virt
-```
-
-The gate refuses a recipe `just` does not publish, and devloop binds the inputs
-digest into the evidence identity, so evidence recorded for one recipe never
-transfers to another.
-
-**The exam is landed before the implementation is graded.** At `eligible`
-and `complete`, approval (`scripts/check/devloop-approval.py`) resolves the
-inputs digest to a tracked file under `.devloop/inputs/` and refuses unless
-that file, the named recipe and every recipe in its dependency chain, the
-scripts those recipes invoke, and the `scripts/lib` modules they import are
-byte-for-byte what `origin/main` carries. An implementation branch may add
-recipes and checkers for other work, but it cannot rewrite the ones that
-decide its own acceptances: a checker that needs to change is a planning
-change and lands first. Inputs that name no recipe (`work-item-store`) are
-only required to be landed.
+**The exam lands before the implementation.** The planning PR adds the
+item and any new target or checker it binds. The implementation PR may not
+touch the grader set of any bound target (V3). A checker that must change is
+a planning change, and a grader change needs a V4 approval.
 
 When a requirement is a number — attempts refused, controls exercised, bytes
-delivered — bind `just-observations` instead. It runs the same named recipe,
-and the recipe's checker reports what it counted through
-`scripts/lib/devloop_observations.py`:
+delivered — the recipe's checker reports it through
+`scripts/lib/devloop_observations.py`, and `h.observedWhere` states the
+predicate:
 
 ```python
 from devloop_observations import record
 record(staleHandlesRejected=refusals, negativeControlsRefused=len(controls))
 ```
 
-The gate adds `passed` and a `transcriptDigest` of its own, refuses an
-observation the policy does not declare or a checker that reports `passed`
-for itself, and the acceptance's predicate states the expected value. The
-planning PR owns that number and the checker that counts it: an implementation
-PR that changes either is changing its own exam, and the review skill in
-[`.agents/skills/spec-review/SKILL.md`](.agents/skills/spec-review/SKILL.md)
-asks why. [`.devloop/examples/`](.devloop/examples/) holds a worked spec and
-its inputs. A check that needs observations the policy does not yet declare
-adds them to `just-observations` in the planning PR.
+`passed` comes from the recipe's exit status, never from the report, so a
+checker cannot vouch for itself. Run one target locally under the record
+wrapper with `just spec_record <target>`. It writes
+`build/observations/<target>.zt`. A record taken from a dirty tree cannot be
+published.
 
-`just tasks_check` also refuses a tracked file that no `codePaths` entry
-covers, unless `scripts/check/check-work-items.py` exempts it by decision:
-a change to a checker, recipe, pin, or fixture must stale the evidence recorded
-against it. Evidence is recorded into the `devloop` record bound to the exact
-requirements, helpers, code, policy, execution inputs, target, image, and run
-epoch that were tested, and the newest entry for an obligation decides it — a
-later failing run is never satisfied by an earlier pass. A human obligation
-stays pending until an operator supplies a real observation; nothing here may
-synthesize one, and `complete` refuses while any mandatory obligation is
-unmet. Merging still does not complete an item.
+A `#human` acceptance stays open until a person listed in
+`specs/allowed_signers` answers it with `scripts/spec/human`. The answer is
+signed and bound to the item's requirements digest, so a reworded statement
+asks again. Automation never infers an answer. Targets CI cannot run, such as
+board and physical-machine boots, are listed under `operator` in
+`specs/targets.toml`, and an operator signs their records with
+`scripts/spec/record <target> --signer <principal>`.
 
-Ordinary prose items need none of this and are unaffected.
+### Intent and backlog first
+
+| From | To |
+|---|---|
+| new | `#planned` |
+| `#planned` | `#active`, `#deferred`, `#cancelled` |
+| `#active` | `#blocked`, `#deferred`, `#cancelled` |
+| `#blocked` | `#active`, `#cancelled` |
+| `#deferred` | `#planned`, `#cancelled` |
+
+The judge refuses any other intent change (V5). Entering `#deferred` or
+`#cancelled` needs a V4 approval. A PR that changes only an item's `intent`
+counts as an implementation PR, so `#planned` to `#active` normally ships
+with the first implementation change. The Evidence workflow claims an item's
+targets only while it is `#active`.
+
+Backlog bugs come first (V7). A milestone, or an item under one, cannot enter
+`#active` while a `#bug` item is `#planned` or `#active`, or while an area
+promise fails.
 
 ## Development setup
 
@@ -214,62 +193,62 @@ These guides own the tutorials; this document owns the contribution workflow.
 
 ### Pull request scope
 
-`scripts/check/check-pr-scope.py` classifies every path a pull request
-changes, from lists the repository already maintains rather than a third
-table, and CI runs it on every pull request. Classification uses the union of
-`codePaths` from the compared base and head commits, not the checkout policy.
-Removing protection in the same diff does not exempt the changed path. Renames
-and detected copies retain source and destination classification; destinations
-introducing a new work-item UUID count as new items even without an `A` status.
-The Git comparison explicitly detects copies from unchanged sources, so a
-copied schema does not qualify as an added interface merely because its source
-was unchanged. Missing or malformed revision policies refuse classification.
-
+`scripts/spec/check` gives every changed path one class, and a pull request
+may carry one class only (V1). The `Spec judge` workflow runs the base
+commit's copy of the judge on every pull request and after each review, so a
+pull request cannot rewrite the judge that judges it. Run the same judgement
+locally with `just spec_check --base origin/main`.
 
 | Class | Paths | Rule |
 |---|---|---|
-| **grader** | `scripts/`, `just/`, `Justfile`, `.devloop/` — the closure `devloop-approval.py` pins to `origin/main` | needs a landed work item; may land with the item as its exam |
-| **product** | every other `codePaths` entry in `.devloop/policy.json`: `slime-root/`, `components/`, `contracts/`, `boot-contracts/`, `sel4/`, build inputs, pins, toolchain configuration | needs a landed work item; **never** in a PR that adds one |
-| **interface** | an **added** `contracts/<name>/v<N>/schema.zt`, or a contract's `README.md` — the boundary a grader binds to | needs a landed work item; may land with the item as part of its exam. `gen_rust.zt`, generated bindings, system specs, and a modified or renamed schema are product |
-| **derived** | regenerated closure sources under `contracts/system-image-closure/v3/closures/`, negative cases under `contracts/system-image-closure/v2/negative/`, and `contracts/system-test-run/v2/runs/` | mirrors whatever else changed; never decides |
-| **other** | `.github/` paths outside `codePaths`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`, `.tasks/`, and anything else outside the code identity | no work item required |
+| **planning** | an added or edited `.tasks/items/*.zt`, `specs/*.zt` area files, an **added** `contracts/**/schema.zt`, a `scripts/check/` or `scripts/lib/` file in the grader set of a bound target, and `Justfile` or `just/` recipes in the closure of a bound target | lands the item and its exam before any implementation |
+| **implementation** | `components/`, `slime-root/`, `boot-contracts/`, other `contracts/` paths including a modified `schema.zt`, `scripts/build/`, `scripts/generate/`, `scripts/tools/`, `sdk/`, `tools/`, `sel4/`, `deps/`, `nix/`, `evidence/`, `verification/`, `assets/`, build and toolchain files, other recipes, and an intent-only item edit | every path under the `owns` of an item that is on base and `#active` on head (V2); touches no bound grader set (V3) |
+| **process** | `.github/`, `docs/`, `.agents/`, `.claude/`, `scripts/spec/`, `roadmap/`, `contracts/task/`, `contracts/observation/`, the task schema copies in `.tasks/`, root `*.md`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `specs/allowed_signers`, `specs/targets.toml`, `specs/schema.zt`, `specs/helpers.zt`, `specs/legacy.zt`, and `scripts/check/` or `scripts/lib/` files outside every grader set | needs no work item |
+| **closeout** | an unchanged move of `.tasks/items/<slug>.zt` to `.tasks/terminal/` | needs a signed done witness, unless the item is `#cancelled` (V6) |
+| **derived** | regenerated closure sources under `contracts/system-image-closure/v3/closures/`, negative cases under `contracts/system-image-closure/v2/negative/`, and `contracts/system-test-run/v1/runs/` and `v2/runs/` | accompanies any class; never decides |
 
-The CI, closeout and retirement workflow files are explicitly
-in `codePaths`: their contents affect shared-tool cache qualification, so edits
-stale evidence and follow the product-classified planning-first rule. Other
-workflow files remain process changes unless explicitly covered.
+The judge refuses a path the table does not list. A process PR adds it to the
+table first. Every `contracts/**/schema.zt` is compiled by
+`just contracts_check` whether or not a generator or checker names it yet, so
+a schema landed ahead of its implementation is still checked. See
+[docs/decisions/planning-pr-schema-contracts.md](docs/decisions/planning-pr-schema-contracts.md).
 
-Two rules follow. A pull request that **adds** a `.tasks/items/*.md` file may
-change grader, interface, derived and other paths — the exam and the schema it
-reads land with the item — but not product paths; CI fails and names both.
-Every `contracts/**/schema.zt` is compiled by `just contracts_check` whether
-or not a generator or checker names it yet, so a schema landed ahead of its
-implementation is still checked. See
-[docs/decisions/planning-pr-schema-contracts.md](docs/decisions/planning-pr-schema-contracts.md). A pull request confined to
-derived and other paths is a **process change**: it needs no landed item,
-still runs every applicable check, and its description states what it
-changes. Product and grader changes keep the landed-item requirement below.
+### Approvals
 
-### Canonical work-item requirement
+One approval on the head from a person in `HUMAN_OWNERS`, other than the
+author, is required for each of these (V4):
 
-Every product or grader implementation PR must implement at least one canonical
-UUID **already present on `main` before the PR opens**. This includes features,
-bug fixes, architecture changes, behavioral refactors, gate semantic changes,
-new verification gates, protocols/schemas, drivers, hardware bring-up,
-authority/security changes, and policy changes to the grader closure.
+- a change to the grader set of a bound target, or to a recipe in its closure;
+- a change to an area invariant;
+- a change to an existing contract `schema.zt`;
+- a change to `scripts/spec/`, `contracts/task/`, `contracts/observation/`,
+  `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, or `specs/allowed_signers`;
+- an item entering `#deferred` or `#cancelled` (V5).
+
+A grader file or recipe that grades a promise, meaning an area requirement or
+a terminal item nobody superseded, changes only from a new item. The judge
+reads approvals from the current head, so a new push needs a new approval.
+An account in `AGENT_ACCOUNTS` never counts as an approval.
+
+### Work-item requirement
+
+Every implementation PR changes only paths under the `owns` of an item that
+is **already on `main`** and is `#active` on the PR's head. This covers
+features, bug fixes, architecture changes, behavioral refactors, protocols
+and schemas, drivers, hardware bring-up, and authority or security changes.
 
 Use the existing [change](.github/PULL_REQUEST_TEMPLATE/change.md) or
 [system-change](.github/PULL_REQUEST_TEMPLATE/system-change.md) template. State
 what changed, the claim, risks/invariants, review surface, exact verification,
 evidence class, target or image identity when relevant, known limits, and
-canonical related work. Link existing evidence instead of duplicating it.
-Name the implemented item by its canonical UUID in the PR description.
+the related work item. Link existing evidence instead of duplicating it.
+Name the item by its slug or UUID in the PR description.
 
 ### No GitHub auto-close
 
 Do not use `Closes #123`, `Fixes #123`, or `Resolves #123` to complete work.
-GitHub does not own work-item completion; the item's devloop record or
-`## Closure evidence` section does.
+GitHub does not own work-item completion. A signed done witness on the
+`evidence` branch and the closeout PR it allows do.
 
 ### Verification
 
@@ -282,7 +261,9 @@ Ordinary changes do not require a devlog entry. Run `just docs_check` for
 maintained documentation, policy, links, or command-reference changes. Archived
 records retain their original checker at their immutable revision; no archive
 checkout or network access is required for current docs checks. Run
-`just tasks_check` when applicable and `just typos` for documentation.
+`just spec_check --base origin/main` before opening a pull request,
+`just spec_tasks_check` when it touches `.tasks/` or `specs/`, and
+`just typos` for documentation.
 
 ## Review and completion
 
@@ -291,124 +272,53 @@ author answers or declines a finding — is set in [AGENTS.md](AGENTS.md) under
 "Code review"; it binds people, review bots, and agents alike. When an author
 stops and asks, [HUMAN.md](HUMAN.md) says how to answer.
 
-**Merge means implementation landed, not that work is complete.** Evaluate the
-item's actual exit conditions: QEMU gates, cross-architecture runs, physical
-hardware evidence, failure/refusal evidence, repeated reliability runs, CI,
-or other item-specific observations. QEMU output does not prove hardware
-support, and a green unrelated gate does not satisfy an exit condition.
+**Merge means implementation landed, not that work is complete.** An item is
+done when every mandatory acceptance is enforced on the `evidence` branch at
+the current closure digest. QEMU output does not prove hardware support, and a
+green unrelated gate does not satisfy an acceptance. `just spec_tasks_status`
+prints each item's state, and `just spec_status` prints each area
+requirement's state.
 
-For an ordinary prose item, record the observed exit evidence, scope, identity,
-and limits in exactly one unambiguous `## Closure evidence` section. Retirement
-extracts that section's content verbatim, through the next heading of the same
-or higher level or the body's end; an `Exit conditions` list is not observed
-evidence. Only then run:
+### Evidence and closeout
 
-```sh
-myque close <ITEM>
-```
+The Evidence workflow (`.github/workflows/evidence.yml`) runs after each push
+to `main`:
 
-A spec-driven item closes through `just devloop complete`, which verifies its
-mandatory acceptance obligations against recorded evidence and then transitions
-the item under the revision it checked. A direct `myque close` bypasses that
-boundary; use it only for items that carry no `devloop` record.
+1. It runs every claimed target: those of `#active` items and of terminal
+   items nobody superseded. `#planned` items are never claimed.
+2. It publishes each record, keyed by closure digest and signed by `ci`, to
+   the `evidence` branch.
+3. It signs a done witness for each `#active` item whose mandatory
+   acceptances are all enforced.
+4. Its closeout bot runs `scripts/spec/closeout`. The bot opens one pull
+   request per witnessed or `#cancelled` item that moves the file to
+   `.tasks/terminal/` byte for byte.
 
-Commit the canonical `.tasks` transition. Leave unfinished work unfinished.
-
-### Automated closeout PRs
-
-`just devloop complete` refuses on an implementation branch whenever that
-branch changed its own grader, and always grades against `origin/main`, so
-the transition is ordinarily made after merge. `myque-closeout.yml` does
-this: on every push to `main` that touches the store or the grader closure it
-clones canonical `main`, runs `just tasks_check`, and for every open or
-active spec-driven item with recorded evidence recovers the inputs file,
-target and image from the evidence identity, asks `just devloop eligible`,
-and runs `just devloop complete` for each item devloop accepts. It commits
-only those items' `.tasks/items` files, pushes `automation/myque-closeout/<main>`
-and opens one PR; a human reviews and merges after normal CI. Items devloop
-refuses — expired evidence, a changed code closure, an unmet acceptance — are
-listed in the PR body with devloop's reason and left open.
-
-The workflow never writes `main`, never records or edits evidence, and never
-decides eligibility itself. `workflow_dispatch` runs a preview that completes
-items in a throwaway clone and publishes nothing; the push trigger publishes
-only while the `MYQUE_CLOSEOUT_ENABLED` repository variable is `true`. A
-proposal whose base `main` has since advanced is closed and regenerated, not
-rebased. Preview locally with
-`python3 scripts/lib/work_item_closeout_publish.py` in the pinned environment.
-
-### Storage-only retirement PRs
-
-The separate `myque-retire.yml` workflow proposes retirement of live `done`
-items from a recorded full revision of canonical `origin/main`, with no
-arbitrary source refs and no additional age threshold. MyQue can retire both
-`work-item/v1` and `work-item/v2` directly; this is not envelope migration,
-closure, or a new completion judgment. Cancelled, unfinished, and already
-retired items are not candidates. Missing/empty/ambiguous prose evidence,
-unsupported consumer versions or evidence, and unknown consumer namespaces
-are reported skips. Devloop retirement references recorded evidence identities
-and gate results, not today's expiry or a fabricated completion receipt; its
-identity fields remain in the terminal consumer entry and full evidence remains
-in exact retained history.
-
-Preview in the pinned environment with
-`python3 scripts/lib/work_item_retirement_publish.py` (the default mode).
-Preview changes neither the source store nor remote refs, branches, or PRs.
-`--apply` is only for the trusted isolated GitHub workflow and enforces remote
-merge-protection and publication guards. It runs `just tasks_check` before and
-after MyQue mutation, verifies exact history and the same-UUID storage-only
-diff, and pushes/verifies this batch's retained refs before the branch or PR.
-Empty batches publish nothing; an existing retirement PR stops a new batch.
-Partial publication is resumed only after verifying expected bot-owned state,
-never by overwriting a PR under review or deleting retained refs. A human must
-review and merge after normal CI; automatic merge and direct `main` writes are
-not supported.
-
-Manual dispatch defaults to preview. The daily schedule runs only when the
-repository variable `MYQUE_RETIRE_ENABLED=true` is set **after real manual
-GitHub qualification**, including the retained refs, maintenance PR, actual CI
-trigger/approval path, and stale-base race. Do not infer qualification from
-local simulations; this document does not claim the workflow tested or enabled.
-Publication prerequisites are PR-required rules with no automation bypass,
-the required `Canonical work-item store` check from GitHub Actions (integration
-`15368`) under strict/current-base rules,
-and GitHub Actions permission to create PRs (“Allow GitHub Actions to create
-and approve pull requests”). Concurrency alone cannot stop stale retirement
-after an item is edited or reopened on `main`. `GITHUB_TOKEN`-created PRs may
-need human approval or a supported manual check trigger; do not claim automatic
-CI without observing it, replace the token, or bypass the merge rules.
-
-The [lifecycle guide](docs/getting-started/06-work-item-lifecycle.md#retirement-maintenance-prs)
-owns exact evidence selection, retained-ref transport, qualification, and recovery.
-An administrator must also approve the ruleset identities using the lifecycle
-guide's `--approve-rules` procedure and set `MYQUE_RETIRE_RULES_APPROVAL`;
-workflow tokens cannot inspect private bypass lists. A ruleset change invalidates
-that approval without granting the workflow administrative credentials.
-
-An administrator must establish these prerequisites before qualification;
-automation does not modify repository settings. A token may lack
-administrative read permission, so PR creation permission is ultimately
-enforced by GitHub's publication request, not promised by a local preflight.
+The judge accepts that move only with a signed witness for the item's current
+digest, or for a `#cancelled` item (V6). A terminal item never changes again.
+The bot authenticates with a GitHub App token minted per run from the
+repository variable `CLOSEOUT_APP_ID` and the secret
+`CLOSEOUT_APP_PRIVATE_KEY`. A pull request opened with the workflow's built-in
+token triggers no checks, so V6 would never run. Without `CLOSEOUT_APP_ID`,
+the job skips closeout and succeeds. Preview locally with
+`python3 scripts/spec/closeout --forge local --dry-run`.
 
 ## Trivial-change exception
 
-Within the product tree or the grader closure, a genuine typo, broken link,
-format-only change, tiny wording correction, or mechanical maintenance with
-**no behavioral or project-state consequence** may skip the landed-item
-requirement. Judge semantics, not line count. When uncertain, create the item.
-This exception does not waive applicable checks. Outside those two classes the
-[process escape hatch](#pull-request-scope) applies mechanically and no
-judgement call is needed.
+The judge admits no exception. A typo fix in an implementation path still
+needs an item on `main` that is `#active` and whose `owns` covers the path. A
+change confined to process paths needs no item, and no judgement call is
+needed.
 
 ## Continuous integration
 
 General CI lives in `.github/workflows/ci.yml`. Pushes to `main` and `develop`,
 and pull requests targeting any branch, run it; a newer run cancels the
 superseded one for the same ref. The workflow's aggregate `CI` job fails unless
-every gate job succeeded. Retirement publication additionally requires the
-`Canonical work-item store` check with strict/current-base enforcement and
-PR-required rules without an automation bypass; `CI` alone does not establish
-that freshness boundary.
+every gate job succeeded. The `Spec judge` workflow
+(`.github/workflows/spec-judge.yml`) is separate from `CI`. A repository
+ruleset requires it from `main`, so the copy a pull request carries does not
+judge that pull request.
 
 Host checks, Kani, and the aggregates run on `ubuntu-latest`; the seL4 image,
 root tests, rollback runtime, contract sources, and the four generation shards
@@ -420,20 +330,12 @@ then fetches both pinned toolchains' locked dependencies before the deliberately
 offline product build. Jobs that need neither the seL4 prefix nor Nix use a
 plain pinned toolchain and `Swatinem/rust-cache`.
 
-Work-item CI uses `nix develop .#projection`, including its trusted retirement
-verifier. It shares the architecture-qualified `projection-v2-*` Nix cache with
-closeout and retirement; all three keys include the flake and local
-devloop/Zutai derivations. Main push CI can populate the shared tool cache even
-when another consumer's trigger only permits restores. Legacy `myque-*` entries
-are not deleted by the workflows: retirement requires a measured replacement,
-successful restore and separate operator authorization. Each consumer roots the
-projection environment with a profile under `RUNNER_TEMP` before running its
-commands and retains that profile through the cache action's post-job GC/save.
-The v2 namespace excludes earlier archives whose unrooted tools could be
-collected before saving; it intentionally has no fallback to that namespace.
-A rooted closure can exceed the GC size target, so archive size still needs
-measurement. A shared key alone does
-not establish cold/warm qualification or byte savings.
+CI's `work_items` job runs `just spec_tasks_check` and `just spec_e2e` in
+the `nix develop .#spec` shell. The Evidence workflow's closeout job uses
+the same shell. `work_items` and the `Spec judge` workflow share one
+`spec-v1-*` Nix cache key, computed from `flake.lock`, `flake.nix`, and
+`nix/zutai.nix`. `work_items` roots the shell closure under `RUNNER_TEMP`, so
+the cache action's post-job GC keeps it.
 
 Every submodule resolves from GitHub over anonymous HTTPS: `deps/zutai`, the
 seL4 fork, and the three rust-sel4 checkouts, whose exact origins are pinned in
@@ -443,14 +345,14 @@ hardware-device access.
 SDK publication (`publish-sdk.yml`, on the dedicated signing runner) stays
 separate from ordinary CI: it relies on GitHub-specific permissions, events,
 and secrets. SDK publication and signing keys retain their separate owners.
-The `.#projection` shell keeps its name for the cache key; it no longer
-projects anything.
+The evidence signing key lives in the `evidence` environment, which only
+pushes to `main` reach.
 
 ## Further reading
 
 - [README](README.md): what Slime OS is.
 - [Getting started](docs/getting-started/01-orientation.md): how to learn,
   build, run, and change it.
-- [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, MyQue, and change-record rules.
+- [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, work items, and change-record rules.
 - [Architecture](docs/architecture/README.md) and [plans](docs/plans/README.md): current subsystem rationale versus unimplemented requirements; [roadmap classification](roadmap/README.md) names unextracted detail and historical sources.
 - [History](docs/history.md): immutable archive lookup, privacy, evidence boundaries, and restoration.

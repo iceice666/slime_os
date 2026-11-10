@@ -40,13 +40,15 @@
 
 ## Related
 
-<!-- Work item UUID from `.tasks/items/` (an optional human key may follow in
-     parentheses); the UUID is the canonical machine identity. Existing
-     evidence or decision links may follow. Ordinary changes need no devlog. -->
+<!-- The task/v2 work item under `.tasks/items/`: its slug (the file name
+     without `.zt`) or its UUID; the UUID is the canonical identity. A process
+     PR names none. Existing evidence or decision links may follow. Ordinary
+     changes need no devlog. -->
 -
 
-<!-- Name the implemented work item by its canonical UUID. Work items are not
+<!-- Name the implemented work item by its slug or UUID. Work items are not
      projected into GitHub Issues, so do not use GitHub auto-close keywords.
-     Merging a PR does not complete its item; use myque close only after
-     recording the observed exit evidence, its identity, scope, and limits in
-     the item, or let the closeout workflow run devloop complete. -->
+     Merging a PR does not complete its item. After merge, the Evidence
+     workflow records the item's targets and signs a done witness once every
+     mandatory acceptance is enforced; its closeout bot then opens the PR that
+     moves the item to `.tasks/terminal/`. -->
