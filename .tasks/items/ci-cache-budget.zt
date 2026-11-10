@@ -5,7 +5,7 @@ item :: s.Item = (h.task "01a0e60f-4ca9-74e6-906e-31f32f3ff683" "ci-cache-budget
   "Keep CI caches within the repository budget so main runs stay warm"
   "Main CI runs keep going cold because GitHub evicts their caches. The repository's live cache set is about 13.8 GB against a 10 GB budget. The seL4 build-output caches account for about 8.9 GB of that, in eight per-job partitions: four generation shards at 1.36 to 1.44 GB each, the product job at 1.53 GB, and three 0.52 to 0.58 GB image-only jobs. The Nix store, Kani, MyQue, projection and rust-cache entries add about 4.9 GB. Every build-output key also carries the commit SHA, so each main run writes a new copy of every partition. Least-recently-used eviction then removes entries the next run needs, the Zutai evaluation stores and the 2 GB Nix store among them. Of the three main runs after 35ca61d that ran the seL4 jobs, one was warm (19 minutes), one was fully cold (30 minutes, at d0ec4ee), and one lost its contract-source evaluation store within 45 minutes of saving it. The change: share build-output partitions among seL4 jobs whose cached outputs come from the same build, and have exactly one job save each shared partition. Stop writing a new build-output copy on every commit; a partition is saved at most once per UTC day unless its key inputs change, so the restored outputs are never more than one day behind. Keep the Zutai evaluation-store partitions per job, and keep Cargo, the pinned artifact hashes and each job's own checks responsible for correctness.")
   with {
-    intent = #active;
+    intent = #planned;
     owns = {
       ".github/workflows/**";
       ".github/actions/**";
