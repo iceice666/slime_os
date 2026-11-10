@@ -28,7 +28,7 @@ request), V2 planning first (`owns` of an item on base that is #active on
 head covers every implementation path), V3 no self-grading, V4 grader
 approval, V5 legal intent, V6 closeout by witness, V7 backlog first, V9
 provenance (warning), V10 frozen area requirements. `--report` prints the
-verdict and exits 0, as CI runs it until cutover.
+verdict and exits 0.
 """
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ def classify(path, status, base, head, base_grader, head_new_grader, just_classe
             return {"implementation"}
         return {"planning"}
     if path.startswith(".tasks/"):
-        return {"process"}  # the task schema copies, and the V1 store until cutover
+        return {"process"}  # the task schema copies
     if path.startswith(PROCESS) or path in PROCESS_FILES or ("/" not in path and path.endswith(".md")):
         return {"process"}
     if path.startswith("specs/") and path.endswith(".zt"):

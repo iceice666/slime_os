@@ -4,11 +4,11 @@
 # scripts/spec/check against the head checkout, so a pull request cannot
 # rewrite the judge or the lists that judge it.
 #
-# Until cutover this reports and never blocks: V1 (`just tasks_check` and
-# check-pr-scope.py) still judges main. This workflow file itself comes from
-# the pull request; before `check` blocks, the cutover runs it from a
-# trusted definition (a ruleset-required workflow on GitHub, a protected
-# pipeline definition on GitLab).
+# This is the only judge of a pull request, and it blocks. A pull request
+# could edit this file, so a repository ruleset requires this workflow from
+# `main` ("Require workflows to pass before merging"); the copy a pull
+# request carries is not the one that judges it. On GitLab the equivalent is
+# a protected pipeline definition.
 name: Spec judge
 
 on:
@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   judge:
-    name: Devloop v1.5 judge (report only)
+    name: Devloop v1.5 judge
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -39,14 +39,14 @@ jobs:
           nix_conf: |
             keep-env-derivations = true
             keep-outputs = true
-      # The same projection shell and cache key as CI's work_items job.
+      # The same `spec` shell and cache key as CI's work_items job.
       - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: >-
-            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
-              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            spec-v1-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/zutai.nix')
             }}
-          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
+          restore-prefixes-first-match: spec-v1-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 5G
       - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
       - name: Judge from the base commit
@@ -66,5 +66,5 @@ jobs:
             echo "the base carries no judge; judging with the head's code"
             cp -r --parents scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS "$judge"/
           fi
-          SPEC_ROOT="$PWD" SPEC_JUDGE=base nix develop .#projection --command \
-            python3 "$judge/scripts/spec/check" --base "$BASE" --forge github --report
+          SPEC_ROOT="$PWD" SPEC_JUDGE=base nix develop .#spec --command \
+            python3 "$judge/scripts/spec/check" --base "$BASE" --forge github

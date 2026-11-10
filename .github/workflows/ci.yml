@@ -16,7 +16,7 @@ env:
 
 jobs:
   # Cheap, always-run scope detection. A change confined to `.tasks/` (the
-  # canonical work-item store, e.g. an automated retirement batch) touches no
+  # work items, e.g. a closeout pull request from the Evidence workflow) touches no
   # code, contract, or generation surface, so every job below that builds or
   # boots something is skipped for it. Anything else — including a mix of
   # `.tasks/` and code — runs the full suite; uncertainty defaults to `true`.
@@ -51,23 +51,6 @@ jobs:
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
-
-  # A pull request that adds a work item may not also change the product
-  # tree: the item lands first, then its implementation. The classes come
-  # from `.devloop/policy.json`; see CONTRIBUTING.md "Pull request scope".
-  pr_scope:
-    name: Pull request scope
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - run: |
-          python3 scripts/check/check-pr-scope.py \
-            --base "${{ github.event.pull_request.base.sha }}" \
-            --head "${{ github.event.pull_request.head.sha }}"
 
   # === Jobs that need neither the seL4 prefix nor Nix ===
   #
@@ -233,13 +216,13 @@ jobs:
       - run: python3 scripts/check/check-generation-v5.py --check-controls
 
   work_items:
-    name: Canonical work-item store
+    name: Work items and area files
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Separate from `docs_gates` on purpose. That job's whole toolchain is a
     # checkout plus `just`, and `docs_check` is deliberately binary-free so
-    # it stays that cheap. This gate runs `myque check`, which needs the dev
-    # shell shared with projection, closeout and retirement.
+    # it stays that cheap. These gates evaluate Zutai, which needs the `spec`
+    # shell the judge and the closeout bot share.
     steps:
       - uses: actions/checkout@v7
 
@@ -249,47 +232,26 @@ jobs:
             keep-env-derivations = true
             keep-outputs = true
 
-      # All tool-cache consumers realize the same projection shell. Keep its
-      # key inputs aligned with the projection, closeout and retirement jobs;
-      # unrelated product lockfiles must not invalidate this tool closure.
+      # Every consumer of the `spec` shell uses this key, so one tool closure
+      # serves CI, the judge and the closeout bot; unrelated product lockfiles
+      # must not invalidate it.
       - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: >-
-            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
-              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            spec-v1-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/zutai.nix')
             }}
-          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
+          restore-prefixes-first-match: spec-v1-${{ runner.os }}-${{ runner.arch }}-
           gc-max-store-size-linux: 5G
 
       # Keep the shell closure rooted through cache-nix-action's post-job GC/save.
       - name: Root shared tool environment
-        run: nix develop .#projection --profile "$RUNNER_TEMP/projection-profile" --command true
+        run: nix develop .#spec --profile "$RUNNER_TEMP/spec-profile" --command true
 
-      - run: nix develop .#projection --command just tasks_check
-
-      # Devloop v1.5 (docs/decisions/work-item-devloop.md): the task/v2 and
-      # area store, and the bootstrap item's exam. V1 above still judges.
-      - run: nix develop .#projection --command just spec_tasks_check
-      - run: nix develop .#projection --command just spec_e2e
-
-      - name: Checkout trusted retirement verifier
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-          path: retirement-verifier
-          persist-credentials: false
-
-      - name: Verify retirement against current main
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'automation/myque-retire/')
-        working-directory: retirement-verifier
-        env:
-          RETIREMENT_HEAD_REF: ${{ github.head_ref }}
-          RETIREMENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          nix develop .#projection --command
-          python3 scripts/lib/work_item_retirement_publish.py --check-pr
+      # Devloop v1.5 (docs/decisions/work-item-devloop.md): the task/v2 items,
+      # the area files, and the judge's own end-to-end exam.
+      - run: nix develop .#spec --command just spec_tasks_check
+      - run: nix develop .#spec --command just spec_e2e
 
   kani_proofs:
     name: Kani IO wire and device-boundary proofs
@@ -517,7 +479,6 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - pr_scope
       - lint
       - sel4_pins
       - test_host
@@ -546,8 +507,6 @@ jobs:
           test "${{ needs.docs_gates.result }}" = success
           test "${{ needs.work_items.result }}" = success
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
-          # `pr_scope` is skipped on pushes; on a pull request it must pass.
-          ok "${{ needs.pr_scope.result }}"
           ok "${{ needs.lint.result }}"
           ok "${{ needs.sel4_pins.result }}"
           ok "${{ needs.test_host.result }}"

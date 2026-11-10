@@ -13,44 +13,12 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # The work-item tracker that owns `.tasks/`. `follows` keeps one nixpkgs:
-    # both pins carry GHC 9.10.3, so sharing avoids a second Haskell closure.
-    #
-    # `myque-bin` is `justStaticExecutables`, a 4-path/75 MB runtime closure.
-    # There is no published binary cache, so an uncached consumer builds it
-    # through GHC — which is why `docs_check` stays binary-free and only
-    # `tasks_check` needs this input.
-    #
-    # Pinned to v0.2.0.0 (`d25241f`), the release that publishes
-    # `work-item/v2`: the open-record envelope, the `myque api` machine
-    # interface, guarded `start`/`close --expected`, and the terminal-record
-    # retirement lifecycle this repository's checks resolve offline.
-    myque = {
-      url = "github:mozufu/myque/d25241fcbf1d6b1e06283717c246576e88f6fa5d";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # devloop owns the requirements body, its semantic helpers, and the
-    # evidence contracts; Slime OS only configures it. It publishes no flake,
-    # so `nix/devloop.nix` builds the pinned release's two programs.
-    devloop = {
-      url = "github:mozufu/devloop/f15302c27a7225ff247b27706307f4744d1a20ba";
-      flake = false;
-    };
     # The Zutai revision `deps/zutai` is pinned to, packaged for the work-item
-    # gate, which runs without submodules or a Rust toolchain. Keep this
-    # revision equal to the submodule's; `scripts/lib/devloop.py` refuses a
-    # toolchain devloop was not released against.
+    # gates, the judge and the closeout bot, which run without submodules or a
+    # Rust toolchain. Keep this revision equal to the submodule's.
     zutai = {
       url = "github:iceice666/zutai/b667e3c5018e69a3f8e39948a73a6c57c514de6e";
       flake = false;
-    };
-    # The projection consumer. Slime OS runs it itself rather than through
-    # myque-gh's reusable workflow, because a spec-driven item's description is
-    # rendered by devloop, and only this repository can supply that renderer
-    # with the pinned Zutai toolchain it needs.
-    myque-gh = {
-      url = "github:mozufu/myque-gh/376fe90742c11bc0a60236ad327a769dac2b9e13";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
@@ -58,9 +26,6 @@
     {
       nixpkgs,
       rust-overlay,
-      myque,
-      myque-gh,
-      devloop,
       zutai,
       ...
     }:
@@ -84,12 +49,6 @@
           # ~325 MB and only one gate uses it, so every other `nix develop`
           # (and the five CI jobs that never run a proof) must not pay for it.
           kani = pkgs.callPackage ./nix/kani.nix { };
-          # The pinned devloop release: `just tasks_check` validates every item
-          # that carries a `devloop` record through it.
-          devloopTools = pkgs.callPackage ./nix/devloop.nix {
-            src = devloop;
-            version = "0.1.0";
-          };
           # The same Zutai revision the submodule carries, so the gate can
           # validate without building it from source.
           zutaiTools = pkgs.callPackage ./nix/zutai.nix {
@@ -176,8 +135,8 @@
                 # No second LLVM here on purpose: the seL4 product build
                 # resolves its own `clang` and linker from this PATH, and
                 # `llvmPackages.llvm` broke `-fuse-ld=lld` for every
-                # cross-compiled component. devloop's validator gets `llc` and
-                # `clang` from the wrapped `zutai-cli` in `nix/zutai.nix`.
+                # cross-compiled component. Zutai's native backend gets `llc`
+                # and `clang` from the wrapped `zutai-cli` in `nix/zutai.nix`.
                 llvmPackages.clang
                 llvmPackages.lld
                 just
@@ -211,14 +170,8 @@
                 grubEfi
               ]
               ++ [
-                # `just tasks_check` and the `tasks_*` views.
-                myque.packages.${system}.myque-bin
-                # `just tasks_check`'s devloop body validation, and admission,
-                # gate execution, and evidence recording for spec-driven items.
-                devloopTools
-                devloopTools.bridge
-                # `zutai-cli`, its standard library, and the native runtime
-                # archive devloop links its validators against.
+                # `zutai-cli` and its standard library, for `scripts/spec/`
+                # and every contract gate.
                 zutaiTools
               ]
               ++ nixpkgs.lib.optionals (pkgs.stdenv.hostPlatform.isLinux && !pkgs.stdenv.hostPlatform.isAarch64) [
@@ -299,26 +252,14 @@
             ];
           };
 
-          # `nix develop .#projection --command myque-gh apply …`. Separate from
-          # the default shell because projection needs one thing that shell does
-          # not — the myque-gh binary — and the default shell must not build a
-          # second Haskell closure for every other gate. devloop and the pinned
-          # Zutai toolchain are here because a spec-driven item's GitHub
-          # description is rendered by `devloop render`, never by pasting the
-          # stored requirements data.
-          projection = pkgs.mkShell {
+          # `nix develop .#spec --command scripts/spec/…`: the judge, the
+          # work-item gates and the closeout bot. Separate from the default
+          # shell so none of them builds the seL4 toolchain.
+          spec = pkgs.mkShell {
             packages = [
               pkgs.git
-              pkgs.gh
               pkgs.just
-              # `devloop render` validates the stored payload by compiling
-              # devloop's helpers; the wrapped `zutai-cli` carries the LLVM it
-              # needs, so no toolchain is added to this PATH either.
               pkgs.python3
-              myque.packages.${system}.myque-bin
-              myque-gh.packages.${system}.myque-gh-bin
-              devloopTools
-              devloopTools.bridge
               zutaiTools
             ];
           };
