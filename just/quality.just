@@ -123,6 +123,15 @@ pr_scope_check:
 tasks_check:
     python3 scripts/check/check-work-items.py
 
+# The devloop v1.5 exam (docs/decisions/work-item-devloop.md): walks M1 to M3
+# on a throwaway fixture repository, judged by the base commit's judge as CI
+# runs it. Its scripts have no file extension, so the closure resolver cannot
+# see them; the inputs name them.
+[group('quality')]
+[metadata("inputs", "scripts/spec/**", "contracts/task/**", "contracts/observation/**", "specs/schema.zt", "specs/helpers.zt")]
+spec_e2e:
+    python3 scripts/spec/e2e
+
 # Work items are not projected into GitHub Issues: refuses while the projection
 # workflow exists, policy names it, a workflow or script runs `myque-gh apply`,
 # or contributor guidance still asks for `myque-gh pr link`.

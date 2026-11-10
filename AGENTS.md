@@ -71,6 +71,8 @@ Explicit hardware and physical-boot targets (`rpi5_ros2_zenoh_check`, `framework
 
 The full lifecycle — store rules, spec-driven bodies and gates, closure pinning, backlog-first, what each PR class may carry, evidence-only PRs, the author-restatement pause, history and `roadmap/` — is [`.agents/skills/work-item-lifecycle/SKILL.md`](.agents/skills/work-item-lifecycle/SKILL.md). Read it before any `just devloop` or `myque` command or before opening a PR that touches `.tasks/`, `.devloop/`, or a checker. [`CONTRIBUTING.md`](CONTRIBUTING.md) owns the human-facing PR workflow.
 
+**Devloop v1.5 is being bootstrapped.** [`docs/decisions/work-item-devloop.md`](docs/decisions/work-item-devloop.md) accepts it, and `scripts/spec/` grows toward it under the V1 item `devloop-v1.5-bootstrap`. Until its cutover pull request lands, V1 still judges `main`: follow the V1 rules in this section, and treat `scripts/spec/check` as a report, never as the gate.
+
 ## Code review
 
 These rules bind every reviewer of a PR — a person, a review bot such as Codex, or an agent asked to review — and the author answering the review. A review's job is to find where the diff, the checker it binds, and the landed work item disagree, and to say so with a file and line.

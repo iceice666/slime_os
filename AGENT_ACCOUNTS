@@ -1,0 +1,4 @@
+# Code-host accounts agents open pull requests with. One login per line.
+# An account listed here never counts as an approval. On GitHub agents have
+# no account of their own, so this file is empty until M6 (GitLab).
+# docs/decisions/work-item-devloop.md

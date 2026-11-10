@@ -32,6 +32,10 @@ readable and link to the decision that replaced them.
 - [Work items are not projected into GitHub Issues](no-github-issue-projection.md)
   — accepted; `.tasks/` is the only work-item surface, and the Issue projection
   workflow is retired after it duplicated 468 Issues during a GitHub outage.
+- [Work-item devloop v1.5](work-item-devloop.md) — accepted; keeps V1's
+  stages and pull-request classes, moves evidence to a signed `evidence`
+  branch keyed by closure digests, judges pull requests from the base
+  commit, and supersedes the two spec-driven records at cutover.
 - [Mandatory spec-driven work items](mandatory-spec-driven-work-items.md) —
   accepted; makes a devloop body compulsory for items created after a fixed
   UUIDv7 cutoff, and scales gate identities through a generic target gate.

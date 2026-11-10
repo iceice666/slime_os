@@ -1,0 +1,8 @@
+# People who may approve a grader, judge or intent change (V4, V5).
+# One login per line. The validator reads the base commit's copy, and a
+# person this file gains in a pull request cannot approve that pull request.
+# At least two people; at the GitLab move, the team that continues.
+# docs/decisions/work-item-devloop.md
+iceice666
+LmanTW
+CG-AA
