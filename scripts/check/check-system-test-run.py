@@ -504,15 +504,21 @@ def check_inventory_controls() -> int:
         items = root / ".tasks/items"
         for path in (checkers, closures, runs, items):
             path.mkdir(parents=True)
+        terminal = root / ".tasks/terminal"
+        terminal.mkdir(parents=True)
+
+        def run_slug(identity: str) -> str:
+            return f"planned-{identity[:8]}"
+
+        def planning_item(identity: str, intent: str | None) -> str:
+            # The task/v2 head the shared reader keys on; no intent means #planned.
+            field = f"    intent = #{intent};\n" if intent else ""
+            return (f'item :: s.Item = (h.task "{identity}" "{run_slug(identity)}" "quality" "t" "p")\n'
+                    f"  with {{\n{field}  }};\n")
+
         for item, checker, _crates in required.values():
             (checkers / checker).write_bytes((ROOT / "scripts/check" / checker).read_bytes())
-            source_item = ROOT / ".tasks/items" / f"{item}.md"
-            if source_item.is_file():
-                item_text = source_item.read_text()
-            else:
-                item_text = json.loads((ROOT / ".tasks/terminal" / f"{item}.json").read_text())["metadata"]
-            (items / f"{item}.md").write_text(
-                re.sub(r"^state: .+$", "state: open", item_text, flags=re.MULTILINE))
+            (items / f"{run_slug(item)}.zt").write_text(planning_item(item, None))
         closure_source = (CLOSURE_ROOT / "sel4-reclamation-unwind.zti").read_text()
         (closures / "sel4-reclamation-unwind.zti").write_text(closure_source)
         local_registry = {run: registry[run] for run in required}
@@ -520,7 +526,7 @@ def check_inventory_controls() -> int:
             patch.multiple(generator, ROOT=root, CHECK_ROOT=checkers, CLOSURE_ROOT=closures,
                            RUN_ROOT=runs, PLANNED_RUNS=local_registry),
             patch.multiple(work_items, ROOT=root, TASKS=root / ".tasks", ITEMS=items,
-                           TERMINAL=root / ".tasks/terminal"),
+                           TERMINAL=terminal, LEGACY=root / "specs/legacy.zt"),
         ):
             work_items.cache_clear()
             try:
@@ -570,18 +576,23 @@ def check_inventory_controls() -> int:
                         path.write_text("present\n")
                         refuse(f"stale {run} registration at {artifact}", generator.outputs)
                         path.unlink()
-                item_path = items / f"{row[0]}.md"
-                item_text = item_path.read_text()
-                for state in ("active", "blocked", "deferred"):
-                    item_path.write_text(re.sub(r"^state: .+$", f"state: {state}", item_text, flags=re.MULTILINE))
+                item_path = items / f"{run_slug(row[0])}.zt"
+                closed_path = terminal / item_path.name
+                for intent in ("active", "blocked", "deferred"):
+                    item_path.write_text(planning_item(row[0], intent))
                     work_items.cache_clear()
                     if generator.outputs() != emitted:
-                        fail(f"inventory control: explicit planning registration lost in {state} state")
-                for state in ("done", "cancelled", "invalid"):
-                    item_path.write_text(re.sub(r"^state: .+$", f"state: {state}", item_text, flags=re.MULTILINE))
+                        fail(f"inventory control: explicit planning registration lost in {intent} intent")
+                for intent in ("cancelled", "invalid"):
+                    item_path.write_text(planning_item(row[0], intent))
                     work_items.cache_clear()
-                    refuse(f"{state} planning identity", generator.outputs)
-                item_path.write_text(item_text)
+                    refuse(f"{intent} planning identity", generator.outputs)
+                item_path.unlink()
+                closed_path.write_text(planning_item(row[0], "active"))
+                work_items.cache_clear()
+                refuse("done planning identity", generator.outputs)
+                closed_path.unlink()
+                item_path.write_text(planning_item(row[0], None))
                 work_items.cache_clear()
 
                 source = reclamation.read_text()

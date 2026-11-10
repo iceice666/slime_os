@@ -308,29 +308,11 @@ def validate_planned_runs() -> None:
         identity, checker, closure, artifacts = row
         if not isinstance(identity, str) or not work_items.UUID.fullmatch(identity):
             fail(f"{run}: planning identity is not a canonical UUID")
-        # The shared reader is deliberately shallow. An exclusion additionally
-        # needs identity and state in the item's envelope, never its body.
-        try:
-            item_text = (work_items.ITEMS / f"{identity}.md").read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as error:
-            fail(f"{run}: cannot read planning item envelope: {error}")
-        opening, separator, remainder = item_text.partition("---\n")
-        frontmatter, closing, _body = remainder.partition("\n---\n")
-        if opening or not separator or not closing:
-            fail(f"{run}: planning item lacks a delimited frontmatter envelope")
-        fields = {
-            key: re.findall(rf"^{key}:[ \t]*(.*)$", frontmatter, re.MULTILINE)
-            for key in ("schema", "id", "state")
-        }
-        if (any(len(values) != 1 for values in fields.values())
-                or fields["schema"][0] not in {"work-item/v1", "work-item/v2"}
-                or fields["id"][0] != identity
-                or fields["state"][0] not in {"open", "active", "blocked", "deferred"}):
-            fail(f"{run}: planning item envelope has invalid identity, schema or state")
+        # A V1 file, a task/v2 item or an index row in `specs/legacy.zt` all
+        # carry the state; an exclusion needs exactly one unfinished item.
         matches = [item for item in work_items.items() if item["id"] == identity]
         if (identity not in work_items.identities() or len(matches) != 1
-                or matches[0]["state"] not in {"open", "active", "blocked", "deferred"}
-                or matches[0]["retired"]):
+                or matches[0]["state"] not in {"open", "active", "blocked", "deferred"}):
             fail(f"{run}: planning identity must name one nonterminal work item")
         if (not isinstance(checker, str) or _Path(checker).name != checker
                 or checker in NOT_A_PLANE
