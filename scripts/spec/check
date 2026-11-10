@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""The v1.5 validator (docs/decisions/work-item-devloop.md).
+
+    scripts/spec/check
+    scripts/spec/check --base REV [--evidence REV] [--author LOGIN] [--approvers a,b]
+                       [--forge github|local] [--report]
+
+Without `--base`: the store alone — every item and area, the task schema
+copies, links, the Zutai pin.
+
+With `--base`: the pull request base...HEAD as well. Its five inputs are
+the base commit, the head checkout, the evidence commit (`--evidence`,
+default the fetched evidence ref), the author and the approvals on the
+current head; `--forge` reads the last three from the code host. Equal
+inputs give an equal verdict, locally, for an agent and in CI.
+
+The judge's code is the base commit's. CI extracts `lib.JUDGE_PATHS` from
+the base commit and runs that copy with `SPEC_ROOT` naming the head
+checkout and `SPEC_JUDGE=base`, so a pull request cannot rewrite the
+judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or `specs/allowed_signers` that
+judge it. Run from a checkout with `--base`, this script hands over to
+the base copy the same way; that hand-off is a convenience, because a
+head that rewrites this file also rewrites the hand-off. A base without
+a judge runs the head's code and says so.
+
+Rules: V1 class (every changed path has a class, and one class per pull
+request), V2 planning first (`owns` of an item on base that is #active on
+head covers every implementation path), V3 no self-grading, V4 grader
+approval, V5 legal intent, V6 closeout by witness, V7 backlog first, V9
+provenance (warning), V10 frozen area requirements. `--report` prints the
+verdict and exits 0, as CI runs it until cutover.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import forge  # noqa: E402
+import lib  # noqa: E402
+import rules  # noqa: E402
+
+BASE_TREE = ("Justfile", "just", "scripts", "specs", ".tasks", "contracts/task", "contracts/observation", "HUMAN_OWNERS")
+
+DERIVED = (
+    "contracts/system-image-closure/v3/closures/",
+    "contracts/system-image-closure/v2/negative/",
+    "contracts/system-test-run/v1/runs/",
+    "contracts/system-test-run/v2/runs/",
+)
+PROCESS = (".github/", "docs/", ".agents/", ".claude/", "scripts/spec/", "roadmap/", ".devloop/", "contracts/task/", "contracts/observation/")
+PROCESS_FILES = ("HUMAN_OWNERS", "AGENT_ACCOUNTS", "specs/allowed_signers", "specs/targets.toml", "specs/schema.zt", "specs/helpers.zt", "specs/legacy.zt")
+APPROVED_PATHS = ("scripts/spec/", "contracts/task/", "contracts/observation/")
+APPROVED_FILES = ("HUMAN_OWNERS", "AGENT_ACCOUNTS", "specs/allowed_signers")
+IMPLEMENTATION = (
+    "components/", "slime-root/", "boot-contracts/", "contracts/", "scripts/build/", "scripts/generate/",
+    "scripts/tools/", "sdk/", "tools/", "sel4/", "deps/", "nix/", "evidence/", "verification/", "assets/",
+)
+IMPLEMENTATION_FILES = (
+    "flake.nix", "flake.lock", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "clippy.toml",
+    "deny.toml", "ruff.toml", "_typos.toml", ".gitignore", ".gitmodules", ".envrc", "specs/zutai.toml",
+)
+JUST = ("Justfile", "just/")
+
+
+def from_base(base: str, argv: list[str]) -> int | None:
+    """Run the base commit's judge against this checkout; None when base has none."""
+    if os.environ.get("SPEC_JUDGE") == "base" or lib.read_blob(base, "scripts/spec/check") is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="slime-spec-judge-") as temporary:
+        lib.extract(base, list(lib.JUDGE_PATHS), Path(temporary))
+        env = os.environ | {"SPEC_ROOT": str(lib.ROOT), "SPEC_JUDGE": "base"}
+        return subprocess.run([sys.executable, str(Path(temporary) / "scripts" / "spec" / "check"), *argv], env=env, check=False).returncode
+
+
+class Side:
+    """Items, areas, recipes and bound grader sets at one commit."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.items = lib.load_items(root)
+        self.areas = lib.load_areas(root)
+        self.recipes = lib.Recipes.load(root)
+        self.bound = {t for t in lib.bound_targets(self.items, self.areas) if t in self.recipes}
+        self.promised = {t for t in lib.bound_targets(self.items, self.areas, promises_only=True) if t in self.recipes}
+        self.graders = {t: self.recipes.grader(t) for t in self.bound}
+        self.closures = {t: set(self.recipes.closure(t)) for t in self.bound}
+
+    def grader_files(self, targets: set[str]) -> set[str]:
+        return {p for t in targets for p in self.graders.get(t, set())} - set(lib.GRADER)
+
+    def bound_recipes(self, targets: set[str]) -> set[str]:
+        return {n for t in targets for n in self.closures.get(t, set())}
+
+
+def changes(base: str) -> list[tuple[str, str, str]]:
+    """(status, old path, new path) for base...HEAD; exact renames only."""
+    rows = []
+    for line in lib.git("diff", "--name-status", "--find-renames=100%", base, "HEAD").splitlines():
+        parts = line.split("\t")
+        status = parts[0][0]
+        rows.append((status, parts[1], parts[-1]))
+    return rows
+
+
+def item_value(side: Side, path: str) -> dict | None:
+    for item in side.items:
+        if item.where == path:
+            return item.value
+    return None
+
+
+def changed_recipes(base: Side, head: Side) -> set[str]:
+    names = set(base.recipes.by_name) | set(head.recipes.by_name)
+    return {
+        n for n in names
+        if n not in base.recipes or n not in head.recipes
+        or lib.Recipes.definition(base.recipes.by_name[n]) != lib.Recipes.definition(head.recipes.by_name[n])
+    }
+
+
+def judge(args: argparse.Namespace, base_sha: str, findings: rules.Findings) -> None:
+    with tempfile.TemporaryDirectory(prefix="slime-spec-base-") as temporary:
+        lib.extract(base_sha, list(BASE_TREE), Path(temporary))
+        base = Side(Path(temporary))
+        head = Side(lib.ROOT)
+        judge_sides(args, base_sha, base, head, findings)
+
+
+def judge_sides(args: argparse.Namespace, base_sha: str, base: Side, head: Side, findings: rules.Findings) -> None:
+    rows = changes(base_sha)
+    newly = head.bound - base.bound
+    base_grader = base.grader_files(base.bound)
+    promised_grader = base.grader_files(base.promised)
+    head_new_grader = head.grader_files(newly)
+    base_items = {i.id: i for i in base.items}
+    added_items = {i.id for i in head.items if i.id not in base_items}
+
+    recipes = changed_recipes(base, head)
+    bound_recipes = base.bound_recipes(base.bound)
+    just_classes: set[str] = set()
+    for name in sorted(recipes):
+        if name in bound_recipes:
+            just_classes.add("planning")
+            findings.needs_approval("V4", f"recipe {name} is in the closure of a bound target")
+            if name in base.bound_recipes(base.promised) and not added_items:
+                findings.error("V4", f"recipe {name} grades a promise; change it from a new item")
+        elif name in head.bound_recipes(newly):
+            just_classes.add("planning")
+        else:
+            just_classes.add("implementation")
+
+    classes: dict[str, set[str]] = {}
+    intent_only: set[str] = set()
+    for status, old, new in rows:
+        paths = {old, new}
+        if status == "R" and old.startswith(".tasks/items/") and new.startswith(".tasks/terminal/") and old.endswith(".zt"):
+            classes[new] = {"closeout"}
+            continue
+        for path in sorted(paths):
+            once = status if status != "R" else ("D" if path == old else "A")
+            classes[path] = classify(path, once, base, head, base_grader, head_new_grader, just_classes, intent_only, findings)
+        for path in paths:
+            if path in base_grader and status in {"M", "D", "R"}:
+                findings.needs_approval("V4", f"{path} is in the grader set of a bound target")
+                if path in promised_grader and not added_items:
+                    findings.error("V4", f"{path} grades a promise; change it from a new item")
+            if path.startswith(APPROVED_PATHS) or path in APPROVED_FILES:
+                findings.needs_approval("V4", f"{path} is part of the judge")
+            if path.startswith("contracts/") and path.endswith("/schema.zt") and status != "A":
+                findings.needs_approval("V4", f"{path} is an existing contract schema")
+
+    unlisted = sorted(p for p, c in classes.items() if "unlisted" in c)
+    for path in unlisted:
+        findings.error("V1", f"{path} has no class in the path table; a process pull request adds it first")
+    kinds = {c for cs in classes.values() for c in cs} - {"derived", "neutral", "unlisted"}
+    if len(kinds) > 1:
+        detail = "; ".join(f"{k}: {', '.join(sorted(p for p, c in classes.items() if k in c)[:3])}" for k in sorted(kinds))
+        findings.error("V1", f"one pull request carries {len(kinds)} classes ({detail})")
+    if "implementation" in kinds:
+        touched = sorted(p for p, c in classes.items() if "planning" in c and (p in base_grader or p.startswith(JUST)))
+        for path in touched:
+            findings.error("V3", f"an implementation pull request touches {path}, which grades a bound target")
+        covering = [i for i in head.items if not i.terminal and i.intent == "active" and i.id in base_items]
+        for path in sorted(p for p, c in classes.items() if "implementation" in c and p not in intent_only):
+            if not any(lib.owns_match(path, i.value["owns"]) for i in covering):
+                findings.error("V2", f"{path} is under no owns of an item that is on base and #active on head")
+    kind = next(iter(kinds)) if len(kinds) == 1 else ("empty" if not kinds else "mixed")
+    print(f"class: {kind} ({len(rows)} changed path(s))")
+
+    judge_closeout(rows, base, head, args.evidence, findings)
+    rules.check_transitions(base.items, head.items, findings)
+    rules.check_backlog(base.items, head.items, lambda: failing_promises(head), findings)
+    rules.check_frozen_areas(base.areas, head.areas, findings)
+    approvers = {a.strip() for a in args.approvers.split(",") if a.strip()}
+    rules.judge_approvals(findings, args.author, approvers, set(lib.names(lib.ROOT / "HUMAN_OWNERS")))
+
+
+def classify(path, status, base, head, base_grader, head_new_grader, just_classes, intent_only, findings) -> set[str]:
+    if path.startswith(DERIVED):
+        return {"derived"}
+    if path.startswith((".tasks/items/", ".tasks/terminal/")) and path.endswith(".zt") and Path(path).name not in lib.ITEM_SOURCES:
+        if path.startswith(".tasks/terminal/"):
+            findings.error("V6", f"{path}: a terminal item is immutable and appears only by moving an item unchanged ({status})")
+            return {"closeout"}
+        if status != "M":
+            return {"planning"}
+        before, after = item_value(base, path), item_value(head, path)
+        if before is not None and after is not None and {k: v for k, v in before.items() if k != "intent"} == {k: v for k, v in after.items() if k != "intent"}:
+            intent_only.add(path)
+            return {"implementation"}
+        return {"planning"}
+    if path.startswith(".tasks/"):
+        return {"process"}  # the task schema copies, and the V1 store until cutover
+    if path.startswith(PROCESS) or path in PROCESS_FILES or ("/" not in path and path.endswith(".md")):
+        return {"process"}
+    if path.startswith("specs/") and path.endswith(".zt"):
+        return {"planning"}
+    if path == "Justfile" or path.startswith("just/"):
+        return set(just_classes) or {"neutral"}
+    if path.startswith(("scripts/check/", "scripts/lib/")):
+        if path in base_grader or (status == "A" and path in head_new_grader):
+            return {"planning"}
+        return {"process"}
+    if path.startswith("contracts/") and path.endswith("/schema.zt"):
+        return {"planning"} if status == "A" else {"implementation"}
+    if path.startswith(IMPLEMENTATION) or path in IMPLEMENTATION_FILES:
+        return {"implementation"}
+    return {"unlisted"}
+
+
+def judge_closeout(rows, base: Side, head: Side, evidence: str | None, findings: rules.Findings) -> None:
+    """V6: a moved item is done by a signed witness, or cancelled; its targets still exist."""
+    ref = evidence or lib.evidence_ref()
+    gone = lib.superseded(head.items)
+    for status, old, new in rows:
+        if not (status == "R" and old.startswith(".tasks/items/") and new.startswith(".tasks/terminal/")):
+            if status == "D" and old.startswith(".tasks/terminal/"):
+                findings.error("V6", f"{old}: a terminal item is never deleted")
+            continue
+        item = next((i for i in head.items if i.where == new), None)
+        if item is None:
+            findings.error("V6", f"{new}: not a task/v2 item")
+            continue
+        if item.intent != "cancelled":
+            ok, detail, _ = lib.witness_state(item.id, lib.item_digest(item.value), lambda p: lib.read_blob(ref, p) if ref else None)
+            if not ok:
+                findings.error("V6", f"{new}: {detail}")
+            else:
+                print(f"closeout: {new} {detail}")
+        if item.id not in gone:
+            for target in item.targets():
+                if target not in head.recipes:
+                    findings.error("V6", f"{new}: acceptance target {target!r} no longer exists")
+
+
+def failing_promises(head: Side) -> list[str]:
+    evidence = lib.Evidence()
+    gone = lib.superseded(head.items)
+    failing = []
+    for area in head.areas:
+        for requirement in area.requirements:
+            if requirement["planned"] or requirement["id"] in gone:
+                continue
+            for kind, body in lib.area_acceptances(requirement):
+                if lib.area_acceptance_state(kind, body, requirement, evidence)[0] == "failing":
+                    failing.append(f"{area.id}/{requirement['id']}")
+    for item in head.items:
+        if item.terminal and item.id not in gone:
+            failing.extend(f"{item.where} ({t})" for t in item.targets() if evidence.record(t)[0] == "failing")
+    return sorted(set(failing))
+
+
+def check_zutai_pin(findings: rules.Findings) -> None:
+    """specs/zutai.toml, the deps/zutai gitlink and the flake.nix zutai input name one revision."""
+    import re
+
+    pin = lib.SPECS / "zutai.toml"
+    if not pin.is_file():
+        return
+    rev = tomllib.loads(pin.read_text()).get("rev", "")
+    gitlink = lib.git("ls-tree", "HEAD", "deps/zutai", check=False).split()
+    if len(gitlink) >= 3 and gitlink[2] != rev:
+        findings.error("format", f"specs/zutai.toml rev {rev[:12]} is not the deps/zutai gitlink {gitlink[2][:12]}")
+    flake = (lib.ROOT / "flake.nix").read_text() if (lib.ROOT / "flake.nix").is_file() else ""
+    match = re.search(r'"github:iceice666/zutai/([0-9a-f]{40})"', flake)
+    if match and match.group(1) != rev:
+        findings.error("format", f"specs/zutai.toml rev {rev[:12]} is not the flake.nix zutai input {match.group(1)[:12]}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--base")
+    parser.add_argument("--evidence")
+    parser.add_argument("--author", default="")
+    parser.add_argument("--approvers", default="")
+    parser.add_argument("--forge", choices=sorted(forge.FORGES))
+    parser.add_argument("--report", action="store_true")
+    args = parser.parse_args()
+    if args.forge:
+        host = forge.get(args.forge)
+        head_sha = lib.git("rev-parse", "HEAD").strip()
+        args.base = args.base or host.base_sha()
+        args.author = args.author or host.author()
+        args.approvers = args.approvers or ",".join(sorted(host.approvers(head_sha)))
+    if args.evidence:
+        os.environ["SPEC_EVIDENCE_REF"] = args.evidence
+
+    base_sha = None
+    if args.base:
+        base_sha = lib.git("merge-base", args.base, "HEAD").strip()
+        argv = [a for a in sys.argv[1:] if a != "--forge" and a not in forge.FORGES]
+        argv += ["--author", args.author, "--approvers", args.approvers] if args.forge else []
+        delegated = from_base(base_sha, argv)
+        if delegated is not None:
+            return delegated
+        if os.environ.get("SPEC_JUDGE") != "base":
+            print(f"note: {base_sha[:12]} carries no scripts/spec/check; judging with this checkout's code")
+
+    findings = rules.Findings()
+    for stray in lib.SPECS.rglob("*.zti") if lib.SPECS.is_dir() else []:
+        findings.error("format", f"{stray.relative_to(lib.ROOT)}: .zti is computed, never committed")
+    check_zutai_pin(findings)
+    rules.check_sources(lib.ROOT, findings)
+    items, areas, recipes = lib.load_items(), lib.load_areas(), lib.Recipes.load()
+    rules.check_store(items, areas, recipes, findings)
+    rules.check_provenance_quality(items, findings)
+    if base_sha:
+        judge(args, base_sha, findings)
+
+    for warning in findings.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    for error in findings.errors:
+        print(f"error: {error}", file=sys.stderr)
+    verdict = "refuses" if findings.errors else "passes"
+    print(f"check {verdict}: {len(findings.errors)} error(s), {len(findings.warnings)} warning(s); {len(items)} item(s), {len(areas)} area(s)")
+    if args.report:
+        return 0
+    return 1 if findings.errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

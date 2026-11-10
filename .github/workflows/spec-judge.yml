@@ -1,0 +1,70 @@
+# The devloop v1.5 judge on every pull request, and again after each review,
+# because only approvals on the current head count
+# (docs/decisions/work-item-devloop.md). It runs the base commit's copy of
+# scripts/spec/check against the head checkout, so a pull request cannot
+# rewrite the judge or the lists that judge it.
+#
+# Until cutover this reports and never blocks: V1 (`just tasks_check` and
+# check-pr-scope.py) still judges main. This workflow file itself comes from
+# the pull request; before `check` blocks, the cutover runs it from a
+# trusted definition (a ruleset-required workflow on GitHub, a protected
+# pipeline definition on GitLab).
+name: Spec judge
+
+on:
+  pull_request:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+concurrency:
+  group: spec-judge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  judge:
+    name: Devloop v1.5 judge (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+      # The same projection shell and cache key as CI's work_items job.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: >-
+            projection-v2-${{ runner.os }}-${{ runner.arch }}-${{
+              hashFiles('flake.lock', 'flake.nix', 'nix/devloop.nix', 'nix/zutai.nix')
+            }}
+          restore-prefixes-first-match: projection-v2-${{ runner.os }}-${{ runner.arch }}-
+          gc-max-store-size-linux: 5G
+      - run: git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence || true
+      - name: Judge from the base commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          judge="$RUNNER_TEMP/judge"
+          mkdir -p "$judge"
+          paths=""
+          for path in scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS; do
+            if git cat-file -e "$BASE:$path" 2>/dev/null; then paths="$paths $path"; fi
+          done
+          if git cat-file -e "$BASE:scripts/spec/check" 2>/dev/null; then
+            git archive "$BASE" $paths | tar -x -C "$judge"
+          else
+            echo "the base carries no judge; judging with the head's code"
+            cp -r --parents scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS "$judge"/
+          fi
+          SPEC_ROOT="$PWD" SPEC_JUDGE=base nix develop .#projection --command \
+            python3 "$judge/scripts/spec/check" --base "$BASE" --forge github --report

@@ -132,6 +132,12 @@ tasks_check:
 spec_e2e:
     python3 scripts/spec/e2e
 
+# The devloop v1.5 judge: the store alone, or with `--base REV` the pull
+# request base...HEAD under V1 to V10. Reports only until cutover.
+[group('quality')]
+spec_check *ARGS:
+    python3 scripts/spec/check {{ARGS}}
+
 # task/v2 items and the frozen area files: format, links, schema copies, and
 # with BASE the V5, V7 and V10 judgements against that commit. The V1
 # `tasks_check` still judges the store until cutover.

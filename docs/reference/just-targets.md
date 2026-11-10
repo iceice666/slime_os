@@ -104,6 +104,7 @@ For how the planes work and how to add one, read
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just tasks_check` | `myque check` plus backlog-first policy, spec-driven mandate, terminal records, devloop validation, and `codePaths` coverage. |
 | `just spec_e2e` | The devloop v1.5 exam: M1 to M3 on a throwaway fixture repository, judged by the base commit's judge; reports `casesObserved` and `negativeControlsRefused`. |
+| `just spec_check ARGS` | The devloop v1.5 judge: the store alone, or with `--base REV` the pull request under V1 to V10 (`--forge github` reads the author and the approvals); reports only until cutover. |
 | `just spec_tasks_check ARGS` | `task/v2` items and the frozen area files: format, links and schema copies; with `--base` also V5, V7 and V10 (`scripts/spec/tasks check`). |
 | `just spec_status ARGS` | Each area requirement's state from the `evidence` branch: enforced, failing, claimed, advisory or superseded. |
 | `just spec_tasks_status ARGS` | Each `task/v2` item's state from the `evidence` branch; `--claimed` lists what the Evidence workflow would run, `--weekly` the seven v1.5 metrics. |
