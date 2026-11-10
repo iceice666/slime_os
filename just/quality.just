@@ -108,21 +108,6 @@ docs_check:
 smoltcp_matrix_check:
     python3 scripts/check/check-docs.py --smoltcp-matrix
 
-# The pull-request scope classes and their refusals on synthetic diffs, without
-# Git; CI judges a real base..head with the same classes. The sweep of every
-# contracts/**/schema.zt is the other half: a schema a planning PR lands must
-# compile before anything refers to it.
-[group('quality')]
-pr_scope_check:
-    python3 scripts/check/check-pr-scope.py --controls
-    python3 scripts/check/check-contracts.py
-
-# MyQue validates the live store; this target also enforces backlog-first policy.
-# docs_check needs only the checkout, never MyQue or the history repository.
-[group('quality')]
-tasks_check:
-    python3 scripts/check/check-work-items.py
-
 # The devloop v1.5 exam (docs/decisions/work-item-devloop.md): walks M1 to M3
 # on a throwaway fixture repository, judged by the base commit's judge as CI
 # runs it. Its scripts have no file extension, so the closure resolver cannot
@@ -133,14 +118,13 @@ spec_e2e:
     python3 scripts/spec/e2e
 
 # The devloop v1.5 judge: the store alone, or with `--base REV` the pull
-# request base...HEAD under V1 to V10. Reports only until cutover.
+# request base...HEAD under V1 to V10.
 [group('quality')]
 spec_check *ARGS:
     python3 scripts/spec/check {{ARGS}}
 
 # task/v2 items and the frozen area files: format, links, schema copies, and
-# with BASE the V5, V7 and V10 judgements against that commit. The V1
-# `tasks_check` still judges the store until cutover.
+# with BASE the V5, V7 and V10 judgements against that commit.
 [group('quality')]
 spec_tasks_check *ARGS:
     python3 scripts/spec/tasks check {{ARGS}}
@@ -165,65 +149,6 @@ spec_record TARGET *ARGS:
 [group('quality')]
 spec_closure *ARGS:
     python3 scripts/spec/closure --bound {{ARGS}}
-
-# Work items are not projected into GitHub Issues: refuses while the projection
-# workflow exists, policy names it, a workflow or script runs `myque-gh apply`,
-# or contributor guidance still asks for `myque-gh pr link`.
-[group('quality')]
-issue_projection_retired_check:
-    @if test -e .github/workflows/myque-project.yml; then echo '.github/workflows/myque-project.yml still exists' >&2; exit 1; fi
-    @if grep -q 'myque-project.yml' .devloop/policy.json; then echo '.devloop/policy.json still names myque-project.yml' >&2; exit 1; fi
-    @if grep -rlq 'myque-gh apply' .github scripts; then echo 'a workflow or script still runs myque-gh apply' >&2; exit 1; fi
-    @if grep -rlq 'myque-gh pr link\|myque-gh/[0-9a-f]*#myque-gh -- pr link' CONTRIBUTING.md .github docs/getting-started .agents; then echo 'contributor guidance still asks for myque-gh pr link' >&2; exit 1; fi
-
-# End-to-end diagnostics from a failing gate through the pinned CLI, including
-# retained output, cached failure, bounds and refusals. Explicit qualification.
-[group('quality')]
-devloop_diagnostics_check: tasks_check
-    python3 scripts/check/check-work-items.py --devloop-diagnostics
-
-# Mutation controls for the diagnostics exam; never qualifies the repair.
-[group('quality')]
-devloop_diagnostics_controls:
-    python3 scripts/check/check-work-items.py --diagnostic-controls
-
-# Linux real-CLI observation capacity, filesystem mutation and memory exam.
-# strace comes from the repository's locked nixpkgs, never an ambient fallback.
-[group('quality')]
-devloop_observation_capacity_check: tasks_check
-    nix shell --inputs-from . nixpkgs#strace --command python3 scripts/check/check-work-items.py --observation-capacity
-
-[group('quality')]
-devloop_observation_capacity_controls:
-    nix shell --inputs-from . nixpkgs#strace --command python3 scripts/check/check-work-items.py --capacity-controls
-
-# The tree the closeout script runs devloop in must contain every policy
-# codePaths entry: a real checkout of canonical main through the script's own
-# prepare function, and a bare checkout the check must refuse. Needs network;
-# explicit, never part of CI.
-[group('quality')]
-closeout_checkout_check:
-    python3 scripts/lib/work_item_closeout_publish_controls.py --checkout
-
-[group('quality')]
-tasks_list:
-    myque list
-
-[group('quality')]
-tasks_next:
-    myque next
-
-[group('quality')]
-tasks_graph:
-    myque graph
-
-# Run the pinned devloop against this repository's Zutai toolchain and gate
-# policy: `just devloop validate <UUID>`, `just devloop admit <spec.zti> …`.
-# Positional arguments keep an operator's quoted title intact.
-[group('quality')]
-[positional-arguments]
-devloop *ARGS:
-    python3 scripts/lib/devloop_cli.py "$@"
 
 [group('quality')]
 x86_portability_check:

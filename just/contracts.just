@@ -58,7 +58,7 @@ contracts_check: contracts_source_check generation_corpus_check
 [group('contracts')]
 generation_v5_retired_check: generation_corpus_check
     @if test -e scripts/check/check-generation-v[5].py; then echo 'the v5 guard checker still exists' >&2; exit 1; fi
-    @if grep -rnE 'generation_v5[_]check|check-generation-v5[.]py' just Justfile .devloop/policy.json .github docs/reference/just-targets.md; then echo 'the v5 guard is still referenced above' >&2; exit 1; fi
+    @if grep -rnE 'generation_v5[_]check|check-generation-v5[.]py' just Justfile .github docs/reference/just-targets.md; then echo 'the v5 guard is still referenced above' >&2; exit 1; fi
 
 [group('contracts')]
 architecture_contract_check: contracts_check
@@ -121,7 +121,7 @@ system_test_run_reference_check:
 # One execution identity covers the declaration/closure boundary and its quality gates.
 [group('contracts')]
 system_test_run_baseline_check: system_image_closure_check system_test_run_check
-    just tasks_check
+    just spec_tasks_check
     just docs_check
     just ruff
     just typos
