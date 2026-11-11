@@ -381,10 +381,10 @@ jobs:
           build-partition: image
           build-save: 'false'
       - run: nix develop --command just sel4_qemu_image_check
-      # Split from `sel4_system_image_builder` so the two chains run
-      # concurrently. Together the two jobs run exactly the recipes the single
-      # job ran; `component_spec_validation_check` (seconds) runs in both
-      # because `system_image_builder_check` depends on it.
+      # Split from `sel4_system_image_builder` so the chains run concurrently.
+      # With `sel4_system_specs`, the jobs run exactly the recipes the single
+      # job ran; `component_spec_validation_check` (seconds) also runs in each
+      # system-spec shard because `system_spec_check` depends on it.
       - run: >-
           nix develop --command just
           contracts_source_check component_spec_validation_check
@@ -393,8 +393,38 @@ jobs:
         with:
           checks-completed: ${{ job.status == 'success' }}
 
+  sel4_system_specs:
+    name: System specs (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04-arm
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      # The check runs host tools only, so no shard builds the image. Each
+      # shard evaluates its own systems and keeps its own evaluation store.
+      - uses: ./.github/actions/slime-env
+        with:
+          build-cache-key: system-spec-${{ matrix.shard }}
+          build-partition: image
+          build-save: 'false'
+      # The shards of one count together run every system, named mutation and
+      # control of the unsharded check exactly once; shard 0 also runs the
+      # generation-from-spec drift check.
+      - run: nix develop --command just system_spec_check ${{ matrix.shard }} 4
+      - uses: ./.github/actions/slime-zutai-store-save
+        if: always()
+        with:
+          checks-completed: ${{ job.status == 'success' }}
+
   sel4_system_image_builder:
-    name: System specs and system-image closures
+    name: System-image closures
     runs-on: ubuntu-24.04-arm
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
@@ -412,7 +442,9 @@ jobs:
       # Closures are digests of source trees; a merge that touches one without
       # regenerating them makes every plane gate refuse to resolve. Fail here,
       # on the clean checkout, rather than in whichever QEMU job runs first.
-      - run: nix develop --command just system_image_builder_check
+      # `system_image_builder_check` without the system-spec check, which
+      # `sel4_system_specs` runs as parallel shards.
+      - run: nix develop --command just image_builder_closures_check
       - uses: ./.github/actions/slime-zutai-store-save
         if: always()
         with:
@@ -449,7 +481,7 @@ jobs:
   sel4_contracts:
     name: Contracts and component specs
     runs-on: ubuntu-latest
-    needs: [sel4_contract_sources, sel4_system_image_builder, sel4_generations]
+    needs: [sel4_contract_sources, sel4_system_specs, sel4_system_image_builder, sel4_generations]
     if: always()
     steps:
       # The seL4 jobs report `skipped` rather than `success` for a
@@ -458,19 +490,21 @@ jobs:
       - run: |
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
           ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_system_specs.result }}"
           ok "${{ needs.sel4_system_image_builder.result }}"
           ok "${{ needs.sel4_generations.result }}"
 
   sel4_rollback:
     name: Rollback, release trust, and BootState trace
     runs-on: ubuntu-latest
-    needs: [sel4_rollback_runtime, sel4_contract_sources, sel4_system_image_builder, sel4_generations]
+    needs: [sel4_rollback_runtime, sel4_contract_sources, sel4_system_specs, sel4_system_image_builder, sel4_generations]
     if: always()
     steps:
       - run: |
           ok() { [[ "$1" == "success" || "$1" == "skipped" ]]; }
           ok "${{ needs.sel4_rollback_runtime.result }}"
           ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_system_specs.result }}"
           ok "${{ needs.sel4_system_image_builder.result }}"
           ok "${{ needs.sel4_generations.result }}"
 
@@ -492,6 +526,7 @@ jobs:
       - sel4_product
       - sel4_rollback_runtime
       - sel4_contract_sources
+      - sel4_system_specs
       - sel4_system_image_builder
       - sel4_generations
       - sel4_contracts
@@ -517,6 +552,7 @@ jobs:
           ok "${{ needs.sel4_product.result }}"
           ok "${{ needs.sel4_rollback_runtime.result }}"
           ok "${{ needs.sel4_contract_sources.result }}"
+          ok "${{ needs.sel4_system_specs.result }}"
           ok "${{ needs.sel4_system_image_builder.result }}"
           ok "${{ needs.sel4_generations.result }}"
           ok "${{ needs.sel4_contracts.result }}"
