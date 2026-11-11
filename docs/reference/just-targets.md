@@ -123,6 +123,7 @@ For how the planes work and how to add one, read
 | `just capability_rights_model_check` | Model-check the capability-rights model. |
 | `just component_spec_check` | Aggregate: `contracts_check`, `component_spec_validation_check`. |
 | `just component_spec_validation_check` | CP0 component-specification model gate. |
+| `just composition_inventory_check` | Render `contracts/composition-inventory/v1`'s host constants and check the composition inventory. |
 | `just contracts_check` | Aggregate: `contracts_source_check`, `generation_corpus_check`. |
 | `just contracts_source_check` | Type-check every contract schema and renderer and refuse stale generated bindings (`check-contracts.py`). |
 | `just data_fabric_profile_check` | C8.9 typed full-profile and resource-bound closure gate. |
@@ -131,6 +132,7 @@ For how the planes work and how to add one, read
 | `just generation_corpus_check shard_index shard_count` | Every seL4 manifest the generation builder declares still builds, optionally one round-robin shard of the corpus. |
 | `just generation_v5_retired_check` | Retirement of the generation v5 guard: the corpus still builds, and the guard's checker, recipe, codePaths entry, reference row and CI steps are gone. |
 | `just generation_v5_check shard_index shard_count` | Every generation this repository builds is v5, and nothing still writes v4. |
+| `just image_builder_closures_check` | `system_image_builder_check` without the system-spec check, which CI runs as `system_spec_check` shards. Resolution checks each closure's committed prefix against `sel4/pins.toml`; no installed platform build or published SDK record is needed for that check. |
 | `just interface_schema_check` | Validate `contracts/interface-schema/v1` and its normalized outputs. |
 | `just io_model_check` | Aggregate: `io_queue_model_check`, `io_resource_model_check`. |
 | `just io_queue_model_check` | Model-check `contracts/io-queue/model/io-queue.zt`. |
@@ -138,13 +140,13 @@ For how the planes work and how to add one, read
 | `just release_trust_check` | Aggregate: `contracts_check`, `release_trust_runtime_check`. |
 | `just release_trust_runtime_check` | M5.8 signed-release authorization and replay scenarios. |
 | `just sample_descriptor_check` | Aggregate: `contracts_check`, `sel4_sample_check`. |
-| `just system_composition_closure_check` | Render `contracts/composition-inventory/v1`'s host constants. |
-| `just system_image_builder_check` | Resolution checks each closure's committed prefix against `sel4/pins.toml`; no installed platform build or published SDK record is needed for that check. |
+| `just system_composition_closure_check` | Aggregate: `system_spec_check`, `composition_inventory_check`. |
+| `just system_image_builder_check` | Aggregate: `system_composition_closure_check`, `image_builder_closures_check`. |
 | `just system_image_closure_aggregate_check` | Every shipped or tested image traces to exactly one closure, and every closure is exercised by an owning gate. |
 | `just system_image_closure_gates_check` | Every gate that consumes the committed closure corpus, on one tree: freshness, resolution and its controls, the frozen test-run records and their inventory controls, the scenario and root-role arms, and image/closure ownership. |
 | `just system_image_closure_check` | Render `contracts/system-image-closure/v2` host constants. |
 | `just system_image_scenario_check` | CP14 scenario-identity gate. |
-| `just system_spec_check` | Validate every system spec and refuse a derived composition manifest that drifted from it. |
+| `just system_spec_check shard_index shard_count` | Validate every system spec and refuse a derived composition manifest that drifted from it. With an index and a count, run one shard; the shards of one count run every check unit once. |
 | `just system_test_run_baseline_check` | One execution identity covers the declaration/closure boundary and its quality gates. |
 | `just system_test_run_bless` | Generate `contracts/system-test-run/v2` records from each plane gate's execution inputs. |
 | `just closure_input_host_paths_check` | Committed closure inputs carry no host path. No file under `contracts/system-image-closure/v2/inputs/` names a home directory or this checkout. Each committed seL4 prefix names its libsel4 generator inputs under `/slime/sel4`. The two riscv64 prefix headers hold their pinned canonicalized bytes. Explicit. |
