@@ -114,6 +114,7 @@ from typing import NoReturn
 
 import devloop_observations
 import zenoh_exchange
+import zenoh_rmw_exam
 import zenoh_links_exam
 import zenoh_grants_exam
 import zenoh_client_exam
@@ -1794,6 +1795,106 @@ def undeclare_main(controls_only: bool) -> int:
     return 0
 
 
+RMW_FILTER = "zenoh_rmw::"
+RMW_FIXTURES = ROOT / "build" / "zenoh-rmw" / "fixtures.zti"
+# The exam's own Rust tests, by name: a filter that matches nothing passes silently.
+RMW_TESTS = tuple(f"zenoh_rmw::{name}" for name in (
+    "the_constants_are_the_handed_off_record",
+    "the_rmw_peer_exam",
+))
+
+
+def run_rmw() -> list[str]:
+    # The pinned corpus, the stock-peer exam and the undeclare exam are judged on this path too: an
+    # implementation that accepts the graph by loosening the decoder could otherwise move a pinned
+    # refusal or a stock case while every rmw test passes.
+    if not STOCK_CORPUS.is_file():
+        fail(f"{STOCK_CORPUS.relative_to(ROOT)} is missing")
+    judge_stock_corpus(STOCK_CORPUS.read_text())
+    stock_fixtures()
+    STOCK_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    STOCK_FIXTURES.write_text(zenoh_stock_peer.fixture_zti())
+    UNDECLARE_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    UNDECLARE_FIXTURES.write_text(zenoh_undeclare_exam.fixture_zti())
+    RMW_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    RMW_FIXTURES.write_text(zenoh_rmw_exam.fixture_zti())
+    try:
+        zenoh_rmw_exam.validate_handoff(RMW_FIXTURES.read_text())
+    except zenoh_rmw_exam.RmwError as error:
+        fail(str(error))
+    environment = {
+        **_os.environ,
+        "ZENOH_STOCK_FIXTURES": str(STOCK_FIXTURES),
+        "ZENOH_UNDECLARE_FIXTURES": str(UNDECLARE_FIXTURES),
+        "ZENOH_RMW_FIXTURES": str(RMW_FIXTURES),
+    }
+    _stdout, retained = cargo_tests(
+        (STOCK_DECODER_FILTER, STOCK_SESSION_FILTER, STOCK_ENCODE_FILTER, STOCK_LINK_FILTER), environment
+    )
+    passed = tests_passed(retained)
+    missing = [name for name in LINKS_RETAINED_TESTS if name not in passed]
+    if missing:
+        fail(f"rmw: retained tests did not run and pass ({len(missing)} of {len(LINKS_RETAINED_TESTS)}): {', '.join(missing[:4])}")
+    stock_stdout, stock_output = cargo_tests((STOCK_FILTER,), environment)
+    stock_passed = tests_passed(stock_output)
+    stock_missing = [name for name in LINKS_STOCK_TESTS if name not in stock_passed]
+    if stock_missing:
+        fail(f"rmw: the stock-peer exam's tests did not run and pass ({len(stock_missing)} of {len(LINKS_STOCK_TESTS)}): {', '.join(stock_missing[:4])}")
+    judge_stock(exam_lines(stock_stdout))
+    undeclare_stdout, undeclare_output = cargo_tests((UNDECLARE_FILTER,), environment)
+    undeclare_passed = tests_passed(undeclare_output)
+    undeclare_missing = [name for name in UNDECLARE_TESTS if name not in undeclare_passed]
+    if undeclare_missing:
+        fail(f"rmw: the undeclare exam's tests did not run and pass ({len(undeclare_missing)} of {len(UNDECLARE_TESTS)}): {', '.join(undeclare_missing[:4])}")
+    try:
+        zenoh_undeclare_exam.judge(exam_lines(undeclare_stdout))
+    except zenoh_undeclare_exam.UndeclareError as error:
+        fail(str(error))
+    rmw_stdout, rmw_output = cargo_tests((RMW_FILTER,), environment)
+    rmw_passed = tests_passed(rmw_output)
+    rmw_missing = [name for name in RMW_TESTS if name not in rmw_passed]
+    if rmw_missing:
+        fail(f"rmw: the exam's tests did not run and pass ({len(rmw_missing)} of {len(RMW_TESTS)}): {', '.join(rmw_missing[:4])}")
+    return exam_lines(rmw_stdout)
+
+
+def rmw_main(controls_only: bool) -> int:
+    # The neighbours' judges and their mutations run here as a precondition, as they do for
+    # `--slice undeclare`: this gate relies on them to keep the pinned refusals where they are, and their
+    # refusals belong to their own gates' counts, not to this one's.
+    stock_controls()
+    sample = "\n".join(f"test {name} ... ok" for name in RMW_TESTS[1:])
+    if all(name in tests_passed(sample) for name in RMW_TESTS):
+        fail("control: a run with an rmw exam test missing was read as complete")
+    try:
+        refused_controls = zenoh_rmw_exam.all_controls()
+        item_cases, item_controls = zenoh_rmw_exam.item_pins()
+        positive, refusals = zenoh_rmw_exam.judge(zenoh_rmw_exam.good_lines())
+    except zenoh_rmw_exam.RmwError as error:
+        fail(str(error))
+    if positive + refusals != zenoh_rmw_exam.PINNED_CASES:
+        fail(f"rmw: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_rmw_exam.PINNED_CASES}")
+    if refused_controls != zenoh_rmw_exam.PINNED_CONTROLS:
+        fail(f"rmw: {refused_controls} controls, the checker pins {zenoh_rmw_exam.PINNED_CONTROLS}")
+    # While the item is open, its stored predicates must say the same. A retired item has no body here, so
+    # this comparison is skipped and the pins above are the whole guard.
+    if item_cases and item_cases != zenoh_rmw_exam.PINNED_CASES:
+        fail(f"rmw: the item fixes {item_cases} cases, the checker pins {zenoh_rmw_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_rmw_exam.PINNED_CONTROLS:
+        fail(f"rmw: the item requires {item_controls} controls, the checker pins {zenoh_rmw_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 rmw judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        cases, refusals = zenoh_rmw_exam.judge(run_rmw())
+    except zenoh_rmw_exam.RmwError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=rmw cases={cases} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=cases + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 rmw check: the session took the graph an rmw_zenoh peer declares and refused every variant of it the profile must")
+    return 0
+
+
 def neighbour_controls(*, subscribers: bool) -> None:
     # A slice that runs a neighbour's tests and judges their transcript relies on that judge's
     # negative controls. They run here as a precondition and their refusals are not counted: they
@@ -2536,7 +2637,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "grants-reader", "server", "limits", "service-component", "service-booted", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "rmw", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "grants-reader", "server", "limits", "service-component", "service-booted", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2549,6 +2650,8 @@ def main() -> int:
         return links_main(arguments.controls_only)
     if arguments.slice == "undeclare":
         return undeclare_main(arguments.controls_only)
+    if arguments.slice == "rmw":
+        return rmw_main(arguments.controls_only)
     if arguments.slice == "subscribers":
         return subscribers_main(arguments.controls_only)
     if arguments.slice == "grants":
