@@ -305,15 +305,13 @@ ledger, retypes and kernel mappings a component's growth would take, and
 deliberately not the spawn, admission or window-placement path, which the next
 stage owns.
 
-### Root and system funding — implementation in progress
+### Root and system funding
 
-Qualification of the current funding changes is pending under the
-canonical reserve-accounting follow-up
-`01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981` (its row is in
-[`specs/legacy.zt`](../../specs/legacy.zt)).
-The mechanisms below describe the current implementation, not completed QEMU
-matrix evidence or closure of that work item. Earlier qualification does not
-establish the new reserve floor or mixed-pressure construction claim.
+The reserve-accounting follow-up `01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981`
+closed as `done` on 2026-09-26 (its row is in
+[`specs/legacy.zt`](../../specs/legacy.zt)). Its recorded evidence covers the
+root host tests, the gate-control mutations and the aarch64 and riscv64
+private-memory matrices under `just private_memory_phase5_check`.
 
 The allocator's [funding owner](../../slime-root/src/object_allocator/funding.rs)
 checks funding before common backing is consumed. Holder demand and root source
@@ -496,9 +494,9 @@ dumps are identical.
   either pressure holder or the guaranteed holder releases capacity. All three
   holders must then re-verify their full contents. The gate retains idle-maximum,
   guarantee-redemption, twenty-cycle zeroed reuse, census conservation,
-  residency-scaling and launcher-only RAM controls. Successful runs of these new
-  checks, tied to tested image identities, remain pending under the
-  reserve-accounting follow-up `01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981`.
+  residency-scaling and launcher-only RAM controls. The reserve-accounting
+  follow-up `01a0d6d1-c21e-7d1d-aafb-8ea9fa39e981` recorded passing runs of
+  these checks on both matrix images before it closed.
 - `just private_memory_phase4_check` runs both over the whole phase-3 surface,
   because adaptive binding changes construction, growth and reclamation for
   fixed holders too.

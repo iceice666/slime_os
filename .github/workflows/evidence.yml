@@ -184,7 +184,7 @@ jobs:
       - name: Closeout token
         id: app
         if: vars.CLOSEOUT_APP_ID != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.CLOSEOUT_APP_ID }}
           private-key: ${{ secrets.CLOSEOUT_APP_PRIVATE_KEY }}

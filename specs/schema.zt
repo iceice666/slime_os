@@ -1,15 +1,15 @@
 --| Living-spec schema (spec/v1).
 --|
 --| `specs/<area>.zt` is an `Area`: what one plane or subsystem promises
---| today. The unit of work is a `Requirement` inside it. Changing a feature
---| is a diff that adds, rewrites or removes requirements in the owning
---| area file, carried by the same PR as the exam and the implementation.
+--| today. Its requirements are frozen (V10): no pull request adds,
+--| rewrites or removes one. A task/v2 item replaces a requirement by
+--| naming it in the item's `supersedes`. The superseded requirement
+--| stays in the file, and `scripts/spec/status` lists it as `superseded`.
 --|
 --| There is no `done` state. `scripts/spec/status` computes each
 --| acceptance's state from the `evidence` branch: enforced, failing,
 --| claimed or advisory. A `planned` requirement is a promise without a
---| bound exam yet. Superseded or cancelled requirements are deleted from
---| the file; `git log` keeps them.
+--| bound exam yet.
 --|
 --| `.zt` is the only form that enters the repository. `.zti` and digests
 --| are computed, never committed.
