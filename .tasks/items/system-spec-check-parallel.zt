@@ -5,6 +5,7 @@ item :: s.Item = (h.task "01a1c957-47f3-7e68-a2c3-ce16ed194835" "system-spec-che
   "Budget parallel system-spec evaluations by the memory they use"
   "scripts/lib/zutai_cli.py budgets each prefetch worker 2 GiB, from an earlier 1.7 GB peak. Each of the 78 system-spec schema checks now peaks near 4.2 GB and takes 36 to 105 s, so on a 4-CPU, 16 GB host prefetch starts 4 at once and the kernel kills one. The serial pass then reruns each killed check; one cold local run of check-system-spec.py lost 13 checks this way. The check also renders the 6 computed sources one at a time, through an adapter whose output is not stored. The change: budget each worker 4.5 GiB, and render the computed sources in parallel within that budget, without changing what any evaluation asserts.")
   with {
+    intent = #active;
     owns = {
       ".github/workflows/ci.yml";
     };
