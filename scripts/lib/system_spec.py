@@ -47,7 +47,7 @@ import private_memory_policy
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
-from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch, workers
+from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch
 from boot_contracts import (
     GRAPH_ARRIVAL_CEILING_DEFAULT,
     GRAPH_ARRIVAL_CEILING_MAX,
@@ -1502,13 +1502,35 @@ def render_computed_system(name: str, root: Path = CONTRACT_ROOT) -> str:
     return rendered
 
 
+# One computed-source render peaks near 3.7 GB of RSS; each parallel render is budgeted this.
+_RENDER_MEMORY_BYTES = 9 << 29
+
+
+def _render_workers() -> int:
+    """Parallel renders that fit the memory available now, at least one, at most one per CPU."""
+    configured = os.environ.get("SLIME_ZUTAI_JOBS")
+    if configured:
+        if not configured.isdigit() or int(configured) < 1:
+            raise SystemExit(f"SLIME_ZUTAI_JOBS must be a positive integer, not {configured!r}")
+        return int(configured)
+    cpus = os.cpu_count() or 1
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return max(1, min(cpus, int(line.split()[1]) * 1024 // _RENDER_MEMORY_BYTES))
+    except (OSError, ValueError):
+        pass
+    return 1
+
+
 def computed_system_outputs(root: Path = CONTRACT_ROOT) -> dict[Path, str]:
     validate_source_mapping(root)
     names = list(COMPUTED_SYSTEM_SOURCES)
     # Each render is an independent, pure adapter run over `root`. Results are taken in
     # declaration order, so the first refused source is the one a serial loop reports.
     source_tool()
-    with ThreadPoolExecutor(max_workers=min(workers(), len(names))) as pool:
+    with ThreadPoolExecutor(max_workers=min(_render_workers(), len(names))) as pool:
         renders = [pool.submit(render_computed_system, name, root) for name in names]
     return {root / "systems" / f"{name}.zti": render.result()
             for name, render in zip(names, renders, strict=True)}
