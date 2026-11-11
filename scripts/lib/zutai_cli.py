@@ -8,9 +8,10 @@ a temporary file rewritten with different contents is a different entry. Only a 
 is stored — a decode that prints `#invalid` exits zero and is a result like any other — so
 a malformed input, which exits non-zero, is re-run and refused every time.
 
-`SLIME_ZUTAI_CACHE=0` bypasses the cache, `SLIME_ZUTAI_JOBS` bounds `prefetch`'s parallel
-width, and `rm -rf build/zutai-cache` resets the store. A store that cannot be read or
-written is skipped, never fatal: the evaluation still runs and its result is returned.
+`SLIME_ZUTAI_CACHE=0` bypasses the cache, `SLIME_ZUTAI_JOBS` overrides `workers()`, the
+parallel width of `prefetch` and of computed-source renders, and `rm -rf build/zutai-cache`
+resets the store. A store that cannot be read or written is skipped, never fatal: the
+evaluation still runs and its result is returned.
 """
 
 from __future__ import annotations
@@ -34,8 +35,8 @@ _BINARY = ZUTAI_ROOT / "target" / "release" / "zutai-cli"
 CACHE_ROOT = ROOT / "build" / "zutai-cache"
 # Bump to orphan every stored entry when the key recipe changes.
 _CACHE_FORMAT = b"slime-zutai-cache/v1"
-# One system-spec evaluation peaks near 1.7 GB of RSS; each parallel worker is budgeted this.
-_WORKER_MEMORY_BYTES = 2 << 30
+# One system-spec schema check peaks near 4.2 GB of RSS; each parallel worker is budgeted this.
+_WORKER_MEMORY_BYTES = 9 << 29
 
 # (command, target, input_path, env_var): run `zutai-cli <command> <target>` with `env_var`
 # naming `input_path` in the child's environment.
@@ -240,8 +241,8 @@ def workers() -> int:
                     return max(1, min(cpus, available // _WORKER_MEMORY_BYTES))
     except (OSError, ValueError):
         pass
-    # Without a memory reading, stay small: every core times 1.7 GB is not a safe default.
-    return min(cpus, 4)
+    # Without a memory reading, stay small: every core times 4.2 GB is not a safe default.
+    return min(cpus, 2)
 
 
 def prefetch(jobs: Iterable[Job]) -> None:

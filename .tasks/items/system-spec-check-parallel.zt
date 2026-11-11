@@ -2,15 +2,15 @@ s ::= import "./schema.zt";
 h ::= import "./helpers.zt";
 
 item :: s.Item = (h.task "01a1c957-47f3-7e68-a2c3-ce16ed194835" "system-spec-check-parallel" "quality"
-  "Evaluate the system-spec check's independent evaluations in parallel"
-  "check-system-spec.py runs most of its Zutai evaluations one at a time. It warms only each system's schema check, then projects each of the 78 systems serially, and renders the 6 computed sources 54 times, one at a time, through an adapter whose output is not stored. A cold profile on 4 CPUs spent about 1235 s in serial projections and 735 s in renders, out of 4114 s. The change: warm both evaluations of each system at once, and render the computed sources in parallel within a memory budget, without changing what any evaluation asserts.")
+  "Budget parallel system-spec evaluations by the memory they use"
+  "scripts/lib/zutai_cli.py budgets each prefetch worker 2 GiB, from an earlier 1.7 GB peak. Each of the 78 system-spec schema checks now peaks near 4.2 GB and takes 36 to 105 s, so on a 4-CPU, 16 GB host prefetch starts 4 at once and the kernel kills one. The serial pass then reruns each killed check; one cold local run of check-system-spec.py lost 13 checks this way. The check also renders the 6 computed sources one at a time, through an adapter whose output is not stored. The change: budget each worker 4.5 GiB, and render the computed sources in parallel within that budget, without changing what any evaluation asserts.")
   with {
     owns = {
       ".github/workflows/ci.yml";
     };
     nonGoals = {
       h.nonGoal "Splitting the check across CI jobs; system-spec-check-shards owns that." h.agentDefault;
-      h.nonGoal "Changing the Zutai evaluation store, its key, or the adapter that renders a computed source." h.agentDefault;
+      h.nonGoal "Changing the Zutai evaluation store's key recipe or entry format, or the adapter that renders a computed source." h.agentDefault;
     };
     requirements = {
       h.req "same-refusals"
@@ -23,12 +23,12 @@ item :: s.Item = (h.task "01a1c957-47f3-7e68-a2c3-ce16ed194835" "system-spec-che
     decisions = {
       h.decided "planning-only"
         "The checker change lands in the planning pull request that adds this item; an implementation pull request changes only the CI workflow, to set SLIME_ZUTAI_JOBS where a runner's memory needs it"
-        "check-system-spec.py and scripts/lib/system_spec.py are the grader set of system_spec_check, which V3 keeps out of an implementation pull request"
+        "scripts/lib/zutai_cli.py, check-system-spec.py and scripts/lib/system_spec.py are in the grader set of system_spec_check, which V3 keeps out of an implementation pull request"
         h.agentDefault
         { "same-refusals"; };
-      h.decided "render-memory-budget"
-        "Each parallel computed-source render is budgeted 4.5 GiB of available memory; the worker count is the smaller of the CPU count and MemAvailable divided by that budget, and SLIME_ZUTAI_JOBS overrides it"
-        "one render peaked near 3.7 GB of resident memory, and four renders at once on a 16 GB host exceeded the memory limit, so the kernel killed one and a control failed with an empty diagnostic"
+      h.decided "worker-memory-budget"
+        "workers() budgets each parallel prefetch job and each parallel computed-source render 4.5 GiB of available memory, takes the smaller of the CPU count and MemAvailable divided by that budget, and falls back to 2 without a memory reading; SLIME_ZUTAI_JOBS overrides it"
+        "prefetch has one caller, the system-spec check, and every one of its 78 schema checks peaked near 4.2 GB of resident memory; a render peaked near 3.7 GB, and four renders at once on a 16 GB host made the kernel kill one, so a control failed with an empty diagnostic"
         h.agentDefault
         { "same-refusals"; };
     };
