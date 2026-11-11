@@ -37,6 +37,7 @@ import re
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,7 +47,7 @@ import private_memory_policy
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
-from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch
+from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch, workers
 from boot_contracts import (
     GRAPH_ARRIVAL_CEILING_DEFAULT,
     GRAPH_ARRIVAL_CEILING_MAX,
@@ -264,11 +265,23 @@ def _fail(message: str) -> None:
     raise SystemSpecError(message)
 
 
-def _run_zutai(path: Path, command: str, *, contract: ModuleType) -> str:
+def _admit_source(path: Path, contract: ModuleType) -> None:
     if not path.is_file():
         _fail(f"system spec not found: {path}")
     if path.stat().st_size > contract.MAX_SOURCE_BYTES:
         _fail(f"{path}: source exceeds bound")
+
+
+def _evaluations(path: Path) -> tuple[tuple[str, Path, Path, str], ...]:
+    """The two evaluations `_load` runs on one source: the schema check, then the projection."""
+    return (
+        ("run", CHECKER, path, "SLIME_SYSTEM_SPEC_PATH"),
+        ("json", path, path, "SLIME_SYSTEM_SPEC_PATH"),
+    )
+
+
+def _run_zutai(path: Path, command: str, *, contract: ModuleType) -> str:
+    _admit_source(path, contract)
     try:
         return evaluate(
             command,
@@ -281,6 +294,10 @@ def _run_zutai(path: Path, command: str, *, contract: ModuleType) -> str:
 
 
 def _load(path: Path, contract: ModuleType) -> dict:
+    # The projection does not depend on the schema check's result, so both are warmed
+    # at once; the serial pass below still refuses in the same order with the same text.
+    _admit_source(path, contract)
+    prefetch(_evaluations(path))
     decoded = _run_zutai(path, "run", contract=contract)
     if not decoded.startswith("#valid"):
         _fail(f"{path}: input does not match the system-spec schema")
@@ -1487,8 +1504,14 @@ def render_computed_system(name: str, root: Path = CONTRACT_ROOT) -> str:
 
 def computed_system_outputs(root: Path = CONTRACT_ROOT) -> dict[Path, str]:
     validate_source_mapping(root)
-    return {root / "systems" / f"{name}.zti": render_computed_system(name, root)
-            for name in COMPUTED_SYSTEM_SOURCES}
+    names = list(COMPUTED_SYSTEM_SOURCES)
+    # Each render is an independent, pure adapter run over `root`. Results are taken in
+    # declaration order, so the first refused source is the one a serial loop reports.
+    source_tool()
+    with ThreadPoolExecutor(max_workers=min(workers(), len(names))) as pool:
+        renders = [pool.submit(render_computed_system, name, root) for name in names]
+    return {root / "systems" / f"{name}.zti": render.result()
+            for name, render in zip(names, renders, strict=True)}
 
 
 def compile_rendered_system(
@@ -1558,11 +1581,12 @@ def system_paths(root: Path = SYSTEM_ROOT) -> list[Path]:
 
 
 def prefetch_systems(paths: list[Path], *, contract: ModuleType = default_contract) -> None:
-    """Warm the evaluation cache for `paths` in parallel; `compile_system` then hits it."""
+    """Warm both evaluations `compile_system` runs for `paths` in parallel; it then hits them."""
     prefetch(
-        ("run", CHECKER, path.resolve(), "SLIME_SYSTEM_SPEC_PATH")
+        job
         for path in paths
         if path.is_file() and path.stat().st_size <= contract.MAX_SOURCE_BYTES
+        for job in _evaluations(path.resolve())
     )
 
 
