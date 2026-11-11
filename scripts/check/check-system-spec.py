@@ -22,6 +22,7 @@ from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
+import argparse
 import copy
 import json
 import os
@@ -1086,10 +1087,85 @@ def computed_source_controls(components: dict[str, dict]) -> int:
     return refused
 
 
+# A shard runs `units[shard_index::shard_count]` of the control units followed by
+# one unit per system. The shards of one count run every unit exactly once, and
+# shard 0 of 1 is the whole check. A system's own checks (sections 1 to 3) run in
+# the shard holding its unit; a control unit also compiles the systems it derives
+# from, so another shard may compile them again. Distinct identities are asserted
+# among the systems a shard compiles: an identity hashes the normalized spec,
+# whose name `compile_system` binds to the distinct file stem, so systems in
+# different shards cannot share one.
+CONTROL_UNITS = {
+    "computed-source": (),
+    "named-mutations": ("sel4-channel",),
+    "private-memory": ("sel4-private-memory-1g",),
+    "manifest-controls": (
+        "sel4-entropy",
+        "sel4-io-tcp",
+        "sel4-lifetime",
+        "sel4-private-memory-isolation",
+        "sel4-zenoh",
+    ),
+}
+
+
+class SelectionError(ValueError):
+    pass
+
+
+def check_units(system_names) -> list[str]:
+    return list(CONTROL_UNITS) + [f"system/{name}" for name in sorted(system_names)]
+
+
+def shard_units(system_names, shard_index: int, shard_count: int) -> list[str]:
+    units = check_units(system_names)
+    if shard_count <= 0:
+        raise SelectionError("--shard-count must be positive")
+    if shard_index < 0:
+        raise SelectionError("--shard-index must not be negative")
+    if shard_index >= shard_count:
+        raise SelectionError("--shard-index must be less than --shard-count")
+    if shard_count > len(units):
+        raise SelectionError(f"--shard-count {shard_count} exceeds the {len(units)} check units")
+    return units[shard_index::shard_count]
+
+
+def check_shard_selection(system_names) -> None:
+    """Every shard count runs each unit exactly once, and a malformed shard is refused."""
+    units = check_units(system_names)
+    for count in range(1, len(units) + 1):
+        chosen = [unit for index in range(count) for unit in shard_units(system_names, index, count)]
+        if sorted(chosen) != sorted(units) or len(chosen) != len(set(chosen)):
+            fail(f"{count} shards do not run every check unit exactly once")
+    for index, count in ((-1, 1), (1, 1), (0, 0), (0, -1), (0, len(units) + 1)):
+        try:
+            shard_units(system_names, index, count)
+        except SelectionError:
+            continue
+        fail(f"shard selection accepted shard {index} of {count}")
+    undeclared = {name for names in CONTROL_UNITS.values() for name in names} - set(system_names)
+    if undeclared:
+        fail(f"control units derive from undeclared systems: {sorted(undeclared)}")
+
+
+parser = argparse.ArgumentParser(description="CP1 system-specification and generation-derivation gate.")
+parser.add_argument("--shard-index", type=int, default=0)
+parser.add_argument("--shard-count", type=int, default=1)
+ARGS = parser.parse_args()
+check_shard_selection(DERIVED_FIXTURES)
+try:
+    SELECTED = set(shard_units(DERIVED_FIXTURES, ARGS.shard_index, ARGS.shard_count))
+except SelectionError as error:
+    fail(str(error))
+CHECKED_NAMES = {name for name in DERIVED_FIXTURES if f"system/{name}" in SELECTED}
+COMPILED_NAMES = CHECKED_NAMES | {
+    name for unit in SELECTED if unit in CONTROL_UNITS for name in CONTROL_UNITS[unit]
+}
+
 CATALOGUE = interface_catalogue()
 COMPONENTS = {entry.name: entry.spec for entry in admit_specs(catalogue=CATALOGUE)}
 
-computed_refusals = computed_source_controls(COMPONENTS)
+computed_refusals = computed_source_controls(COMPONENTS) if "computed-source" in SELECTED else 0
 paths = system_paths()
 if not paths:
     fail("no system specs declared")
@@ -1099,9 +1175,10 @@ if {path.stem for path in paths} != set(DERIVED_FIXTURES):
         f"derivation table {sorted(DERIVED_FIXTURES)}"
     )
 
-prefetch_systems(paths)
+compiled_paths = [path for path in paths if path.stem in COMPILED_NAMES]
+prefetch_systems(compiled_paths)
 systems = {}
-for path in paths:
+for path in compiled_paths:
     try:
         systems[path.stem] = compile_system(path, components=COMPONENTS)
     except SystemSpecError as error:
@@ -1110,6 +1187,7 @@ for path in paths:
 identities = {entry.identity for entry in systems.values()}
 if len(identities) != len(systems):
     fail("two system specs computed the same identity")
+checked = {name: systems[name] for name in sorted(CHECKED_NAMES)}
 
 # Every retired-kind entry must cover at least one real grant, asserted BEFORE
 # any baseline comparison. Ordering matters for diagnosis: the divergence check
@@ -1119,7 +1197,7 @@ if len(identities) != len(systems):
 # three grants through one entry cannot let a second entry skip nothing.
 RETIRED_KINDS_COVERED = {
     grant["capabilityKind"]
-    for name in sorted(systems)
+    for name in sorted(DERIVED_FIXTURES)
     if name not in SPEC_NATIVE_SYSTEMS
     for grant in strip_retired_kinds(load_baseline(DERIVED_FIXTURES[name]))[1]
 }
@@ -1131,9 +1209,9 @@ if RETIRED_CAPABILITY_KINDS - RETIRED_KINDS_COVERED:
     )
 
 # 1. Each system derives the fixture it replaces.
-if not SPEC_NATIVE_SYSTEMS <= systems.keys():
+if not SPEC_NATIVE_SYSTEMS <= DERIVED_FIXTURES.keys():
     fail("spec-native system allowlist names a missing system")
-for name, system in sorted(systems.items()):
+for name, system in sorted(checked.items()):
     if name in SPEC_NATIVE_SYSTEMS:
         if (BASELINE_FIXTURES / DERIVED_FIXTURES[name]).exists():
             fail(f"{name}: spec-native system unexpectedly has a historical baseline")
@@ -1242,7 +1320,7 @@ for name, system in sorted(systems.items()):
 #     held to. Without this, the semantic comparison above would be trivially
 #     true against a fixture nobody could reproduce, and the fixtures would drift
 #     back into hand-edited text one edit at a time.
-for name, system in sorted(systems.items()):
+for name, system in sorted(checked.items()):
     fixture = derived_manifest_path(DERIVED_FIXTURES[name])
     rendered = zti(derive_manifest(system)) + "\n"
     if fixture.read_text(encoding="utf-8") != rendered:
@@ -1252,7 +1330,7 @@ for name, system in sorted(systems.items()):
         )
 
 # 2. The derivation is a function of its inputs alone.
-for name, system in sorted(systems.items()):
+for name, system in sorted(checked.items()):
     if normalized(derive_manifest(system)) != normalized(derive_manifest(system)):
         fail(f"{name}: two derivations of one system spec disagree")
 
@@ -1263,7 +1341,7 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
     root = Path(temporary)
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
-    for name, system in sorted(systems.items()):
+    for name, system in sorted(checked.items()):
         path = root / f"{name}.zti"
         path.write_text(zti(derive_manifest(system)) + "\n", encoding="utf-8")
         process = subprocess.run(
@@ -1281,754 +1359,758 @@ with tempfile.TemporaryDirectory(prefix="slime-system-spec-check-") as temporary
     # 4. Named refusals. Each mutation is applied to a compiled system and must
     #    be refused by the rule it names, with the unmutated baseline admitted
     #    first so no arm can pass by tripping an unrelated guard (B67).
-    baseline = systems["sel4-channel"]
-
     def write_system(directory: Path, spec: dict) -> Path:
         path = directory / f"{spec['name']}.zti"
         path.write_text(zti(spec) + "\n", encoding="utf-8")
         return path
 
-    def source() -> dict:
-        return copy.deepcopy(baseline.spec)
-
     arms = root / "arms"
     arms.mkdir()
-    compile_system(write_system(arms, source()), components=COMPONENTS)
-
-    def rejected(label: str, mutate) -> None:
-        spec = source()
-        mutate(spec)
-        try:
-            compile_system(write_system(arms, spec), components=COMPONENTS)
-        except SystemSpecError:
-            return
-        fail(f"{label} was accepted")
-
-    def undeclared_component(spec: dict) -> None:
-        spec["components"] = sorted(spec["components"] + ["no-such-component"])
-
-    def unknown_target(spec: dict) -> None:
-        spec["targetRequirement"] = "aarch64-imaginary"
-
-    def negative_slot_pin(spec: dict) -> None:
-        spec["slotPins"] = [
-            {
-                "holder": "init",
-                "grant": "dango-output",
-                "slot": -1,
-                "reason": "componentAbi",
-            }
-        ]
-
-    def grant_to_unadmitted(spec: dict) -> None:
-        spec["grants"][0]["target"] = "dango"
-
-    def unknown_capability_kind(spec: dict) -> None:
-        spec["grants"][0]["capabilityKind"] = "pciFunction"
-
-    def rights_outside_kind(spec: dict) -> None:
-        # A *live* right the first grant's kind forbids. That grant is
-        # `dango-output`, an `endpoint`, and `directoryRead` is valid vocabulary
-        # on another kind — so the refusal is `validate_capability_rights`
-        # rejecting a right for this kind. Naming a retired right would be
-        # refused as unknown vocabulary before that check ran, leaving this rule
-        # uncovered (B90).
-        spec["grants"][0]["rights"] = ["directoryRead"]
-
-    def stale_slot_pin(spec: dict) -> None:
-        spec["slotPins"] = [
-            {
-                "holder": "console",
-                "grant": "no-such-grant",
-                "slot": 3,
-                "reason": "componentAbi",
-            }
-        ]
-
-    def duplicate_slot_pin(spec: dict) -> None:
-        spec["slotPins"] = [
-            {
-                "holder": "init",
-                "grant": "dango-output",
-                "slot": 4,
-                "reason": "componentAbi",
-            },
-            {
-                "holder": "init",
-                "grant": "init-console",
-                "slot": 4,
-                "reason": "componentAbi",
-            },
-        ]
-
-    def unknown_slot_pin_reason(spec: dict) -> None:
-        # B91: the reason vocabulary is closed. A pin claiming a reason outside
-        # it cannot be checked against the manifest at all, so it is refused
-        # here rather than reaching the generation builder.
-        spec["slotPins"] = [
-            {
-                "holder": "init",
-                "grant": "dango-output",
-                "slot": 4,
-                "reason": "becauseISaidSo",
-            }
-        ]
-
-    def bootstrap_not_init(spec: dict) -> None:
-        spec["bootstrapInstance"] = "console"
-
-    def bootstrap_unadmitted(spec: dict) -> None:
-        spec["bootstrapInstance"] = "dango"
-
-    def duplicate_grant_name(spec: dict) -> None:
-        spec["grants"].append(copy.deepcopy(spec["grants"][0]))
-
-    def commands_without_executables(spec: dict) -> None:
-        # A command profile in a system granting no executable authority: the
-        # profile advertises commands nothing in this generation can launch.
-        spec["commandBindings"] = [{"component": "console", "commands": ["init"]}]
-        spec["grants"] = [
-            grant for grant in spec["grants"] if grant["capabilityKind"] != "executable"
-        ]
-        spec["slotPins"] = []
-
-    def state_owner_unadmitted(spec: dict) -> None:
-        spec["state"] = [
-            {"name": "orphan", "owner": "dango", "policy": "preserve", "schemaVersion": 1}
-        ]
-
-    def unknown_state_policy(spec: dict) -> None:
-        spec["state"] = [
-            {"name": "orphan", "owner": "console", "policy": "forever", "schemaVersion": 1}
-        ]
-
-    def unsorted_components(spec: dict) -> None:
-        spec["components"] = list(reversed(spec["components"]))
-
-    def over_bounded_slot_pins(spec: dict) -> None:
-        # One more pin than the contract's `maxSlotPins` admits. Every pin names
-        # a real binding, so only the bound can refuse this.
-        spec["slotPins"] = [
-            {
-                "holder": "init",
-                "grant": "dango-output",
-                "slot": index,
-                "reason": "componentAbi",
-            }
-            for index in range(CONTRACT.MAX_SLOT_PINS + 1)
-        ]
-
-    def over_bounded_text(spec: dict) -> None:
-        spec["acceptanceCriteria"] = "x" * (CONTRACT.MAX_TEXT_BYTES + 1)
-
-    def duplicate_state_name(spec: dict) -> None:
-        spec["state"] = [
-            {"name": "twice", "owner": "console", "policy": "preserve", "schemaVersion": 1},
-            {"name": "twice", "owner": "init", "policy": "preserve", "schemaVersion": 1},
-        ]
-
-    def dependency_unadmitted(spec: dict) -> None:
-        # A component whose declared dependency the system does not admit.
-        #
-        # `bootstrapInstance` must stay an admitted init component or the
-        # bootstrap rules fire first and this arm proves nothing — which is what
-        # it did before, in both directions. So `init` stays, and `dango` is
-        # added instead: its component spec depends on `console`, which this
-        # mutation removes, leaving the dependency rule as the only reason to
-        # refuse. Verified by neutralizing that rule and observing the arm
-        # falsely pass.
-        spec["components"] = sorted(
-            name for name in spec["components"] + ["dango"] if name != "console"
-        )
-        spec["placements"] = [
-            entry for entry in spec["placements"] if entry["component"] != "console"
-        ]
-        spec["grants"] = []
-        spec["slotPins"] = []
-
-    def interface_without_graph(spec: dict) -> None:
-        # A component declaring route roles, in a system with no fabric graph.
-        #
-        # `fabric-publisher` depends on `fabric-service`, so adding it alone was
-        # refused by the dependency rule rather than the graph rule. Admitting
-        # both, and clearing the dependency that would fire first, leaves the
-        # missing graph as the only reason to refuse.
-        spec["components"] = sorted(spec["components"] + ["fabric-publisher", "fabric-service"])
-        spec["placements"] = spec["placements"] + [
-            {"component": "fabric-publisher", "owner": "init"},
-            {"component": "fabric-service", "owner": "init"},
-        ]
-        spec["placements"].sort(key=lambda entry: entry["component"])
-
     refusals = 0
-    for label, mutate in (
-        ("a component no component spec declares", undeclared_component),
-        ("a target profile the table does not name", unknown_target),
-        ("a negative slot pin", negative_slot_pin),
-        ("a grant naming an unadmitted target", grant_to_unadmitted),
-        ("a grant with an unknown capability kind", unknown_capability_kind),
-        ("a grant carrying rights its kind forbids", rights_outside_kind),
-        ("a slot pin for a binding the grants do not produce", stale_slot_pin),
-        ("two slot pins on one holder slot", duplicate_slot_pin),
-        ("a slot pin whose reason is outside the vocabulary", unknown_slot_pin_reason),
-        ("a bootstrap instance that is not an init component", bootstrap_not_init),
-        ("a bootstrap instance the system does not admit", bootstrap_unadmitted),
-        ("a duplicate grant name", duplicate_grant_name),
-        ("commands with no executable authority anywhere", commands_without_executables),
-        ("a state binding owned by an unadmitted component", state_owner_unadmitted),
-        ("an unknown state policy", unknown_state_policy),
-        ("an unsorted component list", unsorted_components),
-        ("more slot pins than the declared bound", over_bounded_slot_pins),
-        ("text beyond the declared byte bound", over_bounded_text),
-        ("a duplicate state binding name", duplicate_state_name),
-        ("a dependency the system does not admit", dependency_unadmitted),
-        ("a route role declared with no fabric graph", interface_without_graph),
-    ):
-        rejected(label, mutate)
-        refusals += 1
+    if "named-mutations" in SELECTED:
+        baseline = systems["sel4-channel"]
 
-    # Exercise target-bound memory admission at the exact published edges.
-    # Derivation owns these checks; structural compilation alone is insufficient.
-    for target, region, total in (
-        ("aarch64-sel4-qemu-virt", 65536, 262144),
-        ("riscv64-sel4-qemu-virt", 65536, 262144),
-        ("aarch64-rpi5", 512, 2048),
-    ):
-        memory_spec = copy.deepcopy(systems["sel4-private-memory-1g"].spec)
-        memory_spec["targetRequirement"] = target
-        for instance in memory_spec["instances"]:
-            instance["privatePageQuota"] = (
-                region if instance["name"].startswith("private-memory-1g-holder-") else 0
+        def source() -> dict:
+            return copy.deepcopy(baseline.spec)
+
+        compile_system(write_system(arms, source()), components=COMPONENTS)
+
+        def rejected(label: str, mutate) -> None:
+            spec = source()
+            mutate(spec)
+            try:
+                compile_system(write_system(arms, spec), components=COMPONENTS)
+            except SystemSpecError:
+                return
+            fail(f"{label} was accepted")
+
+        def undeclared_component(spec: dict) -> None:
+            spec["components"] = sorted(spec["components"] + ["no-such-component"])
+
+        def unknown_target(spec: dict) -> None:
+            spec["targetRequirement"] = "aarch64-imaginary"
+
+        def negative_slot_pin(spec: dict) -> None:
+            spec["slotPins"] = [
+                {
+                    "holder": "init",
+                    "grant": "dango-output",
+                    "slot": -1,
+                    "reason": "componentAbi",
+                }
+            ]
+
+        def grant_to_unadmitted(spec: dict) -> None:
+            spec["grants"][0]["target"] = "dango"
+
+        def unknown_capability_kind(spec: dict) -> None:
+            spec["grants"][0]["capabilityKind"] = "pciFunction"
+
+        def rights_outside_kind(spec: dict) -> None:
+            # A *live* right the first grant's kind forbids. That grant is
+            # `dango-output`, an `endpoint`, and `directoryRead` is valid vocabulary
+            # on another kind — so the refusal is `validate_capability_rights`
+            # rejecting a right for this kind. Naming a retired right would be
+            # refused as unknown vocabulary before that check ran, leaving this rule
+            # uncovered (B90).
+            spec["grants"][0]["rights"] = ["directoryRead"]
+
+        def stale_slot_pin(spec: dict) -> None:
+            spec["slotPins"] = [
+                {
+                    "holder": "console",
+                    "grant": "no-such-grant",
+                    "slot": 3,
+                    "reason": "componentAbi",
+                }
+            ]
+
+        def duplicate_slot_pin(spec: dict) -> None:
+            spec["slotPins"] = [
+                {
+                    "holder": "init",
+                    "grant": "dango-output",
+                    "slot": 4,
+                    "reason": "componentAbi",
+                },
+                {
+                    "holder": "init",
+                    "grant": "init-console",
+                    "slot": 4,
+                    "reason": "componentAbi",
+                },
+            ]
+
+        def unknown_slot_pin_reason(spec: dict) -> None:
+            # B91: the reason vocabulary is closed. A pin claiming a reason outside
+            # it cannot be checked against the manifest at all, so it is refused
+            # here rather than reaching the generation builder.
+            spec["slotPins"] = [
+                {
+                    "holder": "init",
+                    "grant": "dango-output",
+                    "slot": 4,
+                    "reason": "becauseISaidSo",
+                }
+            ]
+
+        def bootstrap_not_init(spec: dict) -> None:
+            spec["bootstrapInstance"] = "console"
+
+        def bootstrap_unadmitted(spec: dict) -> None:
+            spec["bootstrapInstance"] = "dango"
+
+        def duplicate_grant_name(spec: dict) -> None:
+            spec["grants"].append(copy.deepcopy(spec["grants"][0]))
+
+        def commands_without_executables(spec: dict) -> None:
+            # A command profile in a system granting no executable authority: the
+            # profile advertises commands nothing in this generation can launch.
+            spec["commandBindings"] = [{"component": "console", "commands": ["init"]}]
+            spec["grants"] = [
+                grant for grant in spec["grants"] if grant["capabilityKind"] != "executable"
+            ]
+            spec["slotPins"] = []
+
+        def state_owner_unadmitted(spec: dict) -> None:
+            spec["state"] = [
+                {"name": "orphan", "owner": "dango", "policy": "preserve", "schemaVersion": 1}
+            ]
+
+        def unknown_state_policy(spec: dict) -> None:
+            spec["state"] = [
+                {"name": "orphan", "owner": "console", "policy": "forever", "schemaVersion": 1}
+            ]
+
+        def unsorted_components(spec: dict) -> None:
+            spec["components"] = list(reversed(spec["components"]))
+
+        def over_bounded_slot_pins(spec: dict) -> None:
+            # One more pin than the contract's `maxSlotPins` admits. Every pin names
+            # a real binding, so only the bound can refuse this.
+            spec["slotPins"] = [
+                {
+                    "holder": "init",
+                    "grant": "dango-output",
+                    "slot": index,
+                    "reason": "componentAbi",
+                }
+                for index in range(CONTRACT.MAX_SLOT_PINS + 1)
+            ]
+
+        def over_bounded_text(spec: dict) -> None:
+            spec["acceptanceCriteria"] = "x" * (CONTRACT.MAX_TEXT_BYTES + 1)
+
+        def duplicate_state_name(spec: dict) -> None:
+            spec["state"] = [
+                {"name": "twice", "owner": "console", "policy": "preserve", "schemaVersion": 1},
+                {"name": "twice", "owner": "init", "policy": "preserve", "schemaVersion": 1},
+            ]
+
+        def dependency_unadmitted(spec: dict) -> None:
+            # A component whose declared dependency the system does not admit.
+            #
+            # `bootstrapInstance` must stay an admitted init component or the
+            # bootstrap rules fire first and this arm proves nothing — which is what
+            # it did before, in both directions. So `init` stays, and `dango` is
+            # added instead: its component spec depends on `console`, which this
+            # mutation removes, leaving the dependency rule as the only reason to
+            # refuse. Verified by neutralizing that rule and observing the arm
+            # falsely pass.
+            spec["components"] = sorted(
+                name for name in spec["components"] + ["dango"] if name != "console"
             )
+            spec["placements"] = [
+                entry for entry in spec["placements"] if entry["component"] != "console"
+            ]
+            spec["grants"] = []
+            spec["slotPins"] = []
 
-        def memory_manifest(spec: dict) -> dict:
-            return derive_manifest(compile_system(write_system(arms, spec), components=COMPONENTS))
+        def interface_without_graph(spec: dict) -> None:
+            # A component declaring route roles, in a system with no fabric graph.
+            #
+            # `fabric-publisher` depends on `fabric-service`, so adding it alone was
+            # refused by the dependency rule rather than the graph rule. Admitting
+            # both, and clearing the dependency that would fire first, leaves the
+            # missing graph as the only reason to refuse.
+            spec["components"] = sorted(spec["components"] + ["fabric-publisher", "fabric-service"])
+            spec["placements"] = spec["placements"] + [
+                {"component": "fabric-publisher", "owner": "init"},
+                {"component": "fabric-service", "owner": "init"},
+            ]
+            spec["placements"].sort(key=lambda entry: entry["component"])
 
-        admitted = memory_manifest(memory_spec)
-        quotas = [entry["pageQuota"] for entry in admitted["privateMemoryBudget"]]
-        if quotas != [region] * 4 or sum(quotas) != total:
-            fail(f"{target}: exact private-memory boundary was not admitted")
-
-        for label, holder, pages, reason in (
-            ("holder", "private-memory-1g-holder-a", region + 1, "cannot admit holders"),
-            ("aggregate", "private-memory-1g-probe", 1, "aggregate exceeds capacity"),
+        for label, mutate in (
+            ("a component no component spec declares", undeclared_component),
+            ("a target profile the table does not name", unknown_target),
+            ("a negative slot pin", negative_slot_pin),
+            ("a grant naming an unadmitted target", grant_to_unadmitted),
+            ("a grant with an unknown capability kind", unknown_capability_kind),
+            ("a grant carrying rights its kind forbids", rights_outside_kind),
+            ("a slot pin for a binding the grants do not produce", stale_slot_pin),
+            ("two slot pins on one holder slot", duplicate_slot_pin),
+            ("a slot pin whose reason is outside the vocabulary", unknown_slot_pin_reason),
+            ("a bootstrap instance that is not an init component", bootstrap_not_init),
+            ("a bootstrap instance the system does not admit", bootstrap_unadmitted),
+            ("a duplicate grant name", duplicate_grant_name),
+            ("commands with no executable authority anywhere", commands_without_executables),
+            ("a state binding owned by an unadmitted component", state_owner_unadmitted),
+            ("an unknown state policy", unknown_state_policy),
+            ("an unsorted component list", unsorted_components),
+            ("more slot pins than the declared bound", over_bounded_slot_pins),
+            ("text beyond the declared byte bound", over_bounded_text),
+            ("a duplicate state binding name", duplicate_state_name),
+            ("a dependency the system does not admit", dependency_unadmitted),
+            ("a route role declared with no fabric graph", interface_without_graph),
         ):
-            altered = copy.deepcopy(memory_spec)
-            next(entry for entry in altered["instances"] if entry["name"] == holder)[
-                "privatePageQuota"
-            ] = pages
+            rejected(label, mutate)
+            refusals += 1
+
+    if "private-memory" in SELECTED:
+        # Exercise target-bound memory admission at the exact published edges.
+        # Derivation owns these checks; structural compilation alone is insufficient.
+        for target, region, total in (
+            ("aarch64-sel4-qemu-virt", 65536, 262144),
+            ("riscv64-sel4-qemu-virt", 65536, 262144),
+            ("aarch64-rpi5", 512, 2048),
+        ):
+            memory_spec = copy.deepcopy(systems["sel4-private-memory-1g"].spec)
+            memory_spec["targetRequirement"] = target
+            for instance in memory_spec["instances"]:
+                instance["privatePageQuota"] = (
+                    region if instance["name"].startswith("private-memory-1g-holder-") else 0
+                )
+
+            def memory_manifest(spec: dict) -> dict:
+                return derive_manifest(compile_system(write_system(arms, spec), components=COMPONENTS))
+
+            admitted = memory_manifest(memory_spec)
+            quotas = [entry["pageQuota"] for entry in admitted["privateMemoryBudget"]]
+            if quotas != [region] * 4 or sum(quotas) != total:
+                fail(f"{target}: exact private-memory boundary was not admitted")
+
+            for label, holder, pages, reason in (
+                ("holder", "private-memory-1g-holder-a", region + 1, "cannot admit holders"),
+                ("aggregate", "private-memory-1g-probe", 1, "aggregate exceeds capacity"),
+            ):
+                altered = copy.deepcopy(memory_spec)
+                next(entry for entry in altered["instances"] if entry["name"] == holder)[
+                    "privatePageQuota"
+                ] = pages
+                try:
+                    memory_manifest(altered)
+                except SystemSpecError as error:
+                    expected = f"private memory: target {target!r} {reason}"
+                    if expected not in str(error):
+                        fail(f"{target}: {label} private-memory boundary refused for wrong reason: {error}")
+                else:
+                    fail(f"{target}: {label} private-memory boundary overflow was accepted")
+                refusals += 1
+
+        adaptive_spec = copy.deepcopy(systems["sel4-private-memory-1g"].spec)
+        for instance in adaptive_spec["instances"]:
+            instance["privatePageQuota"] = 0
+        adaptive_spec["privateMemoryPolicy"] = {
+            "formatVersion": 2,
+            "reserve": dict.fromkeys(private_memory_policy.RESOURCES, 1),
+            "entitlements": [{"name": "workers", "subtreeRoot": "private-memory-1g-probe",
+                              "guaranteePages": 2, "maximumMode": "pool", "maximumPages": 0}],
+            "subjects": [{"instance": f"private-memory-1g-holder-{name}", "entitlement": "workers",
+                          "maximumMode": "pool", "maximumPages": 0} for name in "abcd"],
+        }
+        adaptive_manifest = memory_manifest(adaptive_spec)
+        if "privateMemoryBudget" in adaptive_manifest:
+            fail("adaptive derivation retained a fixed budget")
+        if [entry["id"] for entry in adaptive_manifest["objects"] if entry["id"].startswith("private-memory-")] != ["private-memory-policy"]:
+            fail("adaptive policy resource was not derived exactly once")
+        adaptive = private_memory_policy.manifest_policy(adaptive_manifest)
+        if adaptive != adaptive_spec["privateMemoryPolicy"]:
+            fail("adaptive policy changed during system derivation")
+        encoded = private_memory_policy.encode(adaptive, adaptive_manifest["instances"])
+        policy_blob = root / "private-memory-policy.bin"
+        policy_blob.write_bytes(encoded)
+        decoded_policy = subprocess.run(
+            ["cargo", "run", "--quiet", "-p", "boot-contracts", "--example", "admit_generation",
+             "--", "--private-memory-policy", str(policy_blob)],
+            cwd=ROOT, check=True, capture_output=True, text=True,
+        )
+        if decoded_policy.stdout.strip() != "policy 1 4":
+            fail(f"host policy encoder disagrees with native decoder: {decoded_policy.stdout}")
+        if encoded != private_memory_policy.encode(adaptive, adaptive_manifest["instances"]):
+            fail("adaptive encoding is not deterministic")
+
+        def policy_mutation(spec: dict, case: str) -> None:
+            policy = spec["privateMemoryPolicy"]
+            if case == "fixed-conflict":
+                spec["instances"][0]["privatePageQuota"] = 1
+            elif case == "duplicate-subject":
+                policy["subjects"].append(copy.deepcopy(policy["subjects"][0]))
+            elif case == "unknown-entitlement":
+                policy["subjects"][0]["entitlement"] = "missing"
+            elif case == "outside-subtree":
+                policy["subjects"][0]["instance"] = "init"
+            elif case == "maximum-below-guarantee":
+                policy["entitlements"][0].update(maximumMode="fixed", maximumPages=1)
+            elif case == "unknown-version":
+                policy["formatVersion"] = 3
+            elif case == "overflow":
+                policy["entitlements"][0]["guaranteePages"] = private_memory_policy.MAX_PAGES + 1
+            elif case == "implicit-pool-value":
+                policy["subjects"][0]["maximumPages"] = 1
+
+        for case, reason in (
+            ("fixed-conflict", "conflicts with effective fixed privatePageQuota"),
+            ("duplicate-subject", "unknown or duplicate subject"),
+            ("unknown-entitlement", "unknown entitlement"),
+            ("outside-subtree", "subject outside declared subtree"),
+            ("maximum-below-guarantee", "guarantee exceeds maximum"),
+            ("unknown-version", "unsupported version"),
+            ("overflow", "invalid guaranteePages"),
+            ("implicit-pool-value", "invalid maximum mode/value"),
+        ):
+            altered = copy.deepcopy(adaptive_spec)
+            policy_mutation(altered, case)
             try:
                 memory_manifest(altered)
             except SystemSpecError as error:
-                expected = f"private memory: target {target!r} {reason}"
-                if expected not in str(error):
-                    fail(f"{target}: {label} private-memory boundary refused for wrong reason: {error}")
+                if reason not in str(error):
+                    fail(f"adaptive policy {case} refused at the wrong boundary: {error}")
+                refusals += 1
             else:
-                fail(f"{target}: {label} private-memory boundary overflow was accepted")
-            refusals += 1
+                fail(f"adaptive policy accepted {case}")
 
-    adaptive_spec = copy.deepcopy(systems["sel4-private-memory-1g"].spec)
-    for instance in adaptive_spec["instances"]:
-        instance["privatePageQuota"] = 0
-    adaptive_spec["privateMemoryPolicy"] = {
-        "formatVersion": 2,
-        "reserve": dict.fromkeys(private_memory_policy.RESOURCES, 1),
-        "entitlements": [{"name": "workers", "subtreeRoot": "private-memory-1g-probe",
-                          "guaranteePages": 2, "maximumMode": "pool", "maximumPages": 0}],
-        "subjects": [{"instance": f"private-memory-1g-holder-{name}", "entitlement": "workers",
-                      "maximumMode": "pool", "maximumPages": 0} for name in "abcd"],
-    }
-    adaptive_manifest = memory_manifest(adaptive_spec)
-    if "privateMemoryBudget" in adaptive_manifest:
-        fail("adaptive derivation retained a fixed budget")
-    if [entry["id"] for entry in adaptive_manifest["objects"] if entry["id"].startswith("private-memory-")] != ["private-memory-policy"]:
-        fail("adaptive policy resource was not derived exactly once")
-    adaptive = private_memory_policy.manifest_policy(adaptive_manifest)
-    if adaptive != adaptive_spec["privateMemoryPolicy"]:
-        fail("adaptive policy changed during system derivation")
-    encoded = private_memory_policy.encode(adaptive, adaptive_manifest["instances"])
-    policy_blob = root / "private-memory-policy.bin"
-    policy_blob.write_bytes(encoded)
-    decoded_policy = subprocess.run(
-        ["cargo", "run", "--quiet", "-p", "boot-contracts", "--example", "admit_generation",
-         "--", "--private-memory-policy", str(policy_blob)],
-        cwd=ROOT, check=True, capture_output=True, text=True,
-    )
-    if decoded_policy.stdout.strip() != "policy 1 4":
-        fail(f"host policy encoder disagrees with native decoder: {decoded_policy.stdout}")
-    if encoded != private_memory_policy.encode(adaptive, adaptive_manifest["instances"]):
-        fail("adaptive encoding is not deterministic")
+        for case in ("dual-declaration", "dual-resource", "missing-resource", "orphan-resource"):
+            altered = copy.deepcopy(adaptive_manifest)
+            if case == "dual-declaration":
+                altered["privateMemoryBudget"] = []
+            elif case == "dual-resource":
+                altered["objects"].append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
+            elif case == "missing-resource":
+                altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "private-memory-policy"]
+            else:
+                del altered["privateMemoryPolicy"]
+            try:
+                private_memory_policy.manifest_policy(altered)
+            except ValueError:
+                refusals += 1
+            else:
+                fail(f"adaptive manifest accepted {case}")
 
-    def policy_mutation(spec: dict, case: str) -> None:
-        policy = spec["privateMemoryPolicy"]
-        if case == "fixed-conflict":
-            spec["instances"][0]["privatePageQuota"] = 1
-        elif case == "duplicate-subject":
-            policy["subjects"].append(copy.deepcopy(policy["subjects"][0]))
-        elif case == "unknown-entitlement":
-            policy["subjects"][0]["entitlement"] = "missing"
-        elif case == "outside-subtree":
-            policy["subjects"][0]["instance"] = "init"
-        elif case == "maximum-below-guarantee":
-            policy["entitlements"][0].update(maximumMode="fixed", maximumPages=1)
-        elif case == "unknown-version":
-            policy["formatVersion"] = 3
-        elif case == "overflow":
-            policy["entitlements"][0]["guaranteePages"] = private_memory_policy.MAX_PAGES + 1
-        elif case == "implicit-pool-value":
-            policy["subjects"][0]["maximumPages"] = 1
+        narrowed_instances = [entry for entry in adaptive_manifest["instances"]
+                              if not entry["name"].endswith(("-b", "-c", "-d"))]
+        narrowed_policy = private_memory_policy.narrow(adaptive, narrowed_instances)
+        if len(narrowed_policy["subjects"]) != 1 or narrowed_policy["entitlements"][0]["guaranteePages"] != 2:
+            fail("profile narrowing changed a shared guarantee or retained removed members")
 
-    for case, reason in (
-        ("fixed-conflict", "conflicts with effective fixed privatePageQuota"),
-        ("duplicate-subject", "unknown or duplicate subject"),
-        ("unknown-entitlement", "unknown entitlement"),
-        ("outside-subtree", "subject outside declared subtree"),
-        ("maximum-below-guarantee", "guarantee exceeds maximum"),
-        ("unknown-version", "unsupported version"),
-        ("overflow", "invalid guaranteePages"),
-        ("implicit-pool-value", "invalid maximum mode/value"),
+if "manifest-controls" in SELECTED:
+    # The loan-field exception must refuse drift independently of the frozen
+    # comparison, and must not conceal changes outside its exact scope.
+    loan_system_name = "sel4-private-memory-isolation"
+    loan_system = systems[loan_system_name]
+    loan_source = derive_manifest(loan_system)
+    loan_manifest = normalized(loan_source)
+    check_post_baseline(loan_system_name, loan_manifest, loan_system, loan_source)
+    loan_holder = "private-memory-1g-holder-c"
+    for mutation in ("changed", "missing", "duplicate"):
+        altered = copy.deepcopy(loan_manifest)
+        budget = next(entry for entry in altered["sharedBufferBudget"] if entry["holder"] == loan_holder)
+        if mutation == "changed":
+            budget["loanCount"] += 1
+        elif mutation == "missing":
+            del budget["loanCount"]
+        else:
+            altered["sharedBufferBudget"].append(copy.deepcopy(budget))
+        try:
+            check_post_baseline(loan_system_name, altered, loan_system, loan_source)
+        except SystemExit as error:
+            if "post-baseline sharedBufferBudget" not in str(error):
+                raise
+        else:
+            fail(f"{mutation} post-baseline loan budget was accepted")
+        refusals += 1
+
+    for name, holder, field in (
+        (loan_system_name, loan_holder, "bufferCount"),
+        (loan_system_name, "private-memory-1g-holder-b", "loanCount"),
+        ("sel4-private-memory", loan_holder, "loanCount"),
     ):
-        altered = copy.deepcopy(adaptive_spec)
-        policy_mutation(altered, case)
-        try:
-            memory_manifest(altered)
-        except SystemSpecError as error:
-            if reason not in str(error):
-                fail(f"adaptive policy {case} refused at the wrong boundary: {error}")
-            refusals += 1
+        altered = copy.deepcopy(loan_manifest)
+        budget = next(entry for entry in altered["sharedBufferBudget"] if entry["holder"] == holder)
+        budget[field] += 1
+        if split_post_baseline(altered, name)[0] == split_post_baseline(loan_manifest, name)[0]:
+            fail(f"post-baseline exception concealed unrelated {name}/{holder}.{field} drift")
+        refusals += 1
+
+    # Network exceptions reject derivation drift and invalid authority, while
+    # allowing the owning declarations to evolve without a second policy copy.
+    network_name = "sel4-io-tcp"
+    network_system = systems[network_name]
+    network_manifest = normalized(derive_manifest(network_system))
+    # Coherent changes to live policy are not frozen-baseline drift.
+    for mutation in ("stack", "budget", "lifecycle", "application", "pin"):
+        changed = copy.deepcopy(network_system)
+        if mutation == "stack":
+            next(entry for entry in changed.spec["placements"]
+                 if entry["component"] == "network-service")["stackBytes"] = 262144
+        elif mutation == "budget":
+            next(entry for entry in changed.spec["placements"]
+                 if entry["component"] == "io-tcp-probe")["loanCount"] += 1
+        elif mutation == "lifecycle":
+            changed.spec["lifecyclePolicy"]["parameters"][0]["write"] = False
+        elif mutation == "application":
+            changed.spec["networkApplications"][0]["backend"] = "loopback"
         else:
-            fail(f"adaptive policy accepted {case}")
-
-    for case in ("dual-declaration", "dual-resource", "missing-resource", "orphan-resource"):
-        altered = copy.deepcopy(adaptive_manifest)
-        if case == "dual-declaration":
-            altered["privateMemoryBudget"] = []
-        elif case == "dual-resource":
-            altered["objects"].append({"id": "private-memory-budget", "kind": "resource", "size": 4096})
-        elif case == "missing-resource":
-            altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "private-memory-policy"]
-        else:
-            del altered["privateMemoryPolicy"]
-        try:
-            private_memory_policy.manifest_policy(altered)
-        except ValueError:
-            refusals += 1
-        else:
-            fail(f"adaptive manifest accepted {case}")
-
-    narrowed_instances = [entry for entry in adaptive_manifest["instances"]
-                          if not entry["name"].endswith(("-b", "-c", "-d"))]
-    narrowed_policy = private_memory_policy.narrow(adaptive, narrowed_instances)
-    if len(narrowed_policy["subjects"]) != 1 or narrowed_policy["entitlements"][0]["guaranteePages"] != 2:
-        fail("profile narrowing changed a shared guarantee or retained removed members")
-
-# The loan-field exception must refuse drift independently of the frozen
-# comparison, and must not conceal changes outside its exact scope.
-loan_system_name = "sel4-private-memory-isolation"
-loan_system = systems[loan_system_name]
-loan_source = derive_manifest(loan_system)
-loan_manifest = normalized(loan_source)
-check_post_baseline(loan_system_name, loan_manifest, loan_system, loan_source)
-loan_holder = "private-memory-1g-holder-c"
-for mutation in ("changed", "missing", "duplicate"):
-    altered = copy.deepcopy(loan_manifest)
-    budget = next(entry for entry in altered["sharedBufferBudget"] if entry["holder"] == loan_holder)
-    if mutation == "changed":
-        budget["loanCount"] += 1
-    elif mutation == "missing":
-        del budget["loanCount"]
-    else:
-        altered["sharedBufferBudget"].append(copy.deepcopy(budget))
-    try:
-        check_post_baseline(loan_system_name, altered, loan_system, loan_source)
-    except SystemExit as error:
-        if "post-baseline sharedBufferBudget" not in str(error):
-            raise
-    else:
-        fail(f"{mutation} post-baseline loan budget was accepted")
-    refusals += 1
-
-for name, holder, field in (
-    (loan_system_name, loan_holder, "bufferCount"),
-    (loan_system_name, "private-memory-1g-holder-b", "loanCount"),
-    ("sel4-private-memory", loan_holder, "loanCount"),
-):
-    altered = copy.deepcopy(loan_manifest)
-    budget = next(entry for entry in altered["sharedBufferBudget"] if entry["holder"] == holder)
-    budget[field] += 1
-    if split_post_baseline(altered, name)[0] == split_post_baseline(loan_manifest, name)[0]:
-        fail(f"post-baseline exception concealed unrelated {name}/{holder}.{field} drift")
-    refusals += 1
-
-# Network exceptions reject derivation drift and invalid authority, while
-# allowing the owning declarations to evolve without a second policy copy.
-network_name = "sel4-io-tcp"
-network_system = systems[network_name]
-network_manifest = normalized(derive_manifest(network_system))
-# Coherent changes to live policy are not frozen-baseline drift.
-for mutation in ("stack", "budget", "lifecycle", "application", "pin"):
-    changed = copy.deepcopy(network_system)
-    if mutation == "stack":
-        next(entry for entry in changed.spec["placements"]
-             if entry["component"] == "network-service")["stackBytes"] = 262144
-    elif mutation == "budget":
-        next(entry for entry in changed.spec["placements"]
-             if entry["component"] == "io-tcp-probe")["loanCount"] += 1
-    elif mutation == "lifecycle":
-        changed.spec["lifecyclePolicy"]["parameters"][0]["write"] = False
-    elif mutation == "application":
-        changed.spec["networkApplications"][0]["backend"] = "loopback"
-    else:
-        next(entry for entry in changed.spec["slotPins"]
-             if entry["holder"] == "network-service"
-             and entry["grant"] == "network-tcp-probe-provision")["slot"] = 29
-    check_network_post_baseline(network_name, normalized(derive_manifest(changed)), changed)
-
-# Coherent derivation cannot legitimize invalid authority in a live spec.
-for grant_name, field, value in (
-    ("network-tcp-probe-service", "transferable", True),
-    ("network-tcp-probe-provision", "transferable", False),
-    ("network-tcp-probe-provision", "rights", ["send"]),
-):
-    changed = copy.deepcopy(network_system)
-    next(entry for entry in changed.spec["grants"] if entry["name"] == grant_name)[field] = value
-    try:
+            next(entry for entry in changed.spec["slotPins"]
+                 if entry["holder"] == "network-service"
+                 and entry["grant"] == "network-tcp-probe-provision")["slot"] = 29
         check_network_post_baseline(network_name, normalized(derive_manifest(changed)), changed)
-    except SystemExit as error:
-        if "network post-baseline" not in str(error):
-            raise
-    else:
-        fail(f"network post-baseline accepted invalid live {grant_name}.{field}")
-    refusals += 1
 
-network_cases = (
-    ("stack", "executables", "name", "network-service", "stackBytes", 262144),
-    ("provision rights", "grants", "name", "network-tcp-probe-provision", "rights", ["send"]),
-    ("control transfer", "grants", "name", "network-tcp-probe-service", "transferable", True),
-    ("service pages", "sharedBufferBudget", "holder", "network-service", "bytePages", 13),
-    ("client mapping", "sharedBufferBudget", "holder", "io-tcp-probe", "mappingCount", 3),
-)
-for label, section, key, identity, field, value in network_cases:
-    altered = copy.deepcopy(network_manifest)
-    next(entry for entry in altered[section] if entry[key] == identity)[field] = value
-    try:
-        check_network_post_baseline(network_name, altered, network_system)
-    except SystemExit as error:
-        if "network post-baseline" not in str(error):
-            raise
-    else:
-        fail(f"network post-baseline accepted {label} drift")
-    refusals += 1
+    # Coherent derivation cannot legitimize invalid authority in a live spec.
+    for grant_name, field, value in (
+        ("network-tcp-probe-service", "transferable", True),
+        ("network-tcp-probe-provision", "transferable", False),
+        ("network-tcp-probe-provision", "rights", ["send"]),
+    ):
+        changed = copy.deepcopy(network_system)
+        next(entry for entry in changed.spec["grants"] if entry["name"] == grant_name)[field] = value
+        try:
+            check_network_post_baseline(network_name, normalized(derive_manifest(changed)), changed)
+        except SystemExit as error:
+            if "network post-baseline" not in str(error):
+                raise
+        else:
+            fail(f"network post-baseline accepted invalid live {grant_name}.{field}")
+        refusals += 1
 
-for mutation in ("missing grant", "missing budget", "duplicate budget", "pin", "live grant", "live budget"):
-    altered = copy.deepcopy(network_manifest)
-    altered_system = copy.deepcopy(network_system)
-    if mutation == "missing grant":
-        altered["grants"] = [entry for entry in altered["grants"]
-                             if entry["name"] != "network-tcp-probe-provision"]
-    elif mutation == "missing budget":
-        altered["sharedBufferBudget"] = [entry for entry in altered["sharedBufferBudget"]
-                                         if entry["holder"] != "io-tcp-probe"]
-    elif mutation == "duplicate budget":
-        altered["sharedBufferBudget"].append(copy.deepcopy(next(
-            entry for entry in altered["sharedBufferBudget"] if entry["holder"] == "io-tcp-probe")))
-    elif mutation == "pin":
-        next(binding for instance in altered["instances"] if instance["name"] == "network-service"
-             for binding in instance["bindings"] if binding["grant"] == "network-tcp-probe-provision")["slot"] = 29
-    elif mutation == "live grant":
-        next(entry for entry in altered_system.spec["grants"]
-             if entry["name"] == "network-tcp-probe-provision")["transferable"] = False
-    else:
-        next(entry for entry in altered_system.spec["placements"]
-             if entry["component"] == "io-tcp-probe")["loanCount"] = 3
-    try:
-        check_network_post_baseline(network_name, altered, altered_system)
-    except SystemExit as error:
-        if "network post-baseline" not in str(error):
-            raise
-    else:
-        fail(f"network post-baseline accepted {mutation}")
-    refusals += 1
-
-for name, section, key, identity, field in (
-    (network_name, "executables", "name", "io-tcp-probe", "stackBytes"),
-    (network_name, "executables", "name", "network-service", "spawnBudget"),
-    (network_name, "sharedBufferBudget", "holder", "network-service", "mappingCount"),
-    (network_name, "grants", "name", "network-tcp-probe-service", "transferable"),
-    ("sel4-io-network", "sharedBufferBudget", "holder", "network-service", "loanCount"),
-    ("sel4-product", "executables", "name", "network-service", "stackBytes"),
-):
-    altered = copy.deepcopy(network_manifest)
-    entry = next(entry for entry in altered[section] if entry[key] == identity)
-    entry[field] = 999
-    if split_post_baseline(altered, name)[0] == split_post_baseline(network_manifest, name)[0]:
-        fail(f"network post-baseline concealed unrelated {name}/{identity}.{field} drift")
-    refusals += 1
-
-for mutation in ("missing application", "changed application", "missing object", "changed object", "live resource"):
-    altered = copy.deepcopy(network_manifest)
-    altered_system = copy.deepcopy(network_system)
-    if mutation == "missing application":
-        del altered["networkApplications"]
-    elif mutation == "changed application":
-        altered["networkApplications"][0]["backend"] = "loopback"
-    elif mutation == "missing object":
-        altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "network-application"]
-    elif mutation == "changed object":
-        next(entry for entry in altered["objects"] if entry["id"] == "network-application")["size"] = 8192
-    else:
-        altered_system.spec["networkApplicationsObject"] = False
-    try:
-        check_network_post_baseline(network_name, altered, altered_system)
-    except SystemExit as error:
-        if "network post-baseline" not in str(error):
-            raise
-    else:
-        fail(f"network post-baseline accepted {mutation}")
-    refusals += 1
-for section in ("networkApplications", "objects"):
-    altered = copy.deepcopy(network_manifest)
-    if section == "networkApplications":
-        altered[section][0]["backend"] = "loopback"
-    else:
-        next(entry for entry in altered[section] if entry["id"] == "network-application")["size"] = 8192
-    if split_post_baseline(altered, "sel4-io-network")[0] == split_post_baseline(network_manifest, "sel4-io-network")[0]:
-        fail(f"network application exception concealed another system's {section}")
-    refusals += 1
-
-for mutation in ("foreign holder", "foreign subject", "read-only", "added dependency", "missing policy", "missing lifecycle object"):
-    altered = copy.deepcopy(network_manifest)
-    if mutation == "missing policy":
-        del altered["lifecyclePolicy"]
-    elif mutation == "missing lifecycle object":
-        altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "lifecycle-policy"]
-    elif mutation == "added dependency":
-        altered["lifecyclePolicy"]["dependencies"].append({"subject": "init", "dependsOn": "network-service"})
-    else:
-        key, value = {"foreign holder": ("holder", "io-tcp-probe"),
-                      "foreign subject": ("subject", "io-tcp-probe"), "read-only": ("write", False)}[mutation]
-        altered["lifecyclePolicy"]["parameters"][0][key] = value
-    try:
-        check_network_post_baseline(network_name, altered, network_system)
-    except SystemExit as error:
-        if "network post-baseline" not in str(error):
-            raise
-    else:
-        fail(f"network post-baseline accepted lifecycle {mutation}")
-    refusals += 1
-for section in ("lifecyclePolicy", "objects"):
-    altered = copy.deepcopy(network_manifest)
-    if section == "lifecyclePolicy":
-        altered[section]["parameters"][0]["write"] = False
-    else:
-        next(entry for entry in altered[section] if entry["id"] == "lifecycle-policy")["size"] = 8192
-    if split_post_baseline(altered, "sel4-io-network")[0] == split_post_baseline(network_manifest, "sel4-io-network")[0]:
-        fail(f"network lifecycle exception concealed another system's {section}")
-    refusals += 1
-
-refusals += network_application_controls(derive_manifest(systems["sel4-io-tcp"]))
-
-
-def instance_lifetime_controls(source: dict) -> int:
-    """The lifetime encoder names exactly the resident instances, and refuses the rest."""
-    import boot_contracts as wire
-
-    manifest = copy.deepcopy(source)
-    encoded = BUILDER.build_instance_lifetime(manifest)
-    residents = sorted(
-        BUILDER.instance_lifetime_identity(entry["name"])
-        for entry in manifest["instances"]
-        if entry["lifetime"] == "resident"
+    network_cases = (
+        ("stack", "executables", "name", "network-service", "stackBytes", 262144),
+        ("provision rights", "grants", "name", "network-tcp-probe-provision", "rights", ["send"]),
+        ("control transfer", "grants", "name", "network-tcp-probe-service", "transferable", True),
+        ("service pages", "sharedBufferBudget", "holder", "network-service", "bytePages", 13),
+        ("client mapping", "sharedBufferBudget", "holder", "io-tcp-probe", "mappingCount", 3),
     )
-    rows = [
-        encoded[offset : offset + 32]
-        for offset in range(
-            wire.INSTANCE_LIFETIME_HEADER_BYTES, len(encoded), wire.INSTANCE_LIFETIME_ENTRY_BYTES
-        )
-    ]
-    if not residents or rows != residents:
-        fail("instance lifetime encoder did not emit exactly the sorted resident instances")
-    reverse = copy.deepcopy(manifest)
-    reverse["instances"].reverse()
-    if BUILDER.build_instance_lifetime(reverse) != encoded:
-        fail("instance lifetime encoding depends on authoring order")
-    refused = 0
-    for label, mutate, reason in (
-        ("an unknown lifetime", lambda altered: altered["instances"][0].update(lifetime="forever"), "invalid lifetime"),
-        (
-            "a table naming nobody",
-            lambda altered: [entry.update(lifetime="bounded") for entry in altered["instances"]],
-            "without a resident instance",
-        ),
-    ):
-        altered = copy.deepcopy(manifest)
-        mutate(altered)
+    for label, section, key, identity, field, value in network_cases:
+        altered = copy.deepcopy(network_manifest)
+        next(entry for entry in altered[section] if entry[key] == identity)[field] = value
         try:
-            BUILDER.build_instance_lifetime(altered)
+            check_network_post_baseline(network_name, altered, network_system)
         except SystemExit as error:
-            if reason not in str(error):
-                fail(f"instance lifetime {label} refused at wrong boundary: {error}")
+            if "network post-baseline" not in str(error):
+                raise
         else:
-            fail(f"instance lifetime encoder accepted {label}")
-        refused += 1
-    return refused
+            fail(f"network post-baseline accepted {label} drift")
+        refusals += 1
 
+    for mutation in ("missing grant", "missing budget", "duplicate budget", "pin", "live grant", "live budget"):
+        altered = copy.deepcopy(network_manifest)
+        altered_system = copy.deepcopy(network_system)
+        if mutation == "missing grant":
+            altered["grants"] = [entry for entry in altered["grants"]
+                                 if entry["name"] != "network-tcp-probe-provision"]
+        elif mutation == "missing budget":
+            altered["sharedBufferBudget"] = [entry for entry in altered["sharedBufferBudget"]
+                                             if entry["holder"] != "io-tcp-probe"]
+        elif mutation == "duplicate budget":
+            altered["sharedBufferBudget"].append(copy.deepcopy(next(
+                entry for entry in altered["sharedBufferBudget"] if entry["holder"] == "io-tcp-probe")))
+        elif mutation == "pin":
+            next(binding for instance in altered["instances"] if instance["name"] == "network-service"
+                 for binding in instance["bindings"] if binding["grant"] == "network-tcp-probe-provision")["slot"] = 29
+        elif mutation == "live grant":
+            next(entry for entry in altered_system.spec["grants"]
+                 if entry["name"] == "network-tcp-probe-provision")["transferable"] = False
+        else:
+            next(entry for entry in altered_system.spec["placements"]
+                 if entry["component"] == "io-tcp-probe")["loanCount"] = 3
+        try:
+            check_network_post_baseline(network_name, altered, altered_system)
+        except SystemExit as error:
+            if "network post-baseline" not in str(error):
+                raise
+        else:
+            fail(f"network post-baseline accepted {mutation}")
+        refusals += 1
 
-refusals += instance_lifetime_controls(derive_manifest(systems["sel4-lifetime"]))
-
-
-def entropy_authority_controls(system) -> int:
-    """The entropy encoder emits exactly the declared rows and refuses every malformed table or grant."""
-    import boot_contracts as wire
-
-    manifest = derive_manifest(system)
-    encoded = BUILDER.build_entropy_authority(manifest)
-    rows = manifest["entropyAuthority"]
-    expected_length = wire.ENTROPY_AUTHORITY_HEADER_BYTES + len(rows) * wire.ENTROPY_AUTHORITY_ENTRY_BYTES
-    if not rows or len(encoded) != expected_length or wire.ENTROPY_AUTHORITY_HEADER.unpack_from(encoded) != (
-        wire.ENTROPY_AUTHORITY_MAGIC, wire.ENTROPY_AUTHORITY_VERSION, wire.ENTROPY_AUTHORITY_HEADER_BYTES, 0,
-        len(rows), expected_length,
+    for name, section, key, identity, field in (
+        (network_name, "executables", "name", "io-tcp-probe", "stackBytes"),
+        (network_name, "executables", "name", "network-service", "spawnBudget"),
+        (network_name, "sharedBufferBudget", "holder", "network-service", "mappingCount"),
+        (network_name, "grants", "name", "network-tcp-probe-service", "transferable"),
+        ("sel4-io-network", "sharedBufferBudget", "holder", "network-service", "loanCount"),
+        ("sel4-product", "executables", "name", "network-service", "stackBytes"),
     ):
-        fail("entropy authority encoder changed the generated header or entry bounds")
-    decoded = [
-        wire.ENTROPY_AUTHORITY_ENTRY.unpack_from(
-            encoded, wire.ENTROPY_AUTHORITY_HEADER_BYTES + index * wire.ENTROPY_AUTHORITY_ENTRY_BYTES
+        altered = copy.deepcopy(network_manifest)
+        entry = next(entry for entry in altered[section] if entry[key] == identity)
+        entry[field] = 999
+        if split_post_baseline(altered, name)[0] == split_post_baseline(network_manifest, name)[0]:
+            fail(f"network post-baseline concealed unrelated {name}/{identity}.{field} drift")
+        refusals += 1
+
+    for mutation in ("missing application", "changed application", "missing object", "changed object", "live resource"):
+        altered = copy.deepcopy(network_manifest)
+        altered_system = copy.deepcopy(network_system)
+        if mutation == "missing application":
+            del altered["networkApplications"]
+        elif mutation == "changed application":
+            altered["networkApplications"][0]["backend"] = "loopback"
+        elif mutation == "missing object":
+            altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "network-application"]
+        elif mutation == "changed object":
+            next(entry for entry in altered["objects"] if entry["id"] == "network-application")["size"] = 8192
+        else:
+            altered_system.spec["networkApplicationsObject"] = False
+        try:
+            check_network_post_baseline(network_name, altered, altered_system)
+        except SystemExit as error:
+            if "network post-baseline" not in str(error):
+                raise
+        else:
+            fail(f"network post-baseline accepted {mutation}")
+        refusals += 1
+    for section in ("networkApplications", "objects"):
+        altered = copy.deepcopy(network_manifest)
+        if section == "networkApplications":
+            altered[section][0]["backend"] = "loopback"
+        else:
+            next(entry for entry in altered[section] if entry["id"] == "network-application")["size"] = 8192
+        if split_post_baseline(altered, "sel4-io-network")[0] == split_post_baseline(network_manifest, "sel4-io-network")[0]:
+            fail(f"network application exception concealed another system's {section}")
+        refusals += 1
+
+    for mutation in ("foreign holder", "foreign subject", "read-only", "added dependency", "missing policy", "missing lifecycle object"):
+        altered = copy.deepcopy(network_manifest)
+        if mutation == "missing policy":
+            del altered["lifecyclePolicy"]
+        elif mutation == "missing lifecycle object":
+            altered["objects"] = [entry for entry in altered["objects"] if entry["id"] != "lifecycle-policy"]
+        elif mutation == "added dependency":
+            altered["lifecyclePolicy"]["dependencies"].append({"subject": "init", "dependsOn": "network-service"})
+        else:
+            key, value = {"foreign holder": ("holder", "io-tcp-probe"),
+                          "foreign subject": ("subject", "io-tcp-probe"), "read-only": ("write", False)}[mutation]
+            altered["lifecyclePolicy"]["parameters"][0][key] = value
+        try:
+            check_network_post_baseline(network_name, altered, network_system)
+        except SystemExit as error:
+            if "network post-baseline" not in str(error):
+                raise
+        else:
+            fail(f"network post-baseline accepted lifecycle {mutation}")
+        refusals += 1
+    for section in ("lifecyclePolicy", "objects"):
+        altered = copy.deepcopy(network_manifest)
+        if section == "lifecyclePolicy":
+            altered[section]["parameters"][0]["write"] = False
+        else:
+            next(entry for entry in altered[section] if entry["id"] == "lifecycle-policy")["size"] = 8192
+        if split_post_baseline(altered, "sel4-io-network")[0] == split_post_baseline(network_manifest, "sel4-io-network")[0]:
+            fail(f"network lifecycle exception concealed another system's {section}")
+        refusals += 1
+
+    refusals += network_application_controls(derive_manifest(systems["sel4-io-tcp"]))
+
+
+    def instance_lifetime_controls(source: dict) -> int:
+        """The lifetime encoder names exactly the resident instances, and refuses the rest."""
+        import boot_contracts as wire
+
+        manifest = copy.deepcopy(source)
+        encoded = BUILDER.build_instance_lifetime(manifest)
+        residents = sorted(
+            BUILDER.instance_lifetime_identity(entry["name"])
+            for entry in manifest["instances"]
+            if entry["lifetime"] == "resident"
         )
-        for index in range(len(rows))
-    ]
-    if [entry[0] for entry in decoded] != sorted({entry[0] for entry in decoded}):
-        fail("entropy authority encoder did not emit strictly ordered holders")
-    by_name = {entry[1][: entry[2]].decode("ascii"): entry for entry in decoded}
-    for row in rows:
-        identity, _, _, source, reserved, budget, seed = by_name[row["holder"]]
-        if (
-            identity != BUILDER.entropy_authority_holder_identity(row["holder"])
-            or source != BUILDER.ENTROPY_SOURCES[row["source"]]
-            or reserved != bytes(2)
-            or budget != row["byteBudget"]
-            or seed != bytes.fromhex(row.get("seed", "00" * wire.ENTROPY_AUTHORITY_SEED_BYTES))
+        rows = [
+            encoded[offset : offset + 32]
+            for offset in range(
+                wire.INSTANCE_LIFETIME_HEADER_BYTES, len(encoded), wire.INSTANCE_LIFETIME_ENTRY_BYTES
+            )
+        ]
+        if not residents or rows != residents:
+            fail("instance lifetime encoder did not emit exactly the sorted resident instances")
+        reverse = copy.deepcopy(manifest)
+        reverse["instances"].reverse()
+        if BUILDER.build_instance_lifetime(reverse) != encoded:
+            fail("instance lifetime encoding depends on authoring order")
+        refused = 0
+        for label, mutate, reason in (
+            ("an unknown lifetime", lambda altered: altered["instances"][0].update(lifetime="forever"), "invalid lifetime"),
+            (
+                "a table naming nobody",
+                lambda altered: [entry.update(lifetime="bounded") for entry in altered["instances"]],
+                "without a resident instance",
+            ),
         ):
-            fail(f"entropy authority encoder misplaced {row['holder']}'s declared row")
-    reverse = copy.deepcopy(manifest)
-    reverse["entropyAuthority"].reverse()
-    reverse["grants"].reverse()
-    if BUILDER.build_entropy_authority(reverse) != encoded:
-        fail("entropy authority encoding depends on authoring order")
+            altered = copy.deepcopy(manifest)
+            mutate(altered)
+            try:
+                BUILDER.build_instance_lifetime(altered)
+            except SystemExit as error:
+                if reason not in str(error):
+                    fail(f"instance lifetime {label} refused at wrong boundary: {error}")
+            else:
+                fail(f"instance lifetime encoder accepted {label}")
+            refused += 1
+        return refused
 
-    def row(altered: dict, holder: str) -> dict:
-        return next(entry for entry in altered["entropyAuthority"] if entry["holder"] == holder)
 
-    def grant(altered: dict, name: str) -> dict:
-        return next(entry for entry in altered["grants"] if entry["name"] == name)
+    refusals += instance_lifetime_controls(derive_manifest(systems["sel4-lifetime"]))
 
-    def endpoint(name: str, source: str, **fields) -> dict:
-        return dict({"name": name, "capabilityKind": "endpoint", "source": source, "target": "entropy-service",
-                     "rights": ["send", "recv"], "transferable": False}, **fields)
 
-    seed = row(manifest, "entropy-seeded")["seed"]
-    refused = 0
-    for label, mutate, reason in (
-        ("an unknown source", lambda value: row(value, "entropy-hw-a").update(source="device"), "unknown source"),
-        ("a zero budget", lambda value: row(value, "entropy-hw-a").update(byteBudget=0), "byteBudget outside"),
-        ("a budget above the bound", lambda value: row(value, "entropy-seeded").update(
-            byteBudget=wire.ENTROPY_AUTHORITY_MAX_BYTE_BUDGET + 1), "byteBudget outside"),
-        ("a boolean budget", lambda value: row(value, "entropy-hw-a").update(byteBudget=True), "byteBudget outside"),
-        ("a seed on a hardware row", lambda value: row(value, "entropy-hw-a").update(seed=seed), "declares a seed"),
-        ("an empty seed on a hardware row", lambda value: row(value, "entropy-hw-b").update(seed=""), "declares a seed"),
-        ("a seeded row without a seed", lambda value: row(value, "entropy-seeded").pop("seed"), "64 lowercase hex"),
-        ("an uppercase seed", lambda value: row(value, "entropy-seeded").update(seed=seed.upper()), "64 lowercase hex"),
-        ("a short seed", lambda value: row(value, "entropy-seeded").update(seed=seed[:-2]), "64 lowercase hex"),
-        ("a non-hex seed", lambda value: row(value, "entropy-seeded").update(seed="g" + seed[1:]), "64 lowercase hex"),
-        ("a duplicate holder", lambda value: value["entropyAuthority"].append(
-            copy.deepcopy(row(value, "entropy-hw-a"))), "duplicate holder"),
-        ("an undeclared holder", lambda value: value["entropyAuthority"].append(
-            {"holder": "entropy-ghost", "source": "hardware", "byteBudget": 96}), "not a declared instance"),
-        ("the service as holder", lambda value: (
-            value["entropyAuthority"].append({"holder": "entropy-service", "source": "hardware", "byteBudget": 96}),
-            value["grants"].append(endpoint("entropy-service-entropy", "entropy-service"))), "may not hold"),
-        ("the driver as holder", lambda value: (
-            value["entropyAuthority"].append({"holder": "virtio-rng-driver", "source": "hardware", "byteBudget": 96}),
-            value["grants"].append(endpoint("virtio-rng-driver-entropy", "virtio-rng-driver"))), "may not hold"),
-        ("a missing service instance", lambda value: value.update(
-            instances=[entry for entry in value["instances"] if entry["name"] != "entropy-service"]), "no entropy-service"),
-        ("a transferable holder endpoint", lambda value: grant(value, "entropy-hw-a-entropy").update(
-            transferable=True), "is transferable"),
-        ("a misnamed holder endpoint", lambda value: grant(value, "entropy-hw-a-entropy").update(
-            name="entropy-hw-a-draw"), "is not named"),
-        ("a send-only holder endpoint", lambda value: grant(value, "entropy-hw-b-entropy").update(
-            rights=["send"]), "exactly send and recv"),
-        ("a widened holder endpoint", lambda value: grant(value, "entropy-hw-b-entropy").update(
-            rights=["send", "recv", "grant"]), "exactly send and recv"),
-        ("an endpoint from a holder with no row", lambda value: value["grants"].append(
-            endpoint("entropy-intruder-entropy", "entropy-intruder")), "with no row"),
-        ("a row without its endpoint", lambda value: value.update(
-            grants=[entry for entry in value["grants"] if entry["name"] != "entropy-seeded-entropy"]), "not exactly one"),
-        ("a row with two endpoints", lambda value: value["grants"].append(
-            endpoint("entropy-seeded-entropy", "entropy-seeded")), "not exactly one"),
-        ("a holder name above the entry field", lambda value: (
-            value["instances"].append(dict(next(entry for entry in value["instances"] if entry["name"] == "entropy-hw-a"),
-                                           name="h" * (wire.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES + 1))),
-            value["entropyAuthority"].append({"holder": "h" * (wire.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES + 1),
-                                              "source": "hardware", "byteBudget": 96})), "printable ASCII"),
-        ("rows above the holder bound", lambda value: value["entropyAuthority"].extend(
-            {"holder": f"entropy-extra-{index}", "source": "hardware", "byteBudget": 96}
-            for index in range(wire.MAX_ENTROPY_AUTHORITY_HOLDERS)), "holder bound"),
+    def entropy_authority_controls(system) -> int:
+        """The entropy encoder emits exactly the declared rows and refuses every malformed table or grant."""
+        import boot_contracts as wire
+
+        manifest = derive_manifest(system)
+        encoded = BUILDER.build_entropy_authority(manifest)
+        rows = manifest["entropyAuthority"]
+        expected_length = wire.ENTROPY_AUTHORITY_HEADER_BYTES + len(rows) * wire.ENTROPY_AUTHORITY_ENTRY_BYTES
+        if not rows or len(encoded) != expected_length or wire.ENTROPY_AUTHORITY_HEADER.unpack_from(encoded) != (
+            wire.ENTROPY_AUTHORITY_MAGIC, wire.ENTROPY_AUTHORITY_VERSION, wire.ENTROPY_AUTHORITY_HEADER_BYTES, 0,
+            len(rows), expected_length,
+        ):
+            fail("entropy authority encoder changed the generated header or entry bounds")
+        decoded = [
+            wire.ENTROPY_AUTHORITY_ENTRY.unpack_from(
+                encoded, wire.ENTROPY_AUTHORITY_HEADER_BYTES + index * wire.ENTROPY_AUTHORITY_ENTRY_BYTES
+            )
+            for index in range(len(rows))
+        ]
+        if [entry[0] for entry in decoded] != sorted({entry[0] for entry in decoded}):
+            fail("entropy authority encoder did not emit strictly ordered holders")
+        by_name = {entry[1][: entry[2]].decode("ascii"): entry for entry in decoded}
+        for row in rows:
+            identity, _, _, source, reserved, budget, seed = by_name[row["holder"]]
+            if (
+                identity != BUILDER.entropy_authority_holder_identity(row["holder"])
+                or source != BUILDER.ENTROPY_SOURCES[row["source"]]
+                or reserved != bytes(2)
+                or budget != row["byteBudget"]
+                or seed != bytes.fromhex(row.get("seed", "00" * wire.ENTROPY_AUTHORITY_SEED_BYTES))
+            ):
+                fail(f"entropy authority encoder misplaced {row['holder']}'s declared row")
+        reverse = copy.deepcopy(manifest)
+        reverse["entropyAuthority"].reverse()
+        reverse["grants"].reverse()
+        if BUILDER.build_entropy_authority(reverse) != encoded:
+            fail("entropy authority encoding depends on authoring order")
+
+        def row(altered: dict, holder: str) -> dict:
+            return next(entry for entry in altered["entropyAuthority"] if entry["holder"] == holder)
+
+        def grant(altered: dict, name: str) -> dict:
+            return next(entry for entry in altered["grants"] if entry["name"] == name)
+
+        def endpoint(name: str, source: str, **fields) -> dict:
+            return dict({"name": name, "capabilityKind": "endpoint", "source": source, "target": "entropy-service",
+                         "rights": ["send", "recv"], "transferable": False}, **fields)
+
+        seed = row(manifest, "entropy-seeded")["seed"]
+        refused = 0
+        for label, mutate, reason in (
+            ("an unknown source", lambda value: row(value, "entropy-hw-a").update(source="device"), "unknown source"),
+            ("a zero budget", lambda value: row(value, "entropy-hw-a").update(byteBudget=0), "byteBudget outside"),
+            ("a budget above the bound", lambda value: row(value, "entropy-seeded").update(
+                byteBudget=wire.ENTROPY_AUTHORITY_MAX_BYTE_BUDGET + 1), "byteBudget outside"),
+            ("a boolean budget", lambda value: row(value, "entropy-hw-a").update(byteBudget=True), "byteBudget outside"),
+            ("a seed on a hardware row", lambda value: row(value, "entropy-hw-a").update(seed=seed), "declares a seed"),
+            ("an empty seed on a hardware row", lambda value: row(value, "entropy-hw-b").update(seed=""), "declares a seed"),
+            ("a seeded row without a seed", lambda value: row(value, "entropy-seeded").pop("seed"), "64 lowercase hex"),
+            ("an uppercase seed", lambda value: row(value, "entropy-seeded").update(seed=seed.upper()), "64 lowercase hex"),
+            ("a short seed", lambda value: row(value, "entropy-seeded").update(seed=seed[:-2]), "64 lowercase hex"),
+            ("a non-hex seed", lambda value: row(value, "entropy-seeded").update(seed="g" + seed[1:]), "64 lowercase hex"),
+            ("a duplicate holder", lambda value: value["entropyAuthority"].append(
+                copy.deepcopy(row(value, "entropy-hw-a"))), "duplicate holder"),
+            ("an undeclared holder", lambda value: value["entropyAuthority"].append(
+                {"holder": "entropy-ghost", "source": "hardware", "byteBudget": 96}), "not a declared instance"),
+            ("the service as holder", lambda value: (
+                value["entropyAuthority"].append({"holder": "entropy-service", "source": "hardware", "byteBudget": 96}),
+                value["grants"].append(endpoint("entropy-service-entropy", "entropy-service"))), "may not hold"),
+            ("the driver as holder", lambda value: (
+                value["entropyAuthority"].append({"holder": "virtio-rng-driver", "source": "hardware", "byteBudget": 96}),
+                value["grants"].append(endpoint("virtio-rng-driver-entropy", "virtio-rng-driver"))), "may not hold"),
+            ("a missing service instance", lambda value: value.update(
+                instances=[entry for entry in value["instances"] if entry["name"] != "entropy-service"]), "no entropy-service"),
+            ("a transferable holder endpoint", lambda value: grant(value, "entropy-hw-a-entropy").update(
+                transferable=True), "is transferable"),
+            ("a misnamed holder endpoint", lambda value: grant(value, "entropy-hw-a-entropy").update(
+                name="entropy-hw-a-draw"), "is not named"),
+            ("a send-only holder endpoint", lambda value: grant(value, "entropy-hw-b-entropy").update(
+                rights=["send"]), "exactly send and recv"),
+            ("a widened holder endpoint", lambda value: grant(value, "entropy-hw-b-entropy").update(
+                rights=["send", "recv", "grant"]), "exactly send and recv"),
+            ("an endpoint from a holder with no row", lambda value: value["grants"].append(
+                endpoint("entropy-intruder-entropy", "entropy-intruder")), "with no row"),
+            ("a row without its endpoint", lambda value: value.update(
+                grants=[entry for entry in value["grants"] if entry["name"] != "entropy-seeded-entropy"]), "not exactly one"),
+            ("a row with two endpoints", lambda value: value["grants"].append(
+                endpoint("entropy-seeded-entropy", "entropy-seeded")), "not exactly one"),
+            ("a holder name above the entry field", lambda value: (
+                value["instances"].append(dict(next(entry for entry in value["instances"] if entry["name"] == "entropy-hw-a"),
+                                               name="h" * (wire.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES + 1))),
+                value["entropyAuthority"].append({"holder": "h" * (wire.ENTROPY_AUTHORITY_HOLDER_NAME_BYTES + 1),
+                                                  "source": "hardware", "byteBudget": 96})), "printable ASCII"),
+            ("rows above the holder bound", lambda value: value["entropyAuthority"].extend(
+                {"holder": f"entropy-extra-{index}", "source": "hardware", "byteBudget": 96}
+                for index in range(wire.MAX_ENTROPY_AUTHORITY_HOLDERS)), "holder bound"),
+        ):
+            altered = copy.deepcopy(manifest)
+            mutate(altered)
+            try:
+                BUILDER.build_entropy_authority(altered)
+            except SystemExit as error:
+                if reason not in str(error):
+                    fail(f"entropy authority {label} refused at wrong boundary: {error}")
+            else:
+                fail(f"entropy authority encoder accepted {label}")
+            refused += 1
+        # The spec-admission half: a populated table needs its object, and a row
+        # must name an admitted instance before anything is encoded.
+        for label, mutate, reason in (
+            ("a table without its resource object", lambda spec: spec.update(entropyAuthorityObject=False),
+             "requires its resource object"),
+            ("an unadmitted holder", lambda spec: spec["entropyAuthority"].append(
+                {"holder": "entropy-ghost", "source": "hardware", "byteBudget": 96}), "is not admitted"),
+            ("an encoder refusal at admission", lambda spec: spec["entropyAuthority"][0].update(source="device"),
+             "unknown source"),
+        ):
+            altered_system = copy.deepcopy(system)
+            mutate(altered_system.spec)
+            try:
+                validate_authority_sections(altered_system.spec, set(instance_names(altered_system.spec)))
+                derive_manifest(altered_system)
+            except SystemSpecError as error:
+                if reason not in str(error):
+                    fail(f"entropy authority spec {label} refused at wrong boundary: {error}")
+            else:
+                fail(f"system spec admitted entropy authority with {label}")
+            refused += 1
+        return refused
+
+
+    refusals += entropy_authority_controls(systems["sel4-entropy"])
+    refusals += zenoh_grants_builder_exam.controls(systems["sel4-zenoh"])[1]
+
+    parameter_instance = {"name": "network-service", "bindings": []}
+    parameter_executable = {"role": "service", "spawnBudget": 0}
+    base_services = {BUILDER.SERVICE_LIFECYCLE, BUILDER.SERVICE_CONSOLE}
+    for parameter_holders, expected in (
+        (frozenset(), base_services),
+        (frozenset({"other"}), base_services),
+        (frozenset({"network-service"}), base_services | {BUILDER.SERVICE_SUPERVISION}),
     ):
-        altered = copy.deepcopy(manifest)
-        mutate(altered)
-        try:
-            BUILDER.build_entropy_authority(altered)
-        except SystemExit as error:
-            if reason not in str(error):
-                fail(f"entropy authority {label} refused at wrong boundary: {error}")
-        else:
-            fail(f"entropy authority encoder accepted {label}")
-        refused += 1
-    # The spec-admission half: a populated table needs its object, and a row
-    # must name an admitted instance before anything is encoded.
-    for label, mutate, reason in (
-        ("a table without its resource object", lambda spec: spec.update(entropyAuthorityObject=False),
-         "requires its resource object"),
-        ("an unadmitted holder", lambda spec: spec["entropyAuthority"].append(
-            {"holder": "entropy-ghost", "source": "hardware", "byteBudget": 96}), "is not admitted"),
-        ("an encoder refusal at admission", lambda spec: spec["entropyAuthority"][0].update(source="device"),
-         "unknown source"),
-    ):
-        altered_system = copy.deepcopy(system)
-        mutate(altered_system.spec)
-        try:
-            validate_authority_sections(altered_system.spec, set(instance_names(altered_system.spec)))
-            derive_manifest(altered_system)
-        except SystemSpecError as error:
-            if reason not in str(error):
-                fail(f"entropy authority spec {label} refused at wrong boundary: {error}")
-        else:
-            fail(f"system spec admitted entropy authority with {label}")
-        refused += 1
-    return refused
+        actual = BUILDER.declared_services(parameter_instance, parameter_executable, {}, [], set(), set(), parameter_holders)
+        if actual != expected:
+            fail(f"parameter transport declaration widened or omitted services: {actual} != {expected}")
+        refusals += 1
+    if BUILDER.declared_services(parameter_instance, parameter_executable, {}, [], set(), set()) != base_services:
+        fail("absent parameter declarations implicitly granted supervision transport")
 
-
-refusals += entropy_authority_controls(systems["sel4-entropy"])
-refusals += zenoh_grants_builder_exam.controls(systems["sel4-zenoh"])[1]
-
-parameter_instance = {"name": "network-service", "bindings": []}
-parameter_executable = {"role": "service", "spawnBudget": 0}
-base_services = {BUILDER.SERVICE_LIFECYCLE, BUILDER.SERVICE_CONSOLE}
-for parameter_holders, expected in (
-    (frozenset(), base_services),
-    (frozenset({"other"}), base_services),
-    (frozenset({"network-service"}), base_services | {BUILDER.SERVICE_SUPERVISION}),
-):
-    actual = BUILDER.declared_services(parameter_instance, parameter_executable, {}, [], set(), set(), parameter_holders)
-    if actual != expected:
-        fail(f"parameter transport declaration widened or omitted services: {actual} != {expected}")
-    refusals += 1
-if BUILDER.declared_services(parameter_instance, parameter_executable, {}, [], set(), set()) != base_services:
-    fail("absent parameter declarations implicitly granted supervision transport")
-
+scope = "" if ARGS.shard_count == 1 else f"shard {ARGS.shard_index + 1}/{ARGS.shard_count}: "
 print(
-    f"system spec derivation: {len(systems)} systems compiled and "
-    f"{len(DERIVED_FIXTURES)} generation manifests derived semantically identical to "
+    f"system spec derivation: {scope}{len(systems)} systems compiled and "
+    f"{len(checked)} generation manifests derived semantically identical to "
     f"their committed fixtures; {refusals} named mutations and "
     f"{computed_refusals} computed-source controls refused"
 )

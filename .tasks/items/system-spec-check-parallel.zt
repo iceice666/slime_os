@@ -1,0 +1,37 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.task "01a1c957-47f3-7e68-a2c3-ce16ed194835" "system-spec-check-parallel" "quality"
+  "Budget parallel system-spec evaluations by the memory they use"
+  "scripts/lib/zutai_cli.py budgets each prefetch worker 2 GiB, from an earlier 1.7 GB peak. Each of the 78 system-spec schema checks now peaks near 4.2 GB and takes 36 to 105 s, so on a 4-CPU, 16 GB host prefetch starts 4 at once and the kernel kills one. The serial pass then reruns each killed check; one cold local run of check-system-spec.py lost 13 checks this way. The check also renders the 6 computed sources one at a time, through an adapter whose output is not stored. The change: budget each worker 4.5 GiB, and render the computed sources in parallel within that budget, without changing what any evaluation asserts.")
+  with {
+    owns = {
+      ".github/workflows/ci.yml";
+    };
+    nonGoals = {
+      h.nonGoal "Splitting the check across CI jobs; system-spec-check-shards owns that." h.agentDefault;
+      h.nonGoal "Changing the Zutai evaluation store's key recipe or entry format, or the adapter that renders a computed source." h.agentDefault;
+    };
+    requirements = {
+      h.req "same-refusals"
+        "check-system-spec.py runs every system, named mutation and control it ran before this item, and a refused source reports the same diagnostic text in the same order as a serial run reports it."
+        { "system_spec_check"; };
+    };
+    acceptance = {
+      h.observed "system_spec_check";
+    };
+    decisions = {
+      h.decided "planning-only"
+        "The checker change lands in the planning pull request that adds this item; an implementation pull request changes only the CI workflow, to set SLIME_ZUTAI_JOBS where a runner's memory needs it"
+        "scripts/lib/zutai_cli.py, check-system-spec.py and scripts/lib/system_spec.py are in the grader set of system_spec_check, which V3 keeps out of an implementation pull request"
+        h.agentDefault
+        { "same-refusals"; };
+      h.decided "worker-memory-budget"
+        "workers() budgets each parallel prefetch job and each parallel computed-source render 4.5 GiB of available memory, takes the smaller of the CPU count and MemAvailable divided by that budget, and falls back to 2 without a memory reading; SLIME_ZUTAI_JOBS overrides it"
+        "prefetch has one caller, the system-spec check, and every one of its 78 schema checks peaked near 4.2 GB of resident memory; a render peaked near 3.7 GB, and four renders at once on a 16 GB host made the kernel kill one, so a control failed with an empty diagnostic"
+        h.agentDefault
+        { "same-refusals"; };
+    };
+  };
+
+item

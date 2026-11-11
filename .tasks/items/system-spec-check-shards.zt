@@ -3,7 +3,7 @@ h ::= import "./helpers.zt";
 
 item :: s.Item = (h.task "01a1c858-c278-7934-9c02-cdf9f35e4860" "system-spec-check-shards" "quality"
   "Split the system-spec check across CI jobs so it stops bounding main's critical path"
-  "The CI job \"System specs and system-image closures\" is the critical path of every main run that runs the seL4 jobs. Runs 1020, 1023 and 1036 took 3317, 3523 and 3368 s from the first job starting to the CI aggregate finishing, and that one job took 3296 to 3499 s of it. Inside its main step, scripts/check/check-system-spec.py took 2370 to 2481 s, compiling 78 systems and refusing 214 named mutations and 18 computed-source controls; check-system-image-builder.py took about 440 s. The duration did not move with the Zutai evaluation store: 0 restored hits in runs 1020 and 1023 and 349 in run 1036 gave the same 40 minutes, so no cache change shortens it. The change: give check-system-spec.py a shard index and count, as check-generation-v5.py has, so that the shards together run exactly the systems, mutations and controls the unsharded check runs, and run its shards as parallel CI jobs ahead of the image-builder check.")
+  "The CI job \"System specs and system-image closures\" is the critical path of every main run that runs the seL4 jobs. Runs 1020, 1023 and 1036 took 3317, 3523 and 3368 s from the first job starting to the CI aggregate finishing, and that one job took 3296 to 3499 s of it. Inside its main step, scripts/check/check-system-spec.py took 2370 to 2481 s, compiling 78 systems and refusing 214 named mutations and 18 computed-source controls; check-system-image-builder.py took about 440 s. The job's Zutai evaluation store was cold in all three runs: a store key covers every contracts .zt file, so one contract change misses every entry, and run 1036's 349 hits were what a cancelled run had stored. One host cannot run the check much faster: each of the 78 schema checks takes 36 to 105 s and 4.2 GB, so at most 3 fit at once in a 16 GB runner, and system-spec-check-parallel only stops the kernel from killing a fourth. The change: give check-system-spec.py a shard index and count, as check-generation-v5.py has, so that the shards together run exactly the systems, mutations and controls the unsharded check runs, and run its shards as parallel CI jobs ahead of the image-builder check.")
   with {
     owns = {
       ".github/workflows/**";
@@ -14,8 +14,8 @@ item :: s.Item = (h.task "01a1c858-c278-7934-9c02-cdf9f35e4860" "system-spec-che
     };
     requirements = {
       h.req "same-assertions"
-        "Running every shard of check-system-spec.py for one shard count compiles each system, refuses each named mutation and runs each computed-source control exactly once across the shards, and the unsharded run (one shard of one) does exactly what the check does today."
-        { "system_spec_check"; "system_image_builder_check"; };
+        "Running every shard of check-system-spec.py for one shard count runs each system's own checks, each named mutation and each control exactly once across the shards; a shard also compiles the systems its controls derive from. The unsharded run (shard 0 of 1) runs every check the unsharded check ran before this item. image_builder_closures_check runs what system_image_builder_check runs except the system-spec check."
+        { "system_spec_check"; "system_image_builder_check"; "image_builder_closures_check"; };
       h.req "off-critical-path"
         "In main's CI, the system-spec check runs as parallel shard jobs, and no shard's check step takes more than 900 s; the image-builder job no longer runs the unsharded system-spec check."
         { "critical-path-observed"; };
@@ -23,6 +23,7 @@ item :: s.Item = (h.task "01a1c858-c278-7934-9c02-cdf9f35e4860" "system-spec-che
     acceptance = {
       h.observed "system_spec_check";
       h.observed "system_image_builder_check";
+      h.observed "image_builder_closures_check";
       h.human "critical-path-observed"
         "Reading 3 consecutive main-branch CI runs after the implementation merged that ran the seL4 jobs to success: did every system-spec shard's check step take at most 900 s in each, did the image-builder job run without the unsharded system-spec check, and did the slowest run take at most 1800 s from its first job starting to the CI aggregate finishing? Note the last run's URL.";
     };
@@ -30,6 +31,11 @@ item :: s.Item = (h.task "01a1c858-c278-7934-9c02-cdf9f35e4860" "system-spec-che
       h.decided "grader-first"
         "The shard arguments of check-system-spec.py and the just recipe that passes them land in a planning pull request before the implementation pull request, which changes only .github/workflows/"
         "the checker and the recipe are the grader set of system_spec_check and system_image_builder_check, which V3 keeps out of an implementation pull request and V4 gives to a human approval"
+        h.agentDefault
+        { "same-assertions"; };
+      h.decided "identity-per-shard"
+        "A shard asserts distinct identities among the systems it compiles, not across shards"
+        "an identity hashes the normalized spec, whose name compile_system binds to the file stem, and two system files cannot share a stem; comparing across shards would make every shard compile all 78 systems"
         h.agentDefault
         { "same-assertions"; };
       h.decided "time-bounds"

@@ -37,6 +37,7 @@ import re
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,7 +47,7 @@ import private_memory_policy
 import system_spec_contract as default_contract
 from component_spec import CompiledSpec, admit_specs, interface_catalogue
 from harness import GENERATION_COMPOSITIONS, GENERATION_FIXTURES, ROOT, load_script
-from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch
+from zutai_cli import STDLIB, ZutaiError, binary as zutai_binary, evaluate, prefetch, workers
 from boot_contracts import (
     GRAPH_ARRIVAL_CEILING_DEFAULT,
     GRAPH_ARRIVAL_CEILING_MAX,
@@ -1487,8 +1488,15 @@ def render_computed_system(name: str, root: Path = CONTRACT_ROOT) -> str:
 
 def computed_system_outputs(root: Path = CONTRACT_ROOT) -> dict[Path, str]:
     validate_source_mapping(root)
-    return {root / "systems" / f"{name}.zti": render_computed_system(name, root)
-            for name in COMPUTED_SYSTEM_SOURCES}
+    names = list(COMPUTED_SYSTEM_SOURCES)
+    # Each render is an independent, pure adapter run over `root`, and peaks near the memory
+    # a system-spec evaluation does, so it takes the same worker budget. Results are taken
+    # in declaration order, so the first refused source is the one a serial loop reports.
+    source_tool()
+    with ThreadPoolExecutor(max_workers=min(workers(), len(names))) as pool:
+        renders = [pool.submit(render_computed_system, name, root) for name in names]
+    return {root / "systems" / f"{name}.zti": render.result()
+            for name, render in zip(names, renders, strict=True)}
 
 
 def compile_rendered_system(

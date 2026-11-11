@@ -80,21 +80,35 @@ component_spec_check: contracts_check component_spec_validation_check
 # matches the spec it came from — cannot change because the 42-manifest
 # generation corpus was or was not rebuilt first, and rebuilding it here costs
 # 15 minutes. `contracts_check` remains its own gate; CI runs it sharded.
+#
+# Without arguments this is the whole check. With an index and a count it runs
+# one shard of `check-system-spec.py`; the shards of one count together run
+# every check unit exactly once, so CI runs them as parallel jobs. The
+# generation-from-spec drift check does not shard and runs in shard 0 alone.
 [group('contracts')]
-system_spec_check: component_spec_validation_check
-    python3 scripts/check/check-system-spec.py
-    python3 scripts/generate/generate-generation-from-spec.py --check
+system_spec_check shard_index="0" shard_count="1": component_spec_validation_check
+    python3 scripts/check/check-system-spec.py --shard-index {{ shard_index }} --shard-count {{ shard_count }}
+    {{ if shard_index == "0" { "python3 scripts/generate/generate-generation-from-spec.py --check" } else { "true" } }}
 
 [group('contracts')]
-system_composition_closure_check: system_spec_check
+system_composition_closure_check: system_spec_check composition_inventory_check
+
+[group('contracts')]
+composition_inventory_check:
     python3 scripts/generate/generate-bindings.py --check composition-inventory
     python3 scripts/check/check-composition-inventory.py
 
+[group('contracts')]
+system_image_builder_check: system_composition_closure_check image_builder_closures_check
+
+# `system_image_builder_check` without the system-spec check, which CI runs as
+# `system_spec_check` shards in parallel jobs.
+#
 # Resolution checks each closure's committed prefix against `sel4/pins.toml`;
 # no installed platform build or published SDK record is needed for that check.
 # The checker runs the closure freshness check itself, before anything else.
 [group('contracts')]
-system_image_builder_check: system_composition_closure_check
+image_builder_closures_check: composition_inventory_check
     python3 scripts/check/check-system-image-builder.py
 
 # Execution-only inputs — disks, devices, injected faults, timeouts, marker
