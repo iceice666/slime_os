@@ -29,7 +29,14 @@ item :: s.Item = (h.task "01a0e60f-4ca9-74e6-906e-31f32f3ff683" "ci-cache-budget
     acceptance = {
       h.observed "ci_critical_path_check";
       h.human "retention-observed"
-        "Reading the main-branch CI runs after the implementation merged: did 3 consecutive qualifying runs (seL4 jobs succeeded, not cancelled, head commit changed no build-output key input, Nix key input or contracts .zt file since the preceding qualifying run) each restore every seL4 build-output partition, the Nix store and both contract jobs' Zutai evaluation stores, did the slowest of them take at most 1320 s from its first job starting to the CI aggregate finishing, and was the Actions cache usage at most 9000 MB after the last of them? Note the last counted run's URL.";
+        "Reading the main-branch CI runs after the implementation merged: did 3 consecutive qualifying runs (seL4 jobs succeeded, not cancelled, head commit changed no build-output key input, Nix key input or contracts .zt file since the preceding qualifying run) each restore every seL4 build-output partition, the Nix store and both contract jobs' Zutai evaluation stores, did every seL4 job's slime-env and sel4_qemu_image_check steps together take at most 300 s in each of them, and was the Actions cache usage at most 9000 MB after the last of them? Note the last counted run's URL.";
+    };
+    decisions = {
+      h.decided "cache-time-bound"
+        "The time bound covers the steps a cache restore shortens, each seL4 job's slime-env and sel4_qemu_image_check, at most 300 s together; it no longer bounds the whole critical path"
+        "the critical path is the system-image builder job, whose check-system-spec.py run took 2370 to 2481 s whether its Zutai store restored 0 or 349 entries, and system-spec-check-shards owns that time; with no build-output restore these two steps took 343 to 470 s per job in runs 1020, 1023 and 1036"
+        h.agentDefault
+        { "retention-observed"; };
     };
   };
 
