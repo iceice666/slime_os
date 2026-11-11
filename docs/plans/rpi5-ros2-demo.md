@@ -54,9 +54,11 @@ retains the detailed runtime, trace, fault, repeatability, and board acceptance;
 [R0–R3](ros2-wire-compatibility.md#compatibility-layers) owns broader
 ROS compatibility. Neither sequence grants unimplemented runtime support.
 
-The network path depends on
-[`network-data-plane.md`](network-data-plane.md); the current exact-destination
-service does not provide a TCP byte stream.
+The network path uses the bounded TCP stream the
+[network service](../architecture/network-service.md) provides. The `sel4-zenoh`
+composition runs Zenoh Profile 0 over loopback TCP without a NIC under AArch64
+QEMU. [`network-data-plane.md`](network-data-plane.md) owns the remaining
+transport requirements. No physical Raspberry Pi 5 link is qualified.
 
 ## Physical evidence rule
 
@@ -65,6 +67,13 @@ reproducibly, but the board boot remains unobserved because the available UART
 path produced no serial record. Milk-V Duo, Framework, and QEMU evidence cannot
 substitute. A different evidence channel requires its own bounded implementation
 and identity binding; documentation does not weaken the serial exit condition.
+
+The boot path is not settled. `just rpi5_boot_check` judges UART10 after the
+operator copies `build/rpi5-media/` to FAT32 removable media. The `rpi5-board`
+area in `specs/rpi5-board.zt` lists removable-medium boot as a non-goal. That
+area records that an rpiboot gate landed and was rolled back, and that its
+requirements return with a later work item. P4 and RP3 below still specify
+removable media. A human decides which boot path P4 and RP3 require.
 
 ## Later compatibility
 

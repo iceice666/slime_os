@@ -114,6 +114,13 @@ M5 closes only after M5.7's physical observation. At that point all executable c
 
 ### M6.4 — Minimal Dango implementation and core runtime
 
+Slisp is the resident shell today
+([README](../../README.md#slisp-native-interactive-language)). `slime-root` and the
+system-spec schema describe Dango as retired. `just dango_check` is a
+compatibility alias of `just slisp_core_check`. No record states whether the
+M6.4 checks now bind Slisp. A human decides whether M6.4 applies to Slisp or
+closes.
+
 **Depends on:** M6.2 and M6.3.
 
 Full Hindley–Milner, row-polymorphism, and effect inference are outside this slice.

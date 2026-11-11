@@ -70,6 +70,12 @@ milestones with a live gate were removed without a new archive snapshot. Their
 last text is in this repository at commit `19866cefb1db78a0b113ee4852c011b6cb4c693e`,
 under `roadmap/`.
 
+Two files outside the process class still name a retired roadmap path:
+`contracts/generation-manifest/v1/compositions/sel4.md` and
+`components/build-support/src/lib.rs`. Each changes only under a work item that
+owns it. The paths they name, `roadmap/07-architecture-portability.md` and
+`roadmap/10-component-platform.md`, resolve at the product archive anchor above.
+
 Local Notion exports under an ignored, untracked `spec/` directory are not part
 of this product checkout or the immutable archive snapshot. They are not current
 contract owners or required build inputs. Preserve local originals independently;
