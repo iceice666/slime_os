@@ -175,7 +175,7 @@ refusals, identity-safe completions and full-ring backpressure. It does not
 establish fresh-boot durability, injected descriptor/timeout/cancellation/reset/
 interrupt-loss or coalescing/crash/peer-death settlement, their numeric zero-leak
 reclamation, supervised restart with a fresh epoch, or stale-completion injection.
-Those remain required by [IO2 acceptance](../../roadmap/11-io-substrate.md#io2--userspace-virtio-blk-and-asynchronous-blockdevice-plane);
+Those remain required by [IO2 acceptance](../plans/io-substrate-qualification.md#io2--userspace-virtio-blk-and-asynchronous-blockdevice-plane);
 IO1 or IO3 evidence cannot silently qualify the missing block-driver paths.
 
 ### Bounded lifetime and accounting models (IO5)

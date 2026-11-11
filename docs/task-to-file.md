@@ -3,7 +3,7 @@
 Where a change starts, and which files follow. This is the routing table
 `AGENTS.md` points at: find your change's row, read the named module root
 first, then use LSP symbols or references from there, and only then grep the
-exact symbol. Do not scan `deps/`, `target/`, `roadmap/`, or `.tasks/` for
+exact symbol. Do not scan `deps/`, `target/`, or `.tasks/` for
 implementation symbols unless the task specifically concerns them.
 
 The [recipes](getting-started/11-recipes.md) page turns the most common rows

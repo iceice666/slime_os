@@ -71,7 +71,7 @@ acceptances. Do not change kinds or parents to populate a progress bar.
 
 UUIDs are canonical identities. A slug is the file name. Human keys such as
 `C9.4` in older text are display aliases that no checker resolves. Generated
-lists and `roadmap/` are not state stores.
+lists and `docs/plans/` are not state stores.
 
 ## Proposing work
 
@@ -356,5 +356,5 @@ pushes to `main` reach.
 - [Getting started](docs/getting-started/01-orientation.md): how to learn,
   build, run, and change it.
 - [AGENTS.md](AGENTS.md): routing, invariants, schemas, gates, work items, and change-record rules.
-- [Architecture](docs/architecture/README.md) and [plans](docs/plans/README.md): current subsystem rationale versus unimplemented requirements; [roadmap classification](roadmap/README.md) names unextracted detail and historical sources.
+- [Architecture](docs/architecture/README.md) and [plans](docs/plans/README.md): current subsystem rationale versus unimplemented requirements.
 - [History](docs/history.md): immutable archive lookup, privacy, evidence boundaries, and restoration.

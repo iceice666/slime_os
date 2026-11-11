@@ -12,7 +12,7 @@ source ports, and today those bytes are typed into the serial input by the host
 checker (`scripts/check/check-sel4-io-network-plane.py`, `http_launch_text`).
 Hostname resolution therefore cannot be offered on a product composition.
 
-D3's [deterministic-component authority](../../roadmap/08-native-development.md#deterministic-component-authority)
+D3's [deterministic-component authority](../plans/native-development.md#deterministic-component-authority)
 left the mechanism open: a kernel-pool entropy object, or a per-spawn seeded
 stream minted by the spawner. It also required that a seeded fixture use the
 same rights as a real source, so a test generation changes wiring rather than

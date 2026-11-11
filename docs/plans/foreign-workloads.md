@@ -1,17 +1,15 @@
 # Foreign workloads
 
-> **H2 routing — unextracted plan retained.** This file still owns X1 Linux
-> personality and X2 AMD-V guest design, confinement/error mapping, target and
-> physical-enablement requirements, and their ROS workload relationship. None is
-> reclassified as implemented or historical merely by H2. Current substrate
-> boundaries live in [architecture](../docs/architecture/README.md), not in the
-> proposed foreign-workload interfaces below. Original status and sequencing are
-> retained context; MyQue owns work state. See the [file classification](README.md).
+This plan owns the design and acceptance requirements for two routes that run
+selected Linux workloads: the X1 userspace personality and the X2 AMD-V guest.
+Neither route is implemented. Current substrate boundaries are in
+[architecture](../architecture/README.md), not in the proposed interfaces below.
+Work-item state lives in `.tasks/items/`.
 
 | | |
 | --- | --- |
 | **Purpose** | Run selected Linux workloads without changing Slime's native ABI or importing Linux's ambient authority model. |
-| **Dependencies** | X1 consumes the completed M5.4 content-addressed store and M6 spawn, endpoint-minting, and userspace-filesystem machinery in [Foundations](01-foundations.md), plus the [IO4 network-service contract](11-io-substrate.md#io4--network-service-and-exact-destination-authority) for networked workloads and P0/P1 target/artifact boundaries in [Architecture portability](07-architecture-portability.md). X2 additionally consumes IO2/IO4 service contracts; as an x86-64 Framework AMD-V route it still requires H4 AMD-IOMMU containment and an observed virtualization-enablement gate. [ROS 2 compatibility](03-ros2-compatibility.md) R3 may consume a route only on a target for which that route and executable closure are admitted. |
+| **Dependencies** | X1 consumes the completed M5.4 content-addressed store and M6 spawn, endpoint-minting, and userspace-filesystem machinery in [Foundations](foundations-m5-m6.md), plus the [IO4 network-service contract](network-data-plane.md) for networked workloads and P0/P1 target/artifact boundaries in [targets and portability](../architecture/targets-and-portability.md). X2 additionally consumes IO2/IO4 service contracts; as an x86-64 Framework AMD-V route it still requires H4 AMD-IOMMU containment and an observed virtualization-enablement gate. [ROS 2 compatibility](ros2-wire-compatibility.md#r3-existing-ros-workload-route) R3 may consume a route only on a target for which that route and executable closure are admitted. |
 
 Linux compatibility remains a userspace facility. Native Slime components continue to use the capability-based Slime ABI; neither track adds Linux syscalls, FHS paths, process-global environment state, or ambient filesystem and network lookup to that ABI. A foreign workload is still one generation-declared component contract: a content-addressed image, a selected compatibility backend, bounded configuration, and an explicit grant set.
 
@@ -53,10 +51,10 @@ errno tabulated. Coverage determines when a workload needs X2 instead.
 
 Still decide whether filesystem authority is a directory into the shared store
 or a private writable state binding, and how its quota composes with the
-[resource-account proposal](../docs/directions/25-resource-accounts.md). Also
+[resource-account proposal](../directions/25-resource-accounts.md). Also
 choose the first admitted process shape (one process or a bounded tree) and the
 exact `fork`/`exec` translation within the explicit-subset spawn rule above.
-Clock and randomness mapping consumes [D3's explicit clock/entropy authority](08-native-development.md#deterministic-component-authority).
+Clock and randomness mapping consumes [D3's explicit clock/entropy authority](native-development.md#deterministic-component-authority).
 
 The [archived direction 31](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/31-compat-personality.md)
 preserves the personality-first/VM-later design origin; neither route becomes
@@ -66,7 +64,7 @@ implemented by extracting it here.
 
 X2 MUST NOT begin hardware-backed guest execution until H4 IOMMU containment and AMD-V enablement have been observed on the target.
 
-**Kernel prerequisite:** seL4 has no AMD SVM support. x86 virtualization is `KernelVTX`, which is Intel VMX, VMCS, and EPT only, in both the pinned fork (`fea36b2`) and upstream master (`0f10829`, 2026-09-22). No public SVM port was found. X2 therefore first needs an AMD SVM kernel extension (VMCB, nested paging, VM-exit handling) carried outside every verified configuration. It also needs a Slime-written VMM, since rust-sel4 has no x86 VMM and any existing seL4 x86 VMM can only build on `KernelVTX`, plus H4's AMD IOMMU containment, which the kernel also lacks ([AMD IOMMU ownership](../docs/decisions/amd-iommu-ownership.md)). Without interrupt remapping, passing a physical device such as the GPU to a guest stays out of scope.
+**Kernel prerequisite:** seL4 has no AMD SVM support. x86 virtualization is `KernelVTX`, which is Intel VMX, VMCS, and EPT only, in both the pinned fork (`fea36b2`) and upstream master (`0f10829`, 2026-09-22). No public SVM port was found. X2 therefore first needs an AMD SVM kernel extension (VMCB, nested paging, VM-exit handling) carried outside every verified configuration. It also needs a Slime-written VMM, since rust-sel4 has no x86 VMM and any existing seL4 x86 VMM can only build on `KernelVTX`, plus H4's AMD IOMMU containment, which the kernel also lacks ([AMD IOMMU ownership](../decisions/amd-iommu-ownership.md)). Without interrupt remapping, passing a physical device such as the GPU to a guest stays out of scope.
 
 **Architecture boundary:** X2 applies only to the x86-64 Framework/AMD-V profile. It is not a generic `X2` release dependency for AArch64 or RV64.
 
@@ -101,6 +99,6 @@ paper work until the X2 and H4 physical-enablement prerequisites permit executio
 
 ## ROS 2 relationship
 
-[R3](03-ros2-compatibility.md) may run an existing ROS workload through X1 when its required Linux syscall profile is supported on the exact generation target, or through X2 only on the admitted x86-64 AMD-V profile when it needs a full guest kernel. In either case, its image, filesystem, network, discovery, time, randomness, process, device, and other authority remain generation-declared explicit grants.
+[R3](ros2-wire-compatibility.md#r3-existing-ros-workload-route) may run an existing ROS workload through X1 when its required Linux syscall profile is supported on the exact generation target, or through X2 only on the admitted x86-64 AMD-V profile when it needs a full guest kernel. In either case, its image, filesystem, network, discovery, time, randomness, process, device, and other authority remain generation-declared explicit grants.
 
 R1 and R2 do not depend on X1, X2, Linux, or existing ROS binaries. They establish ROS 2 topic, service, and action interoperability as userspace protocol profiles over native Slime contracts; existing ROS binaries become a requirement only for R3's existing-workload checks.

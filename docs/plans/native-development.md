@@ -1,4 +1,9 @@
-# Native development, live update, and on-device build track
+# Native development, live update, and on-device build
+
+This plan owns the D1–D7 design and acceptance requirements for authoring,
+building, admitting, and live-switching native programs inside Slime OS.
+D1–D7 are not implemented. A planned recipe named below does not exist yet.
+Work-item state lives in `.tasks/items/`.
 
 **Purpose:** Let a user author source inside Slime OS, compile a native program directly into the admitted component-image format, execute it without rebooting under explicit development authority, turn tested artifacts into release-authorized generations, switch compatible userspace components at runtime, and eventually reproduce a complete generation on-device.
 
@@ -6,7 +11,7 @@
 
 **Source directions:** [archived direction 3](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/03-nondeterminism-as-capabilities.md), [archived direction 23](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/23-build-provenance.md), and [archived direction 30](https://git.justaslime.dev/iceice666/slime_os-history/src/commit/45ed1745907b2d0a13fdf70c8b34eb635bed5f23/docs/directions/30-deterministic-on-device-builds.md).
 
-**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory, spawn, generation-management, input, and transfer mechanisms; Slisp's verified non-Rust component path; [target-qualified executable admission](../docs/architecture/targets-and-portability.md); and [C9](../docs/architecture/runtime-authority.md) for explicit time and lifecycle control.
+**Dependencies:** M5's content-addressed object store, deterministic generations, state policies, release authorization, health promotion, and rollback; M6's directory, spawn, generation-management, input, and transfer mechanisms; Slisp's verified non-Rust component path; [target-qualified executable admission](../architecture/targets-and-portability.md); and [C9](../architecture/runtime-authority.md) for explicit time and lifecycle control.
 
 ## Boundaries
 
@@ -70,9 +75,7 @@ normalized source closure
 
 ### Planned verification target
 
-```sh
-just authoring_check
-```
+The planned recipe is `authoring_check`.
 
 ### Exit condition
 
@@ -101,9 +104,7 @@ Inside QEMU, a user creates a project, edits and commits source, reopens the ide
 
 ### Planned verification target
 
-```sh
-just language_image_check
-```
+The planned recipe is `language_image_check`.
 
 ### Exit condition
 
@@ -111,13 +112,13 @@ A pinned compiler for the new language directly emits a byte-deterministic targe
 
 ## D3 — Hermetic on-device build service and provenance
 
-**Depends on:** D1–D2, [C9.1](../docs/architecture/runtime-authority.md#clock-and-timers)'s explicit time and [C9.4](../docs/architecture/runtime-authority.md#lifecycle-and-supervised-restart)'s lifecycle authority, M5.4 object storage, and M5.8's separation of release authorization. This milestone absorbs the build-relevant mechanism from directions 3, 23, and 30. It does not depend on a conserved CPU account: see the track dependencies above.
+**Depends on:** D1–D2, [C9.1](../architecture/runtime-authority.md#clock-and-timers)'s explicit time and [C9.4](../architecture/runtime-authority.md#lifecycle-and-supervised-restart)'s lifecycle authority, M5.4 object storage, and M5.8's separation of release authorization. This milestone absorbs the build-relevant mechanism from directions 3, 23, and 30. It does not depend on a conserved CPU account: see the track dependencies above.
 
 ### Deterministic-component authority
 
 This is the shared, unimplemented clock/entropy design promoted from direction 3,
-not a build-only contract. [Replay](../docs/directions/11-flight-recorder-replay.md),
-[hermetic testing](../docs/directions/26-hermetic-testing.md), migrations, and
+not a build-only contract. [Replay](../directions/11-flight-recorder-replay.md),
+[hermetic testing](../directions/26-hermetic-testing.md), migrations, and
 foreign workloads consume the same authority boundary. Typed IPC supplies a
 meaningful input boundary, but recording IPC alone cannot reproduce a component
 that also reads an unrecorded clock or entropy source.
@@ -130,7 +131,7 @@ that also reads an unrecorded clock or entropy source.
   stream minted by the spawner. A seeded fixture is an explicit input; decide
   whether its seed belongs in the generation, replay trace, or both. Evaluate
   replay composition before proposing the entropy mechanism's kernel work.
-  [Entropy authority](../docs/decisions/entropy-authority.md) proposes a
+  [Entropy authority](../decisions/entropy-authority.md) proposes a
   userspace service with generation-declared hardware and seeded holders
   instead of either; the deterministic-component sealing rule and replay
   recording remain here.
@@ -195,9 +196,7 @@ classes above, and measure verification cost; no implementation or cost is claim
 
 ### Planned verification target
 
-```sh
-just hermetic_build_check
-```
+The planned recipe is `hermetic_build_check`.
 
 ### Exit condition
 
@@ -205,7 +204,7 @@ A native build service inside QEMU consumes one content-addressed source/toolcha
 
 ## D4 — Ephemeral executable admission and sandboxed run
 
-**Depends on:** D3, M6 spawn/supervision, and [C9.4](../docs/architecture/runtime-authority.md#lifecycle-and-supervised-restart)'s lifecycle transitions. The session's resource bounds are the existing per-supervision-subtree limits this milestone declares below, not a conserved CPU account.
+**Depends on:** D3, M6 spawn/supervision, and [C9.4](../architecture/runtime-authority.md#lifecycle-and-supervised-restart)'s lifecycle transitions. The session's resource bounds are the existing per-supervision-subtree limits this milestone declares below, not a conserved CPU account.
 
 ### Deliverables
 
@@ -228,9 +227,7 @@ A native build service inside QEMU consumes one content-addressed source/toolcha
 
 ### Planned verification target
 
-```sh
-just dev_exec_check
-```
+The planned recipe is `dev_exec_check`.
 
 ### Exit condition
 
@@ -262,9 +259,7 @@ Within one QEMU boot, a user edits new-language source, compiles it on-device, a
 
 ### Planned verification target
 
-```sh
-just live_update_check
-```
+The planned recipe is `live_update_check`.
 
 ### Exit condition
 
@@ -295,9 +290,7 @@ A release-authorized generation differing only in one live-compatible component 
 
 ### Planned verification target
 
-```sh
-just on_device_generation_check
-```
+The planned recipe is `on_device_generation_check`.
 
 ### Exit condition
 
@@ -326,9 +319,7 @@ Inside Slime, a user builds and ephemerally tests a changed component, construct
 
 ### Planned verification target
 
-```sh
-just self_host_check
-```
+The planned recipe is `self_host_check`.
 
 ### Exit condition
 

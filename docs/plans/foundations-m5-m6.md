@@ -1,16 +1,11 @@
-# Foundations and implemented history (Milestones 1–6)
+# M5 and M6 retained requirements
 
-> **H2 routing — mixed retained source.** Current capability/runtime boundaries
-> are in [architecture](../docs/architecture/README.md), and Framework promotion
-> boundaries are in the [hardware plan](../docs/plans/framework-hardware.md).
-> M5.7's detailed storage-aware boot and NVMe promotion requirements remain owned
-> here where not extracted; they are not historical or waived. M5 storage,
-> BootState/recovery and M6 spawn/filesystem/powerbox/transfer detail remains
-> unextracted source material, not reverified current documentation: use its owning
-> contracts and implementation for current behavior.
-> See the [file classification](README.md).
-
-**Purpose:** Preserve the implemented kernel, isolation, bootstrap, storage/generation, and native-environment contracts that later roadmap tracks build on.
+This plan owns the M5 and M6 milestone requirements that are not confirmed as
+covered by a gate. M5.7 is not implemented. It needs a physical Framework
+observation. Each other section names a milestone whose gate exists. This page
+keeps the section because one or more of its required checks is not confirmed
+against that gate. `docs/architecture/` and the owning contracts state current
+behavior. Work-item state lives in `.tasks/items/`.
 
 ## Invariants carried forward
 
@@ -67,30 +62,6 @@
 
 **Exit condition:** QEMU retrieves immutable content-addressed objects from a bounded GPT partition while malformed and partial commits fail closed.
 
-### M5.5 — Generation format and BootState records
-
-**Depends on:** M5.4 and the earlier generation contract.
-
-**Required checks:** Require byte-identical artifacts from normalized inputs; reject unknown versions/flags, excessive counts, oversized strings, broken parents, and bad checksums; execute nothing before verification; retain selection through one interrupted or invalid slot.
-
-**Exit condition:** The immutable disk-backed seL4 selector deterministically selects and verifies a complete generation from redundant persistent metadata before `slime-root` admits and launches its component graph.
-
-### M5.6a — Checked BootState transition model
-
-**Depends on:** M5.5.
-
-**Required checks:** Exhaust the bounded interleavings and ensure a deliberate skipped-attempt mutation fails.
-
-**Exit condition:** CI maintains a checked transition contract; implementation-semantic changes update the model with the implementation.
-
-### M5.6b — Checked generation, state, and GC transaction model
-
-**Depends on:** M5.6a.
-
-**Required checks:** Never mix snapshot epochs or expose incomplete state; never collect a reachable sealed object; ensure omitted-root and mixed-epoch mutations fail.
-
-**Exit condition:** Every modeled upgrade, snapshot, promotion, rollback, and GC interleaving retains a bootable generation with a consistent state set.
-
 ### M5.6 — Pending, known-good, rollback, state policy, and GC
 
 **Depends on:** M5.6a and M5.6b; their semantics are the implementation contract.
@@ -99,17 +70,9 @@
 
 **Exit condition:** A failing pending generation automatically returns to verified known-good with persistent state and roots matching declared policy.
 
-### M5.6c — BootState model/implementation conformance
-
-**Depends on:** M5.6a, M5.6b, and M5.6.
-
-**Required checks:** Accept every rollback scenario trace; reject attempt consumption that is not durable before candidate execution, mismatched action/commit or sequence boundaries, wrong-root promotion/collection, and any unbounded instrumentation dependency.
-
-**Exit condition:** Durable transitions observed in QEMU conform to the checked state machine, and deliberately invalid traces fail validation.
-
 ### M5.7 — Framework NVMe transport and safety promotion
 
-**Depends on:** M5.1–M5.6c, M4's historical removable-media safety invariant, the [Framework CPU-boot observation and current image-binding limitation](../docs/architecture/targets-and-portability.md#automated-and-physical-evidence), H1's observed inventory, H2's exact PCI binding, and H4's AMD-IOMMU containment.
+**Depends on:** M5.1–M5.6c, M4's historical removable-media safety invariant, the [Framework CPU-boot observation and current image-binding limitation](../architecture/targets-and-portability.md#automated-and-physical-evidence), H1's observed inventory, H2's exact PCI binding, and H4's AMD-IOMMU containment.
 
 **Still required:** After P6.6 has proven the no-storage product boot, implement the NVMe transport behind the seL4 userspace-driver boundary using H1's observed controller/namespace identity, H2-bound PCI/MMIO/IRQ resources, H4 DMA containment, and IO2's `BlockDevice` contract; then observe a storage-aware removable-media Framework boot without modifying internal NVMe. Destructive writes and interruption experiments may run only on a dedicated replaceable external test device.
 
@@ -118,16 +81,6 @@
 QEMU, Milk-V Duo, or another board cannot replace the required Framework observation.
 
 **Exit condition:** Starting from the P6.6/H1-proven no-write boot path, a physical Framework runs the storage-aware isolated slice over the common protocol while internal NVMe writes remain disabled unless every physical promotion gate has been observed.
-
-### M5.8 — Signed generation release metadata
-
-**Depends on:** M5.5–M5.6c.
-
-**Required checks:** Reject insufficient threshold, missing/duplicate/malformed/excessive signatures, wrong target, stale releases, skipped rotation, or broken old/new-root continuity; preserve the accepted sequence after failed pending boots and preserve the explicit rollback root after promotion.
-
-**Exit condition:** The immutable seL4 selector/root admission and generation management accept only authorized releases while retaining automatic local rollback.
-
-**Scope limit:** This evidence does not establish trusted-time freeze protection, UEFI Secure Boot, TPM sealing, or resistance to rollback of an entire physical disk image.
 
 ### M5.9 — Recovery, scrub, and BootState reconstruction
 
@@ -142,14 +95,6 @@ M5 closes only after M5.7's physical observation. At that point all executable c
 ## M6 — Native interactive environment
 
 **Depends on:** M1–M5 storage, object-store, generation, state-policy, rollback, release-trust, and recovery mechanisms. M6 acceptance is QEMU/removable-media evidence and remains independent of pending M5.7 physical verification. Internal NVMe writes remain disabled.
-
-### M6.1 — Kernel spawn prerequisites and generation format v2
-
-**Depends on:** M5 generation/capability contracts.
-
-**Required checks:** Deny gifting absent rights and all widening; return structured exhaustion per spawner without harming others; bound endpoint tables; preserve distinct supervision outcomes; produce byte-identical v2 artifacts and reject unknown versions; source test bootstrap grants only from manifests.
-
-**Exit condition:** A factory-authorized spawner mints bounded endpoints, gifts narrowed copies, and supervises children within its budget using deterministic manifest wiring.
 
 ### M6.2 — Spawn service and command profile
 
@@ -169,6 +114,13 @@ M5 closes only after M5.7's physical observation. At that point all executable c
 
 ### M6.4 — Minimal Dango implementation and core runtime
 
+Slisp is the resident shell today
+([README](../../README.md#slisp-native-interactive-language)). `slime-root` and the
+system-spec schema describe Dango as retired. `just dango_check` is a
+compatibility alias of `just slisp_core_check`. No record states whether the
+M6.4 checks now bind Slisp. A human decides whether M6.4 applies to Slisp or
+closes.
+
 **Depends on:** M6.2 and M6.3.
 
 Full Hindley–Milner, row-polymorphism, and effect inference are outside this slice.
@@ -184,23 +136,3 @@ Full Hindley–Milner, row-polymorphism, and effect inference are outside this s
 **Required checks:** Match deterministic manifest/store inspection; fail before BootState changes on missing objects or invalid release; validate select/rollback traces against M5.6 models; deny update operations to unprivileged components.
 
 **Exit condition:** Native components inspect, stage, select, and roll back generations using only manifest-declared authority.
-
-### M6.6 — Powerbox file dialog service
-
-**Depends on:** M6.3.
-
-A general graphical UI is outside this slice.
-
-**Required checks:** Return exactly the selected object and declared rights; never exceed chooser authority; mint nothing on cancellation; prevent requester bypass.
-
-**Exit condition:** A selection gesture grants one otherwise-unreachable object capability and no broader directory authority.
-
-### M6.7 — Generation sync and transfer
-
-**Depends on:** M5.8 and M6.5.
-
-QEMU uses a second attachable virtio block disk; networking is outside this slice.
-
-**Required checks:** Produce byte-identical manifests; fail incomplete closure or authorization mismatch before staging pending BootState and without consuming an attempt; promote only after health confirmation; leave every ungranted device byte-identical.
-
-**Exit condition:** An authorized QEMU-built generation transfers to a second machine and activates with grants and state policy intact.
