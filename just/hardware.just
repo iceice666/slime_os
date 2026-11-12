@@ -73,6 +73,17 @@ zenoh_links_check:
 zenoh_undeclare_check:
     python3 scripts/check/check-zenoh-profile0.py --slice undeclare
 
+# An rmw_zenoh peer's session: the key-expression aliases, queryables and liveliness tokens a ROS 2
+# Kilted node declares before it publishes, and the INIT extensions it sends. The 60 batches three
+# nodes sent are replayed into a listener session (scripts/lib/zenoh_rmw_peer.py), the host reference
+# writes each frame again byte for byte (scripts/lib/zenoh_rmw_wire.py), and eleven variants are refused by
+# name and class (scripts/lib/zenoh_rmw_exam.py, contracts/zenoh-rmw-session/v1). The stock corpus, the
+# stock-peer exam and the undeclare exam run beside it. Nothing here needs a registry or a ROS install.
+# Fails until the session takes the graph.
+[group('hardware')]
+zenoh_rmw_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice rmw
+
 # Judges a Zenoh Profile 0 session that holds several subscriptions of its own. The session refused
 # a second one as subscriber-limit, whatever its parameters said. Params.local now says how many it
 # holds. The links exam and the stock-peer exam run beside it, because both pin the subscriber limit.
