@@ -1863,6 +1863,10 @@ def rmw_main(controls_only: bool) -> int:
     # `--slice undeclare`: this gate relies on them to keep the pinned refusals where they are, and their
     # refusals belong to their own gates' counts, not to this one's.
     stock_controls()
+    try:
+        zenoh_undeclare_exam.all_controls()
+    except zenoh_undeclare_exam.UndeclareError as error:
+        fail(str(error))
     sample = "\n".join(f"test {name} ... ok" for name in RMW_TESTS[1:])
     if all(name in tests_passed(sample) for name in RMW_TESTS):
         fail("control: a run with an rmw exam test missing was read as complete")

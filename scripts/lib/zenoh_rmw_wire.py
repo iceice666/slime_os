@@ -39,6 +39,7 @@ NAMES = {
     D_FINAL: "final",
 }
 WITH_KEY = (D_SUBSCRIBER, D_QUERYABLE, D_TOKEN)
+WITH_KEY_NAMES = tuple(NAMES[code] for code in WITH_KEY)
 BY_ID = (U_KEYEXPR, U_SUBSCRIBER, U_QUERYABLE, U_TOKEN)
 FLAG_N, FLAG_M, FLAG_Z = 0x20, 0x40, 0x80
 EXT_QOS = 1
@@ -147,12 +148,13 @@ class Init:
     resolution: int
     batch: int
     extensions: tuple[Extension, ...]
+    cookie: bytes | None = None
 
 
-def init_syn(batch: bytes) -> Init:
+def _init(batch: bytes, ack: bool) -> Init:
     reader = Reader(batch)
     header = reader.u8()
-    _need(header & 0x1F == ID_INIT and not header & FLAG_N, "not an INIT_SYN")
+    _need(header & 0x1F == ID_INIT and bool(header & FLAG_N) == ack, "not an INIT_ACK" if ack else "not an INIT_SYN")
     _need(reader.u8() == 9, "the wire version is not 9")
     packed = reader.u8()
     _need(packed & 0x0C == 0, "reserved bits in the INIT identity byte")
@@ -161,9 +163,30 @@ def init_syn(batch: bytes) -> Init:
     if header & FLAG_M:
         resolution = reader.u8()
         size = int.from_bytes(reader.take(2), "little")
+    cookie = reader.take(reader.leb()) if ack else None
     chain = extensions(reader) if header & FLAG_Z else ()
-    _need(reader.left() == 0, "bytes after the INIT_SYN")
-    return Init(zid, packed & 3, resolution, size, chain)
+    _need(reader.left() == 0, "bytes after the INIT")
+    return Init(zid, packed & 3, resolution, size, chain, cookie)
+
+
+def init_syn(batch: bytes) -> Init:
+    return _init(batch, False)
+
+
+def init_ack(batch: bytes) -> Init:
+    return _init(batch, True)
+
+
+def open_syn_cookie(batch: bytes) -> bytes:
+    """The cookie an OPEN_SYN echoes: <hdr><lease><initial sn><cookie>."""
+    reader = Reader(batch)
+    header = reader.u8()
+    _need(header & 0x1F == ID_OPEN and not header & FLAG_N, "not an OPEN_SYN")
+    reader.leb()
+    reader.leb()
+    cookie = reader.take(reader.leb())
+    _need(reader.left() == 0 and not header & FLAG_Z, "an OPEN_SYN with an extension or trailing bytes")
+    return cookie
 
 
 @dataclass(frozen=True)
@@ -179,6 +202,10 @@ class Message:
     qos: int | None = None
     inner: tuple[Extension, ...] = ()
     span: bytes = b""
+    timestamp: tuple[int, bytes] | None = None
+    encoding: tuple[int, bytes | None] | None = None
+    put_extensions: tuple[Extension, ...] = ()
+    payload: bytes = b""
 
 
 def _declaration(reader: Reader, interest: int | None, qos: int | None) -> Message:
@@ -223,21 +250,23 @@ def network(reader: Reader) -> Message:
     elif kind == ID_PUSH:
         scope = reader.leb()
         suffix = reader.take(reader.leb()).decode("utf-8") if header & FLAG_N else None
-        if header & FLAG_Z:
-            extensions(reader)
+        chain = extensions(reader) if header & FLAG_Z else ()
         put = reader.u8()
         _need(put & 0x1F == 1, "a PUSH body that is not a Put")
+        timestamp = None
         if put & FLAG_N:
-            reader.leb()
-            reader.take(reader.leb())
+            time = reader.leb()
+            timestamp = (time, reader.take(reader.leb()))
+        encoding = None
         if put & FLAG_M:
-            encoding = reader.leb()
-            if encoding & 1:
-                reader.take(reader.leb())
-        if put & FLAG_Z:
-            extensions(reader)
-        reader.take(reader.leb())
-        message = Message("push", None, scope, suffix, bool(header & FLAG_M))
+            identifier = reader.leb()
+            encoding = (identifier, reader.take(reader.leb()) if identifier & 1 else None)
+        put_chain = extensions(reader) if put & FLAG_Z else ()
+        payload = reader.take(reader.leb())
+        message = Message(
+            "push", None, scope, suffix, bool(header & FLAG_M), inner=chain, timestamp=timestamp,
+            encoding=encoding, put_extensions=put_chain, payload=payload,
+        )
     else:
         raise RmwWireError(f"network message {kind:#x} is not one the exam names")
     return Message(**{**message.__dict__, "span": reader.data[start : reader.at]})
@@ -254,9 +283,33 @@ def frame(batch: bytes) -> tuple[int, list[Message]]:
     return sn, messages
 
 
+def _encode_push(message: Message) -> bytes:
+    flags = (FLAG_N if message.suffix is not None else 0) | (FLAG_M if message.sender else 0) | (FLAG_Z if message.inner else 0)
+    out = bytearray([ID_PUSH | flags]) + leb128(message.scope or 0)
+    if message.suffix is not None:
+        raw = message.suffix.encode()
+        out += leb128(len(raw)) + raw
+    if message.inner:
+        out += encode_extensions(message.inner)
+    put = 1 | (FLAG_N if message.timestamp else 0) | (FLAG_M if message.encoding else 0) | (FLAG_Z if message.put_extensions else 0)
+    out.append(put)
+    if message.timestamp:
+        time, zid = message.timestamp
+        out += leb128(time) + leb128(len(zid)) + zid
+    if message.encoding:
+        identifier, schema = message.encoding
+        out += leb128(identifier)
+        if schema is not None:
+            out += leb128(len(schema)) + schema
+    if message.put_extensions:
+        out += encode_extensions(message.put_extensions)
+    return bytes(out) + leb128(len(message.payload)) + message.payload
+
+
 def encode(message: Message) -> bytes:
-    """The canonical bytes of a declaration; a PUSH is not rebuilt."""
-    _need(message.kind != "push", "a PUSH is judged by its span, not rebuilt")
+    """The canonical bytes of a network message, written from its fields and never from its source bytes."""
+    if message.kind == "push":
+        return _encode_push(message)
     kind = next(code for code, name in NAMES.items() if name == message.kind)
     wrapper = ID_DECLARE | (FLAG_N if message.interest is not None else 0) | (FLAG_Z if message.qos is not None else 0)
     out = bytearray([wrapper])
@@ -283,9 +336,9 @@ def encode(message: Message) -> bytes:
 
 
 def rebuild(batch: bytes) -> bytes:
-    """A FRAME written again from what `frame` read of it."""
+    """A FRAME written again from the fields `frame` read of it, a PUSH included."""
     sn, messages = frame(batch)
-    return bytes([ID_FRAME | FLAG_N]) + leb128(sn) + b"".join(message.span if message.kind == "push" else encode(message) for message in messages)
+    return bytes([ID_FRAME | FLAG_N]) + leb128(sn) + b"".join(encode(message) for message in messages)
 
 
 def summarize(batches: list[bytes]) -> dict[str, int]:
@@ -306,7 +359,7 @@ def resolve(messages: list[Message], table: dict[int, str]) -> list[tuple[Messag
             table[message.ident] = message.suffix or ""  # type: ignore[index]
         elif message.kind == "unkeyexpr":
             table.pop(message.ident, None)  # type: ignore[arg-type]
-        if message.kind in WITH_KEY:
+        if message.kind in WITH_KEY_NAMES:
             base = table.get(message.scope or 0, "") if message.scope else ""
             out.append((message, base + (message.suffix or "")))
         else:

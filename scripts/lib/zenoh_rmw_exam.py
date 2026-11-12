@@ -31,6 +31,7 @@ from pathlib import Path
 
 import zenoh_rmw_peer
 import zenoh_rmw_wire as wire
+import zenoh_wire
 import zutai_cli
 from harness import ROOT
 
@@ -66,6 +67,12 @@ def capture_digest(groups: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]) 
 # The longest key the peer declared in any capture, an alias for a liveliness token. A graph
 # configuration must bound keys at or above it; Profile 0's own bound is 129.
 LONGEST_KEY_BYTES = 253
+
+# What our listener sends. The Rust test prints the INIT_ACK it sent as hex, and the judge reads it with
+# the host reference: it must announce `ANNOUNCED_BATCH`, carry no extension and offer a cookie the peer's
+# OPEN_SYN echoes. The test also prints how many bytes the listener sent after the OPEN_ACK. The item says
+# the session sends no reply, so that count is 0.
+OUTBOUND_GROUPS = tuple(name for name, _rows in GROUPS)
 
 # The batch our INIT_ACK announced. The peer announced 65480 and sent nothing over this.
 ANNOUNCED_BATCH = 512
@@ -207,6 +214,23 @@ def reference_agrees(
     _need(capture_digest(groups) == CAPTURE_SHA256, "the captured batches are not the ones the exam pins")
 
 
+def _without_timestamp(batch: bytes) -> bytes:
+    """`rebuild` with every PUSH timestamp forgotten, as a writer that ignored a field would."""
+    import dataclasses
+
+    sn, messages = wire.frame(batch)
+    return bytes([wire.ID_FRAME | wire.FLAG_N]) + wire.leb128(sn) + b"".join(wire.encode(dataclasses.replace(m, timestamp=None)) if m.kind == "push" else wire.encode(m) for m in messages)
+
+
+def _with_payload_flipped(batch: bytes) -> bytes:
+    """`rebuild` with the last payload byte of every PUSH changed, as a writer that mis-encoded a field would."""
+    import dataclasses
+
+    sn, messages = wire.frame(batch)
+    changed = [dataclasses.replace(m, payload=m.payload[:-1] + bytes([m.payload[-1] ^ 1])) if m.kind == "push" and m.payload else m for m in messages]
+    return bytes([wire.ID_FRAME | wire.FLAG_N]) + wire.leb128(sn) + b"".join(wire.encode(m) for m in changed)
+
+
 def reference_controls() -> int:
     """Each input `reference_agrees` guards is corrupted in turn, and must be refused for its own reason."""
     reference_agrees()
@@ -231,6 +255,8 @@ def reference_controls() -> int:
         ("a captured batch name used twice", {"groups": tuple((n, tuple((rows[2][0] if i == 3 else a, b) for i, (a, b) in enumerate(rows))) if n == "talker" else (n, rows) for n, rows in GROUPS)}, "used twice"),
         ("a refused variant name used twice", {"refused": (honest[0], honest[0], *honest[2:])}, "a refused variant name is used twice"),
         ("a refused variant that is a batch the peer sent", {"refused": ((honest[0][0], dict(GROUPS)["talker"][3][1]), *honest[1:])}, "is a batch the peer sent"),
+        ("a host reference that writes a PUSH payload with one byte changed", {"read": _with_payload_flipped}, "the host reference writes"),
+        ("a host reference that drops a PUSH timestamp", {"read": _without_timestamp}, "the host reference writes"),
         ("a captured batch over the announced size", {"groups": corrupt("talker", first_frame, lambda h: h + "00" * 600)}, "over the"),
     ]
     for label, changes, reason in cases:
@@ -243,9 +269,22 @@ def reference_controls() -> int:
     return len(cases)
 
 
+def honest_init_ack(group: str, batch: int = ANNOUNCED_BATCH, extension: bool = False, cookie: bytes | None = None) -> bytes:
+    """An INIT_ACK like the one our listener sends the group's peer, written by `zenoh_wire`: it echoes
+    nothing of the peer's ZID, announces `batch` and offers a cookie. The Rust listener picks its own ZID
+    and cookie, so the judge checks these fields and never the exact bytes."""
+    peer_cookie = wire.open_syn_cookie(bytes.fromhex(dict(dict(GROUPS)[group])[f"{group}-02-open-syn"]))
+    ack = zenoh_wire.init(bytes.fromhex("5110aa0bb0cc0dd0ee0ff00112233445"), batch=batch, cookie=peer_cookie if cookie is None else cookie)
+    if extension:
+        ack = bytes([ack[0] | wire.FLAG_Z]) + ack[1:] + bytes([wire.EXT_QOS])
+    return ack
+
+
 def good_lines() -> list[str]:
     reference_agrees()
     lines = [f"rmw replay {name} ok" for name in BATCH_NAMES]
+    for group in OUTBOUND_GROUPS:
+        lines += [f"rmw sent {group} init-ack {honest_init_ack(group).hex()}", f"rmw sent {group} after-handshake 0"]
     lines += [f"rmw ok {name}" for name in OK_SCENARIOS]
     for group, counts in expected_counts().items():
         lines += [f"rmw count {group} {kind} {counts[kind]}" for kind in sorted(counts)]
@@ -265,7 +304,7 @@ def _exactly(label: str, wanted: tuple[str, ...], seen: list[str]) -> None:
 
 def judge(lines: list[str]) -> tuple[int, int]:
     """Check a transcript against the exam; returns (cases, refusals), a case being a scenario or a replay."""
-    shapes = {("rmw", "ok"): 3, ("rmw", "replay"): 4, ("rmw", "property"): 4, ("rmw", "refused"): 4, ("rmw", "count"): 5}
+    shapes = {("rmw", "ok"): 3, ("rmw", "replay"): 4, ("rmw", "property"): 4, ("rmw", "refused"): 4, ("rmw", "count"): 5, ("rmw", "sent"): 5}
     split = [line.split() for line in lines]
     for line, fields in zip(lines, split, strict=True):
         _need(fields[:1] == ["rmw"], f"rmw: a record that is not an rmw exam line: {line!r}")
@@ -281,6 +320,21 @@ def judge(lines: list[str]) -> tuple[int, int]:
     properties = [f[2] for f in split if f[:2] == ["rmw", "property"]]
     refused = [(f[2], f[3]) for f in split if f[:2] == ["rmw", "refused"]]
     counts = [(f[2], f[3], f[4]) for f in split if f[:2] == ["rmw", "count"]]
+    sent = [(f[2], f[3], f[4]) for f in split if f[:2] == ["rmw", "sent"]]
+    _need([(group, kind) for group, kind, _value in sent] == [(g, k) for g in OUTBOUND_GROUPS for k in ("init-ack", "after-handshake")], f"rmw sent lines are not one init-ack and one after-handshake for each of {list(OUTBOUND_GROUPS)} in order")
+    for group, kind, value in sent:
+        if kind == "after-handshake":
+            _need(value == "0", f"rmw: the {group} listener sent {value} bytes after the handshake, the item says it replies to nothing")
+            continue
+        _need(re.fullmatch(r"(?:[0-9a-f]{2})+", value) is not None, f"rmw: the {group} init-ack is not lowercase hexadecimal")
+        try:
+            ack = wire.init_ack(bytes.fromhex(value))
+        except wire.RmwWireError as error:
+            raise RmwError(f"rmw: the {group} listener's INIT_ACK does not parse: {error}") from error
+        _need(ack.batch == ANNOUNCED_BATCH, f"rmw: the {group} listener announced a batch of {ack.batch}, the item fixes {ANNOUNCED_BATCH}")
+        _need(not ack.extensions, f"rmw: the {group} listener's INIT_ACK carries an extension")
+        echoed = wire.open_syn_cookie(bytes.fromhex(dict(dict(GROUPS)[group])[f"{group}-02-open-syn"]))
+        _need(ack.cookie == echoed, f"rmw: the {group} listener's cookie is not the one the peer echoed")
     _exactly("scenarios", OK_SCENARIOS, done)
     _need(done == list(OK_SCENARIOS), f"rmw scenarios are out of order: {done}")
     _exactly("replays", BATCH_NAMES, replays)
@@ -310,6 +364,9 @@ def transcript_mutations() -> list[tuple[str, list[str]]]:
         return out
 
     first_count = next(i for i, line in enumerate(good) if line.startswith("rmw count "))
+    refusal_lines = [i for i, line in enumerate(good) if line.startswith("rmw refused ")]
+    talker_ack = good.index(f"rmw sent talker init-ack {honest_init_ack('talker').hex()}")
+    talker_after = good.index("rmw sent talker after-handshake 0")
     first_property = good.index(f"rmw property {BATCH_NAMES[0]} ok")
     out: list[tuple[str, list[str]]] = [
         ("an empty transcript", []),
@@ -324,6 +381,21 @@ def transcript_mutations() -> list[tuple[str, list[str]]]:
         ("the scenarios swapped", swapped(good.index(f"rmw ok {OK_SCENARIOS[0]}"), good.index(f"rmw ok {OK_SCENARIOS[1]}"))),
         ("a property that failed", [line.replace(f"property {BATCH_NAMES[7]} ok", f"property {BATCH_NAMES[7]} FAILED") for line in good]),
         ("the first two properties swapped", swapped(first_property, first_property + 1)),
+        ("the first two refusals swapped", swapped(refusal_lines[0], refusal_lines[1])),
+        ("the first and last refusals swapped", swapped(refusal_lines[0], refusal_lines[-1])),
+        ("a listener announcing a batch of 65535", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker', batch=65535).hex()}", *good[talker_ack + 1 :]]),
+        ("a listener announcing a batch of 511", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker', batch=511).hex()}", *good[talker_ack + 1 :]]),
+        ("a listener announcing a batch of 513", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker', batch=513).hex()}", *good[talker_ack + 1 :]]),
+        ("an INIT_ACK that carries an extension", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker', extension=True).hex()}", *good[talker_ack + 1 :]]),
+        ("an INIT_ACK offering another cookie", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker', cookie=b'another-cookie').hex()}", *good[talker_ack + 1 :]]),
+        ("an INIT_ACK cut short", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker').hex()[:-4]}", *good[talker_ack + 1 :]]),
+        ("an INIT_ACK in capitals", [*good[:talker_ack], f"rmw sent talker init-ack {honest_init_ack('talker').hex().upper()}", *good[talker_ack + 1 :]]),
+        ("an INIT_SYN sent where the INIT_ACK belongs", [*good[:talker_ack], f"rmw sent talker init-ack {dict(GROUPS)['talker'][0][1]}", *good[talker_ack + 1 :]]),
+        ("a listener that sent one byte after the handshake", [*good[:talker_after], "rmw sent talker after-handshake 1", *good[talker_after + 1 :]]),
+        ("a listener that sent a declaration reply of 12 bytes", [*good[:talker_after], "rmw sent talker after-handshake 12", *good[talker_after + 1 :]]),
+        ("the talker's sent lines missing", [line for line in good if not line.startswith("rmw sent talker ")]),
+        ("the listener's sent lines swapped with the talker's", swapped(talker_ack, talker_ack + 2)),
+        ("a sent line with an extra field", [*good[:talker_after], good[talker_after] + " extra", *good[talker_after + 1 :]]),
         ("a count that is not a number", [*good[:first_count], good[first_count].rsplit(" ", 1)[0] + " many", *good[first_count + 1 :]]),
         ("a count with a leading zero", [*good[:first_count], good[first_count].rsplit(" ", 1)[0] + " 0" + good[first_count].rsplit(" ", 1)[1], *good[first_count + 1 :]]),
         ("a count of a kind the peer did not send", [*good, "rmw count talker unqueryable 1"]),
@@ -477,7 +549,7 @@ def all_controls() -> int:
 # What the item fixes, held here as well so the gate stays correct after the item is closed and moved to
 # .tasks/terminal. While the item is open its stored predicates are compared with these. Both are exact.
 PINNED_CASES = 75
-PINNED_CONTROLS = 165
+PINNED_CONTROLS = 182
 
 
 def item_pins() -> tuple[int, int]:
