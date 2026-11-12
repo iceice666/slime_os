@@ -84,6 +84,17 @@ zenoh_undeclare_check:
 zenoh_rmw_check:
     python3 scripts/check/check-zenoh-profile0.py --slice rmw
 
+# The graph an rmw_zenoh peer's liveliness tokens declare: each `@ros2_lv` token parsed into a node,
+# publisher, subscription, service server or client, its QoS substring and mangled names read, the live
+# entities held in a bounded graph and dropped when withdrawn. The expected transcript is built from
+# scripts/lib/zenoh_rmw_graph.py, written from rmw_zenoh's source, and the 26 tokens three captured
+# sessions declare are replayed into it (scripts/lib/zenoh_rmw_graph_exam.py,
+# contracts/zenoh-rmw-graph/v1). The session exam runs beside it. Nothing here needs a registry or a ROS
+# install. Fails until the session holds a graph.
+[group('hardware')]
+zenoh_rmw_graph_check:
+    python3 scripts/check/check-zenoh-profile0.py --slice rmw-graph
+
 # Judges a Zenoh Profile 0 session that holds several subscriptions of its own. The session refused
 # a second one as subscriber-limit, whatever its parameters said. Params.local now says how many it
 # holds. The links exam and the stock-peer exam run beside it, because both pin the subscriber limit.

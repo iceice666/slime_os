@@ -115,6 +115,7 @@ from typing import NoReturn
 import devloop_observations
 import zenoh_exchange
 import zenoh_rmw_exam
+import zenoh_rmw_graph_exam
 import zenoh_links_exam
 import zenoh_grants_exam
 import zenoh_client_exam
@@ -1899,6 +1900,80 @@ def rmw_main(controls_only: bool) -> int:
     return 0
 
 
+RMW_GRAPH_FILTER = "zenoh_rmw_graph::"
+RMW_GRAPH_FIXTURES = ROOT / "build" / "zenoh-rmw-graph" / "fixtures.zti"
+# The exam's own Rust tests, by name: a filter that matches nothing passes silently.
+RMW_GRAPH_TESTS = tuple(f"zenoh_rmw_graph::{name}" for name in (
+    "the_constants_are_the_handed_off_record",
+    "the_rmw_graph_exam",
+))
+
+
+def run_rmw_graph() -> list[str]:
+    # The session exam runs first and is judged on this path: a graph built on a session that no longer
+    # takes the peer's declarations proves nothing, and the session exam's own pins stay where they are.
+    session_lines = run_rmw()
+    try:
+        zenoh_rmw_exam.judge(session_lines)
+    except zenoh_rmw_exam.RmwError as error:
+        fail(str(error))
+    RMW_GRAPH_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    RMW_GRAPH_FIXTURES.write_text(zenoh_rmw_graph_exam.fixture_zti())
+    try:
+        zenoh_rmw_graph_exam.validate_handoff(RMW_GRAPH_FIXTURES.read_text())
+    except zenoh_rmw_graph_exam.GraphExamError as error:
+        fail(str(error))
+    environment = {**_os.environ, "ZENOH_RMW_FIXTURES": str(RMW_FIXTURES), "ZENOH_RMW_GRAPH_FIXTURES": str(RMW_GRAPH_FIXTURES)}
+    graph_stdout, graph_output = cargo_tests((RMW_GRAPH_FILTER,), environment)
+    graph_passed = tests_passed(graph_output)
+    graph_missing = [name for name in RMW_GRAPH_TESTS if name not in graph_passed]
+    if graph_missing:
+        fail(f"rmw-graph: the exam's tests did not run and pass ({len(graph_missing)} of {len(RMW_GRAPH_TESTS)}): {', '.join(graph_missing[:4])}")
+    return exam_lines_graph(graph_stdout)
+
+
+def exam_lines_graph(output: str) -> list[str]:
+    """The `[zenoh-exam] graph ...` lines of a run, with the prefix removed."""
+    return [line.split("] ", 1)[1] for line in output.splitlines() if line.startswith("[zenoh-exam] graph ")]
+
+
+def rmw_graph_main(controls_only: bool) -> int:
+    # The session exam's judge and its mutations run here as a precondition; their refusals belong to
+    # the session gate's count, not to this one's.
+    try:
+        zenoh_rmw_exam.all_controls()
+    except zenoh_rmw_exam.RmwError as error:
+        fail(str(error))
+    sample = "\n".join(f"test {name} ... ok" for name in RMW_GRAPH_TESTS[1:])
+    if all(name in tests_passed(sample) for name in RMW_GRAPH_TESTS):
+        fail("control: a run with an rmw-graph exam test missing was read as complete")
+    try:
+        refused_controls = zenoh_rmw_graph_exam.all_controls()
+        item_cases, item_controls = zenoh_rmw_graph_exam.item_pins()
+        positive, refusals = zenoh_rmw_graph_exam.judge(zenoh_rmw_graph_exam.good_lines())
+    except zenoh_rmw_graph_exam.GraphExamError as error:
+        fail(str(error))
+    if positive + refusals != zenoh_rmw_graph_exam.PINNED_CASES:
+        fail(f"rmw-graph: an honest transcript is {positive + refusals} cases, the checker pins {zenoh_rmw_graph_exam.PINNED_CASES}")
+    if refused_controls != zenoh_rmw_graph_exam.PINNED_CONTROLS:
+        fail(f"rmw-graph: {refused_controls} controls, the checker pins {zenoh_rmw_graph_exam.PINNED_CONTROLS}")
+    if item_cases and item_cases != zenoh_rmw_graph_exam.PINNED_CASES:
+        fail(f"rmw-graph: the item fixes {item_cases} cases, the checker pins {zenoh_rmw_graph_exam.PINNED_CASES}")
+    if item_controls and item_controls != zenoh_rmw_graph_exam.PINNED_CONTROLS:
+        fail(f"rmw-graph: the item requires {item_controls} controls, the checker pins {zenoh_rmw_graph_exam.PINNED_CONTROLS}")
+    if controls_only:
+        print(f"zenoh profile 0 rmw-graph judge: refused {refused_controls} corrupted records")
+        return 0
+    try:
+        cases, refusals = zenoh_rmw_graph_exam.judge(run_rmw_graph())
+    except zenoh_rmw_graph_exam.GraphExamError as error:
+        fail(str(error))
+    print(f"[zenoh-profile0] slice=rmw-graph cases={cases} refusals={refusals} controls={refused_controls}")
+    devloop_observations.record(casesObserved=cases + refusals, negativeControlsRefused=refused_controls)
+    print("zenoh profile 0 rmw-graph check: the graph held the entities an rmw_zenoh peer's tokens declare and refused every token it must")
+    return 0
+
+
 def neighbour_controls(*, subscribers: bool) -> None:
     # A slice that runs a neighbour's tests and judges their transcript relies on that judge's
     # negative controls. They run here as a precondition and their refusals are not counted: they
@@ -2641,7 +2716,7 @@ def composition_main(controls_only: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "rmw", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "grants-reader", "server", "limits", "service-component", "service-booted", "service", "service-link"), required=True)
+    parser.add_argument("--slice", choices=(*JUDGES, "composition", "xcheck", "stock", "links", "undeclare", "rmw", "rmw-graph", "subscribers", "grants", "client", "client-wire", "client-io", "client-abort", "grants-table", "grants-reader", "server", "limits", "service-component", "service-booted", "service", "service-link"), required=True)
     parser.add_argument("--controls-only", action="store_true")
     arguments = parser.parse_args()
     if arguments.slice == "composition":
@@ -2656,6 +2731,8 @@ def main() -> int:
         return undeclare_main(arguments.controls_only)
     if arguments.slice == "rmw":
         return rmw_main(arguments.controls_only)
+    if arguments.slice == "rmw-graph":
+        return rmw_graph_main(arguments.controls_only)
     if arguments.slice == "subscribers":
         return subscribers_main(arguments.controls_only)
     if arguments.slice == "grants":
