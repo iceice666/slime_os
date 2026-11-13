@@ -77,7 +77,7 @@ The rules V1 to V10 and their reasons are [`docs/decisions/work-item-devloop.md`
 
 ## Code review
 
-These rules bind every reviewer of a PR — a person, a review bot such as Codex, or an agent asked to review — and the author answering the review. A review's job is to find where the diff, the checker it binds, and the landed work item disagree, and to say so with a file and line.
+These rules bind every reviewer of a PR — a person, a review bot, or an agent asked to review — and the author answering the review. A review's job is to find where the diff, the checker it binds, and the landed work item disagree, and to say so with a file and line.
 
 - **The item bounds the review.** Read the work item, the PR description, and the existing threads before the diff. A process PR has no item; there the rules in this file the PR claims to follow, and the claims its description makes, are what a finding is checked against. A finding names what it breaks — an item requirement or acceptance, a stated invariant, or a rule in this file — the file and line, and the input that produces the wrong result. A case no requirement statement claims is a follow-up proposal in one comment, not a finding; a declared known limit is a decision to weigh, not a gap.
 - **Severity states a consequence.** Blocking only when a gate can pass while its claim is false, a refused input is accepted, an authority, lifetime, or determinism rule is broken, a boundary-crossing format has no Zutai contract, or the recipe cannot pass as landed. A local defect is non-blocking. Style, alternatives, and hardening the item does not require are suggestions, labelled, never blocking, never re-raised. What the PR cannot carry goes to the planning process in one comment.
@@ -87,7 +87,7 @@ These rules bind every reviewer of a PR — a person, a review bot such as Codex
 - **Triage before fixing.** The author's reply to a round opens with one line per finding: the input that breaks it, whether it changes product behavior or only tooling, documentation or process, and the size of the fix. Fixes follow in the same push.
 - **When the author stops and asks.** The author fixes nothing in a round and asks the human in one PR comment, linking [`HUMAN.md`](HUMAN.md), when either holds:
   - a third consecutive round raises a new finding on the same subject. The comment names the subject, the design choice that keeps producing findings, and the decision that would close the whole class (for example: require storage to equal the declared configuration instead of bounding it from below);
-  - a non-blocking finding (Codex P2) lands on process or verification text or code: `scripts/`, `.tasks/`, `specs/`, `.agents/`, this file, or `docs/` outside `docs/architecture/`. These are collected into one follow-up comment for the human to accept or drop, not fixed in the PR.
+  - a non-blocking finding lands on process or verification text or code: `scripts/`, `.tasks/`, `specs/`, `.agents/`, this file, or `docs/` outside `docs/architecture/`. These are collected into one follow-up comment for the human to accept or drop, not fixed in the PR.
 
   The human's answer is a declared decision under **Consistency**; a finding that follows from it is not re-raised.
 
