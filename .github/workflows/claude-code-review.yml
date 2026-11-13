@@ -3,21 +3,15 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+
+# A newer head supersedes a review still running for an older head.
+concurrency:
+  group: claude-code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,10 +30,43 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          claude_args: '--model claude-fable-5-2 --allowedTools "mcp__github_inline_comment__create_inline_comment"'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          # The review rules live in .agents/skills/pr-review/SKILL.md and
+          # .agents/skills/spec-review/SKILL.md; this prompt only routes to them.
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            HEAD SHA: ${{ github.event.pull_request.head.sha }}
 
+            Review this pull request as the Slime OS PR reviewer.
+
+            1. Read `.agents/skills/pr-review/SKILL.md` in full. Its rules bind
+               this review: what counts as a finding, severity, one review per
+               head, the ten-finding bound, and consistency across rounds.
+            2. Read the PR title and description with `gh pr view`, and every
+               existing comment, review, and review thread with
+               `gh pr view --comments` and `gh api`.
+            3. Find the work item the description names under `.tasks/items/`.
+               If the PR is an implementation PR, also read
+               `.agents/skills/spec-review/SKILL.md` and follow its procedure
+               as far as reading files allows. A process PR has no item; bound
+               it by the `AGENTS.md` rules and the description's claims.
+            4. Find your own previous review on this PR: a comment that ends
+               with `Reviewed head: <sha>`. If one exists, review only the delta
+               from that sha to HEAD SHA (`gh api repos/<repo>/compare/<sha>...<head>`)
+               and the threads that delta answers. Otherwise review the whole
+               diff (`gh pr diff`).
+            5. Post each finding as an inline comment with
+               `mcp__github_inline_comment__create_inline_comment`. Open each
+               with its severity: **Blocking**, **Non-blocking**, or
+               **Suggestion**. Name what it breaks, the file and line, and the
+               input that produces the wrong result. A finding that restates an
+               open thread is a reply there, not a new comment.
+            6. Finish with one summary comment via `gh pr comment`: the verdict
+               (ready, or the blocking findings), then a last line
+               `Reviewed head: ${{ github.event.pull_request.head.sha }}`.
+
+            Do not run builds, tests, or `just` targets; this job has no
+            toolchain. Do not push commits or edit files.
+          claude_args: >-
+            --model claude-fable-5-2
+            --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh api:*),mcp__github_inline_comment__create_inline_comment"
