@@ -122,17 +122,15 @@ def _first(group: str, kind: str) -> tuple[str, wire.Message]:
     raise RmwError(f"{group} sent no {kind}")
 
 
-def _chatter_push() -> wire.Message:
-    """The talker's first push on `chatter`. Its 110-byte key is inside Profile 0's 129-byte key bound, so
-    a default session refuses it for the key it never subscribed to; the `parameter_events` push is 133
-    bytes and would be refused as over the bound first."""
-    for _name, hexed in dict(GROUPS)["talker"]:
-        batch = bytes.fromhex(hexed)
-        if batch[0] & 0x1F == wire.ID_FRAME:
-            for message in wire.frame(batch)[1]:
-                if message.kind == "push" and (message.suffix or "").startswith("0/chatter/"):
-                    return message
-    raise RmwError("the talker sent no push on chatter")
+def _unsubscribed_push() -> bytes:
+    """A Put on a key no session subscribed to, written by `zenoh_wire`: the form a default session takes
+    to its subscriber check. The 114-byte key is inside Profile 0's 129-byte bound. It carries no timestamp
+    and one extension, the attachment, because the decoder refuses a Put with a timestamp or any other
+    extension before the session sees the key, and every push the three captured sessions hold carries a
+    timestamp, so none of them can reach that check in a default session."""
+    attachment = zenoh_wire.attachment(1, 0, bytes(range(0xE0, 0xF0)))
+    key = "0/other_topic/std_msgs::msg::dds_::String_/RIHS01_" + "a" * 64
+    return zenoh_wire.push_put(key, attachment, b"x" * 12, False)
 
 
 def _frame(sn: int, *messages: bytes) -> bytes:
@@ -154,7 +152,7 @@ def _refusals() -> tuple[tuple[str, str, str, str], ...]:
     base = _frame_of("talker-03-frame")[0]
     _name, token = _first("talker", "token")
     _name, query = _first("talker", "queryable")
-    push = _chatter_push()
+    push = _unsubscribed_push()
     init = captured("talker-01-init-syn")
     first_extension = len(init) - 3
     mandatory = init[:first_extension] + bytes([init[first_extension] | 0x10]) + init[first_extension + 1 :]
@@ -164,7 +162,7 @@ def _refusals() -> tuple[tuple[str, str, str, str], ...]:
     return (
         ("refuse-rmw-default-queryable", _frame(base, _declare("queryable", 99, scope=query.scope or 0)).hex(), "unsupported-message", "default"),
         ("refuse-rmw-default-token", _frame(base, _declare("token", 98, scope=token.scope or 0)).hex(), "unsupported-message", "default"),
-        ("refuse-rmw-default-push-undeclared", _frame(base, push.span).hex(), "undeclared-key", "default"),
+        ("refuse-rmw-default-push-undeclared", _frame(base, push).hex(), "undeclared-key", "default"),
         ("refuse-rmw-init-extension-mandatory", mandatory.hex(), "unsupported-extension", "graph"),
         ("refuse-rmw-init-extension-unknown", unknown.hex(), "unsupported-extension", "graph"),
         ("refuse-rmw-token-wildcard", _frame(base, _declare("keyexpr", 97, suffix="@ros2_lv/0/*/0/0/NN/%/%/x")).hex(), "wildcard-keyexpr", "graph"),
