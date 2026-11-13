@@ -1933,8 +1933,13 @@ def run_rmw_graph() -> list[str]:
 
 
 def exam_lines_graph(output: str) -> list[str]:
-    """The `[zenoh-exam] graph ...` lines of a run, with the prefix removed."""
-    return [line.split("] ", 1)[1] for line in output.splitlines() if line.startswith("[zenoh-exam] graph ")]
+    """The `[zenoh-exam] graph ...` lines of a run, with the marker removed.
+
+    With `--nocapture`, libtest starts a test's output on the line that names the test, as in
+    `test zenoh_rmw_graph::the_rmw_graph_exam ... [zenoh-exam] graph entity ...`, so the marker is searched
+    for in each line and not matched at its start, as `exam_lines` does.
+    """
+    return [line for line in exam_lines(output) if line.startswith("graph ")]
 
 
 def rmw_graph_main(controls_only: bool) -> int:
