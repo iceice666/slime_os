@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "root_size_check";
+  closureDigest = "1acf1a8805d4b361b512ca5857d47b8ca00088776fcaba66de75ff0bf859401f";
+  passed = true;
+  exitCode = 0;
+  counts = { { key = "bootCodeLines"; value = 5865; }; { key = "consoleCodeLines"; value = 427; }; { key = "coreCodeLines"; value = 15037; }; { key = "dispatchCodeLines"; value = 2538; }; { key = "filesObserved"; value = 73; }; { key = "fixtureCodeLines"; value = 950; }; { key = "harnessCodeLines"; value = 1705; }; { key = "ioResourceCodeLines"; value = 3029; }; { key = "policyCodeLines"; value = 2077; }; { key = "seriesCodeLines"; value = 34294; }; { key = "sharedBufferCodeLines"; value = 3026; }; { key = "timerCodeLines"; value = 1345; }; };
+  flags = {;};
+  observedAt = "2026-11-17T14:55:44Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
