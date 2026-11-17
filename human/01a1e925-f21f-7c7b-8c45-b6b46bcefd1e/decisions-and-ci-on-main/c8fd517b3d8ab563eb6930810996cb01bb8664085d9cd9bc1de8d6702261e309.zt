@@ -1,0 +1,13 @@
+o ::= import "./schema.zt";
+r :: o.HumanRecord = {
+  schema = o.schemaVersion;
+  area = "";
+  requirement = "01a1e925-f21f-7c7b-8c45-b6b46bcefd1e";
+  acceptance = "decisions-and-ci-on-main";
+  requirementsDigest = "c8fd517b3d8ab563eb6930810996cb01bb8664085d9cd9bc1de8d6702261e309";
+  value = true;
+  note = "main 2212228: root-task-scope.md 與 verified-kernel-profile.md 皆 Accepted 且列出決策人，內容涵蓋 requirement 所列項目；ci.yml docs_gates 在 pull_request 上跑 just root_size_check";
+  signer = "iceice666";
+  observedAt = "2026-11-17T14:34:45Z";
+};
+r
