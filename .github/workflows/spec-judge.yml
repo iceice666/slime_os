@@ -5,12 +5,12 @@
 # rewrite the judge or the lists that judge it.
 #
 # This is the only judge of a pull request, and it blocks: the `main`
-# ruleset requires its `Devloop v1.5 judge` status check. A personal-account
-# repository cannot require a workflow from `main`, so a pull request could
-# edit this file or add a workflow that reports a passing check of the same
-# name. .github/CODEOWNERS covers .github/, and the ruleset requires Code
-# Owner review, so such a pull request needs another owner's approval. On
-# GitLab a protected pipeline definition replaces both.
+# ruleset requires its `Devloop v1.5 judge` status check and allows no bypass
+# of it. A personal-account repository cannot require a workflow from `main`,
+# so a pull request could edit this file or add a workflow that reports a
+# passing check of the same name. No mechanism stops that. The review rules
+# make it a blocking finding (docs/decisions/independent-review.md). On
+# GitLab a protected pipeline definition replaces the finding.
 name: Spec judge
 
 on:

@@ -61,7 +61,7 @@ judge that judges it.
 | V5 legal intent | An `intent` change outside `EDGES`. Entering `#deferred` or `#cancelled` without a V4 approval. |
 | V6 closeout | A move to `terminal/` without a signed done witness, unless the item is `#cancelled`. Any later change to a terminal item. |
 | V7 backlog first | A milestone, or an item under one, entering `#active` while a backlog bug is `#planned` or `#active`, or while a promise fails. |
-| V8 R4 floor (M5) | A lowered `negativeControlsRefused` predicate, without an approved R4 known limit. |
+| V8 R4 floor | A bound target whose floor on `negativeControlsRefused` drops, or loses its predicate, unless the same pull request adds an R4 known limit for that target. Adding a known limit needs a V4 approval. |
 | V9 provenance | A `#human` quote shorter than 8 characters or a blanket answer, or a source that is a pull request number. Warning until three real features close. |
 | V10 frozen promises | An added, changed or removed area requirement. An item's `supersedes` replaces one instead. |
 | V11 independent review | Any pull request but a closeout whose head has no approval from `HUMAN_OWNERS` or `REVIEW_AGENTS` by someone other than the author. |
@@ -114,11 +114,11 @@ recipes. `scripts/spec/check` became the only judge, and it blocks.
 - A pull request can edit the workflow that runs the judge, or add one that
   reports a passing check of the same name. A personal-account GitHub
   repository cannot require a workflow from `main`; only an organization
-  ruleset can. So the `main` ruleset requires the `Devloop v1.5 judge` and
-  `CI` status checks and Code Owner review, and `.github/CODEOWNERS` lists
-  `.github/`, `scripts/spec/` and the owner lists. A pull request that
-  touches them needs an approval from a person in `HUMAN_OWNERS` other than
-  its author. On GitLab, a protected pipeline definition replaces both.
+  ruleset can. The `main` ruleset requires the `Devloop v1.5 judge` and `CI`
+  status checks and allows no bypass of the judge check. It required Code
+  Owner review until 2026-11-17. [`independent-review.md`](independent-review.md)
+  replaced that with a blocking finding of the review, which is a rule and
+  not a mechanism. On GitLab, a protected pipeline definition replaces it.
 
 ## Revisit when
 

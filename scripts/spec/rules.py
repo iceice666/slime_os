@@ -5,7 +5,7 @@ and head, the recipes at base and head, the evidence commit, the pull
 request's author and its approvers. Rule ids follow
 `docs/decisions/work-item-devloop.md`: V1 class, V2 planning first, V3 no
 self-grading, V4 grader approval, V5 legal intent, V6 closeout, V7 backlog
-first, V9 provenance, V10 frozen promises; and from
+first, V8 R4 floor, V9 provenance, V10 frozen promises; and from
 `docs/decisions/independent-review.md`, V11 independent review.
 """
 
@@ -226,6 +226,72 @@ def check_backlog(base: list[lib.Item], head: list[lib.Item], failing_promises, 
             findings.error("V7", f"{item.where} enters #active while backlog bug {bug.where} is #{bug.intent}")
         for promise in failing:
             findings.error("V7", f"{item.where} enters #active while promise {promise} fails")
+
+
+CONTROLS = "negativeControlsRefused"
+
+
+def control_floor(predicates: list) -> int | None:
+    """The lower bound the predicates put on `negativeControlsRefused`, or None."""
+    floor = None
+    for predicate in predicates:
+        kind, body = lib.tag(predicate), lib.payload(predicate)
+        if body.get("key") != CONTROLS:
+            continue
+        bound = body.get("equals") if kind == "count" else body.get("min") if kind == "atLeast" else None
+        if bound is not None:
+            floor = bound if floor is None else max(floor, bound)
+    return floor
+
+
+def control_floors(items: list[lib.Item], areas: list[lib.Area]) -> dict[str, int | None]:
+    """Each bound target's floor on `negativeControlsRefused`: the highest
+    lower bound among the mandatory acceptances that bind it, or None when
+    none of them bounds the count. The items and areas are those
+    `lib.bound_targets` counts. An advisory acceptance sets no floor, because
+    `lib.item_done` never reads its predicates."""
+    gone = lib.superseded(items)
+    floors: dict[str, int | None] = {}
+
+    def note(target: str, predicates: list) -> None:
+        floor = control_floor(predicates)
+        known = floors.get(target)
+        floors[target] = floor if known is None else known if floor is None else max(known, floor)
+
+    for item in items:
+        if (item.terminal and item.id not in gone) or (not item.terminal and item.intent != "cancelled"):
+            for acceptance in item.value["acceptance"]:
+                if lib.tag(acceptance["check"]) == "observed":
+                    body = lib.payload(acceptance["check"])
+                    note(body["justTarget"], body["predicates"] if acceptance["mandatory"] else [])
+    for area in areas:
+        for requirement in area.requirements:
+            if requirement["id"] not in gone:
+                for kind, body in lib.area_acceptances(requirement):
+                    if kind == "observed":
+                        note(body["justTarget"], body["predicates"])
+    return floors
+
+
+def check_control_floor(base_items, base_areas, head_items, head_areas, findings: Findings) -> None:
+    """V8 (R4): a bound target's floor on `negativeControlsRefused` never
+    drops, unless this pull request adds an R4 known limit for that target.
+    A known limit covers the pull request that adds it and no later one, and
+    adding it needs an approval."""
+    known = {(item.id, limit["subject"]) for item in base_items for limit in item.value["knownLimits"]}
+    allowed: set[str] = set()
+    for item in head_items:
+        for limit in item.value["knownLimits"]:
+            if limit["ratchet"] == "R4" and (item.id, limit["subject"]) not in known:
+                allowed.add(limit["subject"])
+                findings.needs_approval("V8", f"{item.where} adds an R4 known limit for {limit['subject']}")
+    before, after = control_floors(base_items, base_areas), control_floors(head_items, head_areas)
+    for target, floor in sorted(before.items()):
+        if floor is None or target not in after or target in allowed:
+            continue
+        now = after[target]
+        if now is None or now < floor:
+            findings.error("V8", f"{target}: the floor on {CONTROLS} drops from {floor} to {'none' if now is None else now}; the item that lowers it must add an R4 known limit for {target}")
 
 
 def check_provenance_quality(items: list[lib.Item], findings: Findings) -> None:

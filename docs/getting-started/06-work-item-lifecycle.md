@@ -238,16 +238,16 @@ a PR cannot change the judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`,
 | V5 legal intent | An `intent` change outside `EDGES`. Entering `#deferred` or `#cancelled` without a V4 approval. |
 | V6 closeout | A move to `terminal/` without a signed done witness, unless the item is `#cancelled`. Any later change to a terminal item. |
 | V7 backlog first | A milestone, or an item under one, entering `#active` while a backlog bug is `#planned` or `#active`, or while a promise fails. |
-| V8 R4 floor | A lowered `negativeControlsRefused` predicate without an approved R4 known limit. Milestone M5: the judge does not enforce it yet. |
+| V8 R4 floor | A bound target whose floor on `negativeControlsRefused` drops, or loses its predicate, unless the same PR adds an R4 known limit for that target. Adding a known limit needs a V4 approval. |
 | V9 provenance | A `#human` quote shorter than 8 characters, a blanket answer, or a PR number as source. Warning only. |
 | V10 frozen promises | An added, changed or removed area requirement. |
 | V11 independent review | Any PR but a closeout whose head has no approval from `HUMAN_OWNERS` or `REVIEW_AGENTS` by someone other than the author. A comment that starts with `@claude review` asks the review agent for one. |
 
 The `Spec judge` workflow runs on every PR push and after each review. The
-`main` ruleset requires its `Devloop v1.5 judge` check. A PR that touches
-`.github/` or `scripts/spec/` also needs a Code Owner approval from another
-owner, because such a PR could replace the check. `just spec_e2e` is the judge's own
-exam: it walks a fixture repository through every stage.
+`main` ruleset requires its `Devloop v1.5 judge` check and allows no bypass
+of it. A PR that touches `.github/` could replace the check. The review rules
+make that a blocking finding. `just spec_e2e` is the judge's own exam: it
+walks a fixture repository through every stage.
 
 ## No GitHub projection
 
