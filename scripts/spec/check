@@ -17,8 +17,8 @@ inputs give an equal verdict, locally, for an agent and in CI.
 The judge's code is the base commit's. CI extracts `lib.JUDGE_PATHS` from
 the base commit and runs that copy with `SPEC_ROOT` naming the head
 checkout and `SPEC_JUDGE=base`, so a pull request cannot rewrite the
-judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or `specs/allowed_signers` that
-judge it. Run from a checkout with `--base`, this script hands over to
+judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `REVIEW_AGENTS` or
+`specs/allowed_signers` that judge it. Run from a checkout with `--base`, this script hands over to
 the base copy the same way; that hand-off is a convenience, because a
 head that rewrites this file also rewrites the hand-off. A base without
 a judge runs the head's code and says so.
@@ -56,9 +56,9 @@ DERIVED = (
     "contracts/system-test-run/v2/runs/",
 )
 PROCESS = (".github/", "docs/", ".agents/", ".claude/", "scripts/spec/", "roadmap/", ".devloop/", "contracts/task/", "contracts/observation/")
-PROCESS_FILES = ("HUMAN_OWNERS", "AGENT_ACCOUNTS", "specs/allowed_signers", "specs/targets.toml", "specs/schema.zt", "specs/helpers.zt", "specs/legacy.zt")
+PROCESS_FILES = ("HUMAN_OWNERS", "AGENT_ACCOUNTS", rules.REVIEW_AGENTS, "specs/allowed_signers", "specs/targets.toml", "specs/schema.zt", "specs/helpers.zt", "specs/legacy.zt")
 APPROVED_PATHS = ("scripts/spec/", "contracts/task/", "contracts/observation/")
-APPROVED_FILES = ("HUMAN_OWNERS", "AGENT_ACCOUNTS", "specs/allowed_signers")
+APPROVED_FILES = ("HUMAN_OWNERS", "AGENT_ACCOUNTS", rules.REVIEW_AGENTS, "specs/allowed_signers")
 IMPLEMENTATION = (
     "components/", "slime-root/", "boot-contracts/", "contracts/", "scripts/build/", "scripts/generate/",
     "scripts/tools/", "sdk/", "tools/", "sel4/", "deps/", "nix/", "evidence/", "verification/", "assets/",
@@ -75,7 +75,7 @@ def from_base(base: str, argv: list[str]) -> int | None:
     if os.environ.get("SPEC_JUDGE") == "base" or lib.read_blob(base, "scripts/spec/check") is None:
         return None
     with tempfile.TemporaryDirectory(prefix="slime-spec-judge-") as temporary:
-        lib.extract(base, list(lib.JUDGE_PATHS), Path(temporary))
+        lib.extract(base, [*lib.JUDGE_PATHS, rules.REVIEW_AGENTS], Path(temporary))
         env = os.environ | {"SPEC_ROOT": str(lib.ROOT), "SPEC_JUDGE": "base"}
         return subprocess.run([sys.executable, str(Path(temporary) / "scripts" / "spec" / "check"), *argv], env=env, check=False).returncode
 

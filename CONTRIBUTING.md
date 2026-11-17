@@ -203,7 +203,7 @@ locally with `just spec_check --base origin/main`.
 |---|---|---|
 | **planning** | an added or edited `.tasks/items/*.zt`, `specs/*.zt` area files, an **added** `contracts/**/schema.zt`, a `scripts/check/` or `scripts/lib/` file in the grader set of a bound target, and `Justfile` or `just/` recipes in the closure of a bound target | lands the item and its exam before any implementation |
 | **implementation** | `components/`, `slime-root/`, `boot-contracts/`, other `contracts/` paths including a modified `schema.zt`, `scripts/build/`, `scripts/generate/`, `scripts/tools/`, `sdk/`, `tools/`, `sel4/`, `deps/`, `nix/`, `evidence/`, `verification/`, `assets/`, build and toolchain files, other recipes, and an intent-only item edit | every path under the `owns` of an item that is on base and `#active` on head (V2); touches no bound grader set (V3) |
-| **process** | `.github/`, `docs/`, `.agents/`, `.claude/`, `scripts/spec/`, `roadmap/`, `contracts/task/`, `contracts/observation/`, the task schema copies in `.tasks/`, root `*.md`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `specs/allowed_signers`, `specs/targets.toml`, `specs/schema.zt`, `specs/helpers.zt`, `specs/legacy.zt`, and `scripts/check/` or `scripts/lib/` files outside every grader set | needs no work item |
+| **process** | `.github/`, `docs/`, `.agents/`, `.claude/`, `scripts/spec/`, `roadmap/`, `contracts/task/`, `contracts/observation/`, the task schema copies in `.tasks/`, root `*.md`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `REVIEW_AGENTS`, `specs/allowed_signers`, `specs/targets.toml`, `specs/schema.zt`, `specs/helpers.zt`, `specs/legacy.zt`, and `scripts/check/` or `scripts/lib/` files outside every grader set | needs no work item |
 | **closeout** | an unchanged move of `.tasks/items/<slug>.zt` to `.tasks/terminal/` | needs a signed done witness, unless the item is `#cancelled` (V6) |
 | **derived** | regenerated closure sources under `contracts/system-image-closure/v3/closures/`, negative cases under `contracts/system-image-closure/v2/negative/`, and `contracts/system-test-run/v1/runs/` and `v2/runs/` | accompanies any class; never decides |
 
@@ -222,7 +222,7 @@ author, is required for each of these (V4):
 - a change to an area invariant;
 - a change to an existing contract `schema.zt`;
 - a change to `scripts/spec/`, `contracts/task/`, `contracts/observation/`,
-  `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, or `specs/allowed_signers`;
+  `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `REVIEW_AGENTS`, or `specs/allowed_signers`;
 - an item entering `#deferred` or `#cancelled` (V5).
 
 A grader file or recipe that grades a promise, meaning an area requirement or

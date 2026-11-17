@@ -16,6 +16,11 @@ from pathlib import Path
 
 import lib
 
+# Accounts whose approval is the review agent's verdict. Read from the judge's
+# own commit, like HUMAN_OWNERS; `scripts/spec/check` extracts it beside
+# `lib.JUDGE_PATHS`.
+REVIEW_AGENTS = "REVIEW_AGENTS"
+
 MILESTONE_LISTS = ("owns", "nonGoals", "requirements", "acceptance", "invariants", "decisions")
 # V9: a `#human` quote must be a concrete decision or example.
 QUOTE_MIN = 8
