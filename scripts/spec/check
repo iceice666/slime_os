@@ -14,8 +14,8 @@ default the fetched evidence ref), the author and the approvals on the
 current head; `--forge` reads the last three from the code host. Equal
 inputs give an equal verdict, locally, for an agent and in CI.
 
-The judge's code is the base commit's. CI extracts `lib.JUDGE_PATHS` from
-the base commit and runs that copy with `SPEC_ROOT` naming the head
+The judge's code is the base commit's. CI extracts `lib.JUDGE_PATHS` and
+`REVIEW_AGENTS` from the base commit and runs that copy with `SPEC_ROOT` naming the head
 checkout and `SPEC_JUDGE=base`, so a pull request cannot rewrite the
 judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `REVIEW_AGENTS` or
 `specs/allowed_signers` that judge it. Run from a checkout with `--base`, this script hands over to
