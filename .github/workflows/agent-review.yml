@@ -19,8 +19,12 @@ on:
     types: [created]
 
 # A newer request supersedes a review still running for the same pull request.
+# Every comment on the repository starts a run of this workflow, and a
+# workflow-level group applies before the job's `if`. A comment that is no
+# request therefore gets a group of its own: it must not cancel a review, and
+# the agent's own summary comment is such a comment.
 concurrency:
-  group: agent-review-${{ github.event.issue.number }}
+  group: agent-review-${{ github.event.issue.number }}-${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '@claude review') && 'request' || github.run_id }}
   cancel-in-progress: true
 
 jobs:
