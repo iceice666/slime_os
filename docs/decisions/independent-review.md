@@ -54,16 +54,19 @@ teaches the owner to merge over red, which hides a red that has a real cause.
 5. The review agent runs from the workflow on `main`, under its own account. A
    pull request cannot change the workflow or the skill that reviews it.
 6. A verdict binds to one head commit. A push needs a new review.
-7. The review workflow records its verdict as a commit status on the head.
-   `scripts/spec/forge.py` gains a sixth function that reads it, so no other
-   file in `scripts/spec/` knows the code host.
+7. The review workflow records its verdict as a review on the head commit:
+   an approval when no finding is blocking, a request for changes otherwise.
+   A step of the workflow derives it from the agent's structured result. The
+   judge reads it through the `approvers` function it already has, and a new
+   list, `REVIEW_AGENTS`, names the accounts whose approval counts.
 8. Nobody merges over a red judge. The `main` ruleset allows no bypass of the
    `Devloop v1.5 judge` check. If the judge exits without a verdict, a process
    pull request repairs the judge first.
 9. The author never reviews the author's own pull request. A session that
    opened a pull request does not produce its verdict.
 10. The review agent reports as blocking a pull request that adds a workflow
-    or a job whose check name equals a required check.
+    or a job whose check name equals a required check, or that submits a
+    review.
 11. No rule relies on a person reading a diff. A person decides what an agent
     asks: the cases [`AGENTS.md`](../../AGENTS.md) and
     [`HUMAN.md`](../../HUMAN.md) hand to a person, and the agent defaults a
@@ -80,11 +83,12 @@ below lands, V4 and the ruleset run as
 
 | Part | Where it changes |
 |---|---|
-| The judge requires the review on every pull request but a closeout, and V4 accepts it | `scripts/spec/check`, `scripts/spec/rules.py`, `scripts/spec/e2e` |
-| The sixth forge function | `scripts/spec/forge.py` |
-| The verdict as a commit status | `.github/workflows/claude.yml` |
+| The verdict as a review on the head commit | `.github/workflows/agent-review.yml` |
+| The accounts whose approval counts | `REVIEW_AGENTS` |
+| The judge requires the review on every pull request but a closeout, and V4 accepts it | `scripts/spec/check`, `scripts/spec/rules.py`, `scripts/spec/lib.py`, `scripts/spec/e2e` |
 | The blocking finding of decision 10 | `.agents/skills/pr-review/SKILL.md` |
 | No Code Owner review, and no bypass of the judge check | the `main` ruleset and `.github/CODEOWNERS` |
+| GitHub Actions may approve a pull request | the repository's Actions settings |
 | The rule text | `work-item-devloop.md`, `AGENTS.md`, `CONTRIBUTING.md` |
 
 ## Alternatives
@@ -112,8 +116,9 @@ below lands, V4 and the ruleset run as
 - Text in a pull request can address the review agent. Running the reviewer
   from `main` limits this and does not remove it.
 - GitHub matches a required check by name. Without Code Owner review, a pull
-  request can add a workflow that reports a passing check of a required name.
-  Decision 10 is the only guard, and it is an agent's finding, not a mechanism.
+  request can add a workflow that reports a passing check of a required name,
+  or that approves the pull request under the review account. Decision 10 is
+  the only guard, and it is an agent's finding, not a mechanism.
 - V8, the floor on `negativeControlsRefused`, becomes the main mechanical
   defence. The judge does not enforce V8 yet.
 - With no bypass, a judge that exits without a verdict blocks every pull
@@ -127,6 +132,6 @@ below lands, V4 and the ruleset run as
   Count these.
 - A second person reviews regularly, or the GitLab move gives agents their own
   accounts.
-- The code host cannot record the verdict as a commit status that the ruleset
-  ties to the review agent's account.
+- The code host cannot record the verdict as a review under an account that
+  `REVIEW_AGENTS` can name.
 - A pull request reports a required check name from a workflow it added.
