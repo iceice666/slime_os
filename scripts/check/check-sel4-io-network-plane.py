@@ -1116,7 +1116,12 @@ def run_root_console_arm(transcript_path: Path | None) -> None:
         print(transcript)
         raise
     print(verdict.line())
-    devloop_observations.record(casesObserved=cases, recordsObserved=verdict.records, negativeControlsRefused=refused)
+    devloop_observations.record(
+        casesObserved=cases,
+        recordsObserved=verdict.records,
+        recordsBeforeInstall=verdict.early,
+        negativeControlsRefused=refused,
+    )
 
 
 def run_link_wake_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
@@ -1721,8 +1726,9 @@ def main() -> None:
         run_root_console_arm(arguments.transcript)
         print(
             "seL4 root console check: with a UART installed the root's writer sent the kernel sink no byte, "
-            "the root installs QEMU virt's PL011 once and before its first record, and the first record of "
-            "the boot was the install marker with a carriage return before every later line feed"
+            "the root installs QEMU virt's PL011 once and before main's first record, and in the boot only "
+            "records of the allocator's bring-up preceded the install marker, with a carriage return before "
+            "every later line feed"
         )
     if arguments.arm == "link-wake":
         try:

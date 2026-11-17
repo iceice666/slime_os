@@ -91,8 +91,9 @@ console_record_check: sel4_pin_check io_tcp_host_check
 
 # The root's own console UART on QEMU virt: with a UART installed the actual
 # writer sends the kernel sink no byte, the root installs the PL011 once and
-# before its first record, and the raw bytes of one local boot start with the
-# install marker. The record boundary's own exam runs first.
+# before main's first record, and in the raw bytes of one local boot only the
+# allocator's bring-up precedes the install marker. The record boundary's own
+# exam runs first.
 # Explicit, never part of `all`.
 [group('planes / mechanism')]
 root_console_check: sel4_pin_check console_record_check

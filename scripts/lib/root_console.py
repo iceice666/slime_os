@@ -10,12 +10,16 @@ console receives none. Three judges hold the product to that:
   serial line are the same whichever route wrote them, so no boot can tell the
   two apart.
 * `audit` reads the root's sources. It holds the one install call to
-  `main.rs`, before the first record of `main`, and the build script to the one
+  `main.rs`, before a record of `main` itself, and the build script to the one
   target profile.
-* `judge` reads the raw serial bytes of one boot. The first root record is the
-  install marker, it names QEMU's PL011, and every line feed after it follows a
-  carriage return. The root writes that carriage return itself once the kernel
-  no longer does.
+* `judge` reads the raw serial bytes of one boot. The install marker names
+  QEMU's PL011, only records of the allocator's bring-up precede it, and every
+  line feed after it follows a carriage return. The root writes that carriage
+  return itself once the kernel no longer does.
+
+The root can map a device page only after its allocator and its metadata exist,
+and that bring-up prints records of its own. Those still go to the kernel sink.
+`judge` counts them, and refuses any other record before the marker.
 
 `controls` runs the negative controls of all three. Standard library only.
 """
@@ -37,6 +41,9 @@ PROFILE = "aarch64-sel4-qemu-virt"
 CONFIGURATION = "slime_root_console_pl011"
 MARKER = re.compile(rb"SLIME_ROOT console uart=(\S+) paddr=(\S+)")
 RECORD = re.compile(rb"\[[a-z0-9-]+\] |SLIME_[A-Z0-9]+ ")
+# The record families `slime-root/src/object_allocator.rs` prints while the
+# allocator, the root CSpace and the metadata come up.
+BRING_UP = re.compile(rb"SLIME_BACKING |SLIME_ALLOC |SLIME_ROOT (?:infrastructure|cspace|metadata) ")
 ANSI = re.compile(rb"\x1b\[[0-9;]*m")
 DIAGNOSTIC = "slime-root/src/diagnostic.rs"
 BINARY = "slime-root/src/main.rs"
@@ -102,19 +109,21 @@ def _code(text: str) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class Verdict:
+    early: int
     records: int
     line_feeds: int
 
     def line(self) -> str:
         return (
-            f"[root-console] marker first, uart=pl011 paddr={QEMU_VIRT_PL011:#x}, "
+            f"[root-console] marker uart=pl011 paddr={QEMU_VIRT_PL011:#x} "
+            f"bring_up_records_before_marker={self.early} "
             f"records_after_marker={self.records} line_feeds_after_marker={self.line_feeds}"
         )
 
 
 def judge(raw: bytes) -> Verdict:
-    """Raise ValueError unless `raw` shows the install marker as the first
-    root record and a carriage return before every later line feed."""
+    """Raise ValueError unless `raw` shows one install marker after nothing but
+    bring-up records, and a carriage return before every later line feed."""
     lines = raw.split(b"\n")
     require(len(lines) > 1, "the capture holds no complete line")
     complete, tail = lines[:-1], lines[-1]
@@ -133,8 +142,12 @@ def judge(raw: bytes) -> Verdict:
         found.group(2).startswith(b"0x") and address == QEMU_VIRT_PL011,
         f"the marker names {found.group(2)!r}, and QEMU virt's PL011 is at {QEMU_VIRT_PL011:#x}",
     )
-    for text in texts[:position]:
-        require(RECORD.match(text) is None, f"a record precedes the install marker: {text!r}")
+    early = [text for text in texts[:position] if RECORD.match(text)]
+    for text in early:
+        require(
+            BRING_UP.match(text) is not None,
+            f"a record that is no part of the allocator's bring-up precedes the install marker: {text!r}",
+        )
     later = [text for text in texts[position + 1 :] if RECORD.match(text)]
     require(bool(later), "no record follows the install marker")
     for index in range(position, len(complete)):
@@ -143,12 +156,15 @@ def judge(raw: bytes) -> Verdict:
             f"line {index + 1} ends in a line feed with no carriage return: {complete[index]!r}",
         )
     require(MARKER.search(tail) is None, "the capture ends inside an install marker")
-    return Verdict(records=len(later), line_feeds=len(complete) - position)
+    return Verdict(early=len(early), records=len(later), line_feeds=len(complete) - position)
 
 
 _HONEST_CAPTURE = (
     b"seL4 kernel loader | INFO   Starting kernel\r\n"
     b"Bootstrapping kernel\r\n"
+    b"SLIME_BACKING inventory parent=884 paddr=1610612736 bytes=65536\r\n"
+    b"SLIME_ALLOC preserved untypeds=33\r\n"
+    b"SLIME_ROOT metadata bootstrap objects=544784 alignment=36784 remaining=139264\r\n"
     b"SLIME_ROOT console uart=pl011 paddr=0x9000000\r\n"
     b"SLIME_ROOT allocator ready\r\n"
     b"[network-service] incarnation=1\r\n"
@@ -163,13 +179,18 @@ _CAPTURE_MUTATIONS = (
     ),
     (
         "a root record before the marker",
-        'a record precedes the install marker',
+        "no part of the allocator's bring-up precedes",
         _HONEST_CAPTURE.replace(b"Bootstrapping kernel\r\n", b"SLIME_ROOT allocator ready\r\n"),
     ),
     (
         "a component record before the marker",
-        'a record precedes the install marker',
+        "no part of the allocator's bring-up precedes",
         _HONEST_CAPTURE.replace(b"Bootstrapping kernel\r\n", b"[network-service] incarnation=1\r\n"),
+    ),
+    (
+        "a graph record before the marker",
+        "no part of the allocator's bring-up precedes",
+        _HONEST_CAPTURE.replace(b"Bootstrapping kernel\r\n", b"SLIME_GRAPH HEALTHY\r\n"),
     ),
     (
         "two install markers",
