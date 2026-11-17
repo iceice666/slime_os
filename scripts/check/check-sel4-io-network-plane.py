@@ -32,6 +32,10 @@ The root-diagnostics arm boots the same composition and, besides everything the
 tcp-buffers arm judges, holds the root's per-operation diagnostic lines to once
 per key and its repeat counters to the frames the peer saw
 (`scripts/lib/root_diagnostics.py`); it is also explicit.
+The root-console arm holds the root's own console UART (`scripts/lib/root_console.py`):
+the actual `slime-root/src/diagnostic.rs` on the host, with an installed UART and a
+counting kernel sink, the root's sources, and the raw serial bytes of one boot of the
+local composition; it is also explicit.
 The link-wake arm holds every composition whose network-service has a wait set
 and a virtio-net driver to one declared `device` wait-set source, then boots
 `sel4-io-tcp-buffers` and requires the guest to acknowledge the rx-window
@@ -70,6 +74,7 @@ import tcp_impairment_peer  # noqa: E402
 import tcp_listener_peer  # noqa: E402
 import tcp_options_peer  # noqa: E402
 import tcp_buffers_peer  # noqa: E402
+import root_console  # noqa: E402
 import root_diagnostics  # noqa: E402
 import link_wake  # noqa: E402
 import http_peer  # noqa: E402
@@ -1079,6 +1084,41 @@ def run_root_diagnostics_arm(image: Path, mac: str, retry_limits: dict[int, int]
     print(verdict.line())
 
 
+def run_root_console_arm(transcript_path: Path | None) -> None:
+    """The host exam and the source audit of the console route, then one boot of the local composition
+    whose raw serial bytes are judged."""
+    try:
+        refused = root_console.controls()
+    except ValueError as error:
+        fail(f"root console controls: {error}")
+    print(f"[root-console] controls refused={refused}", flush=True)
+    try:
+        root_console.audit(ROOT)
+        cases = root_console.run_exam(ROOT)
+    except ValueError as error:
+        fail(str(error))
+    print(f"[root-console] host exam cases={cases} kernel_bytes_after_install=0; source audit passed", flush=True)
+    image = build_image("sel4-io-local")
+    terminal = re.compile(LOCAL_CHAINS[-1][1][-1] + "|" + "|".join(FAILURE_MARKERS))
+    with tempfile.TemporaryDirectory(prefix="slime-root-console-") as directory:
+        raw_path = Path(directory) / "run.serial"
+        transcript = run_plane(image=image, timeout=TIMEOUT, terminal_condition=terminal, fail=fail, pins_path=PINS, raw_transcript=raw_path)
+        raw = raw_path.read_bytes()
+    if transcript_path is not None:
+        transcript_path.write_text(transcript, encoding="utf-8")
+    try:
+        match_marker_contract(transcript, LOCAL_CHAINS, FAILURE_MARKERS, fail)
+        try:
+            verdict = root_console.judge(raw)
+        except ValueError as error:
+            fail(str(error))
+    except SystemExit:
+        print(transcript)
+        raise
+    print(verdict.line())
+    devloop_observations.record(casesObserved=cases, recordsObserved=verdict.records, negativeControlsRefused=refused)
+
+
 def run_link_wake_arm(image: Path, mac: str, retry_limits: dict[int, int], transcript_path: Path | None) -> None:
     """The tcp-buffers run, with the rx-window acknowledgment latency and the service's device wakes judged."""
     transcript, peer = run_buffers_arm(image, mac, retry_limits, transcript_path)
@@ -1594,7 +1634,7 @@ def run_http_public_arm(image: Path, transcript_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Boot and check the seL4 I/O network proof planes")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "tcp-buffers", "root-diagnostics", "link-wake", "net", "zenoh", "zenoh-service", "zenoh-external", "http", "http-public", "all"), default="all")
+    parser.add_argument("--arm", choices=("authority", "tcp", "local", "lifetime", "service-fault", "driver-reset", "tcp-impairment", "tcp-listener", "tcp-options", "tcp-buffers", "root-diagnostics", "root-console", "link-wake", "net", "zenoh", "zenoh-service", "zenoh-external", "http", "http-public", "all"), default="all")
     parser.add_argument("--controls-only", action="store_true", help="zenoh-external arm only: run the judges against their mutated evidence, without QEMU or a listener")
     parser.add_argument("--allow-public", action="store_true", help="explicitly authorize the opt-in public DNS/HTTP smoke")
     parser.add_argument("--http-case", choices=tuple(case.name for case in http_peer.cases()))
@@ -1676,6 +1716,13 @@ def main() -> None:
             "seL4 root diagnostics check: the root printed each per-operation clock and payload DMA "
             "diagnostic once per key, its repeat counters matched the frames on the wire, and the "
             "tcp-buffers plane passed with its throughput recorded"
+        )
+    if arguments.arm == "root-console":
+        run_root_console_arm(arguments.transcript)
+        print(
+            "seL4 root console check: with a UART installed the root's writer sent the kernel sink no byte, "
+            "the root installs QEMU virt's PL011 once and before its first record, and the first record of "
+            "the boot was the install marker with a carriage return before every later line feed"
         )
     if arguments.arm == "link-wake":
         try:
