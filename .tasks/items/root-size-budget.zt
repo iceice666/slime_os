@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1e925-f21f-7c7b-8c45-b6b46bcefd1e" "root-size-
   "The source of slime-root has a budget by role, and a ceiling changes only with an approval"
   "slime-root holds 61664 lines in 73 Rust files, and 34294 of them are code lines outside tests. Nothing bounds that count, and nothing says which role a file has. The root also holds component policy and names three product components, although mechanism belongs in the root and policy in components. Two decisions are unrecorded: which roles stay in the root, and which target profiles may claim the verified kernel configuration. Without a count by role, a later milestone cannot state its exit condition as a number.")
   with {
+    intent = #active;
     owns = {
       "docs/decisions/root-task-scope.md";
       "docs/decisions/verified-kernel-profile.md";
