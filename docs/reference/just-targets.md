@@ -96,6 +96,7 @@ For how the planes work and how to add one, read
 | `just private_memory_phase4_check` | One recipe covering the phase-4 surface: the adaptive planes on both reference architectures, their over-guaranteed negative control, and the whole fixed and demand-backed surface underneath them. |
 | `just private_memory_phase5_check` | MEM-ADAPTIVE's qualification: the inventory matrix on both reference architectures over the whole phase-4 surface. |
 | `just private_memory_policy_check` | Formatting, lint, and host tests plus the private-memory policy planes. |
+| `just root_size_check` | The source budget of `slime-root`: every Rust file under `slime-root/` has one role, and each role and the nine series roles together hold at most their ceiling of code lines. Builds nothing. |
 | `just ruff` | `ruff check scripts/` |
 | `just ruff_fix` | `ruff check scripts/ --fix` |
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |
