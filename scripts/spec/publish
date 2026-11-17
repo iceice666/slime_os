@@ -106,6 +106,8 @@ def refuse_stale(ref: str, current: str) -> None:
             f"  Delete the local branch and publish again:\n"
             f"    git fetch origin +refs/heads/evidence:{FETCHED}\n"
             f"    git update-ref -d {ref}\n"
+            f"  The second command drops every commit that is only on the local branch. A record\n"
+            f"  of such a commit must still be under build/observations/, or it is lost.\n"
             f"  Never push the evidence branch with --force."
         )
 
