@@ -114,11 +114,11 @@ recipes. `scripts/spec/check` became the only judge, and it blocks.
 - A pull request can edit the workflow that runs the judge, or add one that
   reports a passing check of the same name. A personal-account GitHub
   repository cannot require a workflow from `main`; only an organization
-  ruleset can. So the `main` ruleset requires the `Devloop v1.5 judge` and
-  `CI` status checks and Code Owner review, and `.github/CODEOWNERS` lists
-  `.github/`, `scripts/spec/` and the owner lists. A pull request that
-  touches them needs an approval from a person in `HUMAN_OWNERS` other than
-  its author. On GitLab, a protected pipeline definition replaces both.
+  ruleset can. The `main` ruleset requires the `Devloop v1.5 judge` and `CI`
+  status checks and allows no bypass of the judge check. It required Code
+  Owner review until 2026-11-17. [`independent-review.md`](independent-review.md)
+  replaced that with a blocking finding of the review, which is a rule and
+  not a mechanism. On GitLab, a protected pipeline definition replaces it.
 
 ## Revisit when
 

@@ -233,10 +233,10 @@ a PR cannot change the judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`,
 | V11 independent review | Any PR but a closeout whose head has no approval from `HUMAN_OWNERS` or `REVIEW_AGENTS` by someone other than the author. A comment that starts with `@claude review` asks the review agent for one. |
 
 The `Spec judge` workflow runs on every PR push and after each review. The
-`main` ruleset requires its `Devloop v1.5 judge` check. A PR that touches
-`.github/` or `scripts/spec/` also needs a Code Owner approval from another
-owner, because such a PR could replace the check. `just spec_e2e` is the judge's own
-exam: it walks a fixture repository through every stage.
+`main` ruleset requires its `Devloop v1.5 judge` check and allows no bypass
+of it. A PR that touches `.github/` could replace the check. The review rules
+make that a blocking finding. `just spec_e2e` is the judge's own exam: it
+walks a fixture repository through every stage.
 
 ## No GitHub projection
 

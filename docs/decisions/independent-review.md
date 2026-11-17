@@ -8,9 +8,9 @@ every pull request
 
 ## Context
 
-V4 requires one approval on the head from a person in `HUMAN_OWNERS` other
-than the author. The `main` ruleset also requires Code Owner review for
-`.github/`, `scripts/spec/` and the owner lists.
+Before this decision, V4 required one approval on the head from a person in
+`HUMAN_OWNERS` other than the author. The `main` ruleset also required Code
+Owner review for `.github/`, `scripts/spec/` and the owner lists.
 
 Agents have no account on GitHub. An agent session pushes with a person's
 account, so that person is the author and cannot approve. `HUMAN_OWNERS` lists
@@ -77,10 +77,9 @@ teaches the owner to merge over red, which hides a red that has a real cause.
 
 ## Implementation state
 
-The judge enforces decisions 1 to 7 and 9 as rules V4 and V11. Decision 8
-waits for the `main` ruleset, which only an owner can change. Until then the
-ruleset still requires Code Owner review, and an owner can still bypass a
-check.
+The judge enforces decisions 1 to 7 and 9 as rules V4 and V11. The `main`
+ruleset carries decision 8. Only an owner can change the ruleset, and no file
+in the repository states it, so the last row below records the owner's report.
 
 | Part | Where it lives | State |
 |---|---|---|
@@ -91,7 +90,8 @@ check.
 | The blocking finding of decision 10 | `.agents/skills/pr-review/SKILL.md` | landed |
 | The rule text | `work-item-devloop.md`, `AGENTS.md`, `CONTRIBUTING.md` | landed |
 | GitHub Actions may approve a pull request | the repository's Actions settings | the owner enabled it on 2026-11-17 |
-| No Code Owner review, and no bypass of the judge check | the `main` ruleset and `.github/CODEOWNERS` | open |
+| No Code Owner review, and no bypass of the judge check | the `main` ruleset | the owner reported it changed on 2026-11-17 |
+| `.github/CODEOWNERS` | removed | landed |
 
 ## Alternatives
 
