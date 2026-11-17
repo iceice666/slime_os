@@ -22,6 +22,9 @@ REVIEW_AGENTS. It then walks the exit fixtures of devloop-v1.5-bootstrap:
       still passes after main moves past the witness; a missing or forged
       witness and an edited terminal item are refused.
 
+Last, `publish` refuses a local evidence branch that is behind the fetched
+one or has another history, and accepts one that equals it or is ahead.
+
 Every negative control has a positive twin in the same walk. Reports
 `casesObserved` and `negativeControlsRefused` through the gate protocol
 and exits non-zero when any case fails. Never touches this checkout.
@@ -390,6 +393,39 @@ def owners_floor(f: Fixture) -> None:
     f.run("git", "checkout", "-q", "main")
 
 
+def stale_evidence(f: Fixture) -> None:
+    """`publish` against a fetched evidence ref. The fixture has no remote, so the walk sets the ref itself."""
+    fetched = "refs/remotes/origin/evidence"
+
+    def tip() -> str:
+        return f.run("git", "rev-parse", "refs/heads/evidence").stdout.strip()
+
+    def tree() -> str:
+        return f.run("git", "rev-parse", "refs/heads/evidence^{tree}").stdout.strip()
+
+    def publish(label: str, accepted: bool) -> None:
+        done = f.spec("publish")
+        stale = done.returncode != 0 and "does not contain" in done.stderr
+        if accepted:
+            ok(not stale, label, done.stdout + done.stderr)
+        else:
+            ok(stale, f"refuses: {label}", done.stdout + done.stderr)
+            if stale:
+                REFUSED.append(label)
+
+    f.run("git", "update-ref", fetched, tip())
+    publish("publish accepts a local evidence branch equal to the fetched one", True)
+    f.run("git", "update-ref", fetched, f.run("git", "rev-parse", "refs/heads/evidence~1").stdout.strip())
+    publish("publish accepts a local evidence branch ahead of the fetched one", True)
+    ahead = f.run("git", "commit-tree", tree(), "-p", tip(), "-m", "the remote moved").stdout.strip()
+    f.run("git", "update-ref", fetched, ahead)
+    publish("publish on a local evidence branch behind the fetched one", False)
+    other = f.run("git", "commit-tree", tree(), "-m", "another history").stdout.strip()
+    f.run("git", "update-ref", fetched, other)
+    publish("publish on a local evidence branch with another history", False)
+    f.run("git", "update-ref", "-d", fetched)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--keep", action="store_true")
@@ -402,6 +438,7 @@ def main() -> int:
         m2_classes(fixture)
         m3_closeout(fixture)
         owners_floor(fixture)
+        stale_evidence(fixture)
     finally:
         if args.keep:
             print(f"kept {temporary}")

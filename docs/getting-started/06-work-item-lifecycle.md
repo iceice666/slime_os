@@ -192,8 +192,19 @@ python3 scripts/spec/human area <area> <requirement id> <acceptance id> yes --si
 The record binds to the item's requirements digest. Rewording a statement or
 an acceptance asks the question again. The principal must be in
 `specs/allowed_signers`. Record an answer only when the person gave it.
-Automation never infers one. `scripts/spec/publish` carries the record to the
-`evidence` branch.
+Automation never infers one.
+
+Three commands carry the record to the `evidence` branch:
+
+```sh
+git fetch origin +refs/heads/evidence:refs/remotes/origin/evidence
+python3 scripts/spec/publish
+git push origin refs/heads/evidence
+```
+
+`publish` refuses a local `evidence` branch that does not contain the fetched
+one, and prints the two commands that reset it. Never push `evidence` with
+`--force`: a forced push replaces every record the branch holds.
 
 ## Closeout PRs
 
