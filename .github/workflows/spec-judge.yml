@@ -92,14 +92,14 @@ jobs:
           judge="$RUNNER_TEMP/judge"
           mkdir -p "$judge"
           paths=""
-          for path in scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS; do
+          for path in scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS REVIEW_AGENTS; do
             if git cat-file -e "$BASE:$path" 2>/dev/null; then paths="$paths $path"; fi
           done
           if git cat-file -e "$BASE:scripts/spec/check" 2>/dev/null; then
             git archive "$BASE" $paths | tar -x -C "$judge"
           else
             echo "the base carries no judge; judging with the head's code"
-            cp -r --parents scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS "$judge"/
+            cp -r --parents scripts/spec contracts/observation contracts/task specs/allowed_signers HUMAN_OWNERS AGENT_ACCOUNTS REVIEW_AGENTS "$judge"/
           fi
           SPEC_ROOT="$PWD" SPEC_JUDGE=base nix develop "$SHELL_ATTR" --command \
             python3 "$judge/scripts/spec/check" --base "$BASE" --forge github

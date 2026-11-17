@@ -12,10 +12,11 @@ is [the devloop v1.5 decision](../decisions/work-item-devloop.md).
 |---|---|
 | The item file | Scope (`owns`), requirements, acceptances, `intent` |
 | Area files `specs/<area>.zt` | The frozen promises: what a subsystem guarantees today |
-| `scripts/spec/check`, from the base commit | Whether a PR is legal under V1 to V10 |
+| `scripts/spec/check`, from the base commit | Whether a PR is legal under V1 to V11 |
 | The `Evidence` workflow on `main` | Records, keyed by closure digest, and done witnesses |
 | The closeout bot | The PR that moves a witnessed or cancelled item to `.tasks/terminal/` |
-| `HUMAN_OWNERS` | V4 approvals, and answers to `#human` acceptances |
+| `HUMAN_OWNERS` | Approvals, and answers to `#human` acceptances |
+| `REVIEW_AGENTS` | The accounts whose approval is the review agent's verdict |
 
 Nobody runs a command that marks an item done.
 
@@ -108,7 +109,7 @@ Every PR has one class, judged from its paths (V1).
 | Planning | The item with `intent = #planned`, and its exam: the recipe and checkers its acceptances name | V1. V4 if it changes an existing grader or area invariant. |
 | Implementation | `intent = #active` and the product change, inside `owns` | V2: every implementation path is under `owns` of an item that is on base and `#active` on head. V3: no path in the grader set of a bound target. |
 | Closeout | The item file moved to `.tasks/terminal/` byte for byte | V6: a signed done witness, or `#cancelled`. |
-| Process | `docs/`, `.agents/`, `.github/`, `scripts/spec/`, top-level `*.md` | V4 for a change to `scripts/spec/`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or `specs/allowed_signers`. |
+| Process | `docs/`, `.agents/`, `.github/`, `scripts/spec/`, top-level `*.md` | V4 for a change to `scripts/spec/`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `REVIEW_AGENTS` or `specs/allowed_signers`. |
 
 The planning PR merges first. An implementation PR that changes only an item's
 `intent` beside product paths is still one implementation PR. One item may
@@ -214,21 +215,22 @@ deletion.
 
 `just spec_check` judges the store alone. `just spec_check --base origin/main`
 judges your branch as CI does. CI runs the base commit's copy of the judge, so
-a PR cannot change the judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS` or
-`specs/allowed_signers` that judge it.
+a PR cannot change the judge, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`,
+`REVIEW_AGENTS` or `specs/allowed_signers` that judge it.
 
 | Rule | Refuses |
 |---|---|
 | V1 class | A PR with more than one class, or a path the class table does not list. |
 | V2 planning first | An implementation path under no `owns` of an item that is on base and `#active` on head. |
 | V3 no self-grading | An implementation PR that touches the grader set of any bound target. |
-| V4 grader approval | A grader change, area invariant change, existing contract schema change, or judge change without one approval on the head from `HUMAN_OWNERS` by someone other than the author. |
+| V4 grader approval | A grader change, area invariant change, existing contract schema change, or judge change without one approval on the head from `HUMAN_OWNERS` or `REVIEW_AGENTS` by someone other than the author. |
 | V5 legal intent | An `intent` change outside `EDGES`. Entering `#deferred` or `#cancelled` without a V4 approval. |
 | V6 closeout | A move to `terminal/` without a signed done witness, unless the item is `#cancelled`. Any later change to a terminal item. |
 | V7 backlog first | A milestone, or an item under one, entering `#active` while a backlog bug is `#planned` or `#active`, or while a promise fails. |
 | V8 R4 floor | A lowered `negativeControlsRefused` predicate without an approved R4 known limit. Milestone M5: the judge does not enforce it yet. |
 | V9 provenance | A `#human` quote shorter than 8 characters, a blanket answer, or a PR number as source. Warning only. |
 | V10 frozen promises | An added, changed or removed area requirement. |
+| V11 independent review | Any PR but a closeout whose head has no approval from `HUMAN_OWNERS` or `REVIEW_AGENTS` by someone other than the author. A comment that starts with `@claude review` asks the review agent for one. |
 
 The `Spec judge` workflow runs on every PR push and after each review. The
 `main` ruleset requires its `Devloop v1.5 judge` check. A PR that touches

@@ -102,7 +102,7 @@ For how the planes work and how to add one, read
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |
 | `just smoltcp_matrix_check` | The smoltcp support matrix in the network data-plane plan against the locked release, its checksum-verified crate archive, and the network service's enabled features; needs `cargo fetch --locked`. |
 | `just spec_e2e` | The devloop v1.5 exam: M1 to M3 on a throwaway fixture repository, judged by the base commit's judge; reports `casesObserved` and `negativeControlsRefused`. |
-| `just spec_check ARGS` | The devloop v1.5 judge: the store alone, or with `--base REV` the pull request under V1 to V10 (`--forge github` reads the author and the approvals). The `Spec judge` workflow runs the base commit's copy on every pull request and blocks. |
+| `just spec_check ARGS` | The devloop v1.5 judge: the store alone, or with `--base REV` the pull request under V1 to V11 (`--forge github` reads the author and the approvals). The `Spec judge` workflow runs the base commit's copy on every pull request and blocks. |
 | `just spec_tasks_check ARGS` | `task/v2` items and the frozen area files: format, links and schema copies; with `--base` also V5, V7 and V10 (`scripts/spec/tasks check`). |
 | `just spec_status ARGS` | Each area requirement's state from the `evidence` branch: enforced, failing, claimed, advisory or superseded. |
 | `just spec_tasks_status ARGS` | Each `task/v2` item's state from the `evidence` branch; `--claimed` lists what the Evidence workflow would run, `--weekly` the seven v1.5 metrics. |

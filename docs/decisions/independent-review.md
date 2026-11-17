@@ -77,19 +77,21 @@ teaches the owner to merge over red, which hides a red that has a real cause.
 
 ## Implementation state
 
-This record states a decision. Nothing implements it yet, and until each part
-below lands, V4 and the ruleset run as
-[`work-item-devloop.md`](work-item-devloop.md) describes them.
+The judge enforces decisions 1 to 7 and 9 as rules V4 and V11. Decision 8
+waits for the `main` ruleset, which only an owner can change. Until then the
+ruleset still requires Code Owner review, and an owner can still bypass a
+check.
 
-| Part | Where it changes |
-|---|---|
-| The verdict as a review on the head commit | `.github/workflows/agent-review.yml` |
-| The accounts whose approval counts | `REVIEW_AGENTS` |
-| The judge requires the review on every pull request but a closeout, and V4 accepts it | `scripts/spec/check`, `scripts/spec/rules.py`, `scripts/spec/lib.py`, `scripts/spec/e2e` |
-| The blocking finding of decision 10 | `.agents/skills/pr-review/SKILL.md` |
-| No Code Owner review, and no bypass of the judge check | the `main` ruleset and `.github/CODEOWNERS` |
-| GitHub Actions may approve a pull request | the repository's Actions settings |
-| The rule text | `work-item-devloop.md`, `AGENTS.md`, `CONTRIBUTING.md` |
+| Part | Where it lives | State |
+|---|---|---|
+| The verdict as a review on the head commit | `.github/workflows/agent-review.yml` | landed |
+| The accounts whose approval counts | `REVIEW_AGENTS` | landed |
+| V11, and V4 accepting the same review | `scripts/spec/check`, `scripts/spec/rules.py`, `scripts/spec/e2e` | landed |
+| The judge runs again after a verdict | `.github/workflows/agent-review.yml` | landed |
+| The blocking finding of decision 10 | `.agents/skills/pr-review/SKILL.md` | landed |
+| The rule text | `work-item-devloop.md`, `AGENTS.md`, `CONTRIBUTING.md` | landed |
+| GitHub Actions may approve a pull request | the repository's Actions settings | the owner enabled it on 2026-11-17 |
+| No Code Owner review, and no bypass of the judge check | the `main` ruleset and `.github/CODEOWNERS` | open |
 
 ## Alternatives
 

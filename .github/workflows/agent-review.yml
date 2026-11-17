@@ -7,9 +7,11 @@
 # the workflow or the skills that review it, and a pull request from a fork is
 # reviewed with the same credentials as any other.
 #
-# The agent posts its findings. It does not post the verdict: the last step
+# The agent posts its findings. It does not post the verdict: a later step
 # derives the verdict from the agent's structured result and submits it as a
 # review on the head commit, under the account of this workflow's token.
+# REVIEW_AGENTS names that account, and the judge reads the review as an
+# approval of the head (V4, V11).
 name: Agent review
 
 on:
@@ -35,7 +37,8 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-      actions: read
+      # The last step runs the judge again.
+      actions: write
     steps:
       # The default branch, never the pull request's head: the review rules
       # come from `main`, and no code of the pull request runs here.
@@ -156,3 +159,20 @@ jobs:
           gh("-X", "POST", f"repos/{repo}/pulls/{number}/reviews", "-f", f"commit_id={head}", "-f", f"event={event}", "-f", f"body={body}")
           print(f"recorded {event} on {head}")
           PY
+
+      # A review submitted with this workflow's token starts no workflow, so
+      # the judge would keep the verdict it reached before the review. Its
+      # latest run for this head runs again and reads the approvals afresh. A
+      # run still in progress finishes first: it may have read them already.
+      - name: Run the judge again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ steps.pull.outputs.head }}
+        run: |
+          run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow spec-judge.yml --commit "$HEAD" --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -z "$run" ] || [ "$run" = null ]; then
+            echo "no judge run for $HEAD"
+            exit 0
+          fi
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || true
+          gh run rerun "$run" --repo "$GITHUB_REPOSITORY"
