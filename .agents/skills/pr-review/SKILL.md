@@ -53,7 +53,9 @@ A finding is **blocking** only when:
 - a refused input is accepted;
 - an authority, lifetime, or determinism rule is broken;
 - a format crossing a boundary has no Zutai contract;
-- the recipe cannot pass as landed.
+- the recipe cannot pass as landed;
+- the PR adds a workflow or a job whose check name equals a required check,
+  or that submits a review, because either could report the PR's own verdict.
 
 A real defect in the diff whose fix is local is a **non-blocking** finding.
 
