@@ -122,7 +122,8 @@ check.
   or that approves the pull request under the review account. Decision 10 is
   the only guard, and it is an agent's finding, not a mechanism.
 - V8, the floor on `negativeControlsRefused`, becomes the main mechanical
-  defence. The judge does not enforce V8 yet.
+  defence. The judge enforces it for the predicates that items and areas
+  state. It does not compare the counts of records.
 - With no bypass, a judge that exits without a verdict blocks every pull
   request that reaches that path until a process pull request repairs it.
 - The pull request that changes V4 is judged by the V4 it replaces. It needs

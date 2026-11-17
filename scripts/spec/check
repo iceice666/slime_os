@@ -26,11 +26,13 @@ a judge runs the head's code and says so.
 Rules: V1 class (every changed path has a class, and one class per pull
 request), V2 planning first (`owns` of an item on base that is #active on
 head covers every implementation path), V3 no self-grading, V4 grader
-approval, V5 legal intent, V6 closeout by witness, V7 backlog first, V9
-provenance (warning), V10 frozen area requirements, V11 independent review
-(every pull request but a closeout has an approval on its head from
-`HUMAN_OWNERS` or `REVIEW_AGENTS`, and that approval also satisfies V4 and
-V5). `--report` prints the verdict and exits 0.
+approval, V5 legal intent, V6 closeout by witness, V7 backlog first, V8 R4
+floor (a bound target's floor on `negativeControlsRefused` drops only with a
+known limit added in the same pull request), V9 provenance (warning), V10
+frozen area requirements, V11 independent review (every pull request but a
+closeout has an approval on its head from `HUMAN_OWNERS` or `REVIEW_AGENTS`,
+and that approval also satisfies V4 and V5). `--report` prints the verdict
+and exits 0.
 """
 
 from __future__ import annotations
@@ -201,6 +203,7 @@ def judge_sides(args: argparse.Namespace, base_sha: str, base: Side, head: Side,
     rules.check_transitions(base.items, head.items, findings)
     rules.check_backlog(base.items, head.items, lambda: failing_promises(head), findings)
     rules.check_frozen_areas(base.areas, head.areas, findings)
+    rules.check_control_floor(base.items, base.areas, head.items, head.areas, findings)
     approvers = {a.strip() for a in args.approvers.split(",") if a.strip()}
     # V11 exempts a closeout, which V6 judges from a signed witness, and a head
     # that changes no path.
