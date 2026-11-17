@@ -19,8 +19,9 @@ REVIEW_AGENTS. It then walks the exit fixtures of devloop-v1.5-bootstrap:
       approved, one the review agent opened and approved, and one approved
       by an account the pull request itself adds to REVIEW_AGENTS.
   R4  refused (V8): an item that lowers its floor on negativeControlsRefused,
-      one that removes the predicate, and one that lowers the floor again
-      under a known limit an earlier pull request added. A lowering that adds
+      one that removes the predicate, one that moves the predicate to an
+      advisory acceptance, and one that lowers the floor again under a known
+      limit an earlier pull request added. A lowering that adds
       an R4 known limit passes with a review and is refused (V4) without one.
   M3  planning -> implementation -> closeout with no re-record; the closeout
       still passes after main moves past the witness; a missing or forged
@@ -108,7 +109,7 @@ MILESTONE = "01a1c4a0-e2e0-7000-8000-0000000000a1"
 REVIEWER = "review-bot"
 
 
-def item(kind: str, uid: str, slug: str, intent: str = "planned", target: str = "feature_exam", extra: str = "", controls: int | None = 2) -> str:
+def item(kind: str, uid: str, slug: str, intent: str = "planned", target: str = "feature_exam", extra: str = "", controls: int | None = 2, more: str = "") -> str:
     floor = "" if controls is None else f' h.atLeast "negativeControlsRefused" {controls};'
     return f'''s ::= import "./schema.zt";
 h ::= import "./helpers.zt";
@@ -116,7 +117,7 @@ item :: s.Item = (h.{kind} "{uid}" "{slug}" "e2e" "Fixture {slug}" "The e2e fixt
   intent = #{intent};
   owns = {{ "components/e2e/**"; }};
   requirements = {{ (h.req "cases" "The exam observes three cases." {{ "{target}"; }}) with {{ provenance = h.fromHuman "three cases, each one a refusal" "docs/e2e.md"; }}; }};
-  acceptance = {{ h.observedWhere "{target}" {{ h.count "casesObserved" 3;{floor} }}; }};
+  acceptance = {{ h.observedWhere "{target}" {{ h.count "casesObserved" 3;{floor} }}; {more} }};
   {extra}
 }};
 item
@@ -341,6 +342,12 @@ def r4_floor(f: Fixture) -> None:
     f.write(path, item("task", FEATURE, "feature-a", controls=None))
     f.commit("drop the control predicate")
     refused(f.check(), "V8", "an item that removes its negativeControlsRefused predicate")
+
+    f.branch("advisory-floor")
+    advisory = 'h.advisory (h.observedAs "floor" "feature_exam" { h.atLeast "negativeControlsRefused" 2; });'
+    f.write(path, item("task", FEATURE, "feature-a", controls=None, more=advisory))
+    f.commit("move the control floor to an advisory acceptance")
+    refused(f.check(), "V8", "an item that moves its floor to an advisory acceptance")
 
     f.branch("raise-floor")
     f.write(path, item("task", FEATURE, "feature-a", controls=3))

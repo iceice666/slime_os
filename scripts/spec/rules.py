@@ -246,8 +246,10 @@ def control_floor(predicates: list) -> int | None:
 
 def control_floors(items: list[lib.Item], areas: list[lib.Area]) -> dict[str, int | None]:
     """Each bound target's floor on `negativeControlsRefused`: the highest
-    lower bound among the acceptances that bind it, as `lib.bound_targets`
-    counts them, or None when none of them bounds the count."""
+    lower bound among the mandatory acceptances that bind it, or None when
+    none of them bounds the count. The items and areas are those
+    `lib.bound_targets` counts. An advisory acceptance sets no floor, because
+    `lib.item_done` never reads its predicates."""
     gone = lib.superseded(items)
     floors: dict[str, int | None] = {}
 
@@ -261,7 +263,7 @@ def control_floors(items: list[lib.Item], areas: list[lib.Area]) -> dict[str, in
             for acceptance in item.value["acceptance"]:
                 if lib.tag(acceptance["check"]) == "observed":
                     body = lib.payload(acceptance["check"])
-                    note(body["justTarget"], body["predicates"])
+                    note(body["justTarget"], body["predicates"] if acceptance["mandatory"] else [])
     for area in areas:
         for requirement in area.requirements:
             if requirement["id"] not in gone:
