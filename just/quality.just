@@ -101,6 +101,15 @@ fmt_check_all: fmt_check
 docs_check:
     python3 scripts/check/check-docs.py
 
+# The source budget of slime-root: every Rust file under slime-root/ has exactly one role, and each role
+# and the nine series roles together hold at most their ceiling of code lines. The role table, the
+# ceilings and the pinned dependency names are in scripts/check/check-root-size.py. Reads source text and
+# slime-root/Cargo.toml; builds nothing.
+[group('quality')]
+[metadata("inputs", "slime-root/**")]
+root_size_check:
+    python3 scripts/check/check-root-size.py
+
 # The smoltcp support matrix in docs/plans/network-data-plane.md against the
 # locked release, its checksum-verified crate archive (`cargo fetch --locked`)
 # and the network service's enabled features.
