@@ -103,7 +103,7 @@ readable and link to the decision that replaced them.
 - [Verified kernel profile](verified-kernel-profile.md) — accepted; no target
   profile claims the verified kernel configuration today, and only a new
   `bcm2712-rpi5-verified` profile may, under three gates and one wording.
-- [Independent review for grader changes](independent-review-for-grader-changes.md)
-  — accepted, not yet implemented; V4 takes an approval from another owner or a
-  review-agent verdict with no blocking finding, for every path and every
-  author, and nobody merges over a red judge.
+- [Independent review](independent-review.md) — accepted, not yet implemented;
+  every pull request but a closeout needs an approval from another owner or a
+  review-agent verdict with no blocking finding, the same review satisfies V4,
+  and nobody merges over a red judge.

@@ -1,9 +1,10 @@
-# A grader change needs one independent review, by a person or by the review agent
+# Every pull request needs one independent review, by a person or by the review agent
 
 **Status:** Accepted
 **Decided by:** the project's human owner, 2026-11-17
 **Amends:** rule V4 and the section "Who is who" of
-[`work-item-devloop.md`](work-item-devloop.md)
+[`work-item-devloop.md`](work-item-devloop.md), and adds a review rule for
+every pull request
 
 ## Context
 
@@ -39,33 +40,35 @@ teaches the owner to merge over red, which hides a red that has a real cause.
 
 ## Decision
 
-1. V4 requires one independent review of the current head. Two things satisfy
-   it:
+1. Every pull request needs one independent review of its current head. Two
+   things satisfy it:
    - an approving review from a person in `HUMAN_OWNERS` other than the
      author, or
    - a verdict of the review agent that reports no blocking finding.
-2. The rule is the same for every path V4 names. The judge's own paths have no
-   stricter rule.
-3. The rule is the same for every author. A pull request of an owner needs the
+2. A closeout pull request is the one exception. It moves an item file
+   unchanged, and V6 judges it from a signed witness.
+3. The same review satisfies V4. The paths V4 names, the judge's own paths
+   among them, have no stricter rule.
+4. The rule is the same for every author. A pull request of an owner needs the
    review as any other does.
-4. The review agent runs from the workflow on `main`, under its own account. A
+5. The review agent runs from the workflow on `main`, under its own account. A
    pull request cannot change the workflow or the skill that reviews it.
-5. A verdict binds to one head commit. A push needs a new review.
-6. The review workflow records its verdict as a commit status on the head.
+6. A verdict binds to one head commit. A push needs a new review.
+7. The review workflow records its verdict as a commit status on the head.
    `scripts/spec/forge.py` gains a sixth function that reads it, so no other
    file in `scripts/spec/` knows the code host.
-7. Nobody merges over a red judge. The `main` ruleset allows no bypass of the
+8. Nobody merges over a red judge. The `main` ruleset allows no bypass of the
    `Devloop v1.5 judge` check. If the judge exits without a verdict, a process
    pull request repairs the judge first.
-8. The author never reviews the author's own pull request. A session that
+9. The author never reviews the author's own pull request. A session that
    opened a pull request does not produce its verdict.
-9. The review agent reports as blocking a pull request that adds a workflow
-   or a job whose check name equals a required check.
-10. No rule relies on a person reading a diff. A person decides what an agent
+10. The review agent reports as blocking a pull request that adds a workflow
+    or a job whose check name equals a required check.
+11. No rule relies on a person reading a diff. A person decides what an agent
     asks: the cases [`AGENTS.md`](../../AGENTS.md) and
     [`HUMAN.md`](../../HUMAN.md) hand to a person, and the agent defaults a
     pull request lists under `Decisions`.
-11. The review rules in [`AGENTS.md`](../../AGENTS.md) stay as they are. One
+12. The review rules in [`AGENTS.md`](../../AGENTS.md) stay as they are. One
     review per head, and the author asks a person when a third round raises a
     new finding on the same subject.
 
@@ -77,10 +80,10 @@ below lands, V4 and the ruleset run as
 
 | Part | Where it changes |
 |---|---|
-| V4 accepts the review agent's verdict | `scripts/spec/check`, `scripts/spec/rules.py`, `scripts/spec/e2e` |
+| The judge requires the review on every pull request but a closeout, and V4 accepts it | `scripts/spec/check`, `scripts/spec/rules.py`, `scripts/spec/e2e` |
 | The sixth forge function | `scripts/spec/forge.py` |
 | The verdict as a commit status | `.github/workflows/claude.yml` |
-| The blocking finding of decision 9 | `.agents/skills/pr-review/SKILL.md` |
+| The blocking finding of decision 10 | `.agents/skills/pr-review/SKILL.md` |
 | No Code Owner review, and no bypass of the judge check | the `main` ruleset and `.github/CODEOWNERS` |
 | The rule text | `work-item-devloop.md`, `AGENTS.md`, `CONTRIBUTING.md` |
 
@@ -90,6 +93,9 @@ below lands, V4 and the ruleset run as
   claim that does not hold, and merging over red stays normal.
 - **Remove V4.** An implementation could then change its own exam with no
   second reader of any kind.
+- **Require the review for grader changes only.** An implementation pull
+  request would then merge with no reader, because the owner does not read
+  diffs.
 - **Give agents their own accounts and list them in `AGENT_ACCOUNTS`.** This
   is the plan for the GitLab move. It separates the author from the approver,
   and it does not add a second person.
@@ -99,14 +105,15 @@ below lands, V4 and the ruleset run as
 
 ## Consequences
 
-- No person reads a grader change by default. The second reader may be an
-  agent of the same model family as the author, and their blind spots
-  correlate.
+- No person reads a change by default. The second reader may be an agent of
+  the same model family as the author, and their blind spots correlate.
+- Each head of each pull request costs one agent review. The review rules
+  bound the rounds, not the count of heads.
 - Text in a pull request can address the review agent. Running the reviewer
   from `main` limits this and does not remove it.
 - GitHub matches a required check by name. Without Code Owner review, a pull
   request can add a workflow that reports a passing check of a required name.
-  Decision 9 is the only guard, and it is an agent's finding, not a mechanism.
+  Decision 10 is the only guard, and it is an agent's finding, not a mechanism.
 - V8, the floor on `negativeControlsRefused`, becomes the main mechanical
   defence. The judge does not enforce V8 yet.
 - With no bypass, a judge that exits without a verdict blocks every pull
@@ -116,8 +123,8 @@ below lands, V4 and the ruleset run as
 
 ## Revisit when
 
-- A person finds a blocking defect in a grader change that the review agent
-  passed. Count these.
+- A person finds a blocking defect in a change that the review agent passed.
+  Count these.
 - A second person reviews regularly, or the GitLab move gives agents their own
   accounts.
 - The code host cannot record the verdict as a commit status that the ruleset
