@@ -18,13 +18,19 @@ on:
   issue_comment:
     types: [created]
 
+# A request is a pull-request comment that starts with `@claude review`, from
+# the repository's owner, a member or a collaborator. `claude-code-action`
+# admits only an actor with write access, but it runs inside the job: a comment
+# from anyone else would already have cancelled the review in progress. So the
+# group and the job's `if` test the same condition.
+#
 # A newer request supersedes a review still running for the same pull request.
 # Every comment on the repository starts a run of this workflow, and a
 # workflow-level group applies before the job's `if`. A comment that is no
 # request therefore gets a group of its own: it must not cancel a review, and
 # the agent's own summary comment is such a comment.
 concurrency:
-  group: agent-review-${{ github.event.issue.number }}-${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '@claude review') && 'request' || github.run_id }}
+  group: agent-review-${{ github.event.issue.number }}-${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '@claude review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && 'request' || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -32,7 +38,8 @@ jobs:
     name: Agent review
     if: >-
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '@claude review')
+      startsWith(github.event.comment.body, '@claude review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
