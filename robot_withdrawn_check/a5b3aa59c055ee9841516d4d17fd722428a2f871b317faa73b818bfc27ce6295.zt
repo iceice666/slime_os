@@ -3,11 +3,11 @@ r :: o.Record = {
   schema = o.schemaVersion;
   target = "robot_withdrawn_check";
   closureDigest = "a5b3aa59c055ee9841516d4d17fd722428a2f871b317faa73b818bfc27ce6295";
-  passed = false;
-  exitCode = 1;
+  passed = true;
+  exitCode = 0;
   counts = {;};
   flags = {;};
-  observedAt = "2026-11-17T09:08:54Z";
+  observedAt = "2026-11-17T16:28:26Z";
   runner = "ci";
   toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
 };
