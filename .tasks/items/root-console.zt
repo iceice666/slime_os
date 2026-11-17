@@ -48,7 +48,7 @@ item :: s.Item = (h.milestone "01a1ea5a-fc2b-7243-8aac-4869740040c4" "root-conso
     };
     acceptance = {
       h.observedWhere "root_console_check" {
-        h.atLeast "negativeControlsRefused" 30;
+        h.atLeast "negativeControlsRefused" 37;
         h.atLeast "casesObserved" 5;
         h.atLeast "recordsObserved" 1;
       };

@@ -372,6 +372,38 @@ _SUBJECT_MUTATIONS = (
         "a refused record reached the UART",
     ),
     (
+        "a writer that sends a refused record's first byte to the kernel sink",
+        "if bytes.len() > 1024 || std::str::from_utf8(bytes).is_err() { return Err(std::fmt::Error); }",
+        "if bytes.len() > 1024 || std::str::from_utf8(bytes).is_err() "
+        "{ if UART.load(Ordering::Acquire) != 0 { crate::debug_put_char(b'!'); } return Err(std::fmt::Error); }",
+        "a refused record reached the kernel sink",
+    ),
+    (
+        "a writer that accepts an oversize record",
+        "if bytes.len() > 1024 || std::str::from_utf8(bytes).is_err() { return Err(std::fmt::Error); }",
+        "if std::str::from_utf8(bytes).is_err() { return Err(std::fmt::Error); }",
+        "an oversize record was accepted",
+    ),
+    (
+        "a writer that accepts a record that is not UTF-8",
+        "if bytes.len() > 1024 || std::str::from_utf8(bytes).is_err() { return Err(std::fmt::Error); }",
+        "if bytes.len() > 1024 { return Err(std::fmt::Error); }",
+        "a record that is not UTF-8 was accepted",
+    ),
+    (
+        "a writer that changes a record on the kernel route",
+        "if uart == 0 { crate::debug_put_char(*byte); } else { put(uart, *byte); }",
+        "if uart == 0 { if *byte == b'\\n' { crate::debug_put_char(b'\\r'); } crate::debug_put_char(*byte); } "
+        "else { put(uart, *byte); }",
+        "before install the kernel sink did not receive the record unchanged",
+    ),
+    (
+        "a writer that drops the bytes after install",
+        "if uart == 0 { crate::debug_put_char(*byte); } else { put(uart, *byte); }",
+        "if uart == 0 { crate::debug_put_char(*byte); }",
+        "after install the data register does not hold the last byte",
+    ),
+    (
         "a writer that ignores a full transmit FIFO",
         "while ((uart + 0x018) as *const u32).read_volatile() & (1 << 5) != 0 { std::hint::spin_loop(); }",
         "",
@@ -640,6 +672,20 @@ _TREE_MUTATIONS = (
         DIAGNOSTIC,
         "fn put(uart: usize, byte: u8) {",
         "pub fn remove() { UART.store(0, Ordering::Release); }\nfn put(uart: usize, byte: u8) {",
+    ),
+    (
+        "a UART sink that does not start at zero",
+        "declares no UART sink that starts at zero",
+        DIAGNOSTIC,
+        "static UART: AtomicUsize = AtomicUsize::new(0);",
+        "static UART: AtomicUsize = AtomicUsize::new(0x0900_0000);",
+    ),
+    (
+        "an install that stores another address",
+        "has no install that only stores the address",
+        DIAGNOSTIC,
+        "UART.store(registers, Ordering::Release);",
+        "UART.store(registers & !0xfff, Ordering::Release);",
     ),
     (
         "a data register written before the flag register is read",
