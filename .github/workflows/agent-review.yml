@@ -41,7 +41,9 @@ jobs:
       startsWith(github.event.comment.body, '@claude review') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The last step waits for judge runs in progress. One that resolves
+    # closures takes about 20 minutes.
+    timeout-minutes: 60
     permissions:
       contents: read
       # The verdict step submits a review.
@@ -172,18 +174,31 @@ jobs:
           PY
 
       # A review submitted with this workflow's token starts no workflow, so
-      # the judge would keep the verdict it reached before the review. Its
-      # latest run for this head runs again and reads the approvals afresh. A
-      # run still in progress finishes first: it may have read them already.
+      # a judge run keeps the verdict it reached before the review. The ruleset
+      # does not merge a head while any check run named `Devloop v1.5 judge` on
+      # it is cancelled or failed. So every judge run of this head that did not
+      # succeed runs again and reads the approvals afresh. A run in progress
+      # finishes first: it may have read them already.
       - name: Run the judge again
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD: ${{ steps.pull.outputs.head }}
         run: |
-          run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow spec-judge.yml --commit "$HEAD" --limit 1 --json databaseId --jq '.[0].databaseId')"
-          if [ -z "$run" ] || [ "$run" = null ]; then
-            echo "no judge run for $HEAD"
+          runs() {
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow spec-judge.yml --commit "$HEAD" --limit 100 \
+              --json databaseId,status,conclusion
+          }
+          for attempt in $(seq 1 240); do
+            busy="$(runs | jq '[.[] | select(.status != "completed")] | length')"
+            if [ "$busy" = 0 ]; then break; fi
+            sleep 10
+          done
+          again="$(runs | jq -r '.[] | select(.status == "completed" and .conclusion != "success") | .databaseId')"
+          if [ -z "$again" ]; then
+            echo "every judge run for $HEAD succeeded"
             exit 0
           fi
-          gh run watch "$run" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || true
-          gh run rerun "$run" --repo "$GITHUB_REPOSITORY"
+          for run in $again; do
+            echo "running judge run $run again"
+            gh run rerun "$run" --repo "$GITHUB_REPOSITORY"
+          done

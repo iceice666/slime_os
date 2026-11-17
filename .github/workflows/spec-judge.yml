@@ -18,9 +18,12 @@ on:
   pull_request_review:
     types: [submitted, dismissed]
 
-concurrency:
-  group: spec-judge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# No concurrency group. A pull request gets one judge run from its push and
+# one from each review, and the Agent review workflow runs them again after a
+# verdict. In one group, a run started again cancelled a newer run. The
+# ruleset does not merge a head while any check run named `Devloop v1.5 judge`
+# on it is cancelled or failed, although a later one of that name succeeded.
+# So every judge run finishes, and each reads the approvals when it runs.
 
 permissions:
   contents: read
