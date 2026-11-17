@@ -31,7 +31,7 @@ item :: s.Item = (h.milestone "01a1ea5a-fc2b-7243-8aac-4869740040c4" "root-conso
         "The writer reads the PL011 flag register before each byte. It writes the data register only while the transmit-FIFO-full flag is clear."
         { "root_console_check"; };
       h.req "installs-once-before-first-record"
-        "The root of an aarch64-sel4-qemu-virt image maps the PL011 at physical address 0x09000000 and calls diagnostic::install once, in main, before a record that main itself emits. No other target profile sets the configuration that compiles the call. No other source file names install."
+        "The root of an aarch64-sel4-qemu-virt image maps the PL011 at physical address 0x09000000 and calls diagnostic::install once, in main, before a record that main itself emits. No other target profile sets the configuration that compiles the call. No source file names diagnostic::install in another form: an import, a re-export and a function value are refused."
         { "root_console_check"; };
       h.req "only-bring-up-precedes-install-marker"
         "In the raw serial bytes of a boot of the sel4-io-local closure, the line SLIME_ROOT console uart=pl011 paddr=0x9000000 appears once, alone on its line, and a record follows it. Every record before it starts with SLIME_BACKING, SLIME_ALLOC, SLIME_ROOT infrastructure, SLIME_ROOT cspace or SLIME_ROOT metadata. The gate reports their count as recordsBeforeInstall."
@@ -48,7 +48,7 @@ item :: s.Item = (h.milestone "01a1ea5a-fc2b-7243-8aac-4869740040c4" "root-conso
     };
     acceptance = {
       h.observedWhere "root_console_check" {
-        h.atLeast "negativeControlsRefused" 26;
+        h.atLeast "negativeControlsRefused" 30;
         h.atLeast "casesObserved" 5;
         h.atLeast "recordsObserved" 1;
       };

@@ -449,6 +449,9 @@ _INSTALL = re.compile(
 )
 _SINK = re.compile(r"static\s+UART\s*:\s*AtomicUsize\s*=\s*AtomicUsize\s*::\s*new\s*\(\s*0\s*\)\s*;")
 _UART_ACCESS = re.compile(r"\bUART\s*\.\s*(\w+)")
+# Every way a source can name the install: the path itself, or a brace list
+# of a `use` that holds it. The audit accepts one of them, a direct call.
+_INSTALL_NAME = re.compile(r"\bdiagnostic\s*::\s*(?:install\b|\{[^}]*\binstall\b[^}]*\})")
 _INSTALL_CALL = re.compile(r"\bdiagnostic\s*::\s*install\s*\(")
 _GUARDED_CALL = re.compile(
     r"#\s*\[\s*cfg\s*\(\s*" + CONFIGURATION + r"\s*\)\s*\]\s*"
@@ -501,7 +504,15 @@ def audit(root: Path) -> None:
     calls = []
     for path in sorted((root / "slime-root").rglob("*.rs")):
         code = _code(path.read_text(encoding="utf-8"))
-        calls += [str(path.relative_to(root))] * len(_INSTALL_CALL.findall(code))
+        relative = str(path.relative_to(root))
+        for name in _INSTALL_NAME.finditer(code):
+            # An import, a re-export or a function value would let a later
+            # line call install under a name this audit does not follow.
+            require(
+                _INSTALL_CALL.match(code, name.start()) is not None,
+                f"{relative} names diagnostic::install without calling it: {name.group(0)!r}",
+            )
+            calls.append(relative)
     require(calls == [BINARY], f"expected one diagnostic::install call, in {BINARY}; found {calls}")
 
     binary = _code(_source(root, BINARY))
@@ -645,6 +656,36 @@ _TREE_MUTATIONS = (
         BINARY,
         "fn earlier() {",
         "fn earlier() {\n    slime_root::diagnostic::install(0);",
+    ),
+    (
+        "an imported install called by its bare name",
+        "names diagnostic::install without calling it",
+        BINARY,
+        "fn earlier() {",
+        "use slime_root::diagnostic::install;\nfn earlier() {\n    install(0);",
+    ),
+    (
+        "an install imported through a brace list",
+        "names diagnostic::install without calling it",
+        BINARY,
+        "fn earlier() {",
+        "use slime_root::diagnostic::{install, write};\nfn earlier() {\n    install(0);",
+    ),
+    (
+        "an install taken as a function value",
+        "names diagnostic::install without calling it",
+        BINARY,
+        "fn earlier() {",
+        "fn earlier() {\n    let route = slime_root::diagnostic::install;\n    route(0);",
+    ),
+    (
+        "an install imported inside another target profile's block",
+        "names diagnostic::install without calling it",
+        BINARY,
+        '    slime_root::diagnostic_println!("SLIME_ROOT allocator ready");',
+        '    slime_root::diagnostic_println!("SLIME_ROOT allocator ready");\n'
+        "    #[cfg(slime_product_uart)]\n    {\n        use slime_root::diagnostic::install;\n"
+        "        install(uart_addr);\n    }",
     ),
     (
         "an install outside the target profile's block",
