@@ -188,17 +188,30 @@ jobs:
             gh run list --repo "$GITHUB_REPOSITORY" --workflow spec-judge.yml --commit "$HEAD" --limit 100 \
               --json databaseId,status,conclusion
           }
+          # A listing that fails is tried again. The runs to start again come
+          # from the last listing that succeeded.
+          list=""
           for attempt in $(seq 1 240); do
-            busy="$(runs | jq '[.[] | select(.status != "completed")] | length')"
-            if [ "$busy" = 0 ]; then break; fi
+            if latest="$(runs)"; then
+              list="$latest"
+              busy="$(jq '[.[] | select(.status != "completed")] | length' <<<"$list")"
+              if [ "$busy" = 0 ]; then break; fi
+            fi
             sleep 10
           done
-          again="$(runs | jq -r '.[] | select(.status == "completed" and .conclusion != "success") | .databaseId')"
+          if [ -z "$list" ]; then
+            echo "no listing of the judge runs for $HEAD succeeded"
+            exit 1
+          fi
+          again="$(jq -r '.[] | select(.status == "completed" and .conclusion != "success") | .databaseId' <<<"$list")"
           if [ -z "$again" ]; then
-            echo "every judge run for $HEAD succeeded"
+            echo "no completed judge run for $HEAD needs to run again"
             exit 0
           fi
+          # One run that does not start again does not keep the others from it.
+          failed=0
           for run in $again; do
             echo "running judge run $run again"
-            gh run rerun "$run" --repo "$GITHUB_REPOSITORY"
+            gh run rerun "$run" --repo "$GITHUB_REPOSITORY" || failed=1
           done
+          exit "$failed"
