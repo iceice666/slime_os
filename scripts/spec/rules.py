@@ -5,7 +5,8 @@ and head, the recipes at base and head, the evidence commit, the pull
 request's author and its approvers. Rule ids follow
 `docs/decisions/work-item-devloop.md`: V1 class, V2 planning first, V3 no
 self-grading, V4 grader approval, V5 legal intent, V6 closeout, V7 backlog
-first, V9 provenance, V10 frozen promises.
+first, V9 provenance, V10 frozen promises; and from
+`docs/decisions/independent-review.md`, V11 independent review.
 """
 
 from __future__ import annotations
@@ -15,6 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import lib
+
+# Accounts whose approval is the review agent's verdict. Read from the judge's
+# own commit, like HUMAN_OWNERS; `scripts/spec/check` extracts it beside
+# `lib.JUDGE_PATHS`.
+REVIEW_AGENTS = "REVIEW_AGENTS"
 
 MILESTONE_LISTS = ("owns", "nonGoals", "requirements", "acceptance", "invariants", "decisions")
 # V9: a `#human` quote must be a concrete decision or example.
@@ -262,21 +268,32 @@ def check_frozen_areas(base: list[lib.Area], head: list[lib.Area], findings: Fin
 # --- Approvals ---------------------------------------------------------------
 
 
-def judge_approvals(findings: Findings, author: str, approvers: set[str], head_owners: set[str]) -> None:
-    """V4/V5: one approval on the current head from HUMAN_OWNERS (as the
-    judge's base lists them) by someone who is not the author and is not
-    being added by this pull request."""
+def review_agents() -> set[str]:
+    return set(lib.names(lib.CODE / REVIEW_AGENTS))
+
+
+def judge_approvals(findings: Findings, author: str, approvers: set[str], head_owners: set[str], reviewable: bool) -> None:
+    """V4/V5 and V11: one independent review of the current head.
+
+    A review is an approval from a person in HUMAN_OWNERS or from an account
+    in REVIEW_AGENTS, as the judge's base lists them. It never counts from the
+    author, from an owner this pull request adds, or from an account in
+    AGENT_ACCOUNTS. V11 requires it of every `reviewable` pull request; V4 and
+    V5 require it for each change that asked for an approval."""
     owners = lib.human_owners()
     if len(owners) < 2:
         findings.error("V4", f"HUMAN_OWNERS lists {len(owners)} person(s); at least two are needed so an author never approves alone")
-    if not findings.approvals:
-        return
     added = head_owners - owners
-    valid = (approvers & owners) - {author} - added - lib.agent_accounts()
+    excluded = {author} | lib.agent_accounts()
+    valid = ((approvers & owners) - added - excluded) | ((approvers & review_agents()) - excluded)
     for reason in findings.approvals:
         print(f"approval: {reason}")
     if valid:
-        print(f"approval: satisfied by {sorted(valid)}")
+        print(f"review: satisfied by {sorted(valid)}")
         return
-    rejected = sorted(approvers - valid)
-    findings.error("V4", f"{len(findings.approvals)} change(s) need an approval from HUMAN_OWNERS other than the author {author or '(unknown)'}; approvals on this head: {rejected or 'none'}")
+    rejected = sorted(approvers) or "none"
+    who = f"other than the author {author or '(unknown)'}"
+    if findings.approvals:
+        findings.error("V4", f"{len(findings.approvals)} change(s) need an approval from HUMAN_OWNERS or REVIEW_AGENTS {who}; approvals on this head: {rejected}")
+    if reviewable:
+        findings.error("V11", f"this head has no independent review: an approval from HUMAN_OWNERS or REVIEW_AGENTS {who}; approvals on this head: {rejected}")

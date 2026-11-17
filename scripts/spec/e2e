@@ -5,8 +5,8 @@
 
 Builds a fresh Git repository from this checkout's scripts/spec, the task
 and observation contracts and the area schema, with one area, a Justfile,
-a product directory, two signing keys and two HUMAN_OWNERS. It then walks
-the exit fixtures of devloop-v1.5-bootstrap:
+a product directory, two signing keys, two HUMAN_OWNERS and one account in
+REVIEW_AGENTS. It then walks the exit fixtures of devloop-v1.5-bootstrap:
 
   M1  an area target gets a signed record on the evidence branch; a
       #planned item's target is not claimed and a planning merge records
@@ -15,7 +15,9 @@ the exit fixtures of devloop-v1.5-bootstrap:
   M2  refused: a pull request carrying a checker and product code, one its
       author approved alone, one that rewrites scripts/spec/check to pass
       itself, one touching an unlisted path, and product code no #active
-      item owns.
+      item owns. Also refused (V11): a head with no review, one a stranger
+      approved, one the review agent opened and approved, and one approved
+      by an account the pull request itself adds to REVIEW_AGENTS.
   M3  planning -> implementation -> closeout with no re-record; the closeout
       still passes after main moves past the witness; a missing or forged
       witness and an edited terminal item are refused.
@@ -41,6 +43,7 @@ ROOT = HERE.parents[1]
 sys.dont_write_bytecode = True  # scripts/spec is under codePaths; no ignored bytes beside it
 sys.path.insert(0, str(HERE))
 import lib  # noqa: E402
+import rules  # noqa: E402
 
 PASSED: list[str] = []
 FAILED: list[str] = []
@@ -95,6 +98,10 @@ feature_exam:
 FEATURE = "01a1c4a0-e2e0-7000-8000-0000000000f1"
 BUG = "01a1c4a0-e2e0-7000-8000-0000000000b1"
 MILESTONE = "01a1c4a0-e2e0-7000-8000-0000000000a1"
+# The fixture's one account in REVIEW_AGENTS. `Fixture.check` gives its approval
+# by default, as a reviewed head has; a control that needs an unreviewed head
+# passes "".
+REVIEWER = "review-bot"
 
 
 def item(kind: str, uid: str, slug: str, intent: str = "planned", target: str = "feature_exam", extra: str = "") -> str:
@@ -137,12 +144,12 @@ class Fixture:
     def spec(self, tool: str, *args: str) -> subprocess.CompletedProcess:
         return self.run(sys.executable, str(self.root / "scripts" / "spec" / tool), *args, check=False)
 
-    def check(self, base: str = "main", author: str = "dev", approvers: str = "", *extra: str) -> subprocess.CompletedProcess:
+    def check(self, base: str = "main", author: str = "dev", approvers: str = REVIEWER, *extra: str) -> subprocess.CompletedProcess:
         """Judge HEAD as CI does: the judge is extracted from `base`, never run from the head."""
         judge = self.root.parent / "judge"
         shutil.rmtree(judge, ignore_errors=True)
         judge.mkdir()
-        archive = subprocess.run(["git", "archive", base, *lib.JUDGE_PATHS], cwd=self.root, capture_output=True, check=True).stdout
+        archive = subprocess.run(["git", "archive", base, *lib.JUDGE_PATHS, rules.REVIEW_AGENTS], cwd=self.root, capture_output=True, check=True).stdout
         subprocess.run(["tar", "-x", "-C", str(judge)], input=archive, check=True)
         env = self.env | {"SPEC_ROOT": str(self.root), "SPEC_JUDGE": "base"}
         command = [sys.executable, str(judge / "scripts" / "spec" / "check"), "--base", base, "--author", author, "--approvers", approvers, *extra]
@@ -195,6 +202,7 @@ def build(root: Path, keys: Path) -> Fixture:
     fixture.write("specs/allowed_signers", "\n".join(signers) + "\n")
     fixture.write("HUMAN_OWNERS", "owner\nsecond\n")
     fixture.write("AGENT_ACCOUNTS", "# none yet\n")
+    fixture.write(rules.REVIEW_AGENTS, f"{REVIEWER}\n")
     fixture.write("specs/e2e.zt", AREA)
     fixture.write("docs/e2e.md", "# Fixture\n")
     fixture.write("scripts/lib/e2e_judge.py", "CASES = 3\n")
@@ -235,9 +243,11 @@ def m1_planning(f: Fixture) -> None:
     f.branch("cancel")
     f.write(".tasks/items/feature-a.zt", item("task", FEATURE, "feature-a", intent="cancelled"))
     f.commit("cancel")
-    refused(f.check(), "V4", "entering #cancelled without an approval")
+    refused(f.check("main", "dev", ""), "V4", "entering #cancelled without an approval")
     done = f.check("main", "dev", "owner")
     ok(done.returncode == 0, "entering #cancelled with an owner's approval passes", done.stdout + done.stderr)
+    done = f.check()
+    ok(done.returncode == 0, "entering #cancelled with the review agent's approval passes", done.stdout + done.stderr)
 
     f.branch("backlog-base")
     f.write(".tasks/items/open-bug.zt", item("bug", BUG, "open-bug", target="area_exam"))
@@ -273,12 +283,31 @@ def m2_classes(f: Fixture) -> None:
     refused(f.check("main", "owner", "owner"), "V4", "a grader change its author approved alone")
     done = f.check("main", "owner", "second")
     ok(done.returncode == 0 and "class: planning" in done.stdout, "the same change approved by another owner passes", done.stdout + done.stderr)
+    done = f.check("main", "owner", REVIEWER)
+    ok(done.returncode == 0 and "class: planning" in done.stdout, "the same change approved by the review agent passes", done.stdout + done.stderr)
+    refused(f.check("main", REVIEWER, REVIEWER), "V4", "a grader change the review agent opened and approved")
 
     f.branch("judge-rewrite")
     judge = f.root / "scripts" / "spec" / "check"
     judge.write_text(judge.read_text().replace("def main() -> int:\n", "def main() -> int:\n    return 0\n", 1))
     f.commit("make the judge pass")
-    refused(f.check(), "V4", "a pull request rewriting scripts/spec/check to pass itself")
+    refused(f.check("main", "dev", ""), "V4", "a pull request rewriting scripts/spec/check to pass itself")
+
+    f.branch("unreviewed")
+    f.write("docs/e2e.md", "# Fixture\n\nA process change.\n")
+    f.commit("docs")
+    refused(f.check("main", "dev", ""), "V11", "a pull request with no review of its head")
+    refused(f.check("main", "dev", "stranger"), "V11", "a pull request approved by an account in neither list")
+    refused(f.check("main", REVIEWER, REVIEWER), "V11", "a pull request the review agent opened and approved")
+    done = f.check()
+    ok(done.returncode == 0 and "class: process" in done.stdout, "the same pull request with the review agent's approval passes", done.stdout + done.stderr)
+    done = f.check("main", "dev", "owner")
+    ok(done.returncode == 0, "the same pull request with an owner's approval passes", done.stdout + done.stderr)
+
+    f.branch("self-listed")
+    f.write(rules.REVIEW_AGENTS, f"{REVIEWER}\nsneaky\n")
+    f.commit("list a review agent")
+    refused(f.check("main", "dev", "sneaky"), "V11", "a pull request approved by an account it adds to REVIEW_AGENTS")
 
     f.branch("unlisted")
     f.write("weird/thing.txt", "?\n")
@@ -317,8 +346,8 @@ def m3_closeout(f: Fixture) -> None:
     done = f.spec("closeout", "--forge", "local", "--dry-run")
     ok("closeout/feature-a" in done.stdout, "the closeout bot prepares one move", done.stdout + done.stderr)
     f.run("git", "checkout", "-q", "closeout/feature-a")
-    done = f.check()
-    ok(done.returncode == 0 and "class: closeout" in done.stdout, "the closeout pull request passes after main moved past the witness", done.stdout + done.stderr)
+    done = f.check("main", "dev", "")
+    ok(done.returncode == 0 and "class: closeout" in done.stdout, "the closeout pull request passes with no review, after main moved past the witness", done.stdout + done.stderr)
     refused(f.check("main", "dev", "", "--evidence", before_witness), "V6", "a closeout without a done witness")
 
     forged = f.root.parent / "forged" / "done"
