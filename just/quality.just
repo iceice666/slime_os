@@ -53,12 +53,12 @@ sel4_gate_control_check:
 [group('quality')]
 fmt:
     cargo fmt --all
-    cargo fmt --manifest-path slime-root/child/Cargo.toml
+    cargo fmt --manifest-path components/root-child/Cargo.toml
 
 [group('quality')]
 fmt_check:
     cargo fmt --all --check
-    cargo fmt --manifest-path slime-root/child/Cargo.toml --check
+    cargo fmt --manifest-path components/root-child/Cargo.toml --check
 
 # Derive root-workspace component packages because `cargo fmt` supports neither
 # package globs nor `--exclude`; metadata also picks up newly added components.
@@ -87,12 +87,12 @@ fmt_check_boot_contracts:
 [group('quality')]
 fmt_sel4_root:
     cargo fmt -p slime-root
-    cargo fmt --manifest-path slime-root/child/Cargo.toml
+    cargo fmt --manifest-path components/root-child/Cargo.toml
 
 [group('quality')]
 fmt_check_sel4_root:
     cargo fmt -p slime-root -- --check
-    cargo fmt --manifest-path slime-root/child/Cargo.toml -- --check
+    cargo fmt --manifest-path components/root-child/Cargo.toml -- --check
 
 [group('quality')]
 fmt_check_all: fmt_check
@@ -209,7 +209,7 @@ lint_sel4_root clippy_flags='-D warnings':
     build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
     cargo clippy -p slime-root --target "$targets/aarch64-sel4-roottask-minimal.json" \
         --target-dir build/sel4-cargo/lint-root "${build_std[@]}" -- {{ clippy_flags }}
-    cargo clippy --manifest-path slime-root/child/Cargo.toml -p slime-root-child \
+    cargo clippy --manifest-path components/root-child/Cargo.toml -p slime-root-child \
         --target "$targets/aarch64-sel4-minimal.json" \
         --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- {{ clippy_flags }}
     cd components
@@ -277,7 +277,7 @@ lint_sel4_root_x86_64 clippy_flags='-D warnings':
     build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
     cargo clippy -p slime-root --target "$targets/x86_64-sel4-roottask-minimal.json" \
         --target-dir build/sel4-cargo/lint-root-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
-    cargo clippy --manifest-path slime-root/child/Cargo.toml -p slime-root-child \
+    cargo clippy --manifest-path components/root-child/Cargo.toml -p slime-root-child \
         --target "$targets/x86_64-sel4-minimal.json" \
         --target-dir build/sel4-cargo/lint-child-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
     cd components

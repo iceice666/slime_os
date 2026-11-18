@@ -370,7 +370,7 @@ VARIANT_IMAGES = {
     PRIVATE_ISOLATION_VARIANT: (PRIVATE_ISOLATION_IMAGE, PRIVATE_ISOLATION_MANIFEST),
 }
 
-CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
+CHILD_MANIFEST = ROOT / "components" / "root-child" / "Cargo.toml"
 CHUNK_SIZE = 1024 * 1024
 
 

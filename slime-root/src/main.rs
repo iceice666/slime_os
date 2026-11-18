@@ -15,7 +15,7 @@
 //! The generation's own component payloads are `SLIMECM*` images built for the
 //! retired Slime kernel, not ELF. Their graph is admitted and counted, but they
 //! are not activated; the cutover proof is the native AArch64 child fixture in
-//! `slime-root/child`.
+//! `components/root-child`.
 
 #![no_main]
 #![no_std]
@@ -188,7 +188,7 @@ const BOOT_BUNDLE_IDENTITY: [u8; 32] = decode_hex32(env!("SLIME_BOOT_BUNDLE_IDEN
 const TARGET_PROFILE: &str = env!("SLIME_TARGET_PROFILE");
 
 /// The native child fixture, built for this platform's seL4 userspace target.
-/// Supplied by the build harness; see `slime-root/child`. `include_bytes!` only guarantees
+/// Supplied by the build harness; see `components/root-child`. `include_bytes!` only guarantees
 /// byte alignment, but `object`'s ELF64 parser requires an 8-byte-aligned
 /// buffer; `Aligned` forces that without a runtime copy into a new allocation.
 #[repr(align(8))]
@@ -218,7 +218,7 @@ const fn hex_nibble(byte: u8) -> u8 {
 static CHILD_ELF: Aligned<{ include_bytes!(env!("CHILD_ELF")).len() }> =
     Aligned(*include_bytes!(env!("CHILD_ELF")));
 
-/// Fixture request tag, mirroring `slime-root/child/src/main.rs`.
+/// Fixture request tag, mirroring `components/root-child/src/main.rs`.
 const REQUEST_TAG: sel4::Word = 0x534c_494d_4552_4551;
 
 /// Directives the root returns to a fixture in reply MR1.
@@ -624,7 +624,7 @@ struct Fixture {
 
 // ---- shared-buffer phase contract ----
 //
-// Every constant below is duplicated in `slime-root/child/src/main.rs` under
+// Every constant below is duplicated in `components/root-child/src/main.rs` under
 // the same name. They are a compile-time agreement between the two images, not
 // runtime discovery: the child never searches for its shared region, so what
 // grants it access is the root's mapping and nothing else.
@@ -714,16 +714,16 @@ const MEM_EXPECTED_GRANTS: usize = 2;
 const MEM_EXPECTED_GRANTS: usize = 2;
 
 /// The value the clean-exit fixture writes into its first private page and
-/// re-reads after a further growth. `slime-root/child/src/main.rs::MEM_PATTERN`.
+/// re-reads after a further growth. `components/root-child/src/main.rs::MEM_PATTERN`.
 const MEM_PATTERN: u64 = 0x4d454d5f42415345;
 
 /// Marks a report as the private-memory phase's rather than the shared-buffer
 /// phase's; both arrive on the same label.
-/// `slime-root/child/src/main.rs::MEM_REPORT_TAG`.
+/// `components/root-child/src/main.rs::MEM_REPORT_TAG`.
 const MEM_REPORT_TAG: sel4::Word = 0x4d454d5f52505449;
 
 /// Report flags the private-memory phase sets.
-/// `slime-root/child/src/main.rs::REPORT_MEM_*`.
+/// `components/root-child/src/main.rs::REPORT_MEM_*`.
 const REPORT_MEM_QUERY_OK: sel4::Word = 1 << 0;
 const REPORT_MEM_FIRST_GROWTH_OK: sel4::Word = 1 << 1;
 const REPORT_MEM_ZEROED: sel4::Word = 1 << 2;

@@ -5,6 +5,7 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
   "The fixture's child program is a crate outside slime-root/"
   "slime-root/child/ holds the program that the root fixture loads as its child task. It is a crate of its own, it builds for another target than the root, and it runs without the root's authority. root_size_check still counts its 390 code lines as root source, in the fixture role of 950. docs/decisions/root-task-scope.md lets the fixture role leave the root in two steps, and this crate is the first.")
   with {
+    intent = #active;
     owns = {
       "slime-root/child/**";
       "components/root-child/**";
