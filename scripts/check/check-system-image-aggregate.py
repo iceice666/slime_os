@@ -73,6 +73,8 @@ IMAGES_WITHOUT_CLOSURE = {
     "slime-sel4-private-memory-cycles-qemu-riscv-virt.elf": "the RV64 arm of MEM-64M's reuse cycles; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-rollback-qemu-riscv-virt.elf": "the RV64 arm of the rollback plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     "slime-sel4-qemu-riscv-virt.elf": "the RV64 arm of the product root-boot aggregate; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
+    "slime-sel4-sample-qemu-riscv-virt.elf": "the RV64 arm of the sample plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
+    "slime-sel4-wait-set-qemu-riscv-virt.elf": "the RV64 arm of the wait-set plane; its closure names qemu-arm-virt, so the RV64 build keeps its platform flag until CP15 migrates it",
     # P6's pc99 arms. pc99's Multiboot2 media has no loader image, so both
     # stay on the legacy builder until closure packaging supports that route.
     "slime-sel4-qemu-pc99.elf": "the pc99 arm of the product root-boot aggregate; pc99's Multiboot2 media has no loader image, so it builds legacy until closure packaging supports that boot route",
@@ -520,8 +522,8 @@ def check_migration_is_monotone() -> tuple[int, int]:
         # builds legacy on that platform until closure packaging supports it.
         "check-sel4-boot-layout.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
         "check-sel4-component-graph.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
-        "check-sel4-sample-plane.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
-        "check-sel4-wait-set-plane.py": "its pc99 arm has no closure; the Multiboot2 route stays on the legacy builder",
+        "check-sel4-sample-plane.py": "its pc99 and riscv64 arms have no closure; the Multiboot2 route stays on the legacy builder, and the closure names platform qemu-arm-virt",
+        "check-sel4-wait-set-plane.py": "its pc99 and riscv64 arms have no closure; the Multiboot2 route stays on the legacy builder, and the closure names platform qemu-arm-virt",
     }
     migrated, legacy, dual = [], [], []
     for path in sorted(CHECK_ROOT.glob("check-sel4-*.py")):
