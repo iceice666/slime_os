@@ -8,16 +8,18 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
     owns = {
       "slime-root/child/**";
       "components/root-child/**";
+      "slime-root/src/main.rs";
       "scripts/build/build-sel4.py";
-      "scripts/generate/generate-system-image-closures.py";
       "just/quality.just";
+      "contracts/system-image-closure/v3/closures/**";
     };
     nonGoals = {
       h.nonGoal "A change to what the child program does. The crate moves, and no line of its source changes." h.agentDefault;
+      h.nonGoal "A change to the root's code. In slime-root/src/main.rs only the comments that name the crate's path change." h.agentDefault;
       h.nonGoal "A new name for the package. It stays slime-root-child, so no artifact name and no pin changes." h.agentDefault;
       h.nonGoal "The root side of the fixture, slime-root/src/fixture_runtime.rs. It leaves when the library holds the boot sequence of main." h.agentDefault;
       h.nonGoal "The child image that every root embeds. The product root still links it until the fixture is a root binary of its own." h.agentDefault;
-      h.nonGoal "Lower ceilings in scripts/check/check-root-size.py. A planning pull request lowers them after this item's change is on main." h.agentDefault;
+      h.nonGoal "Lower ceilings in scripts/check/check-root-size.py. The checker grades promises, so it changes only with a new item (V4). The planning pull request of the next root item lowers them." h.agentDefault;
     };
     requirements = {
       h.req "fixture-role-without-the-child"
@@ -65,6 +67,11 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
         "the action runs cargo fetch on slime-root/child/Cargo.toml, a pull request runs the action of its own head, and a pull request carries one class (V1): .github/ is a process path"
         h.agentDefault
         { "fixture-boots-on-aarch64"; };
+      h.decided "generator-finds-either-place"
+        "The planning pull request of this item makes scripts/generate/generate-system-image-closures.py name the child crate's tree at whichever place holds it. The implementation pull request moves the crate and regenerates the closure sources. The planning pull request of the next root item removes the old place from the generator."
+        "the generator is in the grader set of system_image_closure_gates_check, which promises in specs/contracts.zt bind, so it changes only in a pull request that adds an item (V4). The crate is product code, which a planning pull request cannot move (V1)"
+        h.agentDefault
+        { "closures-name-the-new-place"; };
       h.decided "a-task-not-a-milestone"
         "This item is a task."
         "it moves one crate and changes no behavior. The owner confirmed four items in place of one testability milestone in the session of 2026-11-18. The kind of this one is the agent's choice"
