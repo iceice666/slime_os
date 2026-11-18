@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1ea5a-fc2b-7243-8aac-4869740040c4" "root-conso
   "On QEMU virt the root writes its transcript to a UART it owns"
   "slime-root sends every byte of its transcript through seL4_DebugPutChar, one syscall for each byte. A kernel built from the verified configuration has no such syscall, so its root can print nothing. docs/decisions/verified-kernel-profile.md makes a root-owned UART a prerequisite of the verified profile. The root already maps a PL011 on QEMU virt, but only to read keyboard input.")
   with {
+    intent = #active;
     owns = {
       "slime-root/src/diagnostic.rs";
       "slime-root/src/main.rs";

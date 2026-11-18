@@ -432,11 +432,19 @@ static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// [`FREE_PAGE`], and one shared virtual address cannot hold both.
 static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
-/// Standing window for the selected product terminal receiver.
+/// Standing window for the root's own console UART.
 ///
-/// QEMU maps PL011 at `0x0900_0000`; a physical board's product maps UART0 at
-/// the address supplied from its pinned board profile. Plane images map neither.
-#[cfg(any(slime_qemu_keyboard, slime_product_uart))]
+/// Every image for QEMU `virt` maps the PL011 at `0x0900_0000` here and writes
+/// its transcript through it. The interactive product reads its keyboard from
+/// the same page: a device page is retyped once per boot.
+#[cfg(slime_root_console_pl011)]
+static mut ROOT_CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing window for a physical board's product terminal receiver.
+///
+/// The board's product maps UART0 at the address supplied from its pinned
+/// board profile. Plane images do not map it.
+#[cfg(slime_product_uart)]
 static mut PRODUCT_UART_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
@@ -821,6 +829,32 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     allocator
         .initialize_metadata(bootinfo)
         .unwrap_or_else(|error| fatal!("root metadata bootstrap: {error:?}"));
+    // The first record `main` itself emits: every later byte goes to the
+    // root's own UART. The allocator's bring-up records and a fatal error
+    // before this line reach the kernel's console only.
+    #[cfg(slime_root_console_pl011)]
+    #[cfg_attr(not(slime_qemu_keyboard), allow(unused_variables))]
+    let console_registers = {
+        let console_addr = ptr::addr_of!(ROOT_CONSOLE_PAGE) as usize;
+        if let Err(error) = ScratchPage::claim(bootinfo, console_addr) {
+            fatal!("root console page unavailable: {error:?}")
+        }
+        let registers = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            console_addr,
+            device::QEMU_PL011_PADDR,
+        ) {
+            Ok(registers) => registers,
+            Err(error) => fatal!("root console UART unavailable: {error:?}"),
+        };
+        slime_root::diagnostic::install(console_addr);
+        slime_root::diagnostic_println!(
+            "SLIME_ROOT console uart=pl011 paddr={:#x}",
+            device::QEMU_PL011_PADDR
+        );
+        registers
+    };
     // Qualification roles run before any task exists, so a refusal they
     // provoke cannot reach a published component.
     #[cfg(slime_cspace_expanded)]
@@ -1006,28 +1040,17 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         not(slime_root_fixture)
     ))]
     let product_input = {
-        #[cfg(any(slime_qemu_keyboard, slime_product_uart))]
+        #[cfg(slime_product_uart)]
         let uart_addr = ptr::addr_of!(PRODUCT_UART_PAGE) as usize;
-        #[cfg(any(slime_qemu_keyboard, slime_product_uart))]
+        #[cfg(slime_product_uart)]
         if let Err(error) = ScratchPage::claim(bootinfo, uart_addr) {
             fatal!("product input page unavailable: {error:?}")
         }
         #[cfg(slime_qemu_keyboard)]
-        let (paddr, receiver) = {
-            let registers = match device::DeviceRegion::map(
-                allocator,
-                sel4::init_thread::slot::VSPACE.cap(),
-                uart_addr,
-                device::QEMU_PL011_PADDR,
-            ) {
-                Ok(registers) => registers,
-                Err(error) => fatal!("QEMU keyboard UART unavailable: {error:?}"),
-            };
-            (
-                device::QEMU_PL011_PADDR,
-                device::TerminalReceiver::Pl011(device::Pl011Input::new(registers)),
-            )
-        };
+        let (paddr, receiver) = (
+            device::QEMU_PL011_PADDR,
+            device::TerminalReceiver::Pl011(device::Pl011Input::new(console_registers)),
+        );
         #[cfg(slime_product_uart)]
         let (paddr, receiver) = {
             let registers = match device::DeviceRegion::map(
