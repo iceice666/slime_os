@@ -232,9 +232,11 @@ def classify(path, status, base, head, base_grader, head_new_grader, just_classe
         return {"planning"}
     if path == "Justfile" or path.startswith("just/"):
         return set(just_classes) or {"neutral"}
+    # A grader file is an exam wherever it lives: a generator that a bound
+    # recipe runs with --check grades that target as a checker does.
+    if path in base_grader or (status == "A" and path in head_new_grader):
+        return {"planning"}
     if path.startswith(("scripts/check/", "scripts/lib/")):
-        if path in base_grader or (status == "A" and path in head_new_grader):
-            return {"planning"}
         return {"process"}
     if path.startswith("contracts/") and path.endswith("/schema.zt"):
         return {"planning"} if status == "A" else {"implementation"}

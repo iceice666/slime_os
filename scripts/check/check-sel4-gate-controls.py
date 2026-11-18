@@ -238,14 +238,14 @@ def boot_plane_transcript(gate, marker_transcript: str) -> str:
         for component in slices[needle]:
             expanded.append(spawn_line(cursor, component))
             cursor += 1
-    # Only components the gate's *own, unmutated* CHAINS declaration does not
-    # already require an idle-without-role line for: chain 4/5 name nine of
-    # the ten in causal order (readiness before each participant's own
-    # marker). Derived from `gate.CHAINS` rather than from `lines` — `lines`
-    # is this call's possibly-*mutated* transcript, and computing the filter
-    # from it would silently re-add whichever marker the deletion mutation
-    # below just removed, defeating the very test that removal drives. Only
-    # `fabric-proxy` is absent from every chain.
+    # Only components the gate's *own, unmutated* declaration does not already
+    # require an idle-without-role line for: `EXPECTED_UNORDERED` names nine of
+    # the ten, with no order among them. Derived from the gate's declaration
+    # rather than from `lines` — `lines` is this call's possibly-*mutated*
+    # transcript, and computing the filter from it would silently re-add
+    # whichever marker the deletion mutation below just removed, defeating the
+    # very test that removal drives. Only `fabric-proxy` is absent from the
+    # declaration.
     chain_literals = {
         literal_for(pattern) for _, chain in chains_from_gate(gate) for pattern in chain
     }
@@ -442,8 +442,62 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
             ) is None:
                 fail(f"{name}: generic nonzero-exit failure marker misses status {status}")
         evaluated += 1
+        evaluated += boot_plane_order_controls(gate, baseline)
 
     return evaluated + len(failures)
+
+
+def boot_plane_order_controls(gate, baseline: str) -> int:
+    """The ready and idle lines of the call and operation planes carry no order.
+
+    Each worker and each participant is its own task, and fourteen boots of one
+    image printed these lines in four orders. The gate must accept the three
+    that differ from its declaration, and still refuse a transcript that lacks
+    one of the lines. It must also refuse `--no-build`: that option booted
+    with no image path.
+    """
+    lines = baseline.splitlines()
+    unordered = [literal_for(pattern) for pattern in getattr(gate, "EXPECTED_UNORDERED", ())]
+    if len(unordered) != 11 or any(lines.count(line) != 1 for line in unordered):
+        fail("sel4_boot_plane: synthetic transcript does not hold each order-independent line once")
+    call_ready, call = unordered[0], unordered[1:5]
+    operation_ready, operation = unordered[5], unordered[6:]
+    first = min(lines.index(line) for line in unordered)
+    rest = [line for line in lines if line not in unordered]
+
+    def arranged(order: list[str]) -> str:
+        return "\n".join([*rest[:first], *order, *rest[first:]]) + "\n"
+
+    observed = (
+        ("a call ready line after its participants", [operation_ready, *operation, *call, call_ready]),
+        ("an operation ready line after every other line", [*operation, call_ready, *call, operation_ready]),
+        (
+            "two call participants before the operation plane",
+            [*call[2:], operation_ready, *operation, call_ready, *call[:2]],
+        ),
+    )
+    for description, order in observed:
+        if rejects(gate, arranged(order)):
+            fail(f"sel4_boot_plane: rejected an observed order: {description}")
+    # Each refusal starts from an observed order, not the declared one: the
+    # deletion loop of `check_gate` already removes each line from the declared
+    # order.
+    reordered = observed[0][1]
+    refused = 0
+    for line in unordered:
+        if not rejects(gate, arranged([other for other in reordered if other != line])):
+            fail(f"sel4_boot_plane: accepted a reordered transcript that lacks {line!r}")
+        refused += 1
+    script = ROOT / "scripts" / "check" / "check-sel4-boot-plane.py"
+    result = subprocess.run(
+        [_sys.executable, str(script), "--no-build"], cwd=ROOT, capture_output=True, text=True, timeout=30, check=False
+    )
+    if result.returncode != 2 or "unrecognized arguments: --no-build" not in result.stderr:
+        fail(
+            "sel4_boot_plane: --no-build was not refused as an unknown option "
+            f"(status {result.returncode}): {result.stderr[-200:]!r}"
+        )
+    return len(observed) + refused + 1
 
 
 def check_http_evidence_controls() -> int:

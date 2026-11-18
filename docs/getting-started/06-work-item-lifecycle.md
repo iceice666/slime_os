@@ -135,8 +135,9 @@ at that commit.
 
 A **bound target** is a `just` target that one of these binds: an open item
 that is not cancelled, a terminal item nobody superseded, or an area
-requirement. Its **grader set** is the recipe chain and the checker files that
-decide its result. `just spec_closure --explain` lists the composition of
+requirement. Its **grader set** is the recipe chain and the scripts that
+decide its result: the checkers, the `scripts/lib/` modules they import, and a
+generator that a recipe runs. `just spec_closure --explain` lists the composition of
 every bound target's closure digest.
 
 | Change | Rule |
