@@ -88,9 +88,16 @@ boot sequence and diverge after it. The fixture can become a root binary of its
 own only when the library holds that sequence. Until then every root image,
 the product included, links the fixture's root side and embeds the child image.
 
-`just sel4_root_boot_check` boots the fixture on `qemu-arm-virt`,
-`qemu-riscv-virt` and `qemu-pc99`. The fixture stays the subject of that gate.
-Only its place in the source changes.
+Three recipes boot the fixture through `scripts/check/check-sel4-root-boot.py`:
+
+| Recipe | Platform |
+|---|---|
+| `just sel4_root_boot_check` | `qemu-arm-virt` |
+| `just x86_64_sel4_root_boot_check` | `qemu-pc99` |
+| `just riscv64_qemu_check` | `qemu-riscv-virt` |
+
+The fixture stays the subject of all three. Only its place in the source
+changes.
 
 ### Stage two: 23000 lines
 
