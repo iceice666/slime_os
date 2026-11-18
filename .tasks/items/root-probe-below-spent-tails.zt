@@ -13,7 +13,7 @@ item :: s.Item = (h.bug "01a1ee2a-ce05-7a76-9d34-9b10dbb9b136" "root-probe-below
       h.nonGoal "The commit that first failed. About 390 commits are candidates, and their submodule pins differ." h.agentDefault;
       h.nonGoal "A run on a CI runner in this planning pull request. Every observation in this item comes from one development container. The Evidence workflow makes the first run on a runner." h.agentDefault;
       h.nonGoal "The other assertions of the gate." h.agentDefault;
-      h.nonGoal "The three planes that just riscv64_qemu_check runs after the root boot. Its wait-set arm builds the closure sel4-wait-set, which is an AArch64 image, and boots it on qemu-riscv-virt. With this item's change the recipe passes the root boot and then fails there." h.agentDefault;
+      h.nonGoal "The four plane gates and the portability check that just riscv64_qemu_check runs after the root boot. Its wait-set arm builds the closure sel4-wait-set, which is an AArch64 image, and boots it on qemu-riscv-virt. With this item's change the recipe passes the root boot and then fails there." h.agentDefault;
     };
     requirements = {
       h.req "accepts-the-highest-free-frame"
@@ -46,7 +46,7 @@ item :: s.Item = (h.bug "01a1ee2a-ce05-7a76-9d34-9b10dbb9b136" "root-probe-below
         { "unreported-spend-excuses-nothing"; "a-tail-is-the-end-of-one-range"; };
       h.decided "a-recipe-for-the-root-boot-alone"
         "A new recipe, riscv64_sel4_root_boot_check, runs the root boot gate on qemu-riscv-virt and nothing else."
-        "riscv64_qemu_check runs four planes, and its second one cannot pass today for a reason outside the root boot gate. qemu-pc99 has the same split: x86_64_sel4_root_boot_check owns the boot claim, and x86_64_qemu_check replays more planes"
+        "riscv64_qemu_check runs five plane gates and the portability check, and its second gate cannot pass today for a reason outside the root boot gate. qemu-pc99 has the same split: x86_64_sel4_root_boot_check owns the boot claim, and x86_64_qemu_check replays more planes"
         h.agentDefault
         { "riscv-root-boot-passes"; };
       h.decided "fix-and-controls-in-one-planning-pull-request"
