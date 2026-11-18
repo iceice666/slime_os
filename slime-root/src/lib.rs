@@ -70,6 +70,7 @@ pub mod generation;
 #[cfg(target_arch = "x86_64")]
 pub mod glyph_font;
 pub mod graph;
+pub mod graph_runtime;
 pub mod io_resource;
 pub mod ipc;
 pub mod irq_control;

@@ -1,37 +1,320 @@
-use super::*;
+/// Report an unrecoverable startup condition and park the root task. Every
+/// fallible step returns a typed error that ends up here; nothing panics.
+///
+/// The report goes to both channels. Serial is what every emulated plane
+/// reads; the panel is the *only* channel a physical Framework has, and a
+/// fatal reaching serial alone is a silent stop there — the condition that
+/// made the first physical boot attempt uninterpretable. The panel carries a
+/// fixed label rather than the formatted message: formatting needs a
+/// heap-free writer this macro cannot assume at every one of its 126 sites,
+/// and the label already tells an operator with no serial port that the root
+/// died rather than hung.
+#[macro_export]
+macro_rules! fatal {
+    ($($arg:tt)*) => {{
+        $crate::diagnostic_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: the fatal path is terminal and single-threaded — the root
+        // suspends on the next line — so this cannot overlap another render.
+        //
+        // `unused_unsafe` is allowed because `fatal!` expands both inside and
+        // outside `unsafe` blocks across the root, and the macro cannot know
+        // which; the block is required at the outside sites.
+        #[allow(unused_unsafe)]
+        unsafe {
+            $crate::framebuffer::report_fatal("ROOT FATAL - BOOT ABANDONED");
+        }
+        sel4::init_thread::suspend_self()
+    }};
+}
+
+#[cfg(slime_boot_selector)]
+use crate::boot_selector;
+use crate::{
+    buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
+    generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
+    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, thread_abi,
+    timer, transfer_window, wait_set,
+};
+
+use boot_contracts::generation::{
+    CapabilityKind, Generation, Grant, GrantEndpoint, Instance, InstanceHealth, InstanceOwner,
+    KIND_RESOURCE, MintedBinding,
+};
+use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
+use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
+
+use boot_contracts::generation::{RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
+use buffer_adapter::BufferAdapter;
+use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
+#[cfg(slime_boot_selector)]
+use device::MAX_BLOCK_DEVICES;
+use event::{TaskEpoch, TimerId};
+use generation::{Admission, bound_authority};
+use ipc::{IpcError, Response, poll_notification};
+use launched::LaunchedInstances;
+use object_allocator::ObjectAllocator;
+use platform_timer::PhysicalTimerAdapter;
+use shared_buffer::{
+    BufferHandle, GenerationEpoch, HolderId, HolderQuota, MappingRights, SharedBufferTable,
+    VSpaceCap,
+};
+use task::{Arrival, MAX_TASKS, Supervision, TaskId, TaskTable};
+use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
+use transfer_window::{WindowTable, descriptor_thread};
+
+use slime_proto::syscall_abi::{
+    capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
+    lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+};
 
 use core::ptr;
-use slime_root::shared_buffer;
+
+/// One staged transfer window per admitted component thread.
+pub const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BufferLifecycleRequest {
+    Map,
+    Unmap,
+    Seal,
+    Release,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LoanLifecycleRequest {
+    Map,
+    Return,
+    Revoke,
+}
+
+/// The target profile this root task admits executables for. The build harness
+/// states it explicitly for the root, child, generation, and loader together;
+/// admission then compares every serialized target axis before mapping bytes.
+pub const TARGET_PROFILE: &str = env!("SLIME_TARGET_PROFILE");
+
+/// The timer phase schedules a deadline this fraction of a second out — short
+/// enough that a working IRQ path fires almost immediately, generous enough
+/// that QEMU's timer emulation reliably delivers it.
+const TIMER_PROOF_DEADLINE_DIVISOR: u64 = 100;
+
+/// Wall-clock ceiling, in whole seconds of the timer's own counter, the
+/// bounded wait loop tolerates before declaring the interrupt undelivered.
+/// Generous relative to the scheduled deadline so real delivery never comes
+/// close, while still keeping a wedged boot failing in a few seconds instead
+/// of burning the full boot-check timeout.
+const TIMER_PROOF_BOUND_SECONDS: u64 = 3;
+
+/// Run one IRQ-backed deadline and name the phase in every marker.
+pub fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
+    let mut timer_scheduler = TimerScheduler::<1>::new();
+    const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
+    let timer_start = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => fatal!("timer clock unreadable during {phase}: {error:?}"),
+    };
+    let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
+    let (_, scheduled) =
+        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
+            Ok(scheduled) => scheduled,
+            Err(error) => fatal!("timer proof deadline rejected during {phase}: {error:?}"),
+        };
+    if let Err(error) = apply_deadline_programming(timer_adapter, scheduled.programming) {
+        fatal!("timer deadline could not be programmed during {phase}: {error:?}")
+    }
+
+    let bound_ticks = timer_adapter
+        .frequency_hz()
+        .saturating_mul(TIMER_PROOF_BOUND_SECONDS);
+    let mut polls: u64 = 0;
+    loop {
+        if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
+            break;
+        }
+        let elapsed = match timer_adapter.monotonic_now() {
+            Ok(now) => now.0.wrapping_sub(timer_start.0),
+            Err(error) => fatal!("timer clock unreadable while waiting during {phase}: {error:?}"),
+        };
+        if elapsed > bound_ticks {
+            fatal!(
+                "SLIME_TIMER FAIL phase={phase} timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
+            )
+        }
+        polls += 1;
+    }
+    if phase == "startup" {
+        crate::diagnostic_println!(
+            "SLIME_TIMER delivered badge={:#x} polls={polls}",
+            timer_adapter.signal_badge(),
+        );
+    } else {
+        crate::diagnostic_println!(
+            "SLIME_TIMER phase={phase} delivered badge={:#x} polls={polls}",
+            timer_adapter.signal_badge(),
+        );
+    }
+
+    let drained = match timer_scheduler.service_timer_source(timer_adapter, |_| true) {
+        Ok(transition) => transition,
+        Err(ServiceTimerError::Program { error, transition }) => fatal!(
+            "timer deadline reprogramming failed during {phase}: {error:?} wakes={}",
+            transition.events.len()
+        ),
+        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
+            "timer acknowledgement failed during {phase}: {error:?} wakes={}",
+            transition.events.len()
+        ),
+        Err(error) => fatal!("timer service rejected the observed {phase} expiry: {error:?}"),
+    };
+    let timer_end = match timer_adapter.monotonic_now() {
+        Ok(now) => now,
+        Err(error) => fatal!("timer clock unreadable after {phase} service: {error:?}"),
+    };
+    if phase == "startup" {
+        crate::diagnostic_println!(
+            "SLIME_TIMER serviced events={} programming={:?}",
+            drained.events.len(),
+            drained.programming,
+        );
+        crate::diagnostic_println!(
+            "SLIME_TIMER advanced start={} end={} delta={}",
+            timer_start.0,
+            timer_end.0,
+            timer_end.0.wrapping_sub(timer_start.0),
+        );
+        crate::diagnostic_println!("SLIME_TIMER OK");
+    } else {
+        crate::diagnostic_println!(
+            "SLIME_TIMER phase={phase} serviced events={} programming={:?}",
+            drained.events.len(),
+            drained.programming,
+        );
+        crate::diagnostic_println!(
+            "SLIME_TIMER phase={phase} advanced start={} end={} delta={}",
+            timer_start.0,
+            timer_end.0,
+            timer_end.0.wrapping_sub(timer_start.0),
+        );
+        crate::diagnostic_println!("SLIME_TIMER phase={phase} OK");
+    }
+}
+
+#[repr(C, align(4096))]
+pub struct FreePage(pub [u8; GRANULE_SIZE]);
+
+/// A root-image page whose virtual address becomes the console dispatcher's
+/// scratch window (B41).
+///
+/// Separate from the loader's: the console thread maps a caller's window into
+/// its own address while the main dispatcher may be mapping another into
+/// [`FREE_PAGE`], and one shared virtual address cannot hold both.
+pub(crate) static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// A second root-image page, whose virtual address becomes the standing window
+/// for one device's MMIO register bank (P5.4.2a).
+///
+/// Separate from `FREE_PAGE` rather than sharing it: the loader and every
+/// windowed syscall map and unmap a child frame at the scratch address on each
+/// use, so an MMIO frame left mapped there would be replaced by the next
+/// transfer. A device register bank must stay mapped for as long as the driver
+/// holds the device.
+pub(crate) static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing MMIO windows for the userspace-authority inventory, one per
+/// granule in QEMU's virtio-mmio transport range.
+///
+/// The scan page is transient; a granule containing an attached transport must
+/// remain mapped until its generation-declared userspace driver binds it.
+#[cfg(not(slime_boot_selector))]
+pub(crate) static mut AUTHORITY_MMIO_PAGES: [FreePage; VIRTIO_MMIO_GRANULES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; VIRTIO_MMIO_GRANULES];
+
+#[cfg(slime_boot_selector)]
+pub(crate) static mut BOOT_MMIO_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
+#[cfg(slime_boot_selector)]
+pub(crate) static mut BOOT_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
+#[cfg(slime_boot_selector)]
+pub(crate) static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
+
+/// QEMU virt's architecture-specific virtio-mmio transport window.
+///
+/// These are pinned machine facts, not discovery. The generation's userspace
+/// driver owns device semantics; root uses the constants only for the bounded
+/// bootstrap inventory and IRQ-capability handoff.
+///
+/// QEMU q35 has no virtio-mmio window at all: virtio devices there are PCI
+/// functions behind an ACPI-described host bridge. P6 explicitly does not
+/// enumerate PCI or enable bus mastering — that is H2's — so this profile
+/// declares an empty transport range and its bootstrap inventory finds no
+/// devices. The range is stated as zero granules rather than omitted so the
+/// scan is a real bounded loop over nothing instead of a separate code path.
+#[cfg(target_arch = "aarch64")]
+pub(crate) const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
+#[cfg(target_arch = "riscv64")]
+pub(crate) const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
+#[cfg(target_arch = "x86_64")]
+pub(crate) const VIRTIO_MMIO_BASE: usize = 0;
+/// Bytes between consecutive transports.
+#[cfg(target_arch = "aarch64")]
+pub(crate) const VIRTIO_MMIO_STRIDE: usize = 0x200;
+#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+pub(crate) const VIRTIO_MMIO_STRIDE: usize = 0x1000;
+pub(crate) const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
+/// Number of transport granules to scan.
+#[cfg(target_arch = "aarch64")]
+pub(crate) const VIRTIO_MMIO_GRANULES: usize = 4;
+#[cfg(target_arch = "riscv64")]
+pub(crate) const VIRTIO_MMIO_GRANULES: usize = 8;
+#[cfg(target_arch = "x86_64")]
+pub(crate) const VIRTIO_MMIO_GRANULES: usize = 0;
+/// Interrupt number of the first transport in seL4's IRQ namespace.
+#[cfg(target_arch = "aarch64")]
+pub(crate) const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
+#[cfg(target_arch = "riscv64")]
+pub(crate) const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
+/// Unreachable on this profile: no transport exists to derive an IRQ for.
+#[cfg(target_arch = "x86_64")]
+pub(crate) const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 0;
+/// Badge the device notification carries, distinct from the timer's.
+pub(crate) const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
+
+pub(crate) const fn virtio_irq(paddr: usize) -> sel4::Word {
+    let index = ((paddr - VIRTIO_MMIO_BASE) / VIRTIO_MMIO_STRIDE) as sel4::Word;
+    VIRTIO_MMIO_FIRST_IRQ + index
+}
 
 mod state;
 use state::*;
 
 pub(super) mod adaptive;
 mod console_runtime;
-pub(super) mod platform;
+pub mod platform;
 
 use console_runtime::{ConsoleTables, declared_capability, input_script, start_console_dispatcher};
 // Matches the sole caller's cfg in `main.rs`: the fixture image asserts the
 // root's two-fixture proof path rather than launching a generation graph, so it
 // never admits an IO-resource budget and never probes for userspace authority.
 #[cfg(all(not(slime_boot_selector), not(slime_root_fixture)))]
-pub(super) use platform::probe_authority_devices;
+pub use platform::probe_authority_devices;
 
 #[derive(Clone, Copy)]
-pub(super) struct RootEndpoints {
-    pub(super) service: sel4::cap::Endpoint,
-    pub(super) console: sel4::cap::Endpoint,
+pub struct RootEndpoints {
+    pub service: sel4::cap::Endpoint,
+    pub console: sel4::cap::Endpoint,
 }
 
-pub(super) struct RuntimeDevices<'a> {
-    pub(super) timer: &'a mut PhysicalTimerAdapter,
+pub struct RuntimeDevices<'a> {
+    pub timer: &'a mut PhysicalTimerAdapter,
     #[cfg(slime_boot_selector)]
-    pub(super) boot_blocks: &'a mut device::BlockDevices,
-    pub(super) input: Option<device::TerminalInput>,
-    pub(super) io_authority: &'a mut platform::AuthorityInventory,
+    pub boot_blocks: &'a mut device::BlockDevices,
+    pub input: Option<device::TerminalInput>,
+    pub io_authority: &'a mut platform::AuthorityInventory,
 }
 
-pub(super) fn launch_instance_graph(
+pub fn launch_instance_graph(
     generation: &Generation<'_>,
     admission: &Admission,
     bootinfo: &sel4::BootInfo,
@@ -97,7 +380,7 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM budget holders={} declared={}",
         private_budget
             .as_ref()
@@ -111,7 +394,7 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_CLOCK authority holders={} timer_quota={}",
         clock_authority
             .as_ref()
@@ -127,7 +410,7 @@ pub(super) fn launch_instance_graph(
         }
         None => None,
     };
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_WAIT sources declared={} resource={}",
         wait_sources
             .as_ref()
@@ -300,7 +583,7 @@ pub(super) fn launch_instance_graph(
         // thread runs at is not observable from anything else in the
         // transcript, and a declaration nothing can check is indistinguishable
         // from the constant it replaced (B48).
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH schedule instance={} priority={declared_priority} default={}",
             instance.name,
             task::CHILD_PRIORITY,
@@ -314,7 +597,7 @@ pub(super) fn launch_instance_graph(
             Ok(None) => 1,
             Err(error) => fatal!("SLIME_GRAPH FAIL thread plan rejected: {error:?}"),
         };
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH threads instance={} count={declared_threads}",
             instance.name,
         );
@@ -334,7 +617,7 @@ pub(super) fn launch_instance_graph(
                 Err(error) => fatal!("SLIME_GRAPH FAIL thread schedule rejected: {error:?}"),
             };
             *slot = resolved;
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH schedule instance={} thread={thread_index} priority={resolved}",
                 instance.name,
             );
@@ -535,7 +818,7 @@ pub(super) fn launch_instance_graph(
             // and reaching none. The boot layout names the slot and this
             // records that the root honoured it.
             if matches!(capability, graph::CapabilityEntry::BufferFactory(_)) {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_GRAPH factory placed task={} component={} slot={slot} kind={}",
                     id.0,
                     instance.name,
@@ -557,7 +840,7 @@ pub(super) fn launch_instance_graph(
             });
             if let Err(error) = services::install_driver(
                 &mut io_service,
-                slime_root::io_resource::DriverId(u64::from(id.0)),
+                crate::io_resource::DriverId(u64::from(id.0)),
                 instance_index,
                 quota,
                 shared,
@@ -568,7 +851,7 @@ pub(super) fn launch_instance_graph(
                     instance.name
                 )
             }
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_IO quota task={} instance={} devices={} shared_granule={}",
                 id.0,
                 instance.name,
@@ -579,7 +862,7 @@ pub(super) fn launch_instance_graph(
         if let Err(error) = launched_instances.record(instance_index, instance.executable, id) {
             fatal!("SLIME_GRAPH FAIL instance mapping rejected: {error:?}")
         }
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH staged task={} instance={} executable={} grants={} bindings={} window={:#x} frames={} tables={} entry={:#x}",
             id.0,
             instance.name,
@@ -594,7 +877,7 @@ pub(super) fn launch_instance_graph(
         launched += 1;
     }
 
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH staged instances={launched} root_autostart={} loadable_executables={} slimecm={} wrong_target={} unrecognized={}",
         admission.root_autostart_instances(generation).count(),
         admission.loadable,
@@ -619,7 +902,7 @@ pub(super) fn launch_instance_graph(
         Ok(report) => report,
         Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
     };
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH peer endpoints created={} grants={} installed={}",
         peers.len(),
         materialized.grants,
@@ -665,7 +948,7 @@ pub(super) fn launch_instance_graph(
             task.cspace.installed(installed as u32);
         }
     }
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH notifications created={} bindings={}",
         notification_report.created,
         notification_report.bindings,
@@ -698,7 +981,7 @@ pub(super) fn launch_instance_graph(
                 launched.task.0
             ),
         };
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_CLOCK authority task={} instance={} flags={:#x} timers={} badge={:#x}",
             launched.task.0,
             generation
@@ -739,7 +1022,7 @@ pub(super) fn launch_instance_graph(
             ),
         };
         if declared != 0 {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_WAIT supervision task={} instance={} sources={declared}",
                 launched.task.0,
                 generation
@@ -777,7 +1060,7 @@ pub(super) fn launch_instance_graph(
             ),
         };
         if scheduling_policy.is_some() {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_SCHED class task={} instance={} class={} priority={} worker={} worker_priority={}",
                 launched.task.0,
                 generation
@@ -791,7 +1074,7 @@ pub(super) fn launch_instance_graph(
         }
     }
     if let Some(policy) = scheduling_policy.as_ref() {
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_SCHED policy bands={} instances={} promotions={} unnamed={}",
             policy.class_count(),
             policy.instance_count(),
@@ -804,7 +1087,7 @@ pub(super) fn launch_instance_graph(
             let Some(band) = policy.band(index) else {
                 fatal!("SLIME_SCHED FAIL band {index} is missing")
             };
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_SCHED band class={} priority={}",
                 boot_contracts::scheduling_class::class_name(band.class_id),
                 band.priority,
@@ -830,7 +1113,7 @@ pub(super) fn launch_instance_graph(
             ),
         };
         if lifecycle_policy.is_some() {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_LIFECYCLE state task={} instance={} state={} attempts={}",
                 launched.task.0,
                 generation
@@ -859,7 +1142,7 @@ pub(super) fn launch_instance_graph(
                 policy.restart_count()
             )
         }
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_LIFECYCLE policy transitions={} restarts={} admitted={admitted} dependencies={} parameters={} initial={} terminal={}",
             policy.transition_count(),
             policy.restart_count(),
@@ -872,7 +1155,7 @@ pub(super) fn launch_instance_graph(
             let Some(edge) = policy.transition(index) else {
                 fatal!("SLIME_LIFECYCLE FAIL transition {index} is missing")
             };
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_LIFECYCLE edge from={} to={}",
                 boot_contracts::lifecycle_policy::state_name(edge.from_state),
                 boot_contracts::lifecycle_policy::state_name(edge.to_state),
@@ -882,7 +1165,7 @@ pub(super) fn launch_instance_graph(
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
     let table = bootstrap.and_then(|id| tasks.authority(id));
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "[layout] path={} slots={} max={}",
         generation
             .instance(admission.bootstrap_instance)
@@ -895,7 +1178,7 @@ pub(super) fn launch_instance_graph(
             let Some(capability) = capability else {
                 continue;
             };
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "[layout] {slot} {} {} {:#x}",
                 capability.kind_name(),
                 resource_label(generation, capability),
@@ -903,7 +1186,7 @@ pub(super) fn launch_instance_graph(
             );
         }
     }
-    slime_root::diagnostic_println!("[layout] end");
+    crate::diagnostic_println!("[layout] end");
 
     #[cfg(slime_private_fail_large_map)]
     {
@@ -980,7 +1263,7 @@ pub(super) fn launch_instance_graph(
         let private_extents = plan.extent_descriptors * holders;
         let private_cslots = plan.required_cslots * holders;
         let private_reserved = plan.reserved_bytes * holders;
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM qualification scope=contract-aggregate-headroom holders={} pages={} private_allocations={} private_extents={} private_cslots={} private_reserved={} payload={} tables={} alignment={} static_allocations={} static_reserved={} required_allocations={} required_extents={} required_cslots={} required_reserved={} allocation_capacity={} allocations_available={} extent_capacity={} extents_available={} cslots_available={} ordinary_available={} ordinary_layout={} root_image={} root_metadata={} root_stack={} root_heap={} fit={} limit={}",
             capacity.holders,
             plan.private_pages,
@@ -1070,7 +1353,7 @@ pub(super) fn launch_instance_graph(
             fatal!("SLIME_GRAPH FAIL root instance dependency barrier unsatisfied")
         }
     }
-    slime_root::diagnostic_println!("SLIME_GRAPH activated instances={activated}");
+    crate::diagnostic_println!("SLIME_GRAPH activated instances={activated}");
     // No component request has been received yet: activation can queue a
     // synchronous IPC call, but only the service loop below can mutate the
     // ClockService scheduler or program its hardware deadline. This second
@@ -1100,7 +1383,7 @@ pub(super) fn launch_instance_graph(
         // ceiling could be wrong in the generation and invisible in the
         // transcript -- and a gate checking the declared ceilings against the
         // observed ones saw only the spawned children (B52).
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH quota task={} instance={} executable={} pages={} buffers={} mappings={} loans={}",
             launched_instance.task.0,
             instance.name,
@@ -1118,7 +1401,7 @@ pub(super) fn launch_instance_graph(
         // different facts, and a gate comparing the generation's declaration
         // against this line is what proves the declared quota *is* the ceiling
         // rather than something the root recomputed on its own.
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_MEM quota task={} instance={} declared={} installed={} base={:#x}",
             launched_instance.task.0,
             instance.name,
@@ -1166,7 +1449,7 @@ pub(super) fn launch_instance_graph(
                     launched_instance.task.0
                 )
             };
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_MEM accounting task={} instance={} reservation={} reserved={} payload={} tables={} alignment={} frames_large={} frames_base={} descriptors={} extents={} cslots={}",
                 launched_instance.task.0,
                 instance.name,
@@ -1183,7 +1466,7 @@ pub(super) fn launch_instance_graph(
             );
         }
     }
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",
         launched_instances.len(),
         budget.as_ref().map_or(0, SharedBufferBudget::holder_count),
@@ -1291,5 +1574,5 @@ const MAX_GRAPH_ITERATIONS: usize = 131072;
 const RESIDENT_CHECKPOINT_ITERATIONS: usize = 32768;
 
 mod services;
-pub(super) use services::policy::private_memory_cause;
+pub use services::policy::private_memory_cause;
 use services::{serve_instance_graph, spawn::resource_label};

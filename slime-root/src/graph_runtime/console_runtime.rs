@@ -190,7 +190,7 @@ pub(super) fn start_console_dispatcher(
     if let Err(error) = started {
         fatal!("console thread start failed: {error:?}")
     }
-    slime_root::diagnostic_println!("SLIME_ROOT console dispatcher started");
+    crate::diagnostic_println!("SLIME_ROOT console dispatcher started");
 }
 
 /// The console thread's entry point.

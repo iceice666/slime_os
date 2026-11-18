@@ -21,7 +21,7 @@ pub(super) fn serve_supervision_status(
         table.drop_slot(slot);
     }
     let (kind, detail) = termination.encode();
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH supervision collected task={} child={} kind={kind}",
         id.0,
         capability.task.0
@@ -59,7 +59,7 @@ pub(super) fn serve_supervision_derive(
     }) else {
         return Response::error(IpcError::DestinationSlotsExhausted);
     };
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH supervision derived task={} child={} slot={derived}",
         id.0,
         source.task.0
@@ -113,7 +113,7 @@ pub(super) fn serve_clock_request(
     match outcome {
         Ok((result, aux)) => {
             if super::diagnostic_once::clock_served(task.0, label) {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_CLOCK served task={} label={label} result={result} live={}",
                     task.0,
                     service.live_timers(),
@@ -123,7 +123,7 @@ pub(super) fn serve_clock_request(
         }
         Err(error) => {
             if super::diagnostic_once::clock_refused(task.0, label, clock_error_index(error)) {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_CLOCK refused task={} label={label} class={} detail={error:?}",
                     task.0,
                     clock_error_class(error),
@@ -143,20 +143,18 @@ pub(super) fn service_clock_source(
     if let Some(failure) = failure {
         match failure {
             clock::TimerSourceFailure::Clock(error) => {
-                slime_root::diagnostic_println!("SLIME_CLOCK FAIL expiry clock error={error:?}");
+                crate::diagnostic_println!("SLIME_CLOCK FAIL expiry clock error={error:?}");
                 return;
             }
             clock::TimerSourceFailure::Scheduler(error) => {
-                slime_root::diagnostic_println!(
-                    "SLIME_CLOCK FAIL expiry scheduler error={error:?}"
-                );
+                crate::diagnostic_println!("SLIME_CLOCK FAIL expiry scheduler error={error:?}");
                 return;
             }
-            clock::TimerSourceFailure::Program(error) => slime_root::diagnostic_println!(
+            clock::TimerSourceFailure::Program(error) => crate::diagnostic_println!(
                 "SLIME_CLOCK FAIL deadline reprogramming error={error:?} due={}",
                 expired.due(),
             ),
-            clock::TimerSourceFailure::Acknowledge(error) => slime_root::diagnostic_println!(
+            clock::TimerSourceFailure::Acknowledge(error) => crate::diagnostic_println!(
                 "SLIME_CLOCK FAIL irq acknowledgement error={error:?} due={}",
                 expired.due(),
             ),
@@ -167,13 +165,13 @@ pub(super) fn service_clock_source(
     for task in expired.tasks() {
         match service.authority(task).signal_timer() {
             Ok(()) => delivered += 1,
-            Err(error) => slime_root::diagnostic_println!(
+            Err(error) => crate::diagnostic_println!(
                 "SLIME_CLOCK FAIL expiry signal task={} error={error:?}",
                 task.0,
             ),
         }
     }
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_CLOCK expired due={due} delivered={delivered} live={}",
         service.live_timers(),
     );
@@ -188,7 +186,7 @@ pub(super) fn drop_task_clock(
     let now = match timer_adapter.monotonic_now() {
         Ok(now) => now,
         Err(error) => {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_CLOCK FAIL teardown clock task={} error={error:?}",
                 task.0,
             );
@@ -199,21 +197,15 @@ pub(super) fn drop_task_clock(
     match service.cancel_task(task, now) {
         Ok(programming) => {
             if apply_deadline_programming(timer_adapter, programming).is_err() {
-                slime_root::diagnostic_println!(
-                    "SLIME_CLOCK FAIL teardown programming task={}",
-                    task.0,
-                );
+                crate::diagnostic_println!("SLIME_CLOCK FAIL teardown programming task={}", task.0,);
             }
         }
         Err(error) => {
-            slime_root::diagnostic_println!(
-                "SLIME_CLOCK FAIL teardown task={} error={error:?}",
-                task.0,
-            )
+            crate::diagnostic_println!("SLIME_CLOCK FAIL teardown task={} error={error:?}", task.0,)
         }
     }
     service.clear_task(task);
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_CLOCK teardown task={} before={before} live={}",
         task.0,
         service.live_timers(),
@@ -236,7 +228,7 @@ pub(super) fn signal_declared_death(
     let woken = service.signal_death(tasks, dead);
     service.clear_task(dead);
     if woken != 0 {
-        slime_root::diagnostic_println!("SLIME_WAIT death task={} woken={woken}", dead.0);
+        crate::diagnostic_println!("SLIME_WAIT death task={} woken={woken}", dead.0);
     }
 }
 
@@ -302,7 +294,7 @@ pub(super) fn serve_scheduling_request(
     match label {
         scheduling_labels::CLASS_READ => {
             let class = service.class(task);
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_SCHED read task={} class={} priority={}",
                 task.0,
                 class.name(),
@@ -333,14 +325,14 @@ pub(super) fn serve_scheduling_request(
                     )
                 })
             else {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_SCHED refused task={} class=undeclared detail=slot",
                     task.0,
                 );
                 return Response::error(IpcError::BadCapability);
             };
             let Some(subject) = tasks.get(capability.task) else {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_SCHED refused task={} class=absent detail=subject",
                     task.0,
                 );
@@ -348,7 +340,7 @@ pub(super) fn serve_scheduling_request(
             };
             match service.promote(policy, task, capability.task, subject.tcb, class_id) {
                 Ok(class) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_SCHED promoted task={} subject={} class={} priority={}",
                         task.0,
                         capability.task.0,
@@ -358,7 +350,7 @@ pub(super) fn serve_scheduling_request(
                     Response::success(class.class_id() as i64, class.priority())
                 }
                 Err(error) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_SCHED refused task={} subject={} class={} detail={error:?}",
                         task.0,
                         capability.task.0,
@@ -433,7 +425,7 @@ pub(super) fn serve_lifecycle_request(
                 service.attempts_remaining(policy, instance, generation)
             });
             let cause = instance.map_or(0, |instance| service.terminal_id(instance));
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_LIFECYCLE read task={} state={} attempts={remaining} cause={}",
                 task.0,
                 boot_contracts::lifecycle_policy::state_name(state),
@@ -453,7 +445,7 @@ pub(super) fn serve_lifecycle_request(
             };
             match service.advance(policy, task, state_id) {
                 Ok(state) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE advanced task={} state={}",
                         task.0,
                         boot_contracts::lifecycle_policy::state_name(state),
@@ -461,7 +453,7 @@ pub(super) fn serve_lifecycle_request(
                     Response::success(state as i64, 0)
                 }
                 Err(error) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE refused task={} class={} detail={error:?}",
                         task.0,
                         lifecycle_error_class(error),
@@ -481,14 +473,14 @@ pub(super) fn serve_lifecycle_request(
                 // operation answers, so its task row is already released.
                 true,
             ) else {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_LIFECYCLE refused task={} class=undeclared detail=slot",
                     task.0,
                 );
                 return Response::error(IpcError::BadCapability);
             };
             let Ok(now) = timer_adapter.monotonic_now() else {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_LIFECYCLE FAIL restart clock read task={}",
                     task.0
                 );
@@ -496,7 +488,7 @@ pub(super) fn serve_lifecycle_request(
             };
             match service.admit_restart(policy, generation, subject_instance, now.0) {
                 Ok(admission) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE restart admitted task={} subject={} attempt={} remaining={} ready_at={}",
                         task.0,
                         subject_task.0,
@@ -511,7 +503,7 @@ pub(super) fn serve_lifecycle_request(
                     // marker says so rather than only that a restart was
                     // declined: the two read very differently to an operator.
                     if error == lifecycle::LifecycleError::AttemptsExhausted {
-                        slime_root::diagnostic_println!(
+                        crate::diagnostic_println!(
                             "SLIME_LIFECYCLE terminal task={} subject={} state={} attempts=exhausted",
                             task.0,
                             subject_task.0,
@@ -520,7 +512,7 @@ pub(super) fn serve_lifecycle_request(
                             ),
                         );
                     } else {
-                        slime_root::diagnostic_println!(
+                        crate::diagnostic_println!(
                             "SLIME_LIFECYCLE restart refused task={} subject={} class={} detail={error:?}",
                             task.0,
                             subject_task.0,
@@ -562,7 +554,7 @@ pub(super) fn serve_lifecycle_request(
                 ) {
                     Some((_, instance)) => instance,
                     None => {
-                        slime_root::diagnostic_println!(
+                        crate::diagnostic_println!(
                             "SLIME_LIFECYCLE parameter refused task={} class=undeclared detail=slot",
                             task.0,
                         );
@@ -588,14 +580,14 @@ pub(super) fn serve_lifecycle_request(
             };
             match outcome {
                 Ok(value) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE parameter task={} subject-instance={subject_instance} key={key} write={write} value={value}",
                         task.0,
                     );
                     Response::success(value as i64, 0)
                 }
                 Err(error) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE parameter refused task={} subject-instance={subject_instance} key={key} class={} detail={error:?}",
                         task.0,
                         lifecycle_error_class(error),
@@ -713,12 +705,12 @@ pub(super) fn record_termination(
     }
     let freed = supervision::sweep(terminations, tasks);
     if !terminations.record(child, termination) {
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH FAIL termination lost task={} reason=records-full",
             child.0
         );
     } else {
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH supervision swept freed={freed} live={}",
             terminations.len()
         );
@@ -744,7 +736,7 @@ pub(super) fn reclaim_dead_task(
     match buffers.reclaim_holder(&mut adapter, holder) {
         Ok(actions) => {
             if charged != 0 || !actions.is_empty() {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_GRAPH holder reclaimed task={} charges={charged} actions={}",
                     id.0,
                     actions.len()
@@ -752,7 +744,7 @@ pub(super) fn reclaim_dead_task(
             }
         }
         Err(error) => {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH holder reclaim incomplete task={} class={}",
                 id.0,
                 buffer_error_class(error)
@@ -764,7 +756,7 @@ pub(super) fn reclaim_dead_task(
         return false;
     }
     if buffers.release_quota(holder) {
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH quota released task={} live={}",
             id.0,
             buffers.quota_count()
@@ -823,7 +815,7 @@ pub(super) fn reclaim_task_objects(
         static ARMED: AtomicBool = AtomicBool::new(true);
         if ARMED.swap(false, Ordering::Relaxed) {
             crate::object_allocator::elastic::arm_arena_revoke_failure();
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_MEM adaptive injected kind=revoke task={} instance={instance}",
                 id.0,
             );
@@ -844,7 +836,7 @@ pub(super) fn reclaim_task_objects(
             if let (Some(policy), Some(binding)) = (adaptive, binding.as_ref()) {
                 policy.retire(allocator, id, instance, binding, false, 0);
             }
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",
                 id.0
             );
@@ -852,7 +844,7 @@ pub(super) fn reclaim_task_objects(
         }
     }
     launched.release_by_task(id);
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_ROOT image reclaimed task={} instance={} live_slots={} live_objects={} live_bytes={} allocation_descriptors_free={}",
         id.0,
         instance,
@@ -869,7 +861,7 @@ pub(super) fn reclaim_task_objects(
             continue;
         };
         if let Ok((slots, objects, bytes)) = allocator.arena_usage(peer.cleanup.arena) {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_ROOT image peer task={} instance={} slots={} objects={} bytes={}",
                 peer.id.0,
                 peer_instance.name,
@@ -897,7 +889,7 @@ pub(super) fn reclaim_task_objects(
     // `bytes` are what a repeated spawn/exit workload must return to its
     // starting value; `live_objects` is what must return to *its* starting
     // value even though the arena is reused rather than freed.
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_ROOT reclaim census task={} slots={} bytes={} live_objects={} extent_reuses={}",
         id.0,
         allocator.slots_remaining(),
@@ -913,7 +905,7 @@ pub(super) fn report_memory_census(
     tasks: &TaskTable<MAX_TASKS>,
     retired: u32,
 ) {
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_MEM census retired={} free_slots={} live_objects={} live_bytes={} untyped={} reusable={} anchors={} mapped_pages={} allocations_free={} extents_free={} shared_reusable={} shared_retained={} shared_anchors={} active_extent_bytes={} preserved_bytes={} preserved_anchors={} infrastructure_owned={}",
         retired,
         allocator.free_slots(),
@@ -942,7 +934,7 @@ pub(super) fn report_memory_census(
 /// the request, while the *cause* is the thing a check must be able to pin.
 /// Both are emitted — this as `cause=`, the full variant as `detail=` — so the
 /// marker names the class without hiding the numbers.
-pub(crate) fn private_memory_cause(error: &private_memory::GrowError) -> &'static str {
+pub fn private_memory_cause(error: &private_memory::GrowError) -> &'static str {
     match error {
         private_memory::GrowError::DeltaOverflow { .. } => "delta-overflow",
         private_memory::GrowError::ReservationExceeded { .. } => "reservation",

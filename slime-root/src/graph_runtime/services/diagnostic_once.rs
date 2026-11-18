@@ -83,7 +83,7 @@ pub(super) fn payload_dma(device_read: bool) -> bool {
 
 /// Print the one summary of every unprinted occurrence.
 pub(super) fn report() {
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_ROOT diagnostic repeats clock_served={} clock_refused={} io_device_read={} io_device_write={}",
         SERVED_REPEATS.load(Relaxed),
         REFUSED_REPEATS.load(Relaxed),

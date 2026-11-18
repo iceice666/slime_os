@@ -55,7 +55,7 @@ pub(super) fn serve_instance_graph(
     let mut cleanup_timer_armed = false;
     let mut healthy_emitted = false;
 
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_ROOT allocator baseline live_slots={} live_objects={} live_bytes={} allocation_descriptor_capacity={} extent_descriptor_capacity={}",
         allocator.live_slots(),
         allocator.live_objects(),
@@ -82,7 +82,7 @@ pub(super) fn serve_instance_graph(
         != boot_contracts::generation::BootAction::Product)
         .then(|| declared_ceiling.unwrap_or(MAX_GRAPH_ITERATIONS));
     if let Some(ceiling) = declared_ceiling {
-        slime_root::diagnostic_println!("SLIME_GRAPH arrival-ceiling={}", ceiling);
+        crate::diagnostic_println!("SLIME_GRAPH arrival-ceiling={}", ceiling);
     }
     let required = (0..generation.instance_count())
         .filter(|index| {
@@ -141,7 +141,7 @@ pub(super) fn serve_instance_graph(
                     ) {
                         Ok(()) => true,
                         Err(error) => {
-                            slime_root::diagnostic_println!(
+                            crate::diagnostic_println!(
                                 "SLIME_IO reclaim pending task={} error={error:?}",
                                 id.0
                             );
@@ -199,7 +199,7 @@ pub(super) fn serve_instance_graph(
             && live_required == resident_required
             && completed + resident_required == required
         {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH HEALTHY generation={} required={} live={} completed={} failed=0",
                 generation.number,
                 required,
@@ -209,7 +209,7 @@ pub(super) fn serve_instance_graph(
             resident_certified = true;
         }
         if live == 0 && retirements.is_empty() {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_ROOT allocator quiescent live_slots={} live_objects={} live_bytes={}",
                 allocator.live_slots(),
                 allocator.live_objects(),
@@ -245,19 +245,17 @@ pub(super) fn serve_instance_graph(
         }
         iterations = iterations.saturating_add(1);
         if iteration_limit.is_none() && iterations == RESIDENT_CHECKPOINT_ITERATIONS {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH resident checkpoint live={live} iterations={iterations}"
             );
         }
         let Some((id, arrival)) = TaskId::from_badge(badge) else {
-            slime_root::diagnostic_println!(
-                "SLIME_GRAPH unbadged arrival badge={badge:#x} rejected"
-            );
+            crate::diagnostic_println!("SLIME_GRAPH unbadged arrival badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
             continue;
         };
         if tasks.get(id).is_none() || retirements.contains(id) {
-            slime_root::diagnostic_println!("SLIME_GRAPH unknown task badge={badge:#x} rejected");
+            crate::diagnostic_println!("SLIME_GRAPH unknown task badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
             continue;
         }
@@ -283,7 +281,7 @@ pub(super) fn serve_instance_graph(
             }
             let reason = match decoded_fault {
                 Ok(detail) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_GRAPH component fault task={} kind={:?} address={:?}",
                         id.0,
                         detail.kind,
@@ -310,7 +308,7 @@ pub(super) fn serve_instance_graph(
                     detail.kind.reason_code()
                 }
                 Err(error) => {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_GRAPH fault undecodable task={} error={error:?}",
                         id.0
                     );
@@ -357,7 +355,7 @@ pub(super) fn serve_instance_graph(
             if let Some((instance, recorded)) =
                 lifecycle_service.record_termination(id, lifecycle::Terminal::Fault)
             {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_LIFECYCLE terminated task={} instance={instance} cause={}",
                     id.0,
                     recorded.name(),
@@ -374,7 +372,7 @@ pub(super) fn serve_instance_graph(
         let request = match reception.request {
             Ok(request) => request,
             Err(error) => {
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_GRAPH request rejected task={} label={} error={error:?}",
                     id.0,
                     info.label()
@@ -388,7 +386,7 @@ pub(super) fn serve_instance_graph(
             continue;
         };
         let Some(required_service) = ipc::service_for_root_label(request.label) else {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH unsupported service task={} label={} result={} caller_survives=1",
                 id.0,
                 request.label,
@@ -400,7 +398,7 @@ pub(super) fn serve_instance_graph(
         };
         let (label, words) = (request.label, request.mrs);
         if ipc::clock_request_len(label).is_some_and(|expected| request.len != expected) {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_CLOCK malformed task={} label={label} words={} expected={:?}",
                 id.0,
                 request.len,
@@ -410,7 +408,7 @@ pub(super) fn serve_instance_graph(
             continue;
         }
         if ipc::scheduling_request_len(label).is_some_and(|expected| request.len != expected) {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_SCHED malformed task={} label={label} words={} expected={:?}",
                 id.0,
                 request.len,
@@ -420,7 +418,7 @@ pub(super) fn serve_instance_graph(
             continue;
         }
         if ipc::lifecycle_request_len(label).is_some_and(|expected| request.len != expected) {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_LIFECYCLE malformed task={} label={label} words={} expected={:?}",
                 id.0,
                 request.len,
@@ -437,7 +435,7 @@ pub(super) fn serve_instance_graph(
             .instance_has_service(instance, required_service)
             .unwrap_or(false);
         if !authorized {
-            slime_root::diagnostic_println!(
+            crate::diagnostic_println!(
                 "SLIME_GRAPH service refused task={} label={} class=undeclared",
                 id.0,
                 request.label,
@@ -466,7 +464,7 @@ pub(super) fn serve_instance_graph(
                 buffers,
                 tasks,
                 id,
-                slime_root::io_resource::DriverId(u64::from(id.0)),
+                crate::io_resource::DriverId(u64::from(id.0)),
                 label,
                 &words,
             ));
@@ -503,7 +501,7 @@ pub(super) fn serve_instance_graph(
             // than replied to.
             lifecycle_labels::EXIT => {
                 let status = words[0] as i64;
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_GRAPH component exit task={} status={status}",
                     id.0
                 );
@@ -542,7 +540,7 @@ pub(super) fn serve_instance_graph(
                             instance.name
                         )
                     }
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_GRAPH resident exit instance={} status={status} recorded=unhealthy",
                         instance.name
                     );
@@ -604,7 +602,7 @@ pub(super) fn serve_instance_graph(
                 if let Some((instance, recorded)) =
                     lifecycle_service.record_termination(id, terminal)
                 {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE terminated task={} instance={instance} cause={}",
                         id.0,
                         recorded.name(),
@@ -747,7 +745,7 @@ pub(super) fn serve_instance_graph(
                                 // the peak, since a ceiling a run passed
                                 // through and came back under was still passed.
                                 if cspace::breaches_ceiling(declared_peak, ceiling) {
-                                    slime_root::diagnostic_println!(
+                                    crate::diagnostic_println!(
                                         "SLIME_GRAPH cspace occupancy over-ceiling task={} declared_live={declared} declared_peak={declared_peak} declared_ceiling={ceiling}",
                                         id.0
                                     );
@@ -758,7 +756,7 @@ pub(super) fn serve_instance_graph(
                                 // impossibility worth naming rather than
                                 // silently reporting.
                                 if populated > capacity {
-                                    slime_root::diagnostic_println!(
+                                    crate::diagnostic_println!(
                                         "SLIME_GRAPH cspace occupancy over-capacity task={} populated={populated} capacity={capacity}",
                                         id.0
                                     );
@@ -769,7 +767,7 @@ pub(super) fn serve_instance_graph(
                                 )
                             }
                             Err(error) => {
-                                slime_root::diagnostic_println!(
+                                crate::diagnostic_println!(
                                     "SLIME_GRAPH cspace occupancy refused task={} error={error:?}",
                                     id.0
                                 );
@@ -826,7 +824,7 @@ pub(super) fn serve_instance_graph(
                                 match ipc::resolve_binding_slot(generation, instance, name) {
                                     Some(slot) => Response::success(slot as i64, 0),
                                     None => {
-                                        slime_root::diagnostic_println!(
+                                        crate::diagnostic_println!(
                                             "SLIME_GRAPH binding unresolved task={} instance={instance} len={}",
                                             id.0,
                                             name.len()
@@ -865,7 +863,7 @@ pub(super) fn serve_instance_graph(
                                     scratch,
                                 ) {
                                     Ok(descriptor) => {
-                                        slime_root::diagnostic_println!(
+                                        crate::diagnostic_println!(
                                             "SLIME_GRAPH graph read task={} instance={instance} cursor={cursor} rows={count}",
                                             id.0,
                                         );
@@ -875,7 +873,7 @@ pub(super) fn serve_instance_graph(
                                 }
                             }
                             None => {
-                                slime_root::diagnostic_println!(
+                                crate::diagnostic_println!(
                                     "SLIME_GRAPH graph read refused task={} instance={instance}",
                                     id.0,
                                 );
@@ -1092,7 +1090,7 @@ pub(super) fn serve_instance_graph(
                                     scratch,
                                 ) {
                                     Ok(descriptor) => {
-                                        slime_root::diagnostic_println!(
+                                        crate::diagnostic_println!(
                                             "SLIME_WAIT sources task={} instance={} cursor={cursor} rows={count}",
                                             id.0,
                                             generation
@@ -1105,7 +1103,7 @@ pub(super) fn serve_instance_graph(
                                 }
                             }
                             None => {
-                                slime_root::diagnostic_println!(
+                                crate::diagnostic_println!(
                                     "SLIME_WAIT sources absent task={} instance={}",
                                     id.0,
                                     generation
@@ -1136,7 +1134,7 @@ pub(super) fn serve_instance_graph(
             lifecycle_labels::RECORDING_SOURCES => {
                 let response = match ipc::read_recording_entry(generation, instance) {
                     Some((role, capacity, deterministic)) => {
-                        slime_root::diagnostic_println!(
+                        crate::diagnostic_println!(
                             "SLIME_RECORD entry task={} instance={} role={role} capacity={capacity} deterministic={}",
                             id.0,
                             generation
@@ -1150,7 +1148,7 @@ pub(super) fn serve_instance_graph(
                         )
                     }
                     None => {
-                        slime_root::diagnostic_println!(
+                        crate::diagnostic_println!(
                             "SLIME_RECORD entry absent task={} instance={}",
                             id.0,
                             generation
@@ -1167,7 +1165,7 @@ pub(super) fn serve_instance_graph(
             // not name resident is bounded.
             lifecycle_labels::LIFETIME_READ => {
                 let lifetime = ipc::read_lifetime(generation, instance);
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_GRAPH lifetime task={} instance={} lifetime={}",
                     id.0,
                     generation
@@ -1344,7 +1342,7 @@ pub(super) fn serve_instance_graph(
                                 .get(id)
                                 .map(|task| task.private_memory)
                                 .unwrap_or(private_memory::Region::DENIED);
-                            slime_root::diagnostic_println!(
+                            crate::diagnostic_println!(
                                 "SLIME_MEM grown task={} delta={delta} previous={previous} pages={} base={:#x} quota={} total={} large_frames={} base_frames={} leaf_tables={}",
                                 id.0,
                                 region.pages(),
@@ -1371,7 +1369,7 @@ pub(super) fn serve_instance_graph(
                             // own record, and collapsed to one coarse status on the
                             // wire: a component learns that it cannot grow, not
                             // which of the root's predicates refused it.
-                            slime_root::diagnostic_println!(
+                            crate::diagnostic_println!(
                                 "SLIME_MEM refused task={} delta={delta} cause={} detail={error:?}",
                                 id.0,
                                 private_memory_cause(&error),
@@ -1379,7 +1377,7 @@ pub(super) fn serve_instance_graph(
                             Response::error(IpcError::TransferFailed)
                         }
                         Err(error) => {
-                            slime_root::diagnostic_println!(
+                            crate::diagnostic_println!(
                                 "SLIME_MEM rejected task={} delta={delta} error={error:?}",
                                 id.0
                             );
@@ -1468,7 +1466,7 @@ pub(super) fn serve_instance_graph(
                             }) {
                                 Some(slot) => {
                                     buffers_served += 1;
-                                    slime_root::diagnostic_println!(
+                                    crate::diagnostic_println!(
                                         "SLIME_GRAPH buffer created task={} slot={slot} id={} pages={pages} writable={}",
                                         id.0,
                                         handle.id.0,
@@ -1477,7 +1475,7 @@ pub(super) fn serve_instance_graph(
                                     Response::success(i64::from(slot), handle.id.0)
                                 }
                                 None => {
-                                    slime_root::diagnostic_println!(
+                                    crate::diagnostic_println!(
                                         "SLIME_GRAPH buffer slot unavailable task={}",
                                         id.0
                                     );
@@ -1489,7 +1487,7 @@ pub(super) fn serve_instance_graph(
                                 }
                             },
                             Err(error) => {
-                                slime_root::diagnostic_println!(
+                                crate::diagnostic_println!(
                                     "SLIME_GRAPH buffer create refused task={} pages={pages} class={}",
                                     id.0,
                                     buffer_error_class(error),
@@ -1499,7 +1497,7 @@ pub(super) fn serve_instance_graph(
                         }
                     }
                     _ => {
-                        slime_root::diagnostic_println!(
+                        crate::diagnostic_println!(
                             "SLIME_GRAPH buffer create refused task={} class=ungranted",
                             id.0
                         );
@@ -1581,7 +1579,7 @@ pub(super) fn serve_instance_graph(
                 });
                 let recorded = outcome.is_some();
                 if let Some((instance, cause)) = outcome {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_LIFECYCLE unhealthy task={} instance={instance} cause={}",
                         id.0,
                         cause.name(),
@@ -1609,11 +1607,11 @@ pub(super) fn serve_instance_graph(
                     {
                         match boot_runtime.mark_unhealthy() {
                             Ok(()) => {
-                                slime_root::diagnostic_println!("SLIME_BOOT unhealthy");
+                                crate::diagnostic_println!("SLIME_BOOT unhealthy");
                                 Response::success(0, 0)
                             }
                             Err(error) => {
-                                slime_root::diagnostic_println!(
+                                crate::diagnostic_println!(
                                     "SLIME_BOOT unhealthy refused error={error:?}"
                                 );
                                 Response::error(IpcError::InvalidOperation)
@@ -1731,7 +1729,7 @@ pub(super) fn serve_instance_graph(
                 let holder = HolderId(u64::from(id.0));
                 let quota = buffers.quota(holder);
                 let response = if quota == HolderQuota::DENY {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_GRAPH buffer occupancy refused task={} class=ungranted",
                         id.0
                     );
@@ -1748,7 +1746,7 @@ pub(super) fn serve_instance_graph(
             }
             _ => {
                 unsupported += 1;
-                slime_root::diagnostic_println!(
+                crate::diagnostic_println!(
                     "SLIME_GRAPH unsupported service task={} label={} result={} caller_survives=1",
                     id.0,
                     label,
@@ -1789,13 +1787,13 @@ pub(super) fn serve_instance_graph(
                         .get_mut(0)
                         .unwrap_or_else(|| fatal!("boot promotion has no boot device"));
                     match boot_runtime.confirm(device) {
-                        Ok(()) => slime_root::diagnostic_println!("SLIME_BOOT promoted"),
+                        Ok(()) => crate::diagnostic_println!("SLIME_BOOT promoted"),
                         Err(error) => fatal!("boot promotion rejected: {error:?}"),
                     }
                 }
                 if completed == 0 {
                     let digest = generation.identity;
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_GRAPH healthy generation={} instances={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} required={} live={} idle={} failed=0",
                         generation.number,
                         digest[0],
@@ -1811,9 +1809,9 @@ pub(super) fn serve_instance_graph(
                         live_required,
                     );
                     #[cfg(any(slime_physical_target, slime_framework13_ai300))]
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_ROOT READY target_profile={}",
-                        crate::TARGET_PROFILE
+                        TARGET_PROFILE
                     );
                     // The same facts on the panel, for the machine whose only
                     // channel it is. Rendered after the serial markers so a
@@ -1829,17 +1827,17 @@ pub(super) fn serve_instance_graph(
                             let rendered = crate::boot_record::render_ready(
                                 panel,
                                 allocator,
-                                crate::TARGET_PROFILE,
+                                TARGET_PROFILE,
                                 generation.number,
                                 &generation.identity,
                             )
                             .and_then(|()| crate::boot_record::render_idle(panel, allocator));
                             match rendered {
                                 Ok(()) => {
-                                    slime_root::diagnostic_println!("SLIME_DISPLAY ready rendered")
+                                    crate::diagnostic_println!("SLIME_DISPLAY ready rendered")
                                 }
                                 Err(error) => {
-                                    slime_root::diagnostic_println!(
+                                    crate::diagnostic_println!(
                                         "SLIME_DISPLAY ready failed {error:?}"
                                     )
                                 }
@@ -1850,7 +1848,7 @@ pub(super) fn serve_instance_graph(
                     // Emitted after the accounting summary below: the QEMU
                     // gates stop reading at this terminal certification.
                 } else {
-                    slime_root::diagnostic_println!(
+                    crate::diagnostic_println!(
                         "SLIME_GRAPH HEALTHY generation={} required={} live={} completed={} failed=0",
                         generation.number,
                         required,
@@ -1875,12 +1873,12 @@ pub(super) fn serve_instance_graph(
         if !healthy_emitted {
             fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
         }
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH exhausted live={live} iterations={iterations} certified=1"
         );
     }
     diagnostic_once::report();
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH served live={live} unsupported={unsupported} buffers={buffers_served} windows={} tasks={}",
         windows.len(),
         tasks.len(),
@@ -1889,7 +1887,7 @@ pub(super) fn serve_instance_graph(
     // what makes `CleanupRecord::revoke` run. Before P5.3.4 neither death path
     // reclaimed, so this would have read `tasks=N slots=0` on every boot — the
     // table full of dead entries and not one CSlot returned.
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH tasks reclaimed live={} slots={reclaimed_slots}",
         tasks.len(),
     );
@@ -1903,13 +1901,13 @@ pub(super) fn serve_instance_graph(
             *slot = Some(export);
         }
     }
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH native task_caps={} exports={} tickets={}",
         tasks.len(),
         exports.len(),
         exports.len(),
     );
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH capabilities exports={} imports={} cancels={} finalized={} outstanding={} tickets={}",
         exports.exported,
         exports.imported,
@@ -1918,7 +1916,7 @@ pub(super) fn serve_instance_graph(
         exports.len(),
         exports.len(),
     );
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH loans served={loans_served} loans={} mappings={} regions={} orphans={} quota={}",
         buffers.loan_count(),
         buffers.mapping_count(),
@@ -1926,11 +1924,11 @@ pub(super) fn serve_instance_graph(
         buffers.orphan_count(),
         buffers.quota_count(),
     );
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_GRAPH spawns served={spawns} drops={drops} terminated={}",
         terminations.recorded(),
     );
-    slime_root::diagnostic_println!(
+    crate::diagnostic_println!(
         "SLIME_ROOT allocator live_slots={} free_slots={} live_objects={} live_bytes={} mapped_ram={} reusable_ram={} reusable_private_ram={} allocation_descriptors_free={} extent_descriptors_free={} slot_reuses={} extent_reuses={}",
         allocator.live_slots(),
         allocator.free_slots(),
@@ -1955,7 +1953,7 @@ pub(super) fn serve_instance_graph(
     }
     let completed = completed_required.iter().filter(|done| **done).count();
     if live == 0 && retirements.is_empty() && required != 0 && completed == required {
-        slime_root::diagnostic_println!(
+        crate::diagnostic_println!(
             "SLIME_GRAPH HEALTHY generation={} required={} live=0 completed={} failed=0",
             generation.number,
             required,

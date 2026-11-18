@@ -35,32 +35,23 @@ use slime_root::boot_selector;
 #[cfg(target_arch = "x86_64")]
 use slime_root::{boot_record, framebuffer};
 use slime_root::{
-    buffer_adapter, child_vspace, clock, console, cspace, device, directory, event, fault,
-    generation, graph, ipc, launched, lifecycle, notification, object_allocator, peer_endpoint,
-    platform_timer, private_memory, scheduling, shared_buffer, supervision, task, thread_abi,
-    timer, transfer_window, vm_attributes, wait_set,
+    buffer_adapter, child_vspace, device, fault, generation, ipc, object_allocator, platform_timer,
+    private_memory, shared_buffer, task, vm_attributes,
 };
 
 use core::ptr;
 
-use boot_contracts::generation::{
-    CapabilityKind, Generation, Grant, GrantEndpoint, Instance, InstanceHealth, InstanceOwner,
-    KIND_RESOURCE, MintedBinding,
-};
-use boot_contracts::private_memory_budget::{self, PrivateMemoryBudget};
-use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
+use boot_contracts::generation::Generation;
 use sel4_root_task::root_task;
 
-use boot_contracts::generation::{RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 use buffer_adapter::BufferAdapter;
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 #[cfg(slime_boot_selector)]
 use device::MAX_BLOCK_DEVICES;
-use event::{TaskEpoch, TimerId};
 use fault::{LifecycleEventKind, SupervisionTable};
 use generation::{Admission, Authority, bound_authority};
-use ipc::{IpcError, Response, poll_notification};
-use launched::LaunchedInstances;
+use ipc::{IpcError, Response};
 use object_allocator::ObjectAllocator;
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
 use shared_buffer::{
@@ -68,11 +59,6 @@ use shared_buffer::{
     SharedBufferTable, VSpaceCap,
 };
 use task::{Arrival, CHILD_CNODE_SIZE_BITS, MAX_TASKS, Supervision, TaskId, TaskTable};
-use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
-use transfer_window::{WindowTable, descriptor_thread};
-
-/// One staged transfer window per admitted component thread.
-const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
 
 // B59: the operation labels are generated from
 // `contracts/syscall-abi/v1/schema.zt` and shared with `components/runtime`, so
@@ -87,59 +73,14 @@ const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
 //   argument to forge.
 // - `shared_buffer_labels::OCCUPANCY` derives its holder from the badge for the
 //   same reason.
-use slime_proto::syscall_abi::{
-    capability_table_labels, capability_transfer_labels, clock_labels, directory_labels,
-    fixture_labels, lifecycle_labels, scheduling_labels, shared_buffer_labels, spawn_labels,
-    supervision_labels,
+use slime_proto::syscall_abi::{fixture_labels, lifecycle_labels, shared_buffer_labels};
+
+use slime_root::fatal;
+use slime_root::graph_runtime::{
+    self, FreePage, TARGET_PROFILE, private_memory_cause, prove_timer,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BufferLifecycleRequest {
-    Map,
-    Unmap,
-    Seal,
-    Release,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LoanLifecycleRequest {
-    Map,
-    Return,
-    Revoke,
-}
-
-/// Report an unrecoverable startup condition and park the root task. Every
-/// fallible step returns a typed error that ends up here; nothing panics.
-///
-/// The report goes to both channels. Serial is what every emulated plane
-/// reads; the panel is the *only* channel a physical Framework has, and a
-/// fatal reaching serial alone is a silent stop there — the condition that
-/// made the first physical boot attempt uninterpretable. The panel carries a
-/// fixed label rather than the formatted message: formatting needs a
-/// heap-free writer this macro cannot assume at every one of its 126 sites,
-/// and the label already tells an operator with no serial port that the root
-/// died rather than hung.
-macro_rules! fatal {
-    ($($arg:tt)*) => {{
-        slime_root::diagnostic_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: the fatal path is terminal and single-threaded — the root
-        // suspends on the next line — so this cannot overlap another render.
-        //
-        // `unused_unsafe` is allowed because `fatal!` expands both inside and
-        // outside `unsafe` blocks across the root, and the macro cannot know
-        // which; the block is required at the outside sites.
-        #[allow(unused_unsafe)]
-        unsafe {
-            framebuffer::report_fatal("ROOT FATAL - BOOT ABANDONED");
-        }
-        sel4::init_thread::suspend_self()
-    }};
-}
-mod graph_runtime;
-use graph_runtime::private_memory_cause;
 #[cfg(not(slime_root_fixture))]
-use graph_runtime::{RootEndpoints, RuntimeDevices, launch_instance_graph};
+use slime_root::graph_runtime::{RootEndpoints, RuntimeDevices, launch_instance_graph};
 
 /// The generation this root task admits and launches.
 ///
@@ -181,11 +122,6 @@ const GENERATION_BYTES: &[u8] = &GENERATION.0;
 
 #[cfg(slime_boot_selector)]
 const BOOT_BUNDLE_IDENTITY: [u8; 32] = decode_hex32(env!("SLIME_BOOT_BUNDLE_IDENTITY"));
-
-/// The target profile this root task admits executables for. The build harness
-/// states it explicitly for the root, child, generation, and loader together;
-/// admission then compares every serialized target axis before mapping bytes.
-const TARGET_PROFILE: &str = env!("SLIME_TARGET_PROFILE");
 
 /// The native child fixture, built for this platform's seL4 userspace target.
 /// Supplied by the build harness; see `components/root-child`. `include_bytes!` only guarantees
@@ -237,112 +173,6 @@ const FIXTURE_TASKS: usize = 2;
 /// fixture, so sixteen leaves the same surplus the earlier eight did, bounding
 /// unexpected traffic so the loop cannot spin forever.
 const MAX_SERVICE_ITERATIONS: usize = 16;
-
-/// The timer phase schedules a deadline this fraction of a second out — short
-/// enough that a working IRQ path fires almost immediately, generous enough
-/// that QEMU's timer emulation reliably delivers it.
-const TIMER_PROOF_DEADLINE_DIVISOR: u64 = 100;
-
-/// Wall-clock ceiling, in whole seconds of the timer's own counter, the
-/// bounded wait loop tolerates before declaring the interrupt undelivered.
-/// Generous relative to the scheduled deadline so real delivery never comes
-/// close, while still keeping a wedged boot failing in a few seconds instead
-/// of burning the full boot-check timeout.
-const TIMER_PROOF_BOUND_SECONDS: u64 = 3;
-
-/// Run one IRQ-backed deadline and name the phase in every marker.
-fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
-    let mut timer_scheduler = TimerScheduler::<1>::new();
-    const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
-    let timer_start = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable during {phase}: {error:?}"),
-    };
-    let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
-    let (_, scheduled) =
-        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
-            Ok(scheduled) => scheduled,
-            Err(error) => fatal!("timer proof deadline rejected during {phase}: {error:?}"),
-        };
-    if let Err(error) = apply_deadline_programming(timer_adapter, scheduled.programming) {
-        fatal!("timer deadline could not be programmed during {phase}: {error:?}")
-    }
-
-    let bound_ticks = timer_adapter
-        .frequency_hz()
-        .saturating_mul(TIMER_PROOF_BOUND_SECONDS);
-    let mut polls: u64 = 0;
-    loop {
-        if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
-            break;
-        }
-        let elapsed = match timer_adapter.monotonic_now() {
-            Ok(now) => now.0.wrapping_sub(timer_start.0),
-            Err(error) => fatal!("timer clock unreadable while waiting during {phase}: {error:?}"),
-        };
-        if elapsed > bound_ticks {
-            fatal!(
-                "SLIME_TIMER FAIL phase={phase} timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
-            )
-        }
-        polls += 1;
-    }
-    if phase == "startup" {
-        slime_root::diagnostic_println!(
-            "SLIME_TIMER delivered badge={:#x} polls={polls}",
-            timer_adapter.signal_badge(),
-        );
-    } else {
-        slime_root::diagnostic_println!(
-            "SLIME_TIMER phase={phase} delivered badge={:#x} polls={polls}",
-            timer_adapter.signal_badge(),
-        );
-    }
-
-    let drained = match timer_scheduler.service_timer_source(timer_adapter, |_| true) {
-        Ok(transition) => transition,
-        Err(ServiceTimerError::Program { error, transition }) => fatal!(
-            "timer deadline reprogramming failed during {phase}: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
-            "timer acknowledgement failed during {phase}: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(error) => fatal!("timer service rejected the observed {phase} expiry: {error:?}"),
-    };
-    let timer_end = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable after {phase} service: {error:?}"),
-    };
-    if phase == "startup" {
-        slime_root::diagnostic_println!(
-            "SLIME_TIMER serviced events={} programming={:?}",
-            drained.events.len(),
-            drained.programming,
-        );
-        slime_root::diagnostic_println!(
-            "SLIME_TIMER advanced start={} end={} delta={}",
-            timer_start.0,
-            timer_end.0,
-            timer_end.0.wrapping_sub(timer_start.0),
-        );
-        slime_root::diagnostic_println!("SLIME_TIMER OK");
-    } else {
-        slime_root::diagnostic_println!(
-            "SLIME_TIMER phase={phase} serviced events={} programming={:?}",
-            drained.events.len(),
-            drained.programming,
-        );
-        slime_root::diagnostic_println!(
-            "SLIME_TIMER phase={phase} advanced start={} end={} delta={}",
-            timer_start.0,
-            timer_end.0,
-            timer_end.0.wrapping_sub(timer_start.0),
-        );
-        slime_root::diagnostic_println!("SLIME_TIMER phase={phase} OK");
-    }
-}
 
 #[cfg(slime_duo_early_fault)]
 fn run_duo_early_fault_control(
@@ -418,19 +248,8 @@ const fn const_parse_hex_usize(value: &str) -> usize {
     parsed
 }
 
-#[repr(C, align(4096))]
-struct FreePage([u8; GRANULE_SIZE]);
-
 /// A root-image page whose virtual address becomes the loader's scratch window.
 static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
-
-/// A root-image page whose virtual address becomes the console dispatcher's
-/// scratch window (B41).
-///
-/// Separate from the loader's: the console thread maps a caller's window into
-/// its own address while the main dispatcher may be mapping another into
-/// [`FREE_PAGE`], and one shared virtual address cannot hold both.
-static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the root's own console UART.
 ///
@@ -456,16 +275,6 @@ static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]
 /// memory probe. It is distinct from every standing or loader scratch window,
 /// so mapping the probe cannot displace a live frame.
 static mut ORDINARY_PROBE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
-
-/// A second root-image page, whose virtual address becomes the standing window
-/// for one device's MMIO register bank (P5.4.2a).
-///
-/// Separate from `FREE_PAGE` rather than sharing it: the loader and every
-/// windowed syscall map and unmap a child frame at the scratch address on each
-/// use, so an MMIO frame left mapped there would be replaced by the next
-/// transfer. A device register bank must stay mapped for as long as the driver
-/// holds the device.
-static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Standing window for the platform's memory-mapped timer registers, on the
 /// profiles whose monotonic source is a device rather than an architected
@@ -493,25 +302,6 @@ static mut RESET_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 static mut DUO_RESET_REGISTERS: Option<device::MappedGranule> = None;
 #[cfg(all(slime_product_test_terminator, slime_cv1800b_duo))]
 static mut DUO_TIMER_REGISTERS: Option<device::MappedGranule> = None;
-
-/// Standing MMIO windows for the userspace-authority inventory, one per
-/// granule in QEMU's virtio-mmio transport range.
-///
-/// The scan page is transient; a granule containing an attached transport must
-/// remain mapped until its generation-declared userspace driver binds it.
-#[cfg(not(slime_boot_selector))]
-static mut AUTHORITY_MMIO_PAGES: [FreePage; VIRTIO_MMIO_GRANULES] =
-    [const { FreePage([0; GRANULE_SIZE]) }; VIRTIO_MMIO_GRANULES];
-
-#[cfg(slime_boot_selector)]
-static mut BOOT_MMIO_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
-    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
-#[cfg(slime_boot_selector)]
-static mut BOOT_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
-    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
-#[cfg(slime_boot_selector)]
-static mut BOOT_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
-    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
 
 #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
 const TIMER_PADDR: usize = 0x0010_1000;
@@ -542,52 +332,6 @@ const PC99_COM1_PORT: u16 = {
     assert!(port <= u16::MAX as usize, "I/O port must fit in 16 bits");
     port as u16
 };
-/// QEMU virt's architecture-specific virtio-mmio transport window.
-///
-/// These are pinned machine facts, not discovery. The generation's userspace
-/// driver owns device semantics; root uses the constants only for the bounded
-/// bootstrap inventory and IRQ-capability handoff.
-///
-/// QEMU q35 has no virtio-mmio window at all: virtio devices there are PCI
-/// functions behind an ACPI-described host bridge. P6 explicitly does not
-/// enumerate PCI or enable bus mastering — that is H2's — so this profile
-/// declares an empty transport range and its bootstrap inventory finds no
-/// devices. The range is stated as zero granules rather than omitted so the
-/// scan is a real bounded loop over nothing instead of a separate code path.
-#[cfg(target_arch = "aarch64")]
-const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
-#[cfg(target_arch = "riscv64")]
-const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
-#[cfg(target_arch = "x86_64")]
-const VIRTIO_MMIO_BASE: usize = 0;
-/// Bytes between consecutive transports.
-#[cfg(target_arch = "aarch64")]
-const VIRTIO_MMIO_STRIDE: usize = 0x200;
-#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
-const VIRTIO_MMIO_STRIDE: usize = 0x1000;
-const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = GRANULE_SIZE / VIRTIO_MMIO_STRIDE;
-/// Number of transport granules to scan.
-#[cfg(target_arch = "aarch64")]
-const VIRTIO_MMIO_GRANULES: usize = 4;
-#[cfg(target_arch = "riscv64")]
-const VIRTIO_MMIO_GRANULES: usize = 8;
-#[cfg(target_arch = "x86_64")]
-const VIRTIO_MMIO_GRANULES: usize = 0;
-/// Interrupt number of the first transport in seL4's IRQ namespace.
-#[cfg(target_arch = "aarch64")]
-const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 48;
-#[cfg(target_arch = "riscv64")]
-const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 1;
-/// Unreachable on this profile: no transport exists to derive an IRQ for.
-#[cfg(target_arch = "x86_64")]
-const VIRTIO_MMIO_FIRST_IRQ: sel4::Word = 0;
-/// Badge the device notification carries, distinct from the timer's.
-const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
-
-const fn virtio_irq(paddr: usize) -> sel4::Word {
-    let index = ((paddr - VIRTIO_MMIO_BASE) / VIRTIO_MMIO_STRIDE) as sel4::Word;
-    VIRTIO_MMIO_FIRST_IRQ + index
-}
 
 /// What one fixture task is expected to demonstrate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
