@@ -34,6 +34,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_rights)");
     println!("cargo::rustc-check-cfg=cfg(slime_root_fixture)");
     println!("cargo::rustc-check-cfg=cfg(slime_qemu_keyboard)");
+    println!("cargo::rustc-check-cfg=cfg(slime_root_console_pl011)");
     println!("cargo::rustc-check-cfg=cfg(slime_pc99_com1)");
     println!("cargo::rustc-check-cfg=cfg(slime_product_uart)");
     println!("cargo::rustc-check-cfg=cfg(slime_product_test_terminator)");
@@ -44,6 +45,11 @@ fn main() {
     let target_profile = std::env::var("SLIME_TARGET_PROFILE")
         .unwrap_or_else(|_| "aarch64-sel4-qemu-virt".to_owned());
     println!("cargo:rustc-env=SLIME_TARGET_PROFILE={target_profile}");
+    // QEMU `virt` is the one target whose root owns its console UART: the
+    // root maps the machine's PL011 and writes its transcript through it.
+    if target_profile == "aarch64-sel4-qemu-virt" {
+        println!("cargo::rustc-cfg=slime_root_console_pl011");
+    }
     // A named physical board, as opposed to a QEMU machine: the root announces
     // its target profile at READY and resets the board through its own
     // registers after an autonomous proof, neither of which a QEMU gate wants.
