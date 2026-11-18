@@ -84,6 +84,11 @@ exist. The records of that bring-up therefore still pass through
 `seL4_DebugPutChar`: one boot of the local composition prints 81 of them. A
 kernel that cannot print would lose them.
 
+The panic report of the root and of `sel4-root-task` does not pass through
+`diagnostic::write`. It still reaches the serial line through the kernel's
+debug console, before and after the install, and such a kernel would lose it
+too.
+
 The root retypes a device page once in a boot. The interactive product reads
 its keyboard through the mapping the console installed.
 
