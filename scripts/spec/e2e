@@ -96,7 +96,12 @@ area
 
 JUSTFILE = '''area_exam:
     python3 scripts/check/area-exam.py
+    python3 scripts/generate/area-gen.py --check
 '''
+
+# A generator that a bound recipe runs: a grader file outside scripts/check/
+# and scripts/lib/.
+GENERATOR = "import sys\nsys.exit(0)\n"
 
 FEATURE_RECIPE = '''
 feature_exam:
@@ -105,6 +110,7 @@ feature_exam:
 
 FEATURE = "01a1c4a0-e2e0-7000-8000-0000000000f1"
 BUG = "01a1c4a0-e2e0-7000-8000-0000000000b1"
+GENERATED = "01a1c4a0-e2e0-7000-8000-0000000000c1"
 MILESTONE = "01a1c4a0-e2e0-7000-8000-0000000000a1"
 # The fixture's one account in REVIEW_AGENTS. `Fixture.check` gives its approval
 # by default, as a reviewed head has; a control that needs an unreviewed head
@@ -216,6 +222,7 @@ def build(root: Path, keys: Path) -> Fixture:
     fixture.write("docs/e2e.md", "# Fixture\n")
     fixture.write("scripts/lib/e2e_judge.py", "CASES = 3\n")
     fixture.write("scripts/check/area-exam.py", EXAM)
+    fixture.write("scripts/generate/area-gen.py", GENERATOR)
     fixture.write("components/e2e/lib.rs", "// product\n")
     fixture.write("Justfile", JUSTFILE)
     fixture.write(".gitignore", "build/\n__pycache__/\n")
@@ -295,6 +302,24 @@ def m2_classes(f: Fixture) -> None:
     done = f.check("main", "owner", REVIEWER)
     ok(done.returncode == 0 and "class: planning" in done.stdout, "the same change approved by the review agent passes", done.stdout + done.stderr)
     refused(f.check("main", REVIEWER, REVIEWER), "V4", "a grader change the review agent opened and approved")
+
+    f.branch("generator-unplanned")
+    f.write("scripts/generate/area-gen.py", GENERATOR + "# weaker\n")
+    f.commit("generator change")
+    refused(f.check(), "V4", "a change of a generator that grades a promise, from no new item")
+
+    f.branch("generator-mixed")
+    f.write("scripts/generate/area-gen.py", GENERATOR + "# weaker\n")
+    f.write("components/e2e/lib.rs", "// product and generator together\n")
+    f.commit("generator and product")
+    refused(f.check(), "V1", "a pull request carrying a generator in a grader set and product code")
+
+    f.branch("generator-planned")
+    f.write("scripts/generate/area-gen.py", GENERATOR + "# another row\n")
+    f.write(".tasks/items/generated-a.zt", item("task", GENERATED, "generated-a", target="area_exam"))
+    f.commit("plan a generator change")
+    done = f.check()
+    ok(done.returncode == 0 and "class: planning" in done.stdout, "a generator in a grader set changes from a new item", done.stdout + done.stderr)
 
     f.branch("judge-rewrite")
     judge = f.root / "scripts" / "spec" / "check"

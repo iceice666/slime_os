@@ -119,7 +119,8 @@ change to any grader file makes a new record necessary.
 **The exam lands before the implementation.** The planning PR adds the
 item and any new target or checker it binds. The implementation PR may not
 touch the grader set of any bound target (V3). A checker that must change is
-a planning change, and a grader change needs a V4 approval.
+a planning change, and so is a generator that a bound recipe runs. A grader
+change needs a V4 approval.
 
 When a requirement is a number — attempts refused, controls exercised, bytes
 delivered — the recipe's checker reports it through
@@ -203,8 +204,8 @@ locally with `just spec_check --base origin/main`.
 
 | Class | Paths | Rule |
 |---|---|---|
-| **planning** | an added or edited `.tasks/items/*.zt`, `specs/*.zt` area files, an **added** `contracts/**/schema.zt`, a `scripts/check/` or `scripts/lib/` file in the grader set of a bound target, and `Justfile` or `just/` recipes in the closure of a bound target | lands the item and its exam before any implementation |
-| **implementation** | `components/`, `slime-root/`, `boot-contracts/`, other `contracts/` paths including a modified `schema.zt`, `scripts/build/`, `scripts/generate/`, `scripts/tools/`, `sdk/`, `tools/`, `sel4/`, `deps/`, `nix/`, `evidence/`, `verification/`, `assets/`, build and toolchain files, other recipes, and an intent-only item edit | every path under the `owns` of an item that is on base and `#active` on head (V2); touches no bound grader set (V3) |
+| **planning** | an added or edited `.tasks/items/*.zt`, `specs/*.zt` area files, an **added** `contracts/**/schema.zt`, a script in the grader set of a bound target (a `scripts/check/` or `scripts/lib/` file, or a generator that a bound recipe runs), and `Justfile` or `just/` recipes in the closure of a bound target | lands the item and its exam before any implementation |
+| **implementation** | `components/`, `slime-root/`, `boot-contracts/`, other `contracts/` paths including a modified `schema.zt`, `scripts/build/`, `scripts/generate/` and `scripts/tools/` files outside every grader set, `sdk/`, `tools/`, `sel4/`, `deps/`, `nix/`, `evidence/`, `verification/`, `assets/`, build and toolchain files, other recipes, and an intent-only item edit | every path under the `owns` of an item that is on base and `#active` on head (V2); touches no bound grader set (V3) |
 | **process** | `.github/`, `docs/`, `.agents/`, `.claude/`, `scripts/spec/`, `roadmap/`, `contracts/task/`, `contracts/observation/`, the task schema copies in `.tasks/`, root `*.md`, `HUMAN_OWNERS`, `AGENT_ACCOUNTS`, `REVIEW_AGENTS`, `specs/allowed_signers`, `specs/targets.toml`, `specs/schema.zt`, `specs/helpers.zt`, `specs/legacy.zt`, and `scripts/check/` or `scripts/lib/` files outside every grader set | needs no work item |
 | **closeout** | an unchanged move of `.tasks/items/<slug>.zt` to `.tasks/terminal/` | needs a signed done witness, unless the item is `#cancelled` (V6) |
 | **derived** | regenerated closure sources under `contracts/system-image-closure/v3/closures/`, negative cases under `contracts/system-image-closure/v2/negative/`, and `contracts/system-test-run/v1/runs/` and `v2/runs/` | accompanies any class; never decides |
