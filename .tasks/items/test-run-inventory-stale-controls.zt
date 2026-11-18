@@ -5,6 +5,7 @@ item :: s.Item = (h.bug "01a1ee31-983b-78a0-a2aa-0fe766c1ca2d" "test-run-invento
   "The inventory controls of the test-run check fail on main, on two facts that changed"
   "just system_test_run_inventory_check fails on main within four seconds. Its arm controls in scripts/check/check-system-test-run.py hold two facts that later commits changed. They expect five network arms with no device, and commit 7cb3c28 added a sixth, sel4-zenoh-service. They expect sel4-io-tcp-buffers to be a planned arm, and commit 6507525 removed its planning registration when its closure landed. The evidence branch holds 11 records of the target, and none passed. just system_image_closure_gates_check depends on the target, and none of its 11 records passed.")
   with {
+    intent = #active;
     owns = {
       "scripts/check/check-system-test-run.py";
     };
