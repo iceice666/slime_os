@@ -79,7 +79,7 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
         { "closures-name-the-new-place"; };
       h.decided "riscv-by-the-root-boot-recipe"
         "The RISC-V requirement binds riscv64_sel4_root_boot_check, not riscv64_qemu_check."
-        "riscv64_qemu_check runs three more planes after the root boot, and its wait-set arm boots an AArch64 closure on qemu-riscv-virt, so the recipe cannot pass today. The fixture is the subject of the root boot alone. The bug item root-probe-below-spent-tails added the recipe"
+        "riscv64_qemu_check runs four more plane gates and the portability check after the root boot, and its wait-set arm boots an AArch64 closure on qemu-riscv-virt, so the recipe cannot pass today. The fixture is the subject of the root boot alone. The bug item root-probe-below-spent-tails added the recipe"
         (h.fromHuman "1045 和 1043 都接受，RISC-V 改綁照做，其餘三個 plane 先不處理" "Claude Code session session_01Udthew69PFkRyDtWmFtXKa, 2026-11-18")
         { "fixture-boots-on-riscv64"; };
       h.decided "a-task-not-a-milestone"
