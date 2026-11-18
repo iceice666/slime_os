@@ -61,6 +61,40 @@ A `Line` that overflows its capacity or is not UTF-8 is dropped whole rather
 than printed in part. The console relay component therefore no longer forwards
 a non-UTF-8 message to the root's refusal path.
 
+### Where the bytes go
+
+Every record of the root and of the console dispatcher leaves through
+`diagnostic::write` in `slime-root/src/diagnostic.rs`. The target profile
+decides where that function sends the bytes.
+
+| Target profile | Before the install | After the install |
+|---|---|---|
+| `aarch64-sel4-qemu-virt` | the kernel's debug console | the root's own PL011 |
+| every other profile | the kernel's debug console | there is no install |
+
+On QEMU `virt`, `main` maps the machine's PL011 at `0x09000000` right after the
+metadata bootstrap and calls `diagnostic::install`. From then on the root
+writes each byte of a record to the UART's data register, once the transmit
+FIFO has room. The kernel's debug console receives none of those bytes. The
+root sends a carriage return before each line feed, as the kernel's console
+does, so the bytes on the serial line do not depend on the route.
+
+The root can map a device page only after its allocator and its metadata
+exist. The records of that bring-up therefore still pass through
+`seL4_DebugPutChar`: one boot of the local composition prints 81 of them. A
+kernel that cannot print would lose them.
+
+The root retypes a device page once in a boot. The interactive product reads
+its keyboard through the mapping the console installed.
+
+The root changes no setting of the UART. The loader configured the line.
+
+`just root_console_check` holds the route. It compiles the actual
+`diagnostic.rs` on the host against a register page and a kernel sink that
+counts bytes. It audits the one install call in the root's sources. It judges
+the raw serial bytes of one boot. No boot can tell the two routes apart,
+because both put the same bytes on the same UART.
+
 ## Wait sets
 
 Wait sets are userspace, implemented by `components/runtime/src/wait_set.rs`
@@ -223,3 +257,4 @@ admission, and has target-specific assurance consequences.
 - `just robot_withdrawn_check`
 - `just sel4_gate_control_check` for missing/reordered/failure controls
 - `just console_lines_check`
+- `just root_console_check`
