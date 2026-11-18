@@ -2,6 +2,8 @@
 
 **Status:** Accepted
 **Decided by:** the project's human owner, 2026-11-17
+**Amended:** 2026-11-18, by the owner: the fixture role leaves in two steps,
+and a ceiling follows its implementation
 **Related work item:** `root-size-budget`, UUID
 `01a1e925-f21f-7c7b-8c45-b6b46bcefd1e`
 
@@ -47,7 +49,7 @@ policy in components:
 | policy | 2077 | leaves, to a supervisor component | the operations that policy invokes |
 | timer | 1345 | leaves, to a timer component | the handover of the timer device and its IRQ |
 | console | 427 | splits | the root's own diagnostic writer |
-| fixture | 950 | leaves, to `components/testkit/` | nothing |
+| fixture | 950 | leaves in two steps, see below | nothing |
 | ioResource | 3029 | leaves in stage two | not decided |
 | sharedBuffer | 3026 | leaves in stage two | not decided |
 
@@ -67,6 +69,28 @@ into `#[cfg(test)]` modules, where the gate counts them as test lines.
 
 The target of 28850 allows about 190 lines of what stays from the leaving
 roles. The count of 426 comes from a one-off script and is approximate.
+
+### How the fixture role leaves
+
+The fixture role holds two parts, and they leave at different times.
+
+| Part | Lines | What it is | When it leaves |
+|---|---|---|---|
+| `slime-root/child/` | 390 | the program of the fixture's child task. It is a crate of its own and runs without the root's authority. | first: the crate moves to `components/root-child/` |
+| `slime-root/src/fixture_runtime.rs` | 560 | the root side of the fixture. It runs with the root's authority. | after decision 4 holds |
+
+The child crate cannot move to `components/testkit/`. `just
+component_crate_split_check` holds every crate there to the shape of a
+component, and the child is not one.
+
+The root side shares the first part of `main` with the product: both run one
+boot sequence and diverge after it. The fixture can become a root binary of its
+own only when the library holds that sequence. Until then every root image,
+the product included, links the fixture's root side and embeds the child image.
+
+`just sel4_root_boot_check` boots the fixture on `qemu-arm-virt`,
+`qemu-riscv-virt` and `qemu-pc99`. The fixture stays the subject of that gate.
+Only its place in the source changes.
 
 ### Stage two: 23000 lines
 
@@ -90,8 +114,11 @@ allows about 395 lines of what stays from every leaving role.
 
 ## Consequences
 
-- Each leaving role gets its own work item. The planning pull request of that
-  item lowers the role's ceiling in `scripts/check/check-root-size.py`.
+- Each leaving role gets its own work item. The item's acceptance bounds the
+  role's count. A planning pull request lowers the role's ceiling in
+  `scripts/check/check-root-size.py` after the implementation lands: CI runs
+  the gate on every pull request, so a ceiling below the count on `main` would
+  fail every one of them.
 - A component that receives a role holds only the authority that role needs.
 - Code that leaves the root stays in the trusted base of every component that
   depends on it. The line count measures the root's own source, not the
