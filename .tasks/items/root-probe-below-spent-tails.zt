@@ -5,6 +5,7 @@ item :: s.Item = (h.bug "01a1ee2a-ce05-7a76-9d34-9b10dbb9b136" "root-probe-below
   "The RISC-V root boot gate refuses a probe that the root placed in the highest free frame"
   "scripts/check/check-sel4-root-boot.py requires the root's ordinary-memory probe to lie in the highest ordinary range that can hold one 4096-byte frame. It reads that range from the root's inventory and ignores what the root spent before the probe. On qemu-riscv-virt the root funds its metadata from the tails of the two highest such ranges and reports each as SLIME_BACKING infrastructure_tail. Its probe is then in the third range, and the gate refuses it. just riscv64_qemu_check failed with one message on four root images in one development container: main at 31613aa, d52b447 and 1c16751, and a tree with the fixture's child crate moved. No CI job runs the recipe, and the evidence branch holds no record of it.")
   with {
+    intent = #active;
     owns = {
       "scripts/check/check-sel4-root-boot.py";
     };
