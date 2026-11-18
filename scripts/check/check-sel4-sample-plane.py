@@ -54,13 +54,6 @@ BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 # repository state before the build, so a stale input is refused rather than
 # silently producing a different image.
 CLOSURE = "sel4-sample"
-# The closure names this platform, and a closure cannot describe a build for a
-# platform it does not name. Every other arm builds by plane flag: no RISC-V
-# closure exists for this plane, and pc99's Multiboot2 media has no loader
-# image for closure packaging. `--platform` admits these platforms only, so a
-# platform with no build route is refused before a boot.
-CLOSURE_PLATFORM = "qemu-arm-virt"
-FLAG_PLATFORMS = ("qemu-pc99", "qemu-riscv-virt")
 IMAGE: Path | None = None
 IMAGE_VARIANT = "sample"
 
@@ -71,7 +64,9 @@ def artifact_paths(platform: str) -> tuple[Path, Path]:
 
 def build_image(platform: str, image_path: Path) -> Path | None:
     global IMAGE
-    if platform != CLOSURE_PLATFORM:
+    if platform == "qemu-pc99":
+        # pc99's Multiboot2 media has no loader image, so it remains on the
+        # legacy builder until closure packaging supports that boot route.
         command = [
             sys.executable,
             str(BUILD_SCRIPT),
@@ -595,8 +590,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--platform",
-        choices=sorted((CLOSURE_PLATFORM, *FLAG_PLATFORMS)),
-        default=CLOSURE_PLATFORM,
+        choices=sorted(PLATFORMS),
+        default="qemu-arm-virt",
         help="the pinned QEMU profile and image to build and boot",
     )
     arguments = parser.parse_args()
@@ -604,7 +599,7 @@ def main() -> None:
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")
     image_path, manifest_path = artifact_paths(arguments.platform)
-    if arguments.platform != CLOSURE_PLATFORM:
+    if arguments.platform == "qemu-pc99":
         if not arguments.no_build:
             build_image(arguments.platform, image_path)
         manifest = check_manifest(image_path, manifest_path, arguments.platform)

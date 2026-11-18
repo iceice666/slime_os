@@ -10,14 +10,14 @@ item :: s.Item = (h.bug "01a1ee7f-e814-78bc-b7b1-5eb1e488be89" "riscv-plane-arm-
       "scripts/check/check-sel4-sample-plane.py";
     };
     nonGoals = {
-      h.nonGoal "A RISC-V closure for either plane. A closure takes its platform from its system spec, so each plane needs a second system spec, a second derived composition and marker chains for a second generation number." h.agentDefault;
-      h.nonGoal "The root boot step of just riscv64_qemu_check. The item root-probe-below-spent-tails, UUID 01a1ee2a-ce05-7a76-9d34-9b10dbb9b136, owns it, and the recipe passes only with that item's gate change." h.agentDefault;
+      h.nonGoal "A RISC-V closure for either plane. A closure takes its platform from its system spec, so each plane needs a second system spec, a second derived composition and marker chains for a second generation number." (h.fromHuman "Plane flag (Recommended)" "Claude Code session session_01UdthevjZ9dotV4nTTnv4Kc, 2026-11-18, choosing the plane flag over RISC-V closures and over a narrower recipe");
+      h.nonGoal "The root boot step of just riscv64_qemu_check. The item root-probe-below-spent-tails, UUID 01a1ee2a-ce05-7a76-9d34-9b10dbb9b136, owns it." h.agentDefault;
       h.nonGoal "The generation and rollback gates. Each already builds its RISC-V arm by plane flag, and each passed unchanged on qemu-riscv-virt in one development container on 2026-11-18." h.agentDefault;
       h.nonGoal "scripts/check/check-sel4-component-graph.py and scripts/check/check-sel4-boot-layout.py. Both admit every platform of scripts/lib/sel4_boot.py in the same way, and no recipe runs either on qemu-riscv-virt." h.agentDefault;
-      h.nonGoal "A platform check in scripts/lib/closure_image.py. That module grades 21 bound targets, and a change to it voids the record of each." h.agentDefault;
-      h.nonGoal "Frozen test-run records for the two RISC-V arms. Their exam is system_test_run_inventory_check, whose arm-count control fails on main at 084a7b3 for another reason. A later item adds the two rows to EXTRA_RUNS in scripts/generate/generate-system-test-runs.py." h.agentDefault;
-      h.nonGoal "The scheduling race in components/testkit/wait-set-probe. The waiter requires the stream badge and the supervision badge in one poll, and it polls before the signaller is certain to have signalled. On qemu-riscv-virt 2 of 54 boots printed the failure marker of that requirement, in one development container on 2026-11-18. 40 boots on qemu-arm-virt and 20 on qemu-pc99 did not. A separate backlog bug owns the race." h.agentDefault;
-      h.nonGoal "A CI job for the recipe, and a run on a CI runner in the planning pull request. Every observation in this item comes from one development container. The Evidence workflow makes the first run on a runner." h.agentDefault;
+      h.nonGoal "A platform check in scripts/lib/closure_image.py. On main at 084a7b3 that module grades clock_direct_read_check and 20 more bound targets, and a change to it voids the record of each." h.agentDefault;
+      h.nonGoal "Frozen test-run records for the two RISC-V arms. scripts/generate/generate-system-test-runs.py is an implementation path, and it lists each RISC-V arm that builds by plane flag in EXTRA_RUNS. A later item adds the two rows." h.agentDefault;
+      h.nonGoal "The scheduling race in components/testkit/wait-set-probe. The waiter requires the stream badge and the supervision badge in one poll, and it polls before the signaller is certain to have signalled. On qemu-riscv-virt 2 of 55 boots printed the failure marker of that requirement, in one development container on 2026-11-18. 40 boots on qemu-arm-virt and 20 on qemu-pc99 did not. A separate backlog bug owns the race." (h.fromHuman "Separate bug item (Recommended)" "Claude Code session session_01UdthevjZ9dotV4nTTnv4Kc, 2026-11-18, choosing a separate bug item for the wait-set race over folding it into this item");
+      h.nonGoal "A CI job for the recipe. Every observation in this item comes from one development container. The Evidence workflow makes the first run on a runner." h.agentDefault;
     };
     requirements = {
       h.req "wait-set-arm-boots-a-riscv-image"
@@ -43,17 +43,17 @@ item :: s.Item = (h.bug "01a1ee7f-e814-78bc-b7b1-5eb1e488be89" "riscv-plane-arm-
       h.decided "the-riscv-arm-builds-by-plane-flag"
         "The RISC-V arm of each gate builds by plane flag through scripts/build/build-sel4.py, as its pc99 arm does and as the generation and rollback gates do."
         "both planes pass on qemu-riscv-virt from a flag-built image, observed in one development container on 2026-11-18. A RISC-V closure is the larger change that the first non-goal names. Narrowing the recipe to the generation and rollback planes removes two planes that pass"
-        h.agentDefault
+        (h.fromHuman "Plane flag (Recommended)" "Claude Code session session_01UdthevjZ9dotV4nTTnv4Kc, 2026-11-18, choosing the plane flag over RISC-V closures and over a narrower recipe")
         { "wait-set-arm-boots-a-riscv-image"; "sample-arm-boots-a-riscv-image"; };
       h.decided "the-gate-spells-its-flag-platforms"
         "Each gate lists the platforms it builds by plane flag in one tuple, and --platform takes its choices from that tuple and the closure's platform."
         "scripts/check/check-system-image-aggregate.py finds a gate's platform images by the platform names the gate spells. A gate that reaches qemu-riscv-virt through every platform of scripts/lib/sel4_boot.py boots an image the inventory cannot see"
         h.agentDefault
         { "inventory-names-both-images"; };
-      h.decided "fix-in-the-planning-pull-request"
-        "The planning pull request of this item changes the two gates and the inventory."
-        "the two gates are in the grader set of riscv64_qemu_check, which the item root-child-crate binds, so they are planning paths. The inventory grades promises in specs/contracts.zt, so it changes only in a pull request that adds an item (V4)"
-        h.agentDefault
+      h.decided "the-item-lands-before-the-gate-change"
+        "This item lands alone in its planning pull request. A second planning pull request changes the two gates and the inventory, and adds the bug item of the wait-set race."
+        "on main at 2ebd72f no item binds riscv64_qemu_check, so the judge classes a change to the two gates as a process path, and a pull request carries one class (V1). Once this item binds the recipe, the two gates are planning paths. The inventory grades promises in specs/contracts.zt, so it changes only in a pull request that adds an item (V4). The inventory refuses the gate change without its rows, and the rows without the gate change, so both land in one pull request"
+        (h.fromHuman "Item first (Recommended)" "Claude Code session session_01UdthevjZ9dotV4nTTnv4Kc, 2026-11-18, choosing the item-only planning pull request over a judge change and over a process pull request for the two gates")
         { "wait-set-arm-boots-a-riscv-image"; "sample-arm-boots-a-riscv-image"; "inventory-names-both-images"; };
     };
   };
