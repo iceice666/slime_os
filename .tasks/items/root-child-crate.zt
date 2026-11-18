@@ -35,11 +35,11 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
         "x86_64_sel4_root_boot_check passes: the root fixture boots on qemu-pc99 with the child built from its new place."
         { "x86_64_sel4_root_boot_check"; };
       h.req "fixture-boots-on-riscv64"
-        "riscv64_qemu_check passes: the root fixture boots on qemu-riscv-virt with the child built from its new place."
-        { "riscv64_qemu_check"; };
+        "riscv64_sel4_root_boot_check passes: the root fixture boots on qemu-riscv-virt with the child built from its new place."
+        { "riscv64_sel4_root_boot_check"; };
       h.req "closures-name-the-new-place"
-        "system_image_closure_gates_check passes: every closure source names the child crate's tree at its new place, and no closure source is stale."
-        { "system_image_closure_gates_check"; };
+        "image_builder_closures_check passes: every closure source names the child crate's tree at its new place, no closure source is stale, and the image builder resolves each one."
+        { "image_builder_closures_check"; };
     };
     acceptance = {
       h.observedWhere "root_size_check" {
@@ -48,8 +48,8 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
       };
       h.observed "sel4_root_boot_check";
       h.observed "x86_64_sel4_root_boot_check";
-      h.observed "riscv64_qemu_check";
-      h.observed "system_image_closure_gates_check";
+      h.observed "riscv64_sel4_root_boot_check";
+      h.observed "image_builder_closures_check";
     };
     decisions = {
       h.decided "components-root-child"
@@ -72,6 +72,16 @@ item :: s.Item = (h.task "01a1ed2c-6a01-7d68-84f5-f3057766f1ab" "root-child-crat
         "the generator is in the grader set of system_image_closure_gates_check, which promises in specs/contracts.zt bind, so it changes only in a pull request that adds an item (V4). The crate is product code, which a planning pull request cannot move (V1)"
         h.agentDefault
         { "closures-name-the-new-place"; };
+      h.decided "closures-by-the-builder-gate"
+        "The closure requirement binds image_builder_closures_check, not system_image_closure_gates_check."
+        "system_image_closure_gates_check fails on main in system_test_run_inventory_check, on a count of network arms that the fixture does not touch. The evidence branch holds 11 records of it, and none passed. image_builder_closures_check runs the generator's freshness check and resolves every closure, CI runs it on every pull request that changes code, and its 8 records all passed"
+        (h.fromHuman "1 選 A，2 照你建議，3 開 backlog bug" "Claude Code session session_01Udthew69PFkRyDtWmFtXKa, 2026-11-18, accepting the proposal to bind image_builder_closures_check")
+        { "closures-name-the-new-place"; };
+      h.decided "riscv-by-the-root-boot-recipe"
+        "The RISC-V requirement binds riscv64_sel4_root_boot_check, not riscv64_qemu_check."
+        "riscv64_qemu_check runs four more plane gates and the portability check after the root boot, and its wait-set arm boots an AArch64 closure on qemu-riscv-virt, so the recipe cannot pass today. The fixture is the subject of the root boot alone. The bug item root-probe-below-spent-tails added the recipe"
+        (h.fromHuman "1045 和 1043 都接受，RISC-V 改綁照做，其餘三個 plane 先不處理" "Claude Code session session_01Udthew69PFkRyDtWmFtXKa, 2026-11-18")
+        { "fixture-boots-on-riscv64"; };
       h.decided "a-task-not-a-milestone"
         "This item is a task."
         "it moves one crate and changes no behavior. The owner confirmed four items in place of one testability milestone in the session of 2026-11-18. The kind of this one is the agent's choice"

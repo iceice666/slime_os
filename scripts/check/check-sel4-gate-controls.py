@@ -765,11 +765,88 @@ def check_root_memory_runtime_control() -> int:
             "sel4_root_boot: credited qemu-riscv-virt with passing a superseded "
             "window it never had"
         )
+    # An RV64 inventory in the shape the qemu-riscv-virt root publishes. Before
+    # it probes, that root funds its metadata from the tails of the two highest
+    # frame-capable ranges, so its probe is in the third. The addresses are the
+    # observed ones.
+    spent = (
+        (0x1_3FC0_0000, 256 * 4096),
+        (0x1_3FD0_0000, 64 * 4096),
+        (0x1_3FD4_0000, 32 * 4096),
+        (0x1_3FD6_0000, 16 * 4096),
+        (0x1_3FD7_1800, 2048),
+    )
+    top_tail = (0x1_3FD6_0010, 16 * 4096 - 16)
+    next_tail = (0x1_3FD4_0010, 32 * 4096 - 16)
+
+    def spent_inventory(
+        tails: tuple[tuple[int, int], ...],
+        probe_paddr: int = 0x1_3FD0_1000,
+        late: tuple[tuple[int, int], ...] = (),
+    ) -> str:
+        def records(entries: tuple[tuple[int, int], ...]) -> str:
+            return "".join(
+                f"SLIME_BACKING infrastructure_tail parent={734 - index} paddr={paddr} bytes={size}\n"
+                for index, (paddr, size) in enumerate(entries)
+            )
+
+        return (
+            records(tails)
+            + inventory(spent, probe_paddr=probe_paddr, beyond_legacy=0)
+            + records(late)
+        )
+
+    accepted_tails = (
+        ("the observed tails and the probe in the third range", spent_inventory((top_tail, next_tail))),
+        (
+            "a tail that leaves two frames free, and the probe in one of them",
+            spent_inventory(((0x1_3FD6_2000, 14 * 4096),), probe_paddr=0x1_3FD6_1000),
+        ),
+    )
+    for description, transcript in accepted_tails:
+        if rejects_inventory(transcript, "qemu-riscv-virt"):
+            fail(f"sel4_root_boot: rejected {description}")
+    tail_mutations = (
+        ("a probe below two ranges that no tail spent", spent_inventory(())),
+        ("a probe below a range whose tail the root did not report", spent_inventory((top_tail,))),
+        (
+            "a probe below a range whose tail leaves a frame free",
+            spent_inventory(((0x1_3FD6_2000, 14 * 4096), next_tail)),
+        ),
+        (
+            "a probe inside the bytes a tail spent, in the highest capable range",
+            spent_inventory(((0x1_3FD6_2000, 14 * 4096),), probe_paddr=0x1_3FD6_3000),
+        ),
+        (
+            "a tail that stops before the end of its range",
+            spent_inventory(((0x1_3FD6_0010, 15 * 4096 - 16), next_tail)),
+        ),
+        (
+            "a tail that starts where its range starts",
+            spent_inventory(((0x1_3FD6_0000, 16 * 4096), next_tail)),
+        ),
+        (
+            "a tail in no enumerated range",
+            spent_inventory((top_tail, next_tail, (0x2_0000_0000, 4096))),
+        ),
+        (
+            "two tails in one range, the later one the larger",
+            spent_inventory(((0x1_3FD6_8000, 8 * 4096), next_tail, top_tail)),
+        ),
+        (
+            "tails that the root reports only after the probe",
+            spent_inventory((), late=(top_tail, next_tail)),
+        ),
+    )
+    for description, mutated in tail_mutations:
+        if not rejects_inventory(mutated, "qemu-riscv-virt"):
+            fail(f"sel4_root_boot: accepted {description}")
+    refused = len(mutations) + 1 + len(tail_mutations)
     print(
         "seL4 gate control check: root memory evidence rejected "
-        f"{len(mutations) + 1} launcher-only and inventory mutations"
+        f"{refused} launcher-only, inventory and infrastructure-tail mutations"
     )
-    return len(mutations) + 1
+    return refused
 
 
 def check_layout_gate() -> int:
