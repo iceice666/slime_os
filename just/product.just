@@ -84,6 +84,13 @@ framework_cpu_boot_verify *ARGS: framework_media_check
     python3 scripts/check/check-framework-cpu-boot.py verify "$@"
 
 
+# The RISC-V root boot claim alone, in the same shape as
+# `x86_64_sel4_root_boot_check`. `riscv64_qemu_check` replays three more planes
+# after the same boot.
+[group('product')]
+riscv64_sel4_root_boot_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py --platform qemu-riscv-virt
+
 [group('product')]
 riscv64_qemu_check: sel4_pin_check
     python3 scripts/check/check-sel4-root-boot.py --platform qemu-riscv-virt
