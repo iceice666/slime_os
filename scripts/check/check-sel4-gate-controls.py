@@ -479,9 +479,13 @@ def boot_plane_order_controls(gate, baseline: str) -> int:
     for description, order in observed:
         if rejects(gate, arranged(order)):
             fail(f"sel4_boot_plane: rejected an observed order: {description}")
+    # Each refusal starts from an observed order, not the declared one: the
+    # deletion loop of `check_gate` already removes each line from the declared
+    # order.
+    reordered = observed[0][1]
     refused = 0
     for line in unordered:
-        if not rejects(gate, arranged([other for other in unordered if other != line])):
+        if not rejects(gate, arranged([other for other in reordered if other != line])):
             fail(f"sel4_boot_plane: accepted a reordered transcript that lacks {line!r}")
         refused += 1
     script = ROOT / "scripts" / "check" / "check-sel4-boot-plane.py"
