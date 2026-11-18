@@ -829,8 +829,9 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     allocator
         .initialize_metadata(bootinfo)
         .unwrap_or_else(|error| fatal!("root metadata bootstrap: {error:?}"));
-    // The first record of the boot: every later byte goes to the root's own
-    // UART. A fatal error before this line reaches the kernel's console only.
+    // The first record `main` itself emits: every later byte goes to the
+    // root's own UART. The allocator's bring-up records and a fatal error
+    // before this line reach the kernel's console only.
     #[cfg(slime_root_console_pl011)]
     #[cfg_attr(not(slime_qemu_keyboard), allow(unused_variables))]
     let console_registers = {
