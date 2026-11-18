@@ -5,6 +5,7 @@ item :: s.Item = (h.bug "01a1ec78-31ef-7332-b620-61d644f64a66" "boot-plane-marke
   "Nothing holds the boot plane gate to the orders it must accept, or to building its image"
   "Until pull request 1028, scripts/check/check-sel4-boot-plane.py held eleven lines to one order: the ready line of the call worker and of the operation worker, and the idle line of each of their nine participants. Each line comes from its own task, and the product promises no order among them. On one host, sel4_boot_check failed 2 of 10 boots of main at 31613aa on one of these lines, and fourteen further boots of that image printed the lines in four orders. The gate also accepted --no-build, which started QEMU with no image path. Pull request 1028 changed the gate. No control holds it to that change: nothing refuses a gate that returns to one order, and nothing refuses a gate that takes the option again.")
   with {
+    intent = #active;
     owns = {
       "scripts/check/check-sel4-boot-plane.py";
     };
