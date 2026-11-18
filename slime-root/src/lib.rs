@@ -52,6 +52,7 @@ pub mod boot_selector;
 pub mod boot_selector_block;
 // The boot framebuffer is reached through an x86 extra-BootInfo record, so the
 // renderer and the record it draws exist only where that record can.
+pub mod boot;
 #[cfg(target_arch = "x86_64")]
 pub mod boot_record;
 pub mod buffer_adapter;
