@@ -814,8 +814,8 @@ def check_root_memory_runtime_control() -> int:
             spent_inventory(((0x1_3FD6_2000, 14 * 4096), next_tail)),
         ),
         (
-            "a probe inside the bytes a tail spent",
-            spent_inventory((top_tail,), probe_paddr=0x1_3FD6_1000),
+            "a probe inside the bytes a tail spent, in the highest capable range",
+            spent_inventory(((0x1_3FD6_2000, 14 * 4096),), probe_paddr=0x1_3FD6_3000),
         ),
         (
             "a tail that stops before the end of its range",

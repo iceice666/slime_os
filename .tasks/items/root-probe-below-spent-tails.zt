@@ -23,7 +23,7 @@ item :: s.Item = (h.bug "01a1ee2a-ce05-7a76-9d34-9b10dbb9b136" "root-probe-below
         "The gate refuses a probe below a range for which the root reported no tail, a probe below a range whose tail leaves a frame free, and a probe inside the bytes that a tail spent."
         { "sel4_gate_control_check"; };
       h.req "a-tail-is-the-end-of-one-range"
-        "The gate refuses an infrastructure tail that does not end where one enumerated ordinary range ends, a tail that starts where its range starts, a second tail of one range, and a tail that the root reports after the probe."
+        "The gate refuses an infrastructure tail that does not end where one enumerated ordinary range ends, a tail that starts where its range starts, a second tail of one range, and a probe that only a tail reported after the probe would excuse."
         { "sel4_gate_control_check"; };
       h.req "riscv-root-boot-passes"
         "riscv64_sel4_root_boot_check passes: the root fixture boots on qemu-riscv-virt, and the gate accepts the probe of that boot."
