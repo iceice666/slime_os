@@ -150,8 +150,10 @@ breakpoint.
 - **`just test_sel4_root` asserts its test count** (`just/quality.just`).
   It counts the `#[test]` attributes in the library files the run compiles
   and compares that with the tests that ran. "ran N tests, expected M" means
-  the source holds a test the run did not execute, or the reverse: look for a
-  module that nothing declares, or a `cfg` on a test.
+  the source holds a test the run did not execute, or the reverse. Look for a
+  `cfg` on a single test or on an inline module, which the count does not
+  read, or for a test that a macro generates. A file that no module declares
+  is in neither number; `just root_size_check` refuses it.
 - **`just sel4_gate_control_check` fails after you edited a chain** — its
   `GATES` table pins each checker's marker count. Update the count in the
   same change.
