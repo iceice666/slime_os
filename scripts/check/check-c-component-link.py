@@ -94,7 +94,7 @@ def closed_path(directory: Path, log: Path) -> dict[str, str]:
     (directory / "ld.lld").symlink_to(Path(linker).resolve())
     trap = directory / TRAPS[0]
     trap.write_text(
-        f'#!/bin/sh\nprintf \'%s %s\\n\' "${{0##*/}}" "$*" >> \'{log}\'\nexit {TRAP_EXIT}\n',
+        f"#!/bin/sh\nprintf '%s %s\\n' \"${{0##*/}}\" \"$*\" >> '{log}'\nexit {TRAP_EXIT}\n",
         encoding="utf-8",
     )
     trap.chmod(0o755)
@@ -115,13 +115,17 @@ def check_static_executable(path: Path, machine: int) -> None:
         fail(f"{path.name} is not a little-endian ELF64 file")
     kind, found = struct.unpack_from("<HH", data, 16)
     if kind != ET_EXEC or found != machine:
-        fail(f"{path.name} has ELF type {kind} and machine {found}; expected {ET_EXEC} and {machine}")
+        fail(
+            f"{path.name} has ELF type {kind} and machine {found}; expected {ET_EXEC} and {machine}"
+        )
     (offset,) = struct.unpack_from("<Q", data, 32)
     size, count = struct.unpack_from("<HH", data, 54)
     for index in range(count):
         (segment,) = struct.unpack_from("<I", data, offset + index * size)
         if segment in (PT_DYNAMIC, PT_INTERP):
-            fail(f"{path.name} carries program header type {segment}; a component is a static executable")
+            fail(
+                f"{path.name} carries program header type {segment}; a component is a static executable"
+            )
 
 
 def check_build(architecture: str, compiler: str, staging: Path) -> None:
@@ -167,7 +171,9 @@ def control_trap_is_on_path(staging: Path) -> None:
     program = shutil.which("gcc", path=environment["PATH"])
     if program is None:
         fail("control: the closed PATH resolves no gcc")
-    process = subprocess.run([program, "--version"], env=environment, check=False, capture_output=True)
+    process = subprocess.run(
+        [program, "--version"], env=environment, check=False, capture_output=True
+    )
     if process.returncode != TRAP_EXIT or trapped(log) != ["gcc --version"]:
         fail("control: `gcc` on the closed PATH did not reach the trap")
     REFUSED.append("gcc by name")
@@ -190,7 +196,9 @@ def control_driver_link(architecture: str, compiler: str, staging: Path) -> None
         capture_output=True,
     )
     if compiled.returncode != 0 or trapped(log):
-        fail(f"control: Clang could not compile one object on the closed PATH:\n{compiled.stderr[-2000:]}")
+        fail(
+            f"control: Clang could not compile one object on the closed PATH:\n{compiled.stderr[-2000:]}"
+        )
     linked = subprocess.run(
         [
             compiler,
@@ -215,7 +223,9 @@ def control_driver_link(architecture: str, compiler: str, staging: Path) -> None
             "with LLD itself, the builder's own link step and this control change together"
         )
     REFUSED.append("driver link")
-    record(f"control refused: the Clang driver links {profile['target']} through `{calls[0].split()[0]}`")
+    record(
+        f"control refused: the Clang driver links {profile['target']} through `{calls[0].split()[0]}`"
+    )
 
 
 def main() -> None:
