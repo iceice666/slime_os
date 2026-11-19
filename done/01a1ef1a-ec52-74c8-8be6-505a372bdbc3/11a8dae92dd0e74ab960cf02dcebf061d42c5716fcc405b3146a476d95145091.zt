@@ -1,0 +1,11 @@
+o ::= import "./schema.zt";
+r :: o.Witness = {
+  schema = o.schemaVersion;
+  item = "01a1ef1a-ec52-74c8-8be6-505a372bdbc3";
+  itemDigest = "11a8dae92dd0e74ab960cf02dcebf061d42c5716fcc405b3146a476d95145091";
+  mainSha = "c4ed276751742afb5096470a9621fde93eba3e9e";
+  targets = { { target = "zenoh_service_peer_check"; closureDigest = "d9f6bbc4cd8af74b5cf80bfd1e08614ef2691314fdaba8f293f85c7aba6b244f"; negativeControlsRefused = 36; }; };
+  signer = "ci";
+  observedAt = "2026-11-19T15:08:15Z";
+};
+r
