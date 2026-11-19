@@ -143,7 +143,11 @@ def judge_sides(args: argparse.Namespace, base_sha: str, base: Side, head: Side,
     newly = head.bound - base.bound
     base_grader = base.grader_files(base.bound)
     promised_grader = base.grader_files(base.promised)
-    head_new_grader = head.grader_files(newly)
+    # A file that this pull request adds is a grader when a target bound on
+    # head reads it. `joined` holds those that a target bound on base reads.
+    head_grader = head.grader_files(head.bound)
+    joined = head.grader_files(base.bound & head.bound)
+    joined_promised = head.grader_files(base.promised & head.bound)
     base_items = {i.id: i for i in base.items}
     added_items = {i.id for i in head.items if i.id not in base_items}
 
@@ -170,12 +174,16 @@ def judge_sides(args: argparse.Namespace, base_sha: str, base: Side, head: Side,
             continue
         for path in sorted(paths):
             once = status if status != "R" else ("D" if path == old else "A")
-            classes[path] = classify(path, once, base, head, base_grader, head_new_grader, just_classes, intent_only, findings)
+            classes[path] = classify(path, once, base, head, base_grader, head_grader, just_classes, intent_only, findings)
         for path in paths:
             if path in base_grader and status in {"M", "D", "R"}:
                 findings.needs_approval("V4", f"{path} is in the grader set of a bound target")
                 if path in promised_grader and not added_items:
                     findings.error("V4", f"{path} grades a promise; change it from a new item")
+            elif status == "A" and path in joined:
+                findings.needs_approval("V4", f"{path} joins the grader set of a bound target")
+                if path in joined_promised and not added_items:
+                    findings.error("V4", f"{path} joins the graders of a promise; add it from a new item")
             if path.startswith(APPROVED_PATHS) or path in APPROVED_FILES:
                 findings.needs_approval("V4", f"{path} is part of the judge")
             if path.startswith("contracts/") and path.endswith("/schema.zt") and status != "A":
@@ -210,7 +218,7 @@ def judge_sides(args: argparse.Namespace, base_sha: str, base: Side, head: Side,
     rules.judge_approvals(findings, args.author, approvers, set(lib.names(lib.ROOT / "HUMAN_OWNERS")), reviewable=bool(rows) and kind != "closeout")
 
 
-def classify(path, status, base, head, base_grader, head_new_grader, just_classes, intent_only, findings) -> set[str]:
+def classify(path, status, base, head, base_grader, head_grader, just_classes, intent_only, findings) -> set[str]:
     if path.startswith(DERIVED):
         return {"derived"}
     if path.startswith((".tasks/items/", ".tasks/terminal/")) and path.endswith(".zt") and Path(path).name not in lib.ITEM_SOURCES:
@@ -233,8 +241,10 @@ def classify(path, status, base, head, base_grader, head_new_grader, just_classe
     if path == "Justfile" or path.startswith("just/"):
         return set(just_classes) or {"neutral"}
     # A grader file is an exam wherever it lives: a generator that a bound
-    # recipe runs with --check grades that target as a checker does.
-    if path in base_grader or (status == "A" and path in head_new_grader):
+    # recipe runs with --check grades that target as a checker does. An added
+    # file is one when any target bound on head reads it, a target that base
+    # already bound included: a module that an existing checker now imports.
+    if path in base_grader or (status == "A" and path in head_grader):
         return {"planning"}
     if path.startswith(("scripts/check/", "scripts/lib/")):
         return {"process"}
