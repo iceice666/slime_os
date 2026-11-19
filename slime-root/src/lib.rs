@@ -2,10 +2,11 @@
 //!
 //! Every module here is bounded, and most are pure state machines over fixed
 //! arrays: task-owned typed authority, shared-buffer accounting, supervision
-//! records, and timer scheduling. `main.rs` is the
-//! seL4 root task that drives them — startup staging, the dispatch loop, and
-//! the seL4 object plumbing — and it is deliberately not part of this crate's
-//! testable surface.
+//! records, and timer scheduling. [`boot`] and [`graph_runtime`] are the seL4
+//! plumbing that drives them: the boot sequence after the console install, the
+//! launch of the component graph, and the dispatch loop. `main.rs` keeps the
+//! entry point, the storage of the object allocator, the console install, and
+//! the fixture.
 //!
 //! # Why a library at all (B23)
 //!
@@ -32,7 +33,8 @@
 //!
 //! What the host cannot do is *invoke* seL4. No test here performs a syscall;
 //! they exercise the state machines, which is the whole of what they ever
-//! claimed to cover. The behavior that needs a running kernel stays the seL4
+//! claimed to cover. [`boot`] and [`graph_runtime`] compile for the host and
+//! have no host test, because every path through them invokes seL4. The behavior that needs a running kernel stays the seL4
 //! gates' job, and `just test_sel4_root` does not weaken that division — it closes
 //! the gap where a pure-logic regression was caught by neither.
 
@@ -46,13 +48,13 @@
 
 extern crate alloc;
 
+pub mod boot;
 #[cfg(slime_boot_selector)]
 pub mod boot_selector;
 #[cfg(slime_boot_selector)]
 pub mod boot_selector_block;
 // The boot framebuffer is reached through an x86 extra-BootInfo record, so the
 // renderer and the record it draws exist only where that record can.
-pub mod boot;
 #[cfg(target_arch = "x86_64")]
 pub mod boot_record;
 pub mod buffer_adapter;

@@ -292,11 +292,13 @@ impl DeviceRegion {
     }
 }
 
-/// QEMU `virt`'s PL011 serial controller.
+/// The physical address of QEMU `virt`'s PL011 serial controller.
 ///
-/// This is a temporary product-input path, not platform discovery. The QEMU
-/// build enables it explicitly, maps this page through BootInfo device
-/// authority, and leaves every physical-machine build without the constant.
+/// A fixed address of one machine, not platform discovery. The root maps this
+/// page through BootInfo device authority as its own console, under
+/// `slime_root_console_pl011`. Under `slime_qemu_keyboard` the same mapping is
+/// also the product's terminal input. No other configuration reads the
+/// constant.
 pub const QEMU_PL011_PADDR: usize = 0x0900_0000;
 
 /// One platform receive adapter behind the root's typed input service.

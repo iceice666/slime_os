@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1f136-14af-768c-bb13-2917ec15696b" "root-libra
   "The library compiles the root's graph runtime and boot sequence"
   "slime-root/src/main.rs declares graph_runtime and fixture_runtime as modules of the binary. On main at 6531425 the binary alone compiles 9301 code lines in 13 files, of the 33941 in the series. just test_sel4_root builds the library, so no host test can name those lines. main is one function of 1058 lines, and it runs every boot phase from the object allocator to the launch of the first component.")
   with {
+    intent = #active;
     supersedes = {
       "01a1ed2c-6a01-7d68-84f5-f3057766f1ab/series-without-the-child";
     };
