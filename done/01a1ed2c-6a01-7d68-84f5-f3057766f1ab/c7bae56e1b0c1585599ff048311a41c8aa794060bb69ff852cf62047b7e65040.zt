@@ -1,0 +1,11 @@
+o ::= import "./schema.zt";
+r :: o.Witness = {
+  schema = o.schemaVersion;
+  item = "01a1ed2c-6a01-7d68-84f5-f3057766f1ab";
+  itemDigest = "c7bae56e1b0c1585599ff048311a41c8aa794060bb69ff852cf62047b7e65040";
+  mainSha = "d4f99ad60e5c9d84fb5993fe7132f557ec9588d6";
+  targets = { { target = "image_builder_closures_check"; closureDigest = "0da149e83633099cb04a742de0b01b7bbfaa5abeb8f612af831977931b0f9c33"; negativeControlsRefused = -1; }; { target = "riscv64_sel4_root_boot_check"; closureDigest = "7156ae51242c5b91c2ca0c1080fa1faa30307475b0e8dce9ff042663b493a74a"; negativeControlsRefused = -1; }; { target = "root_size_check"; closureDigest = "f8f780f1f4e90de2f60a3369b7146bf3c75ff7caf38c02fad00952d7db02be29"; negativeControlsRefused = -1; }; { target = "sel4_root_boot_check"; closureDigest = "ea67340d8be6a4e85891075544fb34acfff54e2e7178528808ac1ba038274b29"; negativeControlsRefused = -1; }; { target = "x86_64_sel4_root_boot_check"; closureDigest = "b3ff9373de23e387bf78ba351ca67f91a90210e655b32d1f61fde0ea4cf5a62d"; negativeControlsRefused = -1; }; };
+  signer = "ci";
+  observedAt = "2026-11-19T04:28:34Z";
+};
+r
