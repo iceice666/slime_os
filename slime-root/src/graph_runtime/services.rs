@@ -363,7 +363,7 @@ pub(super) fn serve_instance_graph(
             }
             lifecycle_service.release(id);
             if !retirements.insert(id) {
-                return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+                fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
             }
             live -= 1;
             continue;
@@ -610,7 +610,7 @@ pub(super) fn serve_instance_graph(
                 }
                 lifecycle_service.release(id);
                 if !retirements.insert(id) {
-                    return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+                    fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
                 }
                 live -= 1;
             }

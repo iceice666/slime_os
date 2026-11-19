@@ -430,7 +430,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             #[cfg(slime_root_console_pl011)]
             console_registers,
         },
-    );
+    )
+    .unwrap_or_else(|stop| slime_root::graph_runtime::halt(stop));
     // A v4 generation launches only explicitly declared root-owned autostart
     // instances. Catalogue-only executables remain inert until a bound exec
     // capability authorizes a userspace spawn.

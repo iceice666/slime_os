@@ -792,7 +792,7 @@ pub(super) fn release_child(
     // A revoke that did not complete leaves the task owned and its
     // incarnation quarantined; the exit and fault paths' retry settles it.
     if reclaimed.is_err() && !retirements.insert(id) {
-        return fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+        fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
     }
     if let (Some(policy), Some(binding)) = (adaptive, binding.as_ref()) {
         policy.retire(

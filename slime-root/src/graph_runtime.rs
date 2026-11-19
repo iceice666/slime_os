@@ -1,31 +1,47 @@
-/// Report an unrecoverable startup condition and park the root task. Every
-/// fallible step returns a typed error that ends up here; nothing panics.
+/// The root must stop. The record that says why is already on the console.
 ///
-/// The report goes to both channels. Serial is what every emulated plane
-/// reads; the panel is the *only* channel a physical Framework has, and a
-/// fatal reaching serial alone is a silent stop there — the condition that
-/// made the first physical boot attempt uninterpretable. The panel carries a
-/// fixed label rather than the formatted message: formatting needs a
-/// heap-free writer this macro cannot assume at every one of its 126 sites,
-/// and the label already tells an operator with no serial port that the root
-/// died rather than hung.
+/// A phase that cannot go on prints its record with [`stop!`](crate::stop)
+/// and returns this, so the function returns and its caller decides. The value
+/// carries no text: a record that travelled in it would need a buffer of a
+/// fixed size, and a record cut to fit is not the record the gates read.
+pub struct Stop;
+
+/// Print the record of an unrecoverable condition and yield a [`Stop`].
+///
+/// This is the one definition of the record's format. `fatal!` expands to it.
 #[macro_export]
-macro_rules! fatal {
+macro_rules! stop {
     ($($arg:tt)*) => {{
         $crate::diagnostic_println!("SLIME_ROOT FATAL {}", format_args!($($arg)*));
-        #[cfg(target_arch = "x86_64")]
-        // SAFETY: the fatal path is terminal and single-threaded — the root
-        // suspends on the next line — so this cannot overlap another render.
-        //
-        // `unused_unsafe` is allowed because `fatal!` expands both inside and
-        // outside `unsafe` blocks across the root, and the macro cannot know
-        // which; the block is required at the outside sites.
-        #[allow(unused_unsafe)]
-        unsafe {
-            $crate::framebuffer::report_fatal("ROOT FATAL - BOOT ABANDONED");
-        }
-        sel4::init_thread::suspend_self()
+        $crate::graph_runtime::Stop
     }};
+}
+
+/// Park the root task after a [`Stop`]. Nothing panics.
+///
+/// The serial record is already printed; this adds the panel's. Serial is
+/// what every emulated plane reads; the panel is the *only* channel a physical
+/// Framework has, and a stop that reaches serial alone is silent there. The
+/// panel carries a fixed label rather than the formatted message: it tells an
+/// operator with no serial port that the root died rather than hung.
+pub fn halt(_stop: Stop) -> ! {
+    // SAFETY: this path is terminal and single-threaded: the root suspends on
+    // the next line, so the render cannot overlap another.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        crate::framebuffer::report_fatal("ROOT FATAL - BOOT ABANDONED");
+    }
+    sel4::init_thread::suspend_self()
+}
+
+/// Report an unrecoverable condition and park the root task, where no caller
+/// can stop the root in this function's place. Elsewhere a function returns
+/// [`stop!`](crate::stop) and its caller halts.
+#[macro_export]
+macro_rules! fatal {
+    ($($arg:tt)*) => {
+        $crate::graph_runtime::halt($crate::stop!($($arg)*))
+    };
 }
 
 #[cfg(slime_boot_selector)]
@@ -106,22 +122,19 @@ const TIMER_PROOF_DEADLINE_DIVISOR: u64 = 100;
 const TIMER_PROOF_BOUND_SECONDS: u64 = 3;
 
 /// Run one IRQ-backed deadline and name the phase in every marker.
-pub fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
+pub fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) -> Result<(), Stop> {
     let mut timer_scheduler = TimerScheduler::<1>::new();
     const TIMER_PROOF_OWNER: TaskEpoch = TaskEpoch::new(0, 0);
-    let timer_start = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable during {phase}: {error:?}"),
-    };
+    let timer_start = timer_adapter
+        .monotonic_now()
+        .map_err(|error| stop!("timer clock unreadable during {phase}: {error:?}"))?;
     let deadline_ticks = (timer_adapter.frequency_hz() / TIMER_PROOF_DEADLINE_DIVISOR).max(1);
-    let (_, scheduled) =
-        match timer_scheduler.schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks) {
-            Ok(scheduled) => scheduled,
-            Err(error) => fatal!("timer proof deadline rejected during {phase}: {error:?}"),
-        };
-    if let Err(error) = apply_deadline_programming(timer_adapter, scheduled.programming) {
-        fatal!("timer deadline could not be programmed during {phase}: {error:?}")
-    }
+    let (_, scheduled) = timer_scheduler
+        .schedule_after(TIMER_PROOF_OWNER, timer_start, deadline_ticks)
+        .map_err(|error| stop!("timer proof deadline rejected during {phase}: {error:?}"))?;
+    apply_deadline_programming(timer_adapter, scheduled.programming).map_err(|error| {
+        stop!("timer deadline could not be programmed during {phase}: {error:?}")
+    })?;
 
     let bound_ticks = timer_adapter
         .frequency_hz()
@@ -131,14 +144,14 @@ pub fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
         if poll_notification(timer_adapter.notification()) == Some(timer_adapter.signal_badge()) {
             break;
         }
-        let elapsed = match timer_adapter.monotonic_now() {
-            Ok(now) => now.0.wrapping_sub(timer_start.0),
-            Err(error) => fatal!("timer clock unreadable while waiting during {phase}: {error:?}"),
-        };
+        let now = timer_adapter.monotonic_now().map_err(|error| {
+            stop!("timer clock unreadable while waiting during {phase}: {error:?}")
+        })?;
+        let elapsed = now.0.wrapping_sub(timer_start.0);
         if elapsed > bound_ticks {
-            fatal!(
+            return Err(stop!(
                 "SLIME_TIMER FAIL phase={phase} timeout waited_ticks={elapsed} bound_ticks={bound_ticks} polls={polls}"
-            )
+            ));
         }
         polls += 1;
     }
@@ -154,22 +167,22 @@ pub fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
         );
     }
 
-    let drained = match timer_scheduler.service_timer_source(timer_adapter, |_| true) {
-        Ok(transition) => transition,
-        Err(ServiceTimerError::Program { error, transition }) => fatal!(
-            "timer deadline reprogramming failed during {phase}: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(ServiceTimerError::Acknowledge { error, transition }) => fatal!(
-            "timer acknowledgement failed during {phase}: {error:?} wakes={}",
-            transition.events.len()
-        ),
-        Err(error) => fatal!("timer service rejected the observed {phase} expiry: {error:?}"),
-    };
-    let timer_end = match timer_adapter.monotonic_now() {
-        Ok(now) => now,
-        Err(error) => fatal!("timer clock unreadable after {phase} service: {error:?}"),
-    };
+    let drained = timer_scheduler
+        .service_timer_source(timer_adapter, |_| true)
+        .map_err(|error| match error {
+            ServiceTimerError::Program { error, transition } => stop!(
+                "timer deadline reprogramming failed during {phase}: {error:?} wakes={}",
+                transition.events.len()
+            ),
+            ServiceTimerError::Acknowledge { error, transition } => stop!(
+                "timer acknowledgement failed during {phase}: {error:?} wakes={}",
+                transition.events.len()
+            ),
+            error => stop!("timer service rejected the observed {phase} expiry: {error:?}"),
+        })?;
+    let timer_end = timer_adapter
+        .monotonic_now()
+        .map_err(|error| stop!("timer clock unreadable after {phase} service: {error:?}"))?;
     if phase == "startup" {
         crate::diagnostic_println!(
             "SLIME_TIMER serviced events={} programming={:?}",
@@ -197,6 +210,7 @@ pub fn prove_timer(timer_adapter: &mut PhysicalTimerAdapter, phase: &str) {
         );
         crate::diagnostic_println!("SLIME_TIMER phase={phase} OK");
     }
+    Ok(())
 }
 
 #[repr(C, align(4096))]
@@ -1359,7 +1373,7 @@ pub fn launch_instance_graph(
     // ClockService scheduler or program its hardware deadline. This second
     // proof therefore establishes post-activation IRQ liveness before timer
     // ownership passes to the service loop.
-    prove_timer(timer, "post-graph-start");
+    prove_timer(timer, "post-graph-start").unwrap_or_else(|stop| halt(stop));
 
     let mut buffers = SharedBufferTable::new(GenerationEpoch(generation.number));
     let budget = shared_buffer_budget(generation);
