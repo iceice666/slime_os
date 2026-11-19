@@ -1,21 +1,24 @@
 //! `slime-root`: the seL4 root task that owns Slime's dynamic mechanism.
 //!
-//! Startup is staged so that authority always follows a generation declaration:
+//! This binary is the entry point; the library holds the stages. Authority
+//! always follows a generation declaration, so the order is fixed:
 //!
-//! 1. decode and admit the embedded generation, classifying every component
-//!    payload;
-//! 2. take deterministic ownership of BootInfo CSlots and kernel untypeds;
-//! 3. derive each child's endpoint authority from declared grants;
-//! 4. build every child task — CSpace, VSpace, TCB, IPC buffer, badged root
-//!    endpoint, fault handler — without running any of them;
-//! 5. activate only after every allocation has succeeded, one task at a time so
-//!    the serial record is ordered;
-//! 6. serve requests and faults, then reclaim each task's recorded CSlots.
+//! 1. `main` takes deterministic ownership of BootInfo CSlots and kernel
+//!    untypeds, and installs the root's console where the platform has one;
+//! 2. `slime_root::boot::run` proves the root's foundations, then decodes and
+//!    admits the generation, classifying every component payload;
+//! 3. `slime_root::graph_runtime` derives each child's authority from declared
+//!    grants and builds every child task — CSpace, VSpace, TCB, IPC buffer,
+//!    badged root endpoint, fault handler — without running any of them;
+//! 4. it activates only after every allocation has succeeded, one task at a
+//!    time so the serial record is ordered;
+//! 5. it serves requests and faults, and reclaims each task's recorded CSlots.
 //!
-//! The generation's own component payloads are `SLIMECM*` images built for the
-//! retired Slime kernel, not ELF. Their graph is admitted and counted, but they
-//! are not activated; the cutover proof is the native AArch64 child fixture in
-//! `components/root-child`.
+//! A stage that cannot go on prints its record and returns; `main` halts.
+//!
+//! When no executable of the generation is loadable, `main` runs the fixture
+//! below in place of stages 3 to 5: the native child in `components/root-child`,
+//! with endpoint authority borrowed from the declared instances.
 
 #![no_main]
 #![no_std]
