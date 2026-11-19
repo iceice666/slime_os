@@ -15,8 +15,8 @@ in the root, `boot-contracts`, and roughly fourteen userspace components.
 
 What still lives in more than one place, by design, is *enforcement*: the rights
 types the root builds from those bits in `slime-root/src/graph.rs`, and the
-operations that check them in `slime-root/src/main.rs`'s dispatcher and the
-owning mechanism module. Those are predicates over one vocabulary, not copies of
+operations that check them in the dispatcher,
+`slime-root/src/graph_runtime/services.rs`, and the owning mechanism module. Those are predicates over one vocabulary, not copies of
 it.
 
 ## Grammar
@@ -188,7 +188,8 @@ Semantics not visible in the table:
   with nothing for the kernel to carry, so the descriptor arrives alone and the
   receiver takes up the authority behind it with `CAPABILITY IMPORT`.
 - Only `Endpoint`, `SharedBuffer`, `Loan`, `Supervision`, and `Directory` are
-  nameable by a transfer (`capability_kind` in `slime-root/src/main.rs`). No
+  nameable by a transfer (`capability_kind` in
+  `slime-root/src/graph_runtime/services/capability.rs`). No
   other kind can move; an `Executable` or a factory reaches a child as a spawn
   grant or a declared binding, never as a transfer.
 - C9.5 narrows `CAPABILITY IMPORT` for one class of receiver, and only that one:

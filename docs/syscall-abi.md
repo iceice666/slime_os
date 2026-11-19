@@ -2,8 +2,9 @@
 
 The canonical surface is `components/runtime/src/syscall.rs` (the operations a
 component may name), `components/runtime/src/syscall/sel4_transport.rs` (how
-each one reaches the root), and `slime-root/src/main.rs`'s dispatcher plus
-`slime-root/src/ipc.rs` (what answers). Update this file in the same change that
+each one reaches the root), and the dispatcher in
+`slime-root/src/graph_runtime/services.rs` plus `slime-root/src/ipc.rs` (what
+answers). Update this file in the same change that
 adds, deletes, or renumbers an operation label, changes an argument packing, or
 changes the reply convention.
 

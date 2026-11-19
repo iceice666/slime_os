@@ -88,6 +88,11 @@ boot sequence and diverge after it. The fixture can become a root binary of its
 own only when the library holds that sequence. Until then every root image,
 the product included, links the fixture's root side and embeds the child image.
 
+PR 1068 moved that sequence and the graph runtime into the library, as
+`slime_root::boot::run` and `slime_root::graph_runtime`. The binary alone now
+compiles `slime-root/src/main.rs` and `slime-root/src/fixture_runtime.rs`, 1119
+code lines. The fixture is not yet a root binary of its own.
+
 Three recipes boot the fixture through `scripts/check/check-sel4-root-boot.py`:
 
 | Recipe | Platform |

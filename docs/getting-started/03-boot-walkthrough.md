@@ -37,8 +37,9 @@ invisible except as the mechanism every later step invokes.
 ### 2. Root self-checks — `SLIME_ROOT allocator`, `SLIME_TIMER`, `SLIME_FOUNDATION`
 
 `slime-root` starts single-threaded and proves its own foundations before
-touching the generation (`slime-root/src/main.rs`, staged exactly as its
-module doc describes):
+touching the generation. `slime-root/src/main.rs` brings up the allocator and
+the console, and `run` in `slime-root/src/boot.rs` does the rest, in one order
+for every root image:
 
 - **Allocator** (`object_allocator.rs`): takes deterministic ownership of
   BootInfo's CSlots and untypeds, and reports the budget it will allocate

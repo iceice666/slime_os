@@ -38,9 +38,9 @@ debugging:
 
 **Fatal, before the graph.** `SLIME_ROOT FATAL <reason>` — allocator,
 timer proof, generation decode, or admission failed; the root parks. The
-reason is a typed refusal (`slime-root/src/main.rs`, `fatal!`), never a
-panic. An image built for the wrong target profile, a hash mismatch, or a
-superseded generation format shows up here.
+reason is a typed refusal (`fatal!`, in `slime-root/src/graph_runtime.rs`),
+never a panic. An image built for the wrong target profile, a hash mismatch,
+or a superseded generation format shows up here.
 
 **Refusal at admission or activation.** `SLIME_GRAPH FAIL <what> rejected …`
 — the generation decoded but the root will not build the plan: CSpace plan

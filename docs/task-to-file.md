@@ -14,11 +14,11 @@ Keep this table in the same commit as any move of an owning module.
 | --- | --- | --- |
 | Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`; grants are declared in the system spec below |
 | Native endpoint IPC, message bounds, endpoint lifetime | `slime-root/src/peer_endpoint.rs` | `slime-root/src/{ipc,notification}.rs`, `components/runtime/src/syscall/sel4_transport.rs` |
-| Tasks, spawn, supervision, termination, reclamation | `slime-root/src/task.rs` | `slime-root/src/{main,child_vspace,fault,supervision}.rs` |
+| Tasks, spawn, supervision, termination, reclamation | `slime-root/src/task.rs` | `slime-root/src/{child_vspace,fault,supervision}.rs`, `slime-root/src/graph_runtime/services/spawn.rs` |
 | Syscall argument validation and rights gates | `slime-root/src/ipc.rs` | owner modules in `slime-root/src/`, wrappers in `components/runtime/src/syscall.rs` |
 | seL4 object allocation and VSpace construction | `slime-root/src/object_allocator.rs` | `slime-root/src/{child_vspace,buffer_adapter}.rs` |
 | Shared-buffer allocation, mapping, loan, accounting | `slime-root/src/shared_buffer.rs` | `slime-root/src/{buffer_adapter,transfer_window,ipc}.rs` |
-| Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, system specs below |
+| Boot graph and component launch grants | `slime-root/src/graph_runtime.rs` | boot sequence in `slime-root/src/boot.rs`, entry in `slime-root/src/main.rs`, generation decoding in `slime-root/src/generation.rs`, system specs below |
 | Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
 | Composition: which components run, grants, slots, budgets, health | `contracts/system-spec/v1/sources/<name>.zt` for `COMPUTED_SYSTEM_SOURCES`, otherwise `contracts/system-spec/v1/systems/<name>.zti` | authoring ownership: `contracts/system-spec/README.md`; derivation map `DERIVED_GENERATION_FIXTURES` in `scripts/lib/system_spec.py`; regenerate with `python3 scripts/generate/generate-generation-from-spec.py`; `just system_spec_check` refuses drift. `contracts/generation-manifest/v1/{compositions,fixtures}/*.zti` are derived outputs |
 | Generation construction and manifest encoding | `scripts/build/build-generation.py` | `contracts/generation-manifest/v1/schema.zt`, `components/build-support/src/lib.rs` |

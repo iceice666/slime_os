@@ -25,7 +25,7 @@ For current subsystem rationale, start at [`docs/architecture/`](docs/architectu
 ### Execution path
 
 1. `scripts/build/build-sel4.py` pins and builds seL4, the root task, its child fixture, and the loader image.
-2. `slime-root/src/main.rs` admits the embedded generation, creates the initial capability graph, launches components, supervises faults, and owns bounded kernel-object allocation.
+2. `slime-root/src/main.rs` initializes the bounded kernel-object allocator, installs the root's console, and calls `slime_root::boot::run`. `slime-root/src/boot.rs` proves the root's foundations and admits the embedded generation. `slime-root/src/graph_runtime.rs` creates the initial capability graph and launches components. `slime-root/src/graph_runtime/services.rs` serves their requests and supervises faults.
 3. Components enter through `components/<lifecycle>/<component>/src/main.rs` — one crate per component (CP3), grouped under `system/`, `services/`, `applications/`, or `testkit/` — with shared helpers in `components/lib` and build-time support in `components/build-support`; their syscall surface is `components/runtime/src/syscall.rs`, with the native transport in `components/runtime/src/syscall/sel4_transport.rs` and authoritative operations in `slime-root/src/ipc.rs` plus the owning mechanism module.
 
 ### Task-to-file index
@@ -46,7 +46,7 @@ A closure source names its inputs by path and records no digest; every build res
 
 ### Navigation traps
 
-- `slime-root/src/lib.rs` exposes the mechanism modules host tests compile; the product binary in `slime-root/src/main.rs` links those same modules.
+- `slime-root/src/lib.rs` exposes the mechanism modules host tests compile, the boot sequence and the graph runtime among them; the product binary in `slime-root/src/main.rs` links those same modules. The binary alone compiles `main.rs` and `fixture_runtime.rs`.
 - A component's capability slot layout is established by grants in the matching `contracts/system-spec/v1/systems/<plane>.zti`, the manifest derived from it under `contracts/generation-manifest/v1/compositions/`, and the generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority; edit only the system spec.
 - `scripts/check/` contains end-to-end QEMU assertions and expected serial markers; it is verification code, not the implementation of the behavior it checks.
 
