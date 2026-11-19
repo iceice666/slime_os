@@ -25,19 +25,31 @@ series total covers. The `harness` role holds the build script and the two
 `slime_*` cfg compiles each qualification scenario into its own root role
 image. The role has its own ceiling and is outside the series total.
 
+The script also counts the code lines that only the binary compiles: the lines
+of `src/main.rs` and of every module file that it declares with `mod name;`,
+followed into each declared file in turn. The library, `src/lib.rs`, compiles
+every other file, and host tests reach only what the library compiles. The
+count is reported as `binaryOnlyCodeLines`, with the count of those files as
+`binaryOnlyFiles`. `BINARY_ONLY_CEILING` bounds the lines. A `#[path]`
+attribute in such a file is refused, because the walk finds a module by its
+name.
+
 A role may name a file that does not exist. A planning pull request assigns a
 file before the implementation creates it, and an entry stays after its file
 is deleted.
 
 Known limits. The script counts `slime-root/` only. Code that moves into a
 crate the root links leaves the count. `DEPENDENCIES` pins which crates those
-are, so a new one is a grader change. A role holds whole files:
+are, so a new one is a grader change. The walk for `binaryOnlyCodeLines` reads
+a declaration at the start of a code line, so a line of a multi-line string
+literal that reads `mod name;` would count as one. A role holds whole files:
 `src/object_allocator/qualification.rs` also holds two methods that the
 product image calls, and the `harness` role counts them.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tomllib
@@ -53,6 +65,8 @@ from harness import ROOT  # noqa: E402
 CRATE = "slime-root"
 MANIFEST = ROOT / CRATE / "Cargo.toml"
 TEST_ATTRIBUTE = "#[cfg(test)]"
+BINARY_ROOT = "src/main.rs"
+MODULE_DECLARATION = re.compile(r"\s*(?:pub(?:\([a-z: ]+\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
 
 
 @dataclass(frozen=True)
@@ -67,7 +81,9 @@ class Role:
 
 
 # Each role ceiling is the role's count on the commit that landed this script,
-# rounded up to a multiple of 50.
+# rounded up to a multiple of 50. Two are newer. `fixture` is 600 since its
+# child crate left `slime-root/`. `boot` is 6050, which leaves room for the
+# 5984 lines it holds once `src/boot.rs` carries the boot sequence of `main`.
 ROLES: dict[str, Role] = {
     # Kernel-object allocation, address spaces, tasks, faults and the graph.
     "core": Role(
@@ -96,9 +112,10 @@ ROLES: dict[str, Role] = {
     ),
     # Runs once, before the first component: admission, launch, boot media.
     "boot": Role(
-        ceiling=5900,
+        ceiling=6050,
         files=(
             "src/main.rs",
+            "src/boot.rs",
             "src/generation.rs",
             "src/graph_runtime.rs",
             "src/graph_runtime/platform.rs",
@@ -152,11 +169,10 @@ ROLES: dict[str, Role] = {
         ceiling=1350,
         files=("src/timer.rs", "src/platform_timer.rs", "src/clock.rs"),
     ),
-    # The fixture root and its child image.
+    # The root side of the fixture. Its child program is `components/root-child`.
     "fixture": Role(
-        ceiling=950,
+        ceiling=600,
         files=("src/fixture_runtime.rs",),
-        trees=("child/",),
     ),
     # Root diagnostics and the console endpoint.
     "console": Role(
@@ -180,8 +196,12 @@ ROLES: dict[str, Role] = {
 }
 
 SERIES = ("core", "boot", "ioResource", "sharedBuffer", "dispatch", "policy", "timer", "fixture", "console")
-# The series held 34294 code lines on the commit that landed this script.
-SERIES_CEILING = 34400
+# The series held 34294 code lines on the commit that landed this script, and
+# 33941 after the fixture's child crate left `slime-root/`.
+SERIES_CEILING = 34100
+# The binary alone compiled 9301 code lines, in 13 files, on the commit that
+# landed this ceiling.
+BINARY_ONLY_CEILING = 9350
 
 # Every crate `slime-root/Cargo.toml` names in a dependency table.
 DEPENDENCIES = frozenset({"boot-contracts", "sel4", "slime-proto", "sel4-root-task", "object"})
@@ -325,6 +345,35 @@ def sources() -> list[str]:
     return sorted(path[len(prefix):] for path in listed if path.endswith(".rs") and (ROOT / path).is_file())
 
 
+def binary_only(files: list[str]) -> list[str]:
+    """`src/main.rs` and every module file that it declares, transitively."""
+    known = set(files)
+    found: list[str] = []
+    pending = [BINARY_ROOT]
+    while pending:
+        relative = pending.pop()
+        if relative in found:
+            continue
+        found.append(relative)
+        text = (ROOT / CRATE / relative).read_text(encoding="utf-8")
+        name = relative.rsplit("/", 1)[-1]
+        base = relative.rsplit("/", 1)[0] if name in ("main.rs", "mod.rs") else relative.removesuffix(".rs")
+        for line, held in zip(text.split("\n"), lex(text).code, strict=True):
+            if not held:
+                continue
+            if line.lstrip().startswith("#[path"):
+                fail(f"{CRATE}/{relative} uses #[path]; the binary-only count finds a module by its name")
+            declared = MODULE_DECLARATION.match(line)
+            if declared is None:
+                continue
+            candidates = [f"{base}/{declared.group(1)}.rs", f"{base}/{declared.group(1)}/mod.rs"]
+            holders = [candidate for candidate in candidates if candidate in known]
+            if len(holders) != 1:
+                fail(f"{CRATE}/{relative} declares module {declared.group(1)}, and {len(holders)} of {candidates} hold it")
+            pending.append(holders[0])
+    return sorted(found)
+
+
 def dependencies() -> set[str]:
     manifest = tomllib.loads(MANIFEST.read_text(encoding="utf-8"))
     tables = [manifest]
@@ -361,6 +410,11 @@ def main() -> int:
         code[owners[0]] += code_lines
         test_lines += tested
 
+    if BINARY_ROOT not in files:
+        fail(f"{CRATE}/{BINARY_ROOT} is missing; the binary-only count starts there")
+    binary = binary_only(files)
+    binary_lines = sum(count((ROOT / CRATE / relative).read_text(encoding="utf-8"))[0] for relative in binary)
+
     series = sum(code[name] for name in SERIES)
     for name, role in ROLES.items():
         print(f"[root-size] {name:<13} {code[name]:>6} / {role.ceiling}")
@@ -368,6 +422,9 @@ def main() -> int:
             problems.append(f"role {name} holds {code[name]} code lines, above its ceiling of {role.ceiling}")
     print(f"[root-size] {'series':<13} {series:>6} / {SERIES_CEILING}")
     print(f"[root-size] files={len(files)} testLines={test_lines}")
+    print(f"[root-size] {'binaryOnly':<13} {binary_lines:>6} / {BINARY_ONLY_CEILING} in {len(binary)} file(s)")
+    if binary_lines > BINARY_ONLY_CEILING:
+        problems.append(f"the binary alone compiles {binary_lines} code lines, above its ceiling of {BINARY_ONLY_CEILING}")
     if series > SERIES_CEILING:
         problems.append(f"the series holds {series} code lines, above its ceiling of {SERIES_CEILING}")
 
@@ -383,9 +440,11 @@ def main() -> int:
         seriesCodeLines=series,
         harnessCodeLines=code["harness"],
         filesObserved=len(files),
+        binaryOnlyCodeLines=binary_lines,
+        binaryOnlyFiles=len(binary),
         **{f"{name}CodeLines": code[name] for name in SERIES},
     )
-    print("root size check: every file has one role, and every role and the series are within their ceilings")
+    print("root size check: every file has one role, and every role, the series and the binary-only count are within their ceilings")
     return 0
 
 
