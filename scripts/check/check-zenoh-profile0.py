@@ -2693,7 +2693,7 @@ def grants_reader_main(controls_only: bool) -> int:
             print(f"zenoh profile 0 grants-reader judge: refused {refusals} corrupted inputs")
             return 0
         held = exam.check_facts(exam.read_file)
-        ran = exam.judge_run(exam.run_reader_tests())
+        ran = exam.judge_run(exam.run_reader_tests(), exam.source_total())
     except exam.ReaderExamError as error:
         fail(f"grants-reader: {error}")
     cases = held + (1 if ran == len(exam.TESTS) else 0)

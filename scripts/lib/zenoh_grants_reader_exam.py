@@ -6,7 +6,8 @@ the generation to the Zenoh service: the label that reads it, the manifest and s
 
 Two kinds of evidence. Each declaration the files must hold is a fact: a pattern that has to match the named file. The
 reader's behaviour is graded by the two `slime-root` tests, run alone under the pinned AArch64 recipe, and the count of
-tests that ran and were filtered out has to add up to the number `just test_sel4_root` pins.
+tests that ran and were filtered out has to add up to the number `just test_sel4_root` expects. That recipe takes the
+number from the source through `scripts/check/check-root-size.py --host-tests`, and so does this module.
 
 This module imports no system spec module. The implementation changes those, so a judge that imported them would be
 graded by the files the implementation rewrites.
@@ -17,6 +18,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 
@@ -28,8 +30,10 @@ TESTS = (
     "ipc::tests::zenoh_grants_rows_are_served_only_to_the_zenoh_service",
     "ipc::tests::zenoh_grants_pages_by_row_cursor_within_the_staged_bound",
 )
-PINNED_TESTS = 365
+# The total of an honest run in the controls. The judged run is held to the count the source gives.
+SAMPLE_TOTAL = 369
 QUALITY = "just/quality.just"
+COUNTER = ("scripts/check/check-root-size.py", "--host-tests")
 
 
 class ReaderExamError(Exception):
@@ -97,7 +101,8 @@ FACTS: tuple[tuple[str, str, str, str], ...] = (
     ("wrapper-public", "components/runtime/src/syscall.rs", r"^pub fn zenoh_grants_read\(cursor: usize, out: &mut \[u8\]\) -> Result<usize, i64> \{$",
      "pub fn zenoh_grants_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {"),
     ("wrapper-export", "components/runtime/src/lib.rs", r"\bzenoh_grants_read\b", "    debug_write, zenoh_grants_read,"),
-    ("test-pin", QUALITY, rf"^\s*expected={PINNED_TESTS}$", f"    expected={PINNED_TESTS}"),
+    ("test-count-from-source", QUALITY, r'^\s*expected="\$\(python3 scripts/check/check-root-size\.py --host-tests\)"$',
+     '    expected="$(python3 scripts/check/check-root-size.py --host-tests)"'),
 )
 PINNED_FACTS = len(FACTS)
 
@@ -117,14 +122,22 @@ def fact_controls() -> int:
         raise ReaderExamError(str(error)) from error
 
 
-def judge_run(output: str) -> int:
-    """The filtered `slime-root` run: exactly the two reader tests ran and passed, and every other pinned test was
-    filtered out. Returns the number of tests that ran."""
+def source_total() -> int:
+    """The number of host tests `just test_sel4_root` expects, from the counter that recipe runs."""
+    finished = subprocess.run([sys.executable, *COUNTER], cwd=ROOT, capture_output=True, text=True)
+    _need(finished.returncode == 0, f"{' '.join(COUNTER)} exited {finished.returncode}: {finished.stderr[-500:]}")
+    _need(finished.stdout.strip().isdecimal(), f"{' '.join(COUNTER)} printed {finished.stdout!r}, not a count")
+    return int(finished.stdout)
+
+
+def judge_run(output: str, total: int) -> int:
+    """The filtered `slime-root` run: exactly the two reader tests ran and passed, and every other one of the `total`
+    host tests was filtered out. Returns the number of tests that ran."""
     ran = re.findall(r"^running (\d+) tests?$", output, re.MULTILINE)
     _need(ran == ["2"], f"the run reported {ran or 'no test count'}, not one run of 2 tests")
     results = re.findall(r"^test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out", output, re.MULTILINE)
-    _need(results == [("ok", "2", "0", "0", "0", str(PINNED_TESTS - 2))],
-          f"the run did not pass 2 tests and filter out {PINNED_TESTS - 2}: {results}")
+    _need(results == [("ok", "2", "0", "0", "0", str(total - 2))],
+          f"the run did not pass 2 tests and filter out {total - 2}: {results}")
     passed = set(re.findall(r"^test (\S+) \.\.\. ok$", output, re.MULTILINE))
     _need(passed == set(TESTS), f"the tests that passed are {sorted(passed)}, not {sorted(TESTS)}")
     return len(passed)
@@ -132,27 +145,27 @@ def judge_run(output: str) -> int:
 
 def honest_run() -> str:
     lines = ["running 2 tests", *(f"test {name} ... ok" for name in TESTS), "",
-             f"test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; {PINNED_TESTS - 2} filtered out; finished in 0.01s"]
+             f"test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; {SAMPLE_TOTAL - 2} filtered out; finished in 0.01s"]
     return "\n".join(lines) + "\n"
 
 
 def run_controls() -> int:
     honest = honest_run()
-    _need(judge_run(honest) == 2, "the honest run was not read as two tests")
+    _need(judge_run(honest, SAMPLE_TOTAL) == 2, "the honest run was not read as two tests")
     first, second = TESTS
     mutations = (
-        ("no test ran", "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 365 filtered out; finished in 0.00s\n"),
-        ("a third test", honest.replace("running 2 tests", "running 3 tests").replace("2 passed", "3 passed").replace(f"{PINNED_TESTS - 2} filtered out", f"{PINNED_TESTS - 3} filtered out")),
+        ("no test ran", f"running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; {SAMPLE_TOTAL} filtered out; finished in 0.00s\n"),
+        ("a third test", honest.replace("running 2 tests", "running 3 tests").replace("2 passed", "3 passed").replace(f"{SAMPLE_TOTAL - 2} filtered out", f"{SAMPLE_TOTAL - 3} filtered out")),
         ("a failed test", honest.replace(f"test {second} ... ok", f"test {second} ... FAILED").replace("2 passed; 0 failed", "1 passed; 1 failed")),
         ("a test of another name", honest.replace(first, "ipc::tests::another_test")),
-        ("a pin that does not add up", honest.replace(f"{PINNED_TESTS - 2} filtered out", f"{PINNED_TESTS - 3} filtered out")),
+        ("a total that does not add up", honest.replace(f"{SAMPLE_TOTAL - 2} filtered out", f"{SAMPLE_TOTAL - 3} filtered out")),
         ("two runs in one output", honest + honest),
     )
     refused = 0
     for label, text in mutations:
         _need(text != honest, f"the {label} control changed nothing")
         try:
-            judge_run(text)
+            judge_run(text, SAMPLE_TOTAL)
         except ReaderExamError:
             refused += 1
         else:
@@ -167,7 +180,7 @@ PINNED_CASES = PINNED_FACTS + 1
 
 def controls() -> tuple[int, int]:
     """Returns (honest checks passed, refusals) on synthetic input. Needs no source file and no toolchain."""
-    _need(judge_run(honest_run()) == 2, "the honest run was not read as two tests")
+    _need(judge_run(honest_run(), SAMPLE_TOTAL) == 2, "the honest run was not read as two tests")
     return PINNED_FACTS + 1, fact_controls() + run_controls()
 
 
@@ -179,25 +192,31 @@ def read_file(path: str) -> str:
 
 
 def run_reader_tests() -> str:
-    """`cargo test -p slime-root --lib -- zenoh_grants`, the way `just test_sel4_root` runs the suite: the pinned
-    toolchain, the AArch64 target, the cross linker and `qemu-aarch64` as the runner."""
+    """`cargo test -p slime-root --lib -- zenoh_grants`, the way `just test_sel4_root` runs the suite. On an AArch64
+    host the tests are host binaries. On any other host they are built with the cross linker and run under
+    `qemu-aarch64`, with that toolchain's C library as the system root."""
     prefix = ROOT / "build" / "sel4-prefix"
     _need((prefix / "libsel4" / "include" / "kernel" / "gen_config.json").is_file(), f"no installed seL4 prefix at {prefix}")
     pins = tomllib.loads((ROOT / "sel4" / "pins.toml").read_text(encoding="utf-8"))
     toolchain = pins["rust_sel4"]["toolchain"]
-    cross = os.environ.get("CROSS_COMPILER_PREFIX")
-    _need(bool(cross), "CROSS_COMPILER_PREFIX is not set")
-    libc = subprocess.run([f"{cross}gcc", "-print-file-name=libc.so"], capture_output=True, text=True, check=True).stdout.strip()
-    sysroot = os.path.dirname(os.path.dirname(libc))
-    environment = {
-        **os.environ,
-        "SEL4_PREFIX": str(prefix),
-        "RUSTUP_TOOLCHAIN": toolchain,
-        "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": f"{cross}gcc",
-        "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER": f"qemu-aarch64 -L {sysroot}",
-        "CC_aarch64_unknown_linux_gnu": f"{cross}gcc",
-    }
-    command = ["cargo", "test", "-p", "slime-root", "--target", "aarch64-unknown-linux-gnu", "--lib", "--", FILTER]
+    described = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True).stdout
+    hosts = re.findall(r"^host: (\S+)$", described, re.MULTILINE)
+    _need(len(hosts) == 1, f"rustc -vV names {len(hosts)} hosts")
+    environment = {**os.environ, "SEL4_PREFIX": str(prefix), "RUSTUP_TOOLCHAIN": toolchain}
+    if hosts[0].startswith("aarch64-"):
+        target = hosts[0]
+    else:
+        target = "aarch64-unknown-linux-gnu"
+        cross = os.environ.get("CROSS_COMPILER_PREFIX")
+        _need(bool(cross), "CROSS_COMPILER_PREFIX is not set")
+        libc = subprocess.run([f"{cross}gcc", "-print-file-name=libc.so"], capture_output=True, text=True, check=True).stdout.strip()
+        sysroot = os.path.dirname(os.path.dirname(libc))
+        environment.update({
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": f"{cross}gcc",
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER": f"qemu-aarch64 -L {sysroot}",
+            "CC_aarch64_unknown_linux_gnu": f"{cross}gcc",
+        })
+    command = ["cargo", "test", "-p", "slime-root", "--target", target, "--lib", "--", FILTER]
     finished = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
     _need(finished.returncode == 0, f"{' '.join(command)} exited {finished.returncode}: {(finished.stdout + finished.stderr)[-1500:]}")
     return finished.stdout

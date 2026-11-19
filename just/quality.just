@@ -401,13 +401,14 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    # The count is pinned so a silently dropped or unregistered `#[test]` fails
-    # the gate rather than passing as a smaller run; raise it in the same change
-    # that adds a test. This run compiles for AArch64, so it counts only the
-    # modules that exist there: P6's `framebuffer` and `boot_record` are gated
-    # to x86-64 because the boot framebuffer is reached through an x86 extra-
-    # BootInfo record, and their tests are covered by the x86-64 planes instead.
-    expected=369
+    # The expected count comes from the source: the `#[test]` attributes in the
+    # library files this run compiles. A test that the source holds and the run
+    # misses fails the gate, and a change that adds a test changes no recipe.
+    # This run compiles for AArch64, so the count leaves out the modules behind
+    # another `cfg`: P6's `framebuffer` and `boot_record` are gated to x86-64
+    # because the boot framebuffer is reached through an x86 extra-BootInfo
+    # record, and their tests are covered by the x86-64 planes instead.
+    expected="$(python3 scripts/check/check-root-size.py --host-tests)"
     # Use the toolchain pinned to the installed seL4 prefix, not the ambient one.
     toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
     host="$(rustc -vV | sed -n 's/^host: //p')"

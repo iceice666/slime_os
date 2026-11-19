@@ -44,6 +44,14 @@ file, so the host build may not compile it. The count is reported as
 `LIBRARY_CONDITIONAL_CEILING` bounds the lines. Test files are in neither
 count.
 
+`--host-tests` prints the number of host tests that `just test_sel4_root` must
+run, and nothing else. The number is the count of `#[test]` attributes in the
+library files that the host build compiles: the walk from `src/lib.rs`, where a
+`#[cfg(test)]` on a declaration is no condition and any other `cfg` leaves the
+file out. The recipe compares the number with the tests that ran, so a test
+that the source holds and the run misses fails the gate. Before it prints, the
+mode runs the counter on synthetic trees and refuses a wrong count.
+
 A walk refuses what it cannot follow: a `path` attribute on a declaration, a
 declaration inside an inline module, and a declaration that no file or two
 files hold. The script also refuses a file that neither walk reaches, other
@@ -90,6 +98,8 @@ MODULE_DECLARATION = re.compile(
     r"(?<![A-Za-z0-9_])((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
 )
 CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(")
+TEST_CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+TEST_FUNCTION_ATTRIBUTE = re.compile(r"#\[\s*test\s*\]")
 INNER_CFG_ATTRIBUTE = re.compile(r"#!\[\s*cfg\s*\(")
 PATH_ATTRIBUTE = re.compile(r"\bpath\b")
 
@@ -381,8 +391,15 @@ def sources() -> list[str]:
     return sorted(path[len(prefix):] for path in listed if path.endswith(".rs") and (ROOT / path).is_file())
 
 
-def modules(files: list[str], root: str) -> dict[str, bool]:
-    """Every file that `root` declares, transitively, and whether it is conditional."""
+def read_source(relative: str) -> str:
+    return (ROOT / CRATE / relative).read_text(encoding="utf-8")
+
+
+def modules(files: list[str], root: str, read=read_source, test_is_condition: bool = True) -> dict[str, bool]:
+    """Every file that `root` declares, transitively, and whether it is conditional.
+
+    With `test_is_condition` false, a `#[cfg(test)]` on a declaration is no
+    condition: the walk then describes a build of the tests."""
     known = set(files)
     found: dict[str, bool] = {}
     pending = [(root, False)]
@@ -390,7 +407,7 @@ def modules(files: list[str], root: str) -> dict[str, bool]:
         relative, conditional = pending.pop()
         if relative in found:
             fail(f"{CRATE}/{relative} holds a module that two declarations name")
-        lexed = lex((ROOT / CRATE / relative).read_text(encoding="utf-8"))
+        lexed = lex(read(relative))
         conditional = conditional or INNER_CFG_ATTRIBUTE.search(lexed.text) is not None
         found[relative] = conditional
         name = relative.rsplit("/", 1)[-1]
@@ -406,8 +423,55 @@ def modules(files: list[str], root: str) -> dict[str, bool]:
             holders = [candidate for candidate in candidates if candidate in known]
             if len(holders) != 1:
                 fail(f"{CRATE}/{relative} declares module {module}, and {len(holders)} of {candidates} hold it")
+            if not test_is_condition:
+                attributes = TEST_CFG_ATTRIBUTE.sub("", attributes)
             pending.append((holders[0], conditional or CFG_ATTRIBUTE.search(attributes) is not None))
     return found
+
+
+def host_tests(files: list[str], read=read_source) -> int:
+    """`#[test]` attributes in the library files that a host build of the tests compiles."""
+    tree = modules(files, LIBRARY_ROOT, read, test_is_condition=False)
+    return sum(
+        len(TEST_FUNCTION_ATTRIBUTE.findall(lex(read(relative)).text))
+        for relative, conditional in tree.items()
+        if not conditional
+    )
+
+
+# A synthetic crate for the controls of `host_tests`: three tests that a host
+# build compiles, and one behind a `cfg` that it does not meet.
+_HOST_TEST_TREE = {
+    "src/lib.rs": 'pub mod a;\n#[cfg(target_arch = "x86_64")]\npub mod gated;\n#[cfg(test)]\nmod a_tests;\n',
+    "src/a.rs": "pub fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {}\n    #[test]\n    fn two() {}\n}\n",
+    "src/gated.rs": "#[test]\nfn only_on_x86() {}\n",
+    "src/a_tests.rs": "#[test]\nfn three() {}\n",
+}
+
+
+def host_test_controls() -> int:
+    """The counter gives the expected count on the synthetic crate and on each change to it."""
+
+    def counted(changes: dict[str, str]) -> int:
+        tree = {**_HOST_TEST_TREE, **changes}
+        return host_tests(sorted(tree), tree.__getitem__)
+
+    a, lib = _HOST_TEST_TREE["src/a.rs"], _HOST_TEST_TREE["src/lib.rs"]
+    cases = (
+        ("the synthetic crate", {}, 3),
+        ("a fourth test in a declared module", {"src/a.rs": a + "#[test]\nfn four() {}\n"}, 4),
+        ("a second test behind the unmet cfg", {"src/gated.rs": "#[test]\nfn x() {}\n#[test]\nfn y() {}\n"}, 3),
+        ("a test attribute in a comment", {"src/a.rs": a + "// #[test]\n/* #[test] */\n"}, 3),
+        ("a test attribute in a string literal", {"src/a.rs": a + 'const T: &str = "#[test]";\n'}, 3),
+        ("the test module no longer declared", {"src/lib.rs": lib.replace("#[cfg(test)]\nmod a_tests;\n", ""), "src/a_tests.rs": ""}, 2),
+        ("the test module behind a second cfg", {"src/lib.rs": lib.replace("#[cfg(test)]\nmod a_tests;", '#[cfg(test)]\n#[cfg(feature = "x")]\nmod a_tests;')}, 2),
+        ("a file that no module declares", {"src/orphan.rs": "#[test]\nfn lost() {}\n"}, 3),
+    )
+    for label, changes, expected in cases:
+        found = counted(changes)
+        if found != expected:
+            fail(f"host test count control '{label}' counted {found}, not {expected}")
+    return len(cases)
 
 
 def dependencies() -> set[str]:
@@ -422,6 +486,14 @@ def dependencies() -> set[str]:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--host-tests"]:
+        controls = host_test_controls()
+        expected = host_tests(sources())
+        devloop_observations.record(hostTests=expected, hostTestCountControls=controls)
+        print(expected)
+        return 0
+    if sys.argv[1:]:
+        fail(f"unknown arguments {sys.argv[1:]}; the only option is --host-tests")
     for name, role in ROLES.items():
         if any(not tree.endswith("/") for tree in role.trees):
             fail(f"role {name}: a tree must end in '/'")
