@@ -125,6 +125,20 @@ fn a_generation_without_optional_resources_declares_none() {
 
 #[test]
 fn an_absent_or_decoded_resource_does_not_stop_the_launch() {
-    assert!(matches!(admitted(None::<Result<u8, ()>>, "X"), Ok(None)));
-    assert!(matches!(admitted(Some(Ok::<u8, ()>(7)), "X"), Ok(Some(7))));
+    assert_eq!(admitted(None::<Result<u8, u8>>, "X", text), Ok(None));
+    assert_eq!(admitted(Some(Ok::<u8, u8>(7)), "X", text), Ok(Some(7)));
+}
+
+#[test]
+fn a_resource_that_will_not_decode_is_refused_with_its_record() {
+    assert_eq!(
+        admitted(
+            Some(Err::<u8, u8>(3)),
+            "SLIME_MEM FAIL admitted budget",
+            text
+        ),
+        Err(String::from(
+            "SLIME_MEM FAIL admitted budget will not decode: 3"
+        ))
+    );
 }

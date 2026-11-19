@@ -474,6 +474,7 @@ impl<'a, 'g> Launch<'a, 'g> {
         let private_budget = admitted(
             crate::generation::private_memory_budget_object(generation),
             "SLIME_MEM FAIL admitted budget",
+            stopped,
         )?;
         // Every declared guarantee is made physical here, before the first
         // task is constructed: backing a later static construction could spend
@@ -484,7 +485,7 @@ impl<'a, 'g> Launch<'a, 'g> {
             owner: None,
         }; crate::generation::MAX_ADMITTED_INSTANCES];
         let policy = crate::generation::private_memory_policy_object(generation);
-        let adaptive = match admitted(policy, "SLIME_MEM FAIL admitted policy")? {
+        let adaptive = match admitted(policy, "SLIME_MEM FAIL admitted policy", stopped)? {
             Some(decoded) => {
                 let count =
                     crate::generation::private_memory_instances(generation, &mut policy_instances)
@@ -513,6 +514,7 @@ impl<'a, 'g> Launch<'a, 'g> {
         let clock_authority = admitted(
             generation::clock_authority_object(generation),
             "SLIME_CLOCK FAIL admitted authority",
+            stopped,
         )?;
         let clock = clock_authority.as_ref();
         let (holders, quota) = (
@@ -523,6 +525,7 @@ impl<'a, 'g> Launch<'a, 'g> {
         let wait_sources = admitted(
             wait_set::source_object(generation),
             "SLIME_WAIT FAIL admitted sources",
+            stopped,
         )?;
         let declared = wait_sources
             .as_ref()
@@ -532,14 +535,17 @@ impl<'a, 'g> Launch<'a, 'g> {
         let scheduling_policy = admitted(
             generation::scheduling_class_object(generation),
             "SLIME_SCHED FAIL admitted policy",
+            stopped,
         )?;
         let lifecycle_policy = admitted(
             lifecycle::policy_object(generation),
             "SLIME_LIFECYCLE FAIL admitted policy",
+            stopped,
         )?;
         let io_budget = admitted(
             generation::io_resource_budget_object(generation),
             "SLIME_IO FAIL admitted budget",
+            stopped,
         )?;
         Ok(Self {
             generation,
@@ -574,8 +580,7 @@ impl<'a, 'g> Launch<'a, 'g> {
             .take(self.generation.instance_count())
         {
             let budget = self.private_budget.as_ref();
-            if let Some(bits) = image_arena_bits(self.generation, index, budget, |r| stop!("{r}"))?
-            {
+            if let Some(bits) = image_arena_bits(self.generation, index, budget, stopped)? {
                 *slot = Some(
                     self.allocator
                         .begin_task_arena(bits)
@@ -601,7 +606,7 @@ impl<'a, 'g> Launch<'a, 'g> {
     ) -> Result<bool, Stop> {
         let generation = self.generation;
         let note = |line: core::fmt::Arguments<'_>| crate::diagnostic_println!("{line}");
-        let planned = plan_instance(generation, self.admission, index, note, |r| stop!("{r}"))?;
+        let planned = plan_instance(generation, self.admission, index, note, stopped)?;
         let Some(plan) = planned else {
             return Ok(false);
         };
@@ -1397,20 +1402,26 @@ impl<'a, 'g> Launch<'a, 'g> {
 /// A resource the generation may declare. `Admission::admit` accepted the
 /// generation, so one that will not decode stops the launch; `record` opens
 /// the record that says which.
-fn admitted<T, E: core::fmt::Debug>(
-    resource: Option<Result<T, E>>,
+fn admitted<T, D: core::fmt::Debug, E>(
+    resource: Option<Result<T, D>>,
     record: &str,
-) -> Result<Option<T>, Stop> {
+    mut refuse: impl FnMut(Record<'_>) -> E,
+) -> Result<Option<T>, E> {
     resource
         .transpose()
-        .map_err(|error| stop!("{record} will not decode: {error:?}"))
+        .map_err(|error| refuse(format_args!("{record} will not decode: {error:?}")))
 }
 
 /// The pure decisions of the launch print nothing and invoke no kernel
 /// operation, so a host test can call them. Each hands the record of a plan it
 /// refuses to the caller's `refuse` and returns what `refuse` makes of it: the
-/// launch prints the record and stops, and a test reads it.
+/// launch passes [`stopped`], and a test reads the record.
 type Record<'r> = core::fmt::Arguments<'r>;
+
+/// Print the record of a refused plan and stop.
+fn stopped(record: Record<'_>) -> Stop {
+    stop!("{record}")
+}
 
 /// What the plan declares for one instance the root starts.
 struct InstancePlan<'g> {
