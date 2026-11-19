@@ -5,6 +5,7 @@ item :: s.Item = (h.bug "01a1f283-00b8-7499-9d83-63c21fc66bb6" "host-test-count-
   "No pull request can add a host test to slime-root, and a second copy of the test count is stale"
   "just test_sel4_root pins the number of root host tests in its recipe, as expected=369. Promises in specs/quality.zt bind that recipe, so only a pull request that adds an item may change it (V4). Such a pull request is a planning one and carries no product code (V1), and a test is product code. A second copy of the count is stale: scripts/lib/zenoh_grants_reader_exam.py pins 365. just zenoh_service_grants_reader_check failed in all 20 of its records on the evidence branch, and five promises in specs/zenoh-service-grants.zt bind it.")
   with {
+    intent = #active;
     owns = {
       "just/quality.just";
       "scripts/check/check-root-size.py";
