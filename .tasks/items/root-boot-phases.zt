@@ -19,6 +19,7 @@ item :: s.Item = (h.milestone "01a1f287-45a5-7d08-9204-06ba2bad331f" "root-boot-
       h.nonGoal "A trait over the kernel's operations, with a fake for the host. The estimate is 400 to 700 code lines, and the series has 57 lines of room. The order of kernel calls and the rollback paths stay without a host test." (h.acceptedDefault "Claude Code session session_01Udthew69PFkRyDtWmFtXKa, 2026-11-19: the owner chose the proposed option of three, plan and apply");
       h.nonGoal "The 41 fatal! invocations of the binary: slime-root/src/main.rs and slime-root/src/fixture_runtime.rs. The fixture leaves the product root in the next root item." h.agentDefault;
       h.nonGoal "The other eight functions above the limit. Three are in roles that leave the root: serve_lifecycle_request, serve_io_resource and serve_capability_export. Two are in the harness role. main shrinks when the fixture leaves the product root. grow and preflight_spawn_grants are in the core role, which has 12 lines of room. Each keeps its entry in the checker's table." h.agentDefault;
+      h.nonGoal "A host test of the installs of an instance's bindings, of the activation order and of the shared-granule flag of the IO quota. The generation that the host tests read, slime-root/fixtures/admission-v5.bin, declares no binding and no dependency, so a test on it checks nothing. Each as a pure function costs 15 to 20 code lines, and the series has 57 lines of room." h.agentDefault;
       h.nonGoal "A higher ceiling of any role or of the series." h.agentDefault;
       h.nonGoal "An exam on the Evidence runner for the gates that pin the text of a fatal record. The evidence branch holds no record of them. The implementation pull request runs them and reports each." h.agentDefault;
     };
@@ -33,7 +34,7 @@ item :: s.Item = (h.milestone "01a1f287-45a5-7d08-9204-06ba2bad331f" "root-boot-
         "root_size_check counts at most 8 fatal! invocations in the library's files, and reports the count as libraryFatalSites. main holds 160. The functions of the boot, the launch and the service loop return a result, and their caller stops the root."
         { "root_size_check"; };
       h.req "decisions-have-host-tests"
-        "test_sel4_root runs at least 380 host tests, and reports the count as hostTests. main runs 369. The new tests call the functions that decide the image and CSpace funding, the foundation accounting, the admitted resources, the arena size, the launch plan of an instance, the installs of its bindings and the activation order."
+        "test_sel4_root runs at least 380 host tests, and reports the count as hostTests. main runs 369. The new tests call the functions that decide the image and CSpace funding, the foundation accounting, the bound of the legacy memory window, the admitted resources, the arena size of a large image and the launch plan of an instance."
         { "test_sel4_root"; };
       h.req "series-within-its-ceiling"
         "root_size_check counts at most 34100 code lines in the nine series roles. The ceiling does not rise."
@@ -117,7 +118,7 @@ item :: s.Item = (h.milestone "01a1f287-45a5-7d08-9204-06ba2bad331f" "root-boot-
         { "the-library-returns-instead-of-stopping"; };
       h.decided "eleven-more-host-tests"
         "The bound on hostTests is 380."
-        "the requirement names seven decisions. Each has at least one test of an accepted input, and four of them refuse an input and have a test of the refusal. That is eleven tests above the 369 of main"
+        "the requirement names six decisions. A draft of the implementation, on a local branch, holds 13 tests of them and runs 382 tests in all. The bound is the 369 of main and eleven; two tests are room"
         h.agentDefault
         { "decisions-have-host-tests"; };
       h.decided "matrix-gate-is-advisory"
