@@ -44,13 +44,20 @@ file, so the host build may not compile it. The count is reported as
 `LIBRARY_CONDITIONAL_CEILING` bounds the lines. Test files are in neither
 count.
 
-`--host-tests` prints the number of host tests that `just test_sel4_root` must
-run, and nothing else. The number is the count of `#[test]` attributes in the
-library files that the host build compiles: the walk from `src/lib.rs`, where a
-`#[cfg(test)]` on a declaration is no condition and any other `cfg` leaves the
-file out. The recipe compares the number with the tests that ran, so a test
-that the source holds and the run misses fails the gate. Before it prints, the
-mode runs the counter on synthetic trees and refuses a wrong count.
+The script measures every function outside test items, in code lines from the
+line of its `fn` to the line of its closing brace. `FUNCTION_LIMIT` bounds a
+function. `LONG_FUNCTIONS` names the functions that were longer when the limit
+landed, each with a ceiling of its own. A function above the limit that the
+table does not name is refused, and so is a named function above its ceiling.
+An entry stays after its function is split, as a role's file entry does; a
+planning pull request removes it. The script reports the number of functions
+above the limit as `functionsOverLimit`, and the longest function of
+`LAUNCH_PATH` as `launchPathLongestFunctionCodeLines`.
+
+The script counts the `fatal!` invocations in the files of the library's tree,
+outside test items. A function that reaches one stops the root and does not
+return, so no host test can call it past that point. The count is reported as
+`libraryFatalSites`, and `LIBRARY_FATAL_CEILING` bounds it.
 
 A walk refuses what it cannot follow: a `path` attribute on a declaration, a
 declaration inside an inline module, and a declaration that no file or two
@@ -75,7 +82,6 @@ product image calls, and the `harness` role counts them.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -86,22 +92,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 import devloop_observations  # noqa: E402
 from harness import ROOT  # noqa: E402
+from rust_source import SourceError, is_test_file, lex, modules, sources, test_items  # noqa: E402
 
 CRATE = "slime-root"
 MANIFEST = ROOT / CRATE / "Cargo.toml"
-TEST_ATTRIBUTE = "#[cfg(test)]"
 BINARY_ROOT = "src/main.rs"
 LIBRARY_ROOT = "src/lib.rs"
 BUILD_SCRIPT = "build.rs"
-# `mod name;` with the outer attributes that stand on it, in blanked text.
-MODULE_DECLARATION = re.compile(
-    r"(?<![A-Za-z0-9_])((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
-)
-CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(")
-TEST_CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
-TEST_FUNCTION_ATTRIBUTE = re.compile(r"#\[\s*test\s*\]")
-INNER_CFG_ATTRIBUTE = re.compile(r"#!\[\s*cfg\s*\(")
-PATH_ATTRIBUTE = re.compile(r"\bpath\b")
+FUNCTION = re.compile(r"(?<![A-Za-z0-9_])fn\s+([A-Za-z_][A-Za-z0-9_]*)")
+FATAL_SITE = re.compile(r"(?<![A-Za-z0-9_])fatal!\s*[(\[{]")
 
 
 @dataclass(frozen=True)
@@ -235,12 +234,41 @@ SERIES = ("core", "boot", "ioResource", "sharedBuffer", "dispatch", "policy", "t
 # 33941 after the fixture's child crate left `slime-root/`.
 SERIES_CEILING = 34100
 # The binary alone compiled 9301 code lines, in 13 files, on the commit that
-# landed this ceiling.
-BINARY_ONLY_CEILING = 9350
+# landed this measure, and 1119 lines, in `src/main.rs` and
+# `src/fixture_runtime.rs`, once the library held the graph runtime and the
+# boot sequence.
+BINARY_ONLY_CEILING = 1150
 # The library compiled 2443 code lines under a `cfg`, in 6 files, on the same
 # commit: the boot selector, the boot framebuffer of x86-64 and one
 # qualification module.
 LIBRARY_CONDITIONAL_CEILING = 2450
+
+# No function may hold more code lines, except those `LONG_FUNCTIONS` names.
+FUNCTION_LIMIT = 150
+# The functions above the limit on the commit that landed it, as
+# `(file, function)`, each with its count then rounded up to a multiple of 50.
+# An entry covers every function of that name in that file.
+LONG_FUNCTIONS: dict[tuple[str, str], int] = {
+    ("src/graph_runtime/services.rs", "serve_instance_graph"): 1500,
+    ("src/graph_runtime.rs", "launch_instance_graph"): 1100,
+    ("src/graph_runtime/services/spawn.rs", "serve_spawn"): 600,
+    ("src/boot.rs", "run"): 550,
+    ("src/main.rs", "main"): 450,
+    ("src/task.rs", "create"): 450,
+    ("src/graph_runtime/services/spawn.rs", "construct_child"): 400,
+    ("src/graph_runtime/services/io_resource.rs", "serve_io_resource"): 350,
+    ("src/private_memory/qualification.rs", "exercise_failure_rollback"): 350,
+    ("src/private_memory/elastic.rs", "grow"): 250,
+    ("src/graph_runtime/services/spawn.rs", "preflight_spawn_grants"): 200,
+    ("src/graph_runtime/services/capability.rs", "serve_capability_export"): 200,
+    ("src/private_memory/qualification.rs", "exercise_mixed_fragmentation"): 200,
+    ("src/graph_runtime/services/policy.rs", "serve_lifecycle_request"): 200,
+}
+# The files that run once, from the console install to the first component.
+LAUNCH_PATH = ("src/boot.rs", "src/graph_runtime.rs")
+# The library's tree held 160 `fatal!` invocations on the commit that landed
+# this measure.
+LIBRARY_FATAL_CEILING = 160
 
 # Every crate `slime-root/Cargo.toml` names in a dependency table.
 DEPENDENCIES = frozenset({"boot-contracts", "sel4", "slime-proto", "sel4-root-task", "object"})
@@ -250,228 +278,67 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"root size check failed: {message}")
 
 
-@dataclass
-class Lexed:
-    """What the lexer keeps of one file, per line."""
-
-    code: list[bool]  # the line holds a character outside whitespace and comments
-    depth: list[int]  # delimiter depth before the line's first character
-    ends: list[bool]  # the line holds a `;` or `}` that leaves the depth at 0
-    text: str = ""  # the file with every comment and literal replaced by spaces
-
-
-def lex(text: str) -> Lexed:
-    """Read Rust's lexical structure: comments, literals and delimiters."""
-    lines = text.count("\n") + 1
-    out = Lexed([False] * lines, [0] * lines, [False] * lines)
-    line = depth = index = 0
-    size = len(text)
-    blanked = list(text)
-
-    def span(end: int, held: bool) -> int:
-        """Pass a comment or a literal that ends before `end`; a literal's text is code."""
-        nonlocal line
-        for position in range(index, min(end, size)):
-            if text[position] == "\n":
-                line += 1
-                out.depth[line] = depth
-                continue
-            blanked[position] = " "
-            if held and not text[position].isspace():
-                out.code[line] = True
-        return min(end, size)
-
-    while index < size:
-        char = text[index]
-        if char.isspace():
-            index = span(index + 1, False)
-        elif text.startswith("//", index):
-            end = text.find("\n", index)
-            end = size if end < 0 else end
-            blanked[index:end] = " " * (end - index)
-            index = end
-        elif text.startswith("/*", index):
-            nesting, end = 1, index + 2
-            while end < size and nesting:
-                if text.startswith("/*", end):
-                    nesting, end = nesting + 1, end + 2
-                elif text.startswith("*/", end):
-                    nesting, end = nesting - 1, end + 2
-                else:
-                    end += 1
-            index = span(end, False)
-        elif char == '"':
-            end = index + 1
-            while end < size and text[end] != '"':
-                end += 2 if text[end] == "\\" else 1
-            index = span(end + 1, True)
-        elif char == "r" and raw_string(text, index) and not identifier_before(text, index):
-            hashes = raw_string(text, index) - 1
-            end = text.find('"' + "#" * hashes, index + hashes + 2)
-            index = span(size if end < 0 else end + hashes + 1, True)
-        elif char == "'":
-            index = span(character_literal(text, index), True)
-        else:
-            out.code[line] = True
-            if char in "{([":
-                depth += 1
-            elif char in "})]":
-                depth -= 1
-            if char in ";}" and depth == 0:
-                out.ends[line] = True
-            index += 1
-    out.text = "".join(blanked)
-    return out
-
-
-def raw_string(text: str, index: int) -> int:
-    """For `r"`, `r#"`, ... at `index`: one more than the count of `#`. Otherwise 0."""
-    end = index + 1
-    while end < len(text) and text[end] == "#":
-        end += 1
-    return end - index if end < len(text) and text[end] == '"' else 0
-
-
-def identifier_before(text: str, index: int) -> bool:
-    """Whether the `r` at `index` continues an identifier other than the `b` of `br"..."`."""
-    if index == 0:
-        return False
-    before = text[index - 1]
-    if before == "b":
-        return index >= 2 and (text[index - 2].isalnum() or text[index - 2] == "_")
-    return before.isalnum() or before == "_"
-
-
-def character_literal(text: str, index: int) -> int:
-    """The end of the character literal at `index`, or `index + 1` for a lifetime."""
-    if text.startswith("\\", index + 1):
-        end = text.find("'", index + 3)
-        return index + 1 if end < 0 else end + 1
-    return index + 3 if text.startswith("'", index + 2) else index + 1
-
-
 def count(text: str) -> tuple[int, int]:
     """(code lines, test lines) of one source file."""
     lexed = lex(text)
-    lines = text.split("\n")
-    test = [False] * len(lines)
-    number = 0
-    while number < len(lines):
-        if lines[number].strip() == TEST_ATTRIBUTE and lexed.depth[number] == 0:
-            # The item ends at its first `;` at depth 0, or at the `}` that returns to depth 0.
-            end = next((n for n in range(number + 1, len(lines)) if lexed.ends[n]), len(lines) - 1)
-            for covered in range(number, end + 1):
-                test[covered] = True
-            number = end + 1
-        else:
-            number += 1
+    test = test_items(text, lexed)
     code_lines = sum(1 for held, tested in zip(lexed.code, test, strict=True) if held and not tested)
     test_lines = sum(1 for held, tested in zip(lexed.code, test, strict=True) if held and tested)
     return code_lines, test_lines
 
 
-def is_test_file(relative: str) -> bool:
-    name = relative.rsplit("/", 1)[-1]
-    return name == "tests.rs" or name.endswith("_tests.rs") or "/tests/" in f"/{relative}"
+def functions(text: str) -> list[tuple[str, int]]:
+    """(name, code lines) of every function with a body, outside test items."""
+    lexed = lex(text)
+    blanked = lexed.text
+    test = test_items(text, lexed)
+    found: list[tuple[str, int]] = []
+    for declared in FUNCTION.finditer(blanked):
+        # The body opens at the first `{` outside the parameter list; a `;` first means no body.
+        index, nesting, opened = declared.end(), 0, -1
+        while index < len(blanked):
+            char = blanked[index]
+            if char in "([":
+                nesting += 1
+            elif char in ")]":
+                nesting -= 1
+            elif nesting == 0 and char in ";{":
+                opened = index if char == "{" else -1
+                break
+            index += 1
+        if opened < 0:
+            continue
+        nesting, closed = 0, opened
+        while closed < len(blanked):
+            if blanked[closed] == "{":
+                nesting += 1
+            elif blanked[closed] == "}":
+                nesting -= 1
+                if nesting == 0:
+                    break
+            closed += 1
+        first, last = blanked.count("\n", 0, declared.start()), blanked.count("\n", 0, closed)
+        if test[first]:
+            continue
+        found.append((declared.group(1), sum(1 for line in range(first, last + 1) if lexed.code[line] and not test[line])))
+    return found
 
 
-def roles_of(relative: str) -> list[str]:
-    """Roles that name the file; when none does, roles whose tree holds it."""
-    named = [name for name, role in ROLES.items() if relative in role.files]
-    return named or [name for name, role in ROLES.items() if any(relative.startswith(tree) for tree in role.trees)]
-
-
-def sources() -> list[str]:
-    """Rust files under `slime-root/` that Git tracks or does not ignore, relative to it."""
-    listed = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", CRATE],
-        cwd=ROOT, check=True, capture_output=True, text=True,
-    ).stdout.split("\0")
-    prefix = f"{CRATE}/"
-    return sorted(path[len(prefix):] for path in listed if path.endswith(".rs") and (ROOT / path).is_file())
+def fatal_sites(text: str) -> int:
+    """`fatal!` invocations outside test items."""
+    lexed = lex(text)
+    test = test_items(text, lexed)
+    return sum(1 for site in FATAL_SITE.finditer(lexed.text) if not test[lexed.text.count("\n", 0, site.start())])
 
 
 def read_source(relative: str) -> str:
     return (ROOT / CRATE / relative).read_text(encoding="utf-8")
 
 
-def modules(files: list[str], root: str, read=read_source, test_is_condition: bool = True) -> dict[str, bool]:
-    """Every file that `root` declares, transitively, and whether it is conditional.
-
-    With `test_is_condition` false, a `#[cfg(test)]` on a declaration is no
-    condition: the walk then describes a build of the tests."""
-    known = set(files)
-    found: dict[str, bool] = {}
-    pending = [(root, False)]
-    while pending:
-        relative, conditional = pending.pop()
-        if relative in found:
-            fail(f"{CRATE}/{relative} holds a module that two declarations name")
-        lexed = lex(read(relative))
-        conditional = conditional or INNER_CFG_ATTRIBUTE.search(lexed.text) is not None
-        found[relative] = conditional
-        name = relative.rsplit("/", 1)[-1]
-        base = relative.rsplit("/", 1)[0] if name in ("main.rs", "lib.rs", "mod.rs") else relative.removesuffix(".rs")
-        for declared in MODULE_DECLARATION.finditer(lexed.text):
-            attributes, module = declared.group(1), declared.group(2)
-            if PATH_ATTRIBUTE.search(attributes):
-                fail(f"{CRATE}/{relative} declares module {module} with a path attribute; a walk finds a module by its name")
-            before = lexed.text[: declared.start(2)]
-            if sum(before.count(opened) for opened in "{([") != sum(before.count(closed) for closed in "})]"):
-                fail(f"{CRATE}/{relative} declares module {module} inside an inline module; a walk does not follow it")
-            candidates = [f"{base}/{module}.rs", f"{base}/{module}/mod.rs"]
-            holders = [candidate for candidate in candidates if candidate in known]
-            if len(holders) != 1:
-                fail(f"{CRATE}/{relative} declares module {module}, and {len(holders)} of {candidates} hold it")
-            if not test_is_condition:
-                attributes = TEST_CFG_ATTRIBUTE.sub("", attributes)
-            pending.append((holders[0], conditional or CFG_ATTRIBUTE.search(attributes) is not None))
-    return found
-
-
-def host_tests(files: list[str], read=read_source) -> int:
-    """`#[test]` attributes in the library files that a host build of the tests compiles."""
-    tree = modules(files, LIBRARY_ROOT, read, test_is_condition=False)
-    return sum(
-        len(TEST_FUNCTION_ATTRIBUTE.findall(lex(read(relative)).text))
-        for relative, conditional in tree.items()
-        if not conditional
-    )
-
-
-# A synthetic crate for the controls of `host_tests`: three tests that a host
-# build compiles, and one behind a `cfg` that it does not meet.
-_HOST_TEST_TREE = {
-    "src/lib.rs": 'pub mod a;\n#[cfg(target_arch = "x86_64")]\npub mod gated;\n#[cfg(test)]\nmod a_tests;\n',
-    "src/a.rs": "pub fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn one() {}\n    #[test]\n    fn two() {}\n}\n",
-    "src/gated.rs": "#[test]\nfn only_on_x86() {}\n",
-    "src/a_tests.rs": "#[test]\nfn three() {}\n",
-}
-
-
-def host_test_controls() -> int:
-    """The counter gives the expected count on the synthetic crate and on each change to it."""
-
-    def counted(changes: dict[str, str]) -> int:
-        tree = {**_HOST_TEST_TREE, **changes}
-        return host_tests(sorted(tree), tree.__getitem__)
-
-    a, lib = _HOST_TEST_TREE["src/a.rs"], _HOST_TEST_TREE["src/lib.rs"]
-    cases = (
-        ("the synthetic crate", {}, 3),
-        ("a fourth test in a declared module", {"src/a.rs": a + "#[test]\nfn four() {}\n"}, 4),
-        ("a second test behind the unmet cfg", {"src/gated.rs": "#[test]\nfn x() {}\n#[test]\nfn y() {}\n"}, 3),
-        ("a test attribute in a comment", {"src/a.rs": a + "// #[test]\n/* #[test] */\n"}, 3),
-        ("a test attribute in a string literal", {"src/a.rs": a + 'const T: &str = "#[test]";\n'}, 3),
-        ("the test module no longer declared", {"src/lib.rs": lib.replace("#[cfg(test)]\nmod a_tests;\n", ""), "src/a_tests.rs": ""}, 2),
-        ("the test module behind a second cfg", {"src/lib.rs": lib.replace("#[cfg(test)]\nmod a_tests;", '#[cfg(test)]\n#[cfg(feature = "x")]\nmod a_tests;')}, 2),
-        ("a file that no module declares", {"src/orphan.rs": "#[test]\nfn lost() {}\n"}, 3),
-    )
-    for label, changes, expected in cases:
-        found = counted(changes)
-        if found != expected:
-            fail(f"host test count control '{label}' counted {found}, not {expected}")
-    return len(cases)
+def roles_of(relative: str) -> list[str]:
+    """Roles that name the file; when none does, roles whose tree holds it."""
+    named = [name for name, role in ROLES.items() if relative in role.files]
+    return named or [name for name, role in ROLES.items() if any(relative.startswith(tree) for tree in role.trees)]
 
 
 def dependencies() -> set[str]:
@@ -486,14 +353,8 @@ def dependencies() -> set[str]:
 
 
 def main() -> int:
-    if sys.argv[1:] == ["--host-tests"]:
-        controls = host_test_controls()
-        expected = host_tests(sources())
-        devloop_observations.record(hostTests=expected, hostTestCountControls=controls)
-        print(expected)
-        return 0
     if sys.argv[1:]:
-        fail(f"unknown arguments {sys.argv[1:]}; the only option is --host-tests")
+        fail(f"unknown arguments {sys.argv[1:]}; the script takes none")
     for name, role in ROLES.items():
         if any(not tree.endswith("/") for tree in role.trees):
             fail(f"role {name}: a tree must end in '/'")
@@ -503,7 +364,7 @@ def main() -> int:
     code = dict.fromkeys(ROLES, 0)
     test_lines = 0
     problems: list[str] = []
-    files = sources()
+    files = sources(CRATE)
     if not files:
         fail(f"no Rust file under {CRATE}/")
     for relative in files:
@@ -521,8 +382,11 @@ def main() -> int:
     for root in (BINARY_ROOT, LIBRARY_ROOT):
         if root not in files:
             fail(f"{CRATE}/{root} is missing; a walk starts there")
-    binary_tree = modules(files, BINARY_ROOT)
-    library_tree = modules(files, LIBRARY_ROOT)
+    try:
+        binary_tree = modules(files, BINARY_ROOT, read_source)
+        library_tree = modules(files, LIBRARY_ROOT, read_source)
+    except SourceError as error:
+        fail(f"{CRATE}: {error}")
     for relative in sorted(set(binary_tree) & set(library_tree)):
         problems.append(f"{CRATE}/{relative} is a module of the binary and of the library")
     for relative in files:
@@ -536,6 +400,24 @@ def main() -> int:
     conditional = sorted(relative for relative, gated in library_tree.items() if gated and not is_test_file(relative))
     binary_lines = code_lines(binary)
     conditional_lines = code_lines(conditional)
+
+    over_limit = 0
+    launch_longest = 0
+    for relative in files:
+        if is_test_file(relative):
+            continue
+        for name, length in functions(read_source(relative)):
+            if relative in LAUNCH_PATH:
+                launch_longest = max(launch_longest, length)
+            if length <= FUNCTION_LIMIT:
+                continue
+            over_limit += 1
+            ceiling = LONG_FUNCTIONS.get((relative, name))
+            if ceiling is None:
+                problems.append(f"{CRATE}/{relative}: function {name} holds {length} code lines, above the limit of {FUNCTION_LIMIT}")
+            elif length > ceiling:
+                problems.append(f"{CRATE}/{relative}: function {name} holds {length} code lines, above its ceiling of {ceiling}")
+    library_fatal = sum(fatal_sites(read_source(relative)) for relative in library_tree if not is_test_file(relative))
 
     series = sum(code[name] for name in SERIES)
     for name, role in ROLES.items():
@@ -552,6 +434,10 @@ def main() -> int:
         problems.append(
             f"the library compiles {conditional_lines} code lines under a cfg, above its ceiling of {LIBRARY_CONDITIONAL_CEILING}"
         )
+    print(f"[root-size] {'functions':<13} {over_limit:>6} above {FUNCTION_LIMIT} code lines; the longest on the launch path holds {launch_longest}")
+    print(f"[root-size] {'fatalSites':<13} {library_fatal:>6} / {LIBRARY_FATAL_CEILING} in the library")
+    if library_fatal > LIBRARY_FATAL_CEILING:
+        problems.append(f"the library holds {library_fatal} fatal! invocations, above its ceiling of {LIBRARY_FATAL_CEILING}")
     if series > SERIES_CEILING:
         problems.append(f"the series holds {series} code lines, above its ceiling of {SERIES_CEILING}")
 
@@ -571,9 +457,12 @@ def main() -> int:
         binaryOnlyFiles=len(binary),
         libraryConditionalCodeLines=conditional_lines,
         libraryConditionalFiles=len(conditional),
+        functionsOverLimit=over_limit,
+        launchPathLongestFunctionCodeLines=launch_longest,
+        libraryFatalSites=library_fatal,
         **{f"{name}CodeLines": code[name] for name in SERIES},
     )
-    print("root size check: every file has one role, and every role, the series and both walks are within their ceilings")
+    print("root size check: every file has one role, and every role, the series, both walks, every function and the fatal sites are within their bounds")
     return 0
 
 

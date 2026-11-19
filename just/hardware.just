@@ -212,8 +212,8 @@ zenoh_service_grants_builder_check:
 # Judges the path that carries the Zenoh grants table from the generation to the Zenoh service. The judge requires the
 # read label in the contract and its generated outputs, the manifest and system spec fields, the `slime-root` reader
 # that serves the table to the instance named `zenoh-service`, and the runtime wrapper. It runs the reader's two tests
-# alone under the AArch64 recipe `test_sel4_root` uses. The expectation is scripts/lib/zenoh_grants_reader_exam.py. The
-# recipe fails until the implementation lands.
+# alone under the AArch64 recipe `test_sel4_root` uses, and holds the run to the count of host tests in the source. The
+# expectation is scripts/lib/zenoh_grants_reader_exam.py.
 [group('hardware')]
 zenoh_service_grants_reader_check:
     python3 scripts/check/check-zenoh-profile0.py --slice grants-reader

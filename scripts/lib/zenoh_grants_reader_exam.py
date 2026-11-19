@@ -7,7 +7,8 @@ the generation to the Zenoh service: the label that reads it, the manifest and s
 Two kinds of evidence. Each declaration the files must hold is a fact: a pattern that has to match the named file. The
 reader's behaviour is graded by the two `slime-root` tests, run alone under the pinned AArch64 recipe, and the count of
 tests that ran and were filtered out has to add up to the number `just test_sel4_root` expects. That recipe takes the
-number from the source through `scripts/check/check-root-size.py --host-tests`, and so does this module.
+number from the source through `scripts/check/check-root-host-tests.py`, and this module takes it from the same
+counter, `scripts/lib/root_host_tests.py`.
 
 This module imports no system spec module. The implementation changes those, so a judge that imported them would be
 graded by the files the implementation rewrites.
@@ -18,10 +19,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import sys
 import tomllib
 from collections.abc import Callable
 
+import root_host_tests
+import rust_source
 import zenoh_facts as facts
 from harness import ROOT
 
@@ -33,7 +35,6 @@ TESTS = (
 # The total of an honest run in the controls. The judged run is held to the count the source gives.
 SAMPLE_TOTAL = 369
 QUALITY = "just/quality.just"
-COUNTER = ("scripts/check/check-root-size.py", "--host-tests")
 
 
 class ReaderExamError(Exception):
@@ -101,8 +102,8 @@ FACTS: tuple[tuple[str, str, str, str], ...] = (
     ("wrapper-public", "components/runtime/src/syscall.rs", r"^pub fn zenoh_grants_read\(cursor: usize, out: &mut \[u8\]\) -> Result<usize, i64> \{$",
      "pub fn zenoh_grants_read(cursor: usize, out: &mut [u8]) -> Result<usize, i64> {"),
     ("wrapper-export", "components/runtime/src/lib.rs", r"\bzenoh_grants_read\b", "    debug_write, zenoh_grants_read,"),
-    ("test-count-from-source", QUALITY, r'^\s*expected="\$\(python3 scripts/check/check-root-size\.py --host-tests\)"$',
-     '    expected="$(python3 scripts/check/check-root-size.py --host-tests)"'),
+    ("test-count-from-source", QUALITY, r'^\s*expected="\$\(python3 scripts/check/check-root-host-tests\.py\)"$',
+     '    expected="$(python3 scripts/check/check-root-host-tests.py)"'),
 )
 PINNED_FACTS = len(FACTS)
 
@@ -124,10 +125,10 @@ def fact_controls() -> int:
 
 def source_total() -> int:
     """The number of host tests `just test_sel4_root` expects, from the counter that recipe runs."""
-    finished = subprocess.run([sys.executable, *COUNTER], cwd=ROOT, capture_output=True, text=True)
-    _need(finished.returncode == 0, f"{' '.join(COUNTER)} exited {finished.returncode}: {finished.stderr[-500:]}")
-    _need(finished.stdout.strip().isdecimal(), f"{' '.join(COUNTER)} printed {finished.stdout!r}, not a count")
-    return int(finished.stdout)
+    try:
+        return root_host_tests.count()
+    except rust_source.SourceError as error:
+        raise ReaderExamError(f"the host tests cannot be counted: {error}") from error
 
 
 def judge_run(output: str, total: int) -> int:

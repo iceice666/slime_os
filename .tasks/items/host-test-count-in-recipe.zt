@@ -8,6 +8,9 @@ item :: s.Item = (h.bug "01a1f283-00b8-7499-9d83-63c21fc66bb6" "host-test-count-
     owns = {
       "just/quality.just";
       "scripts/check/check-root-size.py";
+      "scripts/check/check-root-host-tests.py";
+      "scripts/lib/root_host_tests.py";
+      "scripts/lib/rust_source.py";
       "scripts/check/check-zenoh-profile0.py";
       "scripts/lib/zenoh_grants_reader_exam.py";
     };
@@ -19,7 +22,7 @@ item :: s.Item = (h.bug "01a1f283-00b8-7499-9d83-63c21fc66bb6" "host-test-count-
     };
     requirements = {
       h.req "the-count-comes-from-the-source"
-        "test_sel4_root passes: it takes the expected count from scripts/check/check-root-size.py --host-tests, which counts the test attributes in the library files that the run compiles, and it runs that many tests. The count is reported as hostTests."
+        "test_sel4_root passes: it takes the expected count from scripts/check/check-root-host-tests.py, which counts the test attributes in the library files that the run compiles, and it runs that many tests. The count is reported as hostTests."
         { "test_sel4_root"; };
       h.req "the-counter-has-controls"
         "Before it prints the count, the counter runs on a synthetic crate and on seven changes to it, and it refuses a wrong count: a test more in a declared module, a test behind an unmet cfg, a test attribute in a comment and in a string literal, a test module that is no longer declared, a test module behind a second cfg, and a file that no module declares. The number of cases is reported as hostTestCountControls."
@@ -41,9 +44,9 @@ item :: s.Item = (h.bug "01a1f283-00b8-7499-9d83-63c21fc66bb6" "host-test-count-
         "a pinned number in a promised recipe changes only with a new item, and a test changes only in an implementation pull request, so the two can never change together. The purpose of the pin was a test that exists and does not run. A count of the source states that purpose directly: on main at ea60618 the count is 369, the number the recipe pinned"
         h.agentDefault
         { "the-count-comes-from-the-source"; };
-      h.decided "the-size-checker-holds-the-counter"
-        "The counter is a mode of scripts/check/check-root-size.py."
-        "that script already reads Rust's comments and literals and walks the module tree of slime-root with the cfg on each declaration. A second reader would be a second copy of both"
+      h.decided "the-counter-has-its-own-script"
+        "The counter is scripts/lib/root_host_tests.py, and scripts/check/check-root-host-tests.py prints its count. Both read Rust through scripts/lib/rust_source.py, which the size checker reads too."
+        "the counter first landed as a mode of scripts/check/check-root-size.py, which holds the ceilings of root_size_check. That put the ceilings into the grader set of test_sel4_root and of every recipe that depends on it, so each ceiling edit changed the closure of those targets and the Evidence workflow recorded them again. One reader of Rust in a library module keeps one copy of the lexer and the walk, and leaves the ceilings to root_size_check alone"
         h.agentDefault
         { "the-count-comes-from-the-source"; "the-counter-has-controls"; };
       h.decided "fix-and-item-in-one-planning-pull-request"
