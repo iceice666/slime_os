@@ -284,8 +284,9 @@ pub fn beyond_legacy(profile: &str, probe_paddr: usize) -> u8 {
 
 /// Name a boot stage on the panel. A machine with no panel shows nothing.
 #[cfg(target_arch = "x86_64")]
-fn show_stage(allocator: &mut ObjectAllocator, stage: &str) {
-    // SAFETY: single-threaded startup; no component runs yet.
+pub(crate) fn show_stage(allocator: &mut ObjectAllocator, stage: &str) {
+    // SAFETY: the caller is the root's first thread, the only renderer; no
+    // other thread of the root touches the panel.
     unsafe {
         framebuffer::with_panel(allocator, |panel, allocator| {
             let _ = boot_record::render_stage(panel, allocator, stage);

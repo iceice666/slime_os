@@ -459,7 +459,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             },
             #[cfg(slime_boot_selector)]
             &mut booted.boot_runtime,
-        );
+        )
+        .unwrap_or_else(|stop| slime_root::graph_runtime::halt(stop));
         #[cfg(all(slime_cv1800b_duo, not(slime_product_uart)))]
         slime_root::boot::request_duo_cold_reset(booted.timer_registers, booted.reset_registers);
         loop {

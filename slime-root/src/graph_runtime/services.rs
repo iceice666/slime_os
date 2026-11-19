@@ -43,7 +43,7 @@ pub(super) fn serve_instance_graph(
     mut adaptive: Option<&mut super::adaptive::AdaptivePolicy<'_>>,
     #[cfg(slime_boot_selector)] block_devices: &mut device::BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
-) {
+) -> Result<(), Stop> {
     policy::report_memory_census(allocator, tasks, 0);
     let report_backing =
         generation.boot_action == boot_contracts::generation::BootAction::PrivateMemory;
@@ -174,16 +174,16 @@ pub(super) fn serve_instance_graph(
         if !retirements.is_empty() || cleanup_timer_armed {
             let now = timer_adapter
                 .monotonic_now()
-                .unwrap_or_else(|error| fatal!("SLIME_GRAPH FAIL cleanup clock error={error:?}"));
+                .map_err(|error| stop!("SLIME_GRAPH FAIL cleanup clock error={error:?}"))?;
             let programming = if retirements.is_empty() {
                 clock_service.cancel_cleanup_retry(now)
             } else {
                 clock_service.arm_cleanup_retry(now, (timer_adapter.frequency_hz() / 100).max(1))
             }
-            .unwrap_or_else(|error| fatal!("SLIME_GRAPH FAIL cleanup timer error={error:?}"));
-            apply_deadline_programming(timer_adapter, programming).unwrap_or_else(|error| {
-                fatal!("SLIME_GRAPH FAIL cleanup timer programming error={error:?}")
-            });
+            .map_err(|error| stop!("SLIME_GRAPH FAIL cleanup timer error={error:?}"))?;
+            apply_deadline_programming(timer_adapter, programming).map_err(|error| {
+                stop!("SLIME_GRAPH FAIL cleanup timer programming error={error:?}")
+            })?;
             cleanup_timer_armed = !retirements.is_empty();
         }
         // Checked here rather than after dispatch: the last bounded instance's
@@ -265,19 +265,19 @@ pub(super) fn serve_instance_graph(
                 && let Ok(instance) = generation.instance(instance_index)
                 && instance.health == InstanceHealth::Required
             {
-                match decoded_fault {
-                    Ok(detail) => fatal!(
+                return Err(match decoded_fault {
+                    Ok(detail) => stop!(
                         "SLIME_GRAPH FAIL required instance {} fault kind={:?} instruction={:?} address={:?}",
                         instance.name,
                         detail.kind,
                         detail.instruction,
                         detail.address,
                     ),
-                    Err(error) => fatal!(
+                    Err(error) => stop!(
                         "SLIME_GRAPH FAIL required instance {} fault error={error:?}",
                         instance.name,
                     ),
-                }
+                });
             }
             let reason = match decoded_fault {
                 Ok(detail) => {
@@ -363,7 +363,10 @@ pub(super) fn serve_instance_graph(
             }
             lifecycle_service.release(id);
             if !retirements.insert(id) {
-                fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+                return Err(stop!(
+                    "SLIME_GRAPH FAIL pending retirement capacity task={}",
+                    id.0
+                ));
             }
             live -= 1;
             continue;
@@ -535,10 +538,10 @@ pub(super) fn serve_instance_graph(
                     && let Ok(instance) = generation.instance(instance_index)
                 {
                     if instance.health == InstanceHealth::Required {
-                        fatal!(
+                        return Err(stop!(
                             "SLIME_GRAPH FAIL resident instance {} exit status={status}",
                             instance.name
-                        )
+                        ));
                     }
                     crate::diagnostic_println!(
                         "SLIME_GRAPH resident exit instance={} status={status} recorded=unhealthy",
@@ -550,10 +553,10 @@ pub(super) fn serve_instance_graph(
                     && let Ok(instance) = generation.instance(instance_index)
                     && instance.health == InstanceHealth::Required
                 {
-                    fatal!(
+                    return Err(stop!(
                         "SLIME_GRAPH FAIL required instance {} exit status={status}",
                         instance.name
-                    )
+                    ));
                 }
                 if status == 0
                     && !resident
@@ -610,7 +613,10 @@ pub(super) fn serve_instance_graph(
                 }
                 lifecycle_service.release(id);
                 if !retirements.insert(id) {
-                    fatal!("SLIME_GRAPH FAIL pending retirement capacity task={}", id.0);
+                    return Err(stop!(
+                        "SLIME_GRAPH FAIL pending retirement capacity task={}",
+                        id.0
+                    ));
                 }
                 live -= 1;
             }
@@ -1756,40 +1762,18 @@ pub(super) fn serve_instance_graph(
             }
         }
         if required != 0 && retirements.is_empty() {
-            let mut live_required = 0;
-            let mut completed = 0;
-            for instance_index in 0..generation.instance_count() {
-                let Ok(instance) = generation.instance(instance_index) else {
-                    continue;
-                };
-                if !instance.autostart || instance.health != InstanceHealth::Required {
-                    continue;
-                }
-                if completed_required
-                    .get(instance_index)
-                    .copied()
-                    .unwrap_or(false)
-                {
-                    completed += 1;
-                    continue;
-                }
-                if tasks
-                    .tasks()
-                    .any(|task| task.instance == Some(instance_index))
-                {
-                    live_required += 1;
-                }
-            }
+            let (live_required, completed) =
+                required_accounting(generation, tasks, &completed_required);
             if live_required + completed == required && (!healthy_emitted || live_required == 0) {
                 #[cfg(slime_boot_selector)]
                 if !healthy_emitted && boot_runtime.running_pending() {
                     let device = block_devices
                         .get_mut(0)
-                        .unwrap_or_else(|| fatal!("boot promotion has no boot device"));
-                    match boot_runtime.confirm(device) {
-                        Ok(()) => crate::diagnostic_println!("SLIME_BOOT promoted"),
-                        Err(error) => fatal!("boot promotion rejected: {error:?}"),
-                    }
+                        .ok_or_else(|| stop!("boot promotion has no boot device"))?;
+                    boot_runtime
+                        .confirm(device)
+                        .map_err(|error| stop!("boot promotion rejected: {error:?}"))?;
+                    crate::diagnostic_println!("SLIME_BOOT promoted");
                 }
                 if completed == 0 {
                     let digest = generation.identity;
@@ -1871,7 +1855,9 @@ pub(super) fn serve_instance_graph(
     // count must not stop its root dispatcher.
     if iteration_limit == Some(iterations) && live != 0 {
         if !healthy_emitted {
-            fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
+            return Err(stop!(
+                "SLIME_GRAPH FAIL graph iterations exhausted live={live}"
+            ));
         }
         crate::diagnostic_println!(
             "SLIME_GRAPH exhausted live={live} iterations={iterations} certified=1"
@@ -1960,6 +1946,7 @@ pub(super) fn serve_instance_graph(
             completed,
         );
     }
+    Ok(())
 }
 
 /// Bytes one encoded spawn-grant record occupies in the caller's transfer
