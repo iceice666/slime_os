@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1f287-45a5-7d08-9204-06ba2bad331f" "root-boot-
   "The root's boot and launch run as phases that return, and their decisions have host tests"
   "The library compiles the root's boot sequence and graph runtime, and no host test runs them. slime_root::boot::run holds 510 code lines and launch_instance_graph 1054. The library names fatal! in 160 places, and a function that reaches one stops the root and does not return. The decisions those two functions make are computed between kernel calls: what each instance needs, in which order instances start, which grant fills which slot. A host cannot invoke seL4, so today it cannot check one of them.")
   with {
+    intent = #active;
     depends = {
       "01a1f136-14af-768c-bb13-2917ec15696b";
       "01a1f283-00b8-7499-9d83-63c21fc66bb6";
