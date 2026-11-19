@@ -25,14 +25,29 @@ series total covers. The `harness` role holds the build script and the two
 `slime_*` cfg compiles each qualification scenario into its own root role
 image. The role has its own ceiling and is outside the series total.
 
-The script also counts the code lines that only the binary compiles: the lines
-of `src/main.rs` and of every module file that it declares with `mod name;`,
-followed into each declared file in turn. The library, `src/lib.rs`, compiles
-every other file, and host tests reach only what the library compiles. The
-count is reported as `binaryOnlyCodeLines`, with the count of those files as
-`binaryOnlyFiles`. `BINARY_ONLY_CEILING` bounds the lines. A `#[path]`
-attribute in such a file is refused, because the walk finds a module by its
-name.
+The script also walks the module tree from each crate root. A walk reads every
+`mod name;` declaration of a file and follows it into the file that holds the
+module. It reads the file with comments and literals blanked, so text inside
+them declares nothing.
+
+The walk from `src/main.rs` finds what only the binary compiles. Host tests
+build the library, so they cannot name those lines. The count is reported as
+`binaryOnlyCodeLines`, with the count of those files as `binaryOnlyFiles`, and
+`BINARY_ONLY_CEILING` bounds the lines.
+
+The walk from `src/lib.rs` finds what the library compiles under a condition.
+A file is conditional when a `#[cfg(...)]` attribute stands on its declaration
+or on the declaration of a module above it, or when the file holds an inner
+`#![cfg(...)]` attribute. A build that does not meet the condition skips the
+file, so the host build may not compile it. The count is reported as
+`libraryConditionalCodeLines`, with `libraryConditionalFiles`, and
+`LIBRARY_CONDITIONAL_CEILING` bounds the lines. Test files are in neither
+count.
+
+A walk refuses what it cannot follow: a `path` attribute on a declaration, a
+declaration inside an inline module, and a declaration that no file or two
+files hold. The script also refuses a file that neither walk reaches, other
+than the build script and test files, because no build compiles it.
 
 A role may name a file that does not exist. A planning pull request assigns a
 file before the implementation creates it, and an entry stays after its file
@@ -40,9 +55,11 @@ is deleted.
 
 Known limits. The script counts `slime-root/` only. Code that moves into a
 crate the root links leaves the count. `DEPENDENCIES` pins which crates those
-are, so a new one is a grader change. The walk for `binaryOnlyCodeLines` reads
-a declaration at the start of a code line, so a line of a multi-line string
-literal that reads `mod name;` would count as one. A role holds whole files:
+are, so a new one is a grader change. A walk reads the `cfg` on a module
+declaration and on a whole file. It does not read a `cfg` on an item inside a
+file, so an item that the host build skips still counts as compiled. A walk
+does not expand macros, so a module that a macro declares is not followed. A
+role holds whole files:
 `src/object_allocator/qualification.rs` also holds two methods that the
 product image calls, and the `harness` role counts them.
 """
@@ -66,7 +83,15 @@ CRATE = "slime-root"
 MANIFEST = ROOT / CRATE / "Cargo.toml"
 TEST_ATTRIBUTE = "#[cfg(test)]"
 BINARY_ROOT = "src/main.rs"
-MODULE_DECLARATION = re.compile(r"\s*(?:pub(?:\([a-z: ]+\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+LIBRARY_ROOT = "src/lib.rs"
+BUILD_SCRIPT = "build.rs"
+# `mod name;` with the outer attributes that stand on it, in blanked text.
+MODULE_DECLARATION = re.compile(
+    r"(?<![A-Za-z0-9_])((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
+)
+CFG_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(")
+INNER_CFG_ATTRIBUTE = re.compile(r"#!\[\s*cfg\s*\(")
+PATH_ATTRIBUTE = re.compile(r"\bpath\b")
 
 
 @dataclass(frozen=True)
@@ -202,6 +227,10 @@ SERIES_CEILING = 34100
 # The binary alone compiled 9301 code lines, in 13 files, on the commit that
 # landed this ceiling.
 BINARY_ONLY_CEILING = 9350
+# The library compiled 2443 code lines under a `cfg`, in 6 files, on the same
+# commit: the boot selector, the boot framebuffer of x86-64 and one
+# qualification module.
+LIBRARY_CONDITIONAL_CEILING = 2450
 
 # Every crate `slime-root/Cargo.toml` names in a dependency table.
 DEPENDENCIES = frozenset({"boot-contracts", "sel4", "slime-proto", "sel4-root-task", "object"})
@@ -218,6 +247,7 @@ class Lexed:
     code: list[bool]  # the line holds a character outside whitespace and comments
     depth: list[int]  # delimiter depth before the line's first character
     ends: list[bool]  # the line holds a `;` or `}` that leaves the depth at 0
+    text: str = ""  # the file with every comment and literal replaced by spaces
 
 
 def lex(text: str) -> Lexed:
@@ -226,6 +256,7 @@ def lex(text: str) -> Lexed:
     out = Lexed([False] * lines, [0] * lines, [False] * lines)
     line = depth = index = 0
     size = len(text)
+    blanked = list(text)
 
     def span(end: int, held: bool) -> int:
         """Pass a comment or a literal that ends before `end`; a literal's text is code."""
@@ -234,7 +265,9 @@ def lex(text: str) -> Lexed:
             if text[position] == "\n":
                 line += 1
                 out.depth[line] = depth
-            elif held and not text[position].isspace():
+                continue
+            blanked[position] = " "
+            if held and not text[position].isspace():
                 out.code[line] = True
         return min(end, size)
 
@@ -244,7 +277,9 @@ def lex(text: str) -> Lexed:
             index = span(index + 1, False)
         elif text.startswith("//", index):
             end = text.find("\n", index)
-            index = size if end < 0 else end
+            end = size if end < 0 else end
+            blanked[index:end] = " " * (end - index)
+            index = end
         elif text.startswith("/*", index):
             nesting, end = 1, index + 2
             while end < size and nesting:
@@ -275,6 +310,7 @@ def lex(text: str) -> Lexed:
             if char in ";}" and depth == 0:
                 out.ends[line] = True
             index += 1
+    out.text = "".join(blanked)
     return out
 
 
@@ -345,33 +381,33 @@ def sources() -> list[str]:
     return sorted(path[len(prefix):] for path in listed if path.endswith(".rs") and (ROOT / path).is_file())
 
 
-def binary_only(files: list[str]) -> list[str]:
-    """`src/main.rs` and every module file that it declares, transitively."""
+def modules(files: list[str], root: str) -> dict[str, bool]:
+    """Every file that `root` declares, transitively, and whether it is conditional."""
     known = set(files)
-    found: list[str] = []
-    pending = [BINARY_ROOT]
+    found: dict[str, bool] = {}
+    pending = [(root, False)]
     while pending:
-        relative = pending.pop()
+        relative, conditional = pending.pop()
         if relative in found:
-            continue
-        found.append(relative)
-        text = (ROOT / CRATE / relative).read_text(encoding="utf-8")
+            fail(f"{CRATE}/{relative} holds a module that two declarations name")
+        lexed = lex((ROOT / CRATE / relative).read_text(encoding="utf-8"))
+        conditional = conditional or INNER_CFG_ATTRIBUTE.search(lexed.text) is not None
+        found[relative] = conditional
         name = relative.rsplit("/", 1)[-1]
-        base = relative.rsplit("/", 1)[0] if name in ("main.rs", "mod.rs") else relative.removesuffix(".rs")
-        for line, held in zip(text.split("\n"), lex(text).code, strict=True):
-            if not held:
-                continue
-            if line.lstrip().startswith("#[path"):
-                fail(f"{CRATE}/{relative} uses #[path]; the binary-only count finds a module by its name")
-            declared = MODULE_DECLARATION.match(line)
-            if declared is None:
-                continue
-            candidates = [f"{base}/{declared.group(1)}.rs", f"{base}/{declared.group(1)}/mod.rs"]
+        base = relative.rsplit("/", 1)[0] if name in ("main.rs", "lib.rs", "mod.rs") else relative.removesuffix(".rs")
+        for declared in MODULE_DECLARATION.finditer(lexed.text):
+            attributes, module = declared.group(1), declared.group(2)
+            if PATH_ATTRIBUTE.search(attributes):
+                fail(f"{CRATE}/{relative} declares module {module} with a path attribute; a walk finds a module by its name")
+            before = lexed.text[: declared.start(2)]
+            if sum(before.count(opened) for opened in "{([") != sum(before.count(closed) for closed in "})]"):
+                fail(f"{CRATE}/{relative} declares module {module} inside an inline module; a walk does not follow it")
+            candidates = [f"{base}/{module}.rs", f"{base}/{module}/mod.rs"]
             holders = [candidate for candidate in candidates if candidate in known]
             if len(holders) != 1:
-                fail(f"{CRATE}/{relative} declares module {declared.group(1)}, and {len(holders)} of {candidates} hold it")
-            pending.append(holders[0])
-    return sorted(found)
+                fail(f"{CRATE}/{relative} declares module {module}, and {len(holders)} of {candidates} hold it")
+            pending.append((holders[0], conditional or CFG_ATTRIBUTE.search(attributes) is not None))
+    return found
 
 
 def dependencies() -> set[str]:
@@ -410,10 +446,24 @@ def main() -> int:
         code[owners[0]] += code_lines
         test_lines += tested
 
-    if BINARY_ROOT not in files:
-        fail(f"{CRATE}/{BINARY_ROOT} is missing; the binary-only count starts there")
-    binary = binary_only(files)
-    binary_lines = sum(count((ROOT / CRATE / relative).read_text(encoding="utf-8"))[0] for relative in binary)
+    for root in (BINARY_ROOT, LIBRARY_ROOT):
+        if root not in files:
+            fail(f"{CRATE}/{root} is missing; a walk starts there")
+    binary_tree = modules(files, BINARY_ROOT)
+    library_tree = modules(files, LIBRARY_ROOT)
+    for relative in sorted(set(binary_tree) & set(library_tree)):
+        problems.append(f"{CRATE}/{relative} is a module of the binary and of the library")
+    for relative in files:
+        if relative not in binary_tree and relative not in library_tree and relative != BUILD_SCRIPT and not is_test_file(relative):
+            problems.append(f"{CRATE}/{relative} is a module of neither the binary nor the library; no build compiles it")
+
+    def code_lines(tree: list[str]) -> int:
+        return sum(count((ROOT / CRATE / relative).read_text(encoding="utf-8"))[0] for relative in tree)
+
+    binary = sorted(relative for relative in binary_tree if not is_test_file(relative))
+    conditional = sorted(relative for relative, gated in library_tree.items() if gated and not is_test_file(relative))
+    binary_lines = code_lines(binary)
+    conditional_lines = code_lines(conditional)
 
     series = sum(code[name] for name in SERIES)
     for name, role in ROLES.items():
@@ -425,6 +475,11 @@ def main() -> int:
     print(f"[root-size] {'binaryOnly':<13} {binary_lines:>6} / {BINARY_ONLY_CEILING} in {len(binary)} file(s)")
     if binary_lines > BINARY_ONLY_CEILING:
         problems.append(f"the binary alone compiles {binary_lines} code lines, above its ceiling of {BINARY_ONLY_CEILING}")
+    print(f"[root-size] {'conditional':<13} {conditional_lines:>6} / {LIBRARY_CONDITIONAL_CEILING} in {len(conditional)} file(s)")
+    if conditional_lines > LIBRARY_CONDITIONAL_CEILING:
+        problems.append(
+            f"the library compiles {conditional_lines} code lines under a cfg, above its ceiling of {LIBRARY_CONDITIONAL_CEILING}"
+        )
     if series > SERIES_CEILING:
         problems.append(f"the series holds {series} code lines, above its ceiling of {SERIES_CEILING}")
 
@@ -442,9 +497,11 @@ def main() -> int:
         filesObserved=len(files),
         binaryOnlyCodeLines=binary_lines,
         binaryOnlyFiles=len(binary),
+        libraryConditionalCodeLines=conditional_lines,
+        libraryConditionalFiles=len(conditional),
         **{f"{name}CodeLines": code[name] for name in SERIES},
     )
-    print("root size check: every file has one role, and every role, the series and the binary-only count are within their ceilings")
+    print("root size check: every file has one role, and every role, the series and both walks are within their ceilings")
     return 0
 
 

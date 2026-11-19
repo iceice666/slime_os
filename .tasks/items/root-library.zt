@@ -23,6 +23,7 @@ item :: s.Item = (h.milestone "01a1f136-14af-768c-bb13-2917ec15696b" "root-libra
       h.nonGoal "Explicit imports in the nine child modules of graph_runtime. Each keeps its use super::*. Only slime-root/src/graph_runtime.rs names what it imports." h.agentDefault;
       h.nonGoal "The root side of the fixture, slime-root/src/fixture_runtime.rs. The binary still compiles it, and the product root still links it. It leaves when the fixture is a root binary of its own." h.agentDefault;
       h.nonGoal "An exam for the boot selector, Milk-V Duo S, Raspberry Pi 5 and product UART configurations. The evidence branch holds no record of a target that builds them." h.agentDefault;
+      h.nonGoal "A measure of a cfg attribute on an item inside a file. The size checker reads the attribute on a module declaration and on a whole file. An item that the host build skips still counts as compiled." h.agentDefault;
       h.nonGoal "A ceiling on the binary-only count below 9350 in scripts/check/check-root-size.py. The checker grades promises, so it changes only with a new item (V4). The planning pull request of the next root item lowers it." h.agentDefault;
       h.nonGoal "The pages under docs/ that name slime-root/src/main.rs or fatal!. docs/ is a process path, and a process pull request follows the implementation." h.agentDefault;
     };
@@ -33,8 +34,11 @@ item :: s.Item = (h.milestone "01a1f136-14af-768c-bb13-2917ec15696b" "root-libra
       h.req "series-with-the-library-seam"
         "root_size_check counts at most 34100 code lines in the nine series roles, and reports the count as seriesCodeLines."
         { "root_size_check"; };
-      h.req "host-build-compiles-the-moved-code"
-        "test_sel4_root passes: the host build of the library compiles graph_runtime and boot, and every host test passes."
+      h.req "no-cfg-on-the-moved-modules"
+        "root_size_check counts at most 2450 code lines that the library compiles under a cfg attribute, and reports them as libraryConditionalCodeLines. main holds 2443 such lines, so the library declares graph_runtime, boot and every module below them without one."
+        { "root_size_check"; };
+      h.req "host-tests-pass-with-the-moved-code"
+        "test_sel4_root passes: the host build of the library succeeds with the moved modules in it, and every host test passes."
         { "test_sel4_root"; };
       h.req "fixture-boots-on-aarch64"
         "sel4_root_boot_check passes: the root fixture boots on qemu-arm-virt through the library's boot function."
@@ -60,6 +64,7 @@ item :: s.Item = (h.milestone "01a1f136-14af-768c-bb13-2917ec15696b" "root-libra
         h.atMost "binaryOnlyCodeLines" 1200;
         h.atMost "binaryOnlyFiles" 2;
         h.atMost "seriesCodeLines" 34100;
+        h.atMost "libraryConditionalCodeLines" 2450;
       };
       h.observed "test_sel4_root";
       h.observed "sel4_root_boot_check";
@@ -91,7 +96,7 @@ item :: s.Item = (h.milestone "01a1f136-14af-768c-bb13-2917ec15696b" "root-libra
         "fatal! keeps its form in this item. main keeps the allocator and the console install. The exam is the binary-only count, the host build and the boots."
         "a function that returns errors needs a decision for each of 201 call sites, and that is the next item. The two console audits read main, so a move of the install changes two graders. No host test can run the moved code before a seam for the kernel exists, so the exam measures what the library compiles"
         (h.acceptedDefault "Claude Code session session_01Udthew69PFkRyDtWmFtXKa, 2026-11-18: the owner accepted the three proposals named in this decision")
-        { "the-binary-compiles-the-entry-only"; "host-build-compiles-the-moved-code"; "console-install-stays-in-main"; };
+        { "the-binary-compiles-the-entry-only"; "no-cfg-on-the-moved-modules"; "host-tests-pass-with-the-moved-code"; "console-install-stays-in-main"; };
       h.decided "bounds-from-a-measured-draft"
         "The bound on binaryOnlyCodeLines is 1200, and the bound on binaryOnlyFiles is 2."
         "a draft of the move, on a branch that no pull request carries, leaves 1117 lines in slime-root/src/main.rs and slime-root/src/fixture_runtime.rs. 1200 is that count rounded up to a multiple of 50, plus 50. The draft passed test_sel4_root, sel4_root_boot_check, riscv64_sel4_root_boot_check, x86_64_sel4_root_boot_check and sel4_boot_check in one development container"
@@ -111,9 +116,14 @@ item :: s.Item = (h.milestone "01a1f136-14af-768c-bb13-2917ec15696b" "root-libra
         "Every mandatory acceptance binds a target that the evidence branch records as passed."
         "on the evidence branch at f860baa every record of these targets passed: root_size_check 4, test_sel4_root 12, sel4_root_boot_check 1, riscv64_sel4_root_boot_check 1, sel4_boot_check 4, root_console_check 5, sel4_gate_control_check 4. The item root-child-crate bound a target that the Evidence runner cannot build, and could not close"
         h.agentDefault
-        { "host-build-compiles-the-moved-code"; "product-graph-boots"; "console-install-stays-in-main"; };
+        { "host-tests-pass-with-the-moved-code"; "product-graph-boots"; "console-install-stays-in-main"; };
+      h.decided "a-count-of-conditional-modules"
+        "The size checker walks the module tree from slime-root/src/lib.rs and counts the files behind a cfg attribute. The item bounds the count at what main holds."
+        "a passing host build does not show that it compiled the moved code: a module declared under cfg(target_os = \"none\") leaves the binary-only count low, the host tests green and the boots unchanged. With the two counts bounded, a moved file is a module of the library with no condition on its declaration"
+        h.agentDefault
+        { "no-cfg-on-the-moved-modules"; };
       h.decided "graders-change-in-the-planning-pull-request"
-        "The planning pull request of this item changes four graders. The size checker counts what only the binary compiles, lowers three ceilings and raises the boot role's. The closure generator names the child crate at its one place. The console line audit leaves the child crate out. A comment in the root boot gate no longer names a file."
+        "The planning pull request of this item changes four graders. The size checker counts what only the binary compiles and what the library compiles under a cfg, lowers two ceilings and raises the boot role's. The closure generator names the child crate at its one place. The console line audit leaves the child crate out. A comment in the root boot gate no longer names a file."
         "each file is in the grader set of a target that a promise binds, so it changes only in a pull request that adds an item (V4). The item root-child-crate left the generator's second place and the lower ceilings to this pull request"
         h.agentDefault
         { "the-binary-compiles-the-entry-only"; "series-with-the-library-seam"; "console-audit-counts-components-only"; };
