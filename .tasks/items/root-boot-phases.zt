@@ -18,7 +18,7 @@ item :: s.Item = (h.milestone "01a1f287-45a5-7d08-9204-06ba2bad331f" "root-boot-
       h.nonGoal "A split of serve_spawn, construct_child and TaskTable::create, and a result from release_child. The core role has 12 lines of room, and release_child has 22 callers in the first two." h.agentDefault;
       h.nonGoal "A trait over the kernel's operations, with a fake for the host. The estimate is 400 to 700 code lines, and the series has 57 lines of room. The order of kernel calls and the rollback paths stay without a host test." (h.acceptedDefault "Claude Code session session_01Udthew69PFkRyDtWmFtXKa, 2026-11-19: the owner chose the proposed option of three, plan and apply");
       h.nonGoal "The 41 fatal! invocations of the binary: slime-root/src/main.rs and slime-root/src/fixture_runtime.rs. The fixture leaves the product root in the next root item." h.agentDefault;
-      h.nonGoal "The four functions above the limit in roles that leave the root, and the two in the harness role. Each keeps its entry in the checker's table." h.agentDefault;
+      h.nonGoal "The other eight functions above the limit. Three are in roles that leave the root: serve_lifecycle_request, serve_io_resource and serve_capability_export. Two are in the harness role. main shrinks when the fixture leaves the product root. grow and preflight_spawn_grants are in the core role, which has 12 lines of room. Each keeps its entry in the checker's table." h.agentDefault;
       h.nonGoal "A higher ceiling of any role or of the series." h.agentDefault;
       h.nonGoal "An exam on the Evidence runner for the gates that pin the text of a fatal record. The evidence branch holds no record of them. The implementation pull request runs them and reports each." h.agentDefault;
     };
