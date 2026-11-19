@@ -111,6 +111,7 @@ feature_exam:
 FEATURE = "01a1c4a0-e2e0-7000-8000-0000000000f1"
 BUG = "01a1c4a0-e2e0-7000-8000-0000000000b1"
 GENERATED = "01a1c4a0-e2e0-7000-8000-0000000000c1"
+MODULE = "01a1c4a0-e2e0-7000-8000-0000000000c2"
 MILESTONE = "01a1c4a0-e2e0-7000-8000-0000000000a1"
 # The fixture's one account in REVIEW_AGENTS. `Fixture.check` gives its approval
 # by default, as a reviewed head has; a control that needs an unreviewed head
@@ -320,6 +321,29 @@ def m2_classes(f: Fixture) -> None:
     f.commit("plan a generator change")
     done = f.check()
     ok(done.returncode == 0 and "class: planning" in done.stdout, "a generator in a grader set changes from a new item", done.stdout + done.stderr)
+
+    f.branch("grader-module-planned")
+    f.write("scripts/lib/e2e_cases.py", "EXTRA = 0\n")
+    f.write("scripts/check/area-exam.py", EXAM.replace("import e2e_judge\n", "import e2e_cases\nimport e2e_judge\n"))
+    f.write(".tasks/items/generated-b.zt", item("task", MODULE, "generated-b", target="area_exam"))
+    f.commit("plan a checker that imports a new module")
+    done = f.check()
+    ok(done.returncode == 0 and "class: planning" in done.stdout, "a new module that a bound checker imports is a grader, from a new item", done.stdout + done.stderr)
+    refused(f.check("main", "owner", "owner"), "V4", "a new grader module its author approved alone")
+
+    f.branch("grader-module-mixed")
+    f.write("scripts/lib/e2e_cases.py", "EXTRA = 0\n")
+    f.write("scripts/check/area-exam.py", EXAM.replace("import e2e_judge\n", "import e2e_cases\nimport e2e_judge\n"))
+    f.write(".tasks/items/generated-b.zt", item("task", MODULE, "generated-b", target="area_exam"))
+    f.write("components/e2e/lib.rs", "// product and a new grader module together\n")
+    f.commit("a new grader module and product")
+    refused(f.check(), "V1", "a pull request carrying a new grader module and product code")
+
+    f.branch("module-no-grader-reads")
+    f.write("scripts/lib/e2e_unread.py", "UNREAD = 0\n")
+    f.commit("a module that no bound checker imports")
+    done = f.check()
+    ok(done.returncode == 0 and "class: process" in done.stdout, "a new module that no bound checker imports stays process", done.stdout + done.stderr)
 
     f.branch("judge-rewrite")
     judge = f.root / "scripts" / "spec" / "check"

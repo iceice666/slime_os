@@ -79,8 +79,8 @@ Follow [Write a contract](09-write-a-contract.md). Short form: `schema.zt` →
    `syscall/sel4_transport.rs` only if operand packing is new).
 4. Document the operation in [`syscall-abi.md`](../syscall-abi.md) — the
    label table is machine-checked by `just contracts_check`.
-5. Host tests in the mechanism module; raise the count in `just/quality.just`
-   for `just test_sel4_root`.
+5. Host tests in the mechanism module. `just test_sel4_root` counts them from
+   the source, so the recipe does not change.
 6. A plane that exercises it, including a refusal case (`request rejected`
    for a holder without the right). Regenerate closures.
 7. `just contracts_check test_sel4_root lint_all` plus the plane.
