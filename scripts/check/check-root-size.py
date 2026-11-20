@@ -69,6 +69,17 @@ outside test items. A function that reaches one stops the root and does not
 return, so no host test can call it past that point. The count is reported as
 `libraryFatalSites`, and `LIBRARY_FATAL_CEILING` bounds it.
 
+The script counts the string literals that name a product component. A product
+component is a crate under one of the four lifecycle directories of
+`components/`, and its name is the name of its directory. A literal names one
+when its whole text is that name. The script reads `slime-root/` and the two
+crates of this repository that the root links, outside test items and test
+files. The count is reported as `productComponentNames`, and
+`COMPONENT_NAME_CEILING` bounds it. Before it reads a file, the script checks
+the reader on synthetic sources: it must count a literal in a function and a
+raw literal, and it must not count a literal in a test item, a comment, or a
+longer text.
+
 A walk refuses what it cannot follow: a `path` attribute on a declaration, a
 declaration inside an inline module, and a declaration that no file or two
 files hold. The script also refuses a file that neither walk reaches, other
@@ -87,7 +98,10 @@ variant on every platform but `cv1800b-duo`.
 A walk reads the `cfg` on a module
 declaration and on a whole file. It does not read a `cfg` on an item inside a
 file, so an item that the host build skips still counts as compiled. A walk
-does not expand macros, so a module that a macro declares is not followed. A
+does not expand macros, so a module that a macro declares is not followed.
+The count of component names holds a literal only: a name inside a longer
+literal, a name that code assembles, and an instance name that differs from
+every crate's name are not counted. A
 role holds whole files:
 `src/object_allocator/qualification.rs` also holds two methods that the
 product image calls, and the `harness` role counts them.
@@ -292,6 +306,15 @@ LAUNCH_PATH = ("src/boot.rs", "src/graph_runtime.rs")
 # this measure, and 5 once its boot, launch and service loop returned a result.
 LIBRARY_FATAL_CEILING = 8
 
+# The directories of `components/` that hold one crate per product component.
+COMPONENT_GROUPS = ("system", "services", "applications", "testkit")
+# The root, and the crates of this repository that it links.
+NAME_SCAN = (CRATE, "boot-contracts", "components/proto")
+# `slime-root/src/ipc.rs` held six such literals on the commit that landed this
+# measure: `network-service` three times, `entropy-service`, `zenoh-service`
+# and `virtio-blk-driver`.
+COMPONENT_NAME_CEILING = 6
+
 # Every crate `slime-root/Cargo.toml` names in a dependency table.
 DEPENDENCIES = frozenset({"boot-contracts", "sel4", "slime-proto", "sel4-root-task", "object"})
 
@@ -351,6 +374,38 @@ def fatal_sites(text: str) -> int:
     lexed = lex(text)
     test = test_items(text, lexed)
     return sum(1 for site in FATAL_SITE.finditer(lexed.text) if not test[lexed.text.count("\n", 0, site.start())])
+
+
+def component_names() -> frozenset[str]:
+    """The directory name of every crate under a lifecycle directory of `components/`."""
+    names = frozenset(manifest.parent.name for group in COMPONENT_GROUPS for manifest in (ROOT / "components" / group).glob("*/Cargo.toml"))
+    if not names:
+        fail("no crate under components/; the count of component names would read nothing")
+    return names
+
+
+def named_components(text: str, names: frozenset[str]) -> list[tuple[int, str]]:
+    """(line, name) of every string literal outside test items whose whole text is a component's name."""
+    lexed = lex(text)
+    test = test_items(text, lexed)
+    return [(line + 1, literal) for line, literal in lexed.strings if literal in names and not test[line]]
+
+
+def name_reader_controls(names: frozenset[str]) -> None:
+    """The reader must count a literal in product code and nothing else."""
+    name = min(names)
+    cases = (
+        ("a literal in a function", f'fn f() -> &\'static str {{ "{name}" }}\n', 1),
+        ("a raw literal", f'const N: &str = r#"{name}"#;\n', 1),
+        ("a byte literal", f'const N: &[u8] = b"{name}";\n', 1),
+        ("a literal in a test item", f'#[cfg(test)]\nmod tests {{\n    const N: &str = "{name}";\n}}\n', 0),
+        ("a comment", f'// "{name}"\nfn f() {{}} /* "{name}" */\n', 0),
+        ("a longer text", f'const N: &str = "[{name}] started";\n', 0),
+        ("another text", 'const N: &str = "no-such-component-crate";\n', 0),
+    )
+    for label, source, expected in cases:
+        if len(named_components(source, names)) != expected:
+            fail(f"control: the reader of component names does not count {expected} for {label}")
 
 
 def read_source(relative: str) -> str:
@@ -455,6 +510,19 @@ def main() -> int:
                 problems.append(f"{CRATE}/{relative}: function {name} holds {length} code lines, above its ceiling of {ceiling}")
     library_fatal = sum(fatal_sites(read_source(relative)) for relative in library_tree if not is_test_file(relative))
 
+    names = component_names()
+    name_reader_controls(names)
+    named: list[str] = []
+    for crate in NAME_SCAN:
+        scanned = files if crate == CRATE else sources(crate)
+        if not scanned:
+            fail(f"no Rust file under {crate}/")
+        for relative in scanned:
+            if is_test_file(relative):
+                continue
+            found_names = named_components((ROOT / crate / relative).read_text(encoding="utf-8"), names)
+            named.extend(f"{crate}/{relative}:{line} names {name}" for line, name in found_names)
+
     series = sum(code[name] for name in SERIES) - fixture_only_lines
     for name, role in ROLES.items():
         print(f"[root-size] {name:<13} {code[name]:>6} / {role.ceiling}")
@@ -479,6 +547,12 @@ def main() -> int:
     print(f"[root-size] {'fatalSites':<13} {library_fatal:>6} / {LIBRARY_FATAL_CEILING} in the library")
     if library_fatal > LIBRARY_FATAL_CEILING:
         problems.append(f"the library holds {library_fatal} fatal! invocations, above its ceiling of {LIBRARY_FATAL_CEILING}")
+    print(f"[root-size] {'componentNames':<13} {len(named):>5} / {COMPONENT_NAME_CEILING} literal(s) that name one of {len(names)} product components")
+    if len(named) > COMPONENT_NAME_CEILING:
+        problems.append(
+            f"the root and the crates it links name a product component {len(named)} time(s), above the ceiling of {COMPONENT_NAME_CEILING}:\n    "
+            + "\n    ".join(named)
+        )
     if series > SERIES_CEILING:
         problems.append(f"the series holds {series} code lines, above its ceiling of {SERIES_CEILING}")
 
@@ -503,9 +577,10 @@ def main() -> int:
         functionsOverLimit=over_limit,
         launchPathLongestFunctionCodeLines=launch_longest,
         libraryFatalSites=library_fatal,
+        productComponentNames=len(named),
         **{f"{name}CodeLines": code[name] for name in SERIES},
     )
-    print("root size check: every file has one role, and every role, the series, both walks, every function and the fatal sites are within their bounds")
+    print("root size check: every file has one role, and every role, the series, both walks, every function, the fatal sites and the component names are within their bounds")
     return 0
 
 

@@ -2,7 +2,7 @@
 
 The grants table has an encoder, a decoder and a builder step. This module judges the code that carries the table from
 the generation to the Zenoh service: the label that reads it, the manifest and system spec fields that declare it, the
-`slime-root` reader that serves it to one instance, and the runtime wrapper that calls it.
+`slime-root` reader that serves it to its one reader, and the runtime wrapper that calls it.
 
 Two kinds of evidence. Each declaration the files must hold is a fact: a pattern that has to match the named file. The
 reader's behaviour is graded by the two `slime-root` tests, run alone under the pinned AArch64 recipe, and the count of
@@ -75,8 +75,12 @@ FACTS: tuple[tuple[str, str, str, str], ...] = (
     ("python-constant", "scripts/lib/system_spec_contract.py", r"^MAX_ZENOH_GRANTS = 64$", "MAX_ZENOH_GRANTS = 64"),
     ("python-ceiling", "scripts/lib/system_spec.py", r'^\s*\("zenohGrants", contract\.MAX_ZENOH_GRANTS\),$',
      '        ("zenohGrants", contract.MAX_ZENOH_GRANTS),'),
-    ("root-instance", "slime-root/src/ipc.rs", r'^pub const ZENOH_GRANTS_READER_INSTANCE: &str = "zenoh-service";$',
-     'pub const ZENOH_GRANTS_READER_INSTANCE: &str = "zenoh-service";'),
+    # The reader and its gate each have two forms. The root either names the instance, or takes the reader from the
+    # generation's resource-reader table (`contracts/resource-reader/v1`) and hands the verdict to the copier.
+    ("root-instance", "slime-root/src/ipc.rs",
+     r'^pub const ZENOH_GRANTS_READER_INSTANCE: &str = "zenoh-service";$'
+     r"|^    let reader = is_declared_reader\(generation, instance, Resource::ZenohGrants\);$",
+     "    let reader = is_declared_reader(generation, instance, Resource::ZenohGrants);"),
     ("root-rows-per-call", "slime-root/src/ipc.rs",
      r"^pub const ZENOH_GRANTS_ROWS_PER_CALL: usize =\s*crate::transfer_window::MAX_STAGED_ARRAY_BYTES / ZENOH_GRANTS_ROW_BYTES;$",
      "pub const ZENOH_GRANTS_ROWS_PER_CALL: usize =\n    crate::transfer_window::MAX_STAGED_ARRAY_BYTES / ZENOH_GRANTS_ROW_BYTES;"),
@@ -84,7 +88,9 @@ FACTS: tuple[tuple[str, str, str, str], ...] = (
      "pub const ZENOH_GRANTS_ROW_BYTES: usize =\n    slime_proto::zenoh_service_grants_table_wire::ENTRY_BYTES;"),
     ("root-reader", "slime-root/src/ipc.rs", r"^pub fn read_zenoh_grants\($", "pub fn read_zenoh_grants("),
     ("root-copier", "slime-root/src/ipc.rs", r"^pub fn copy_zenoh_grants_rows\($", "pub fn copy_zenoh_grants_rows("),
-    ("root-gate", "slime-root/src/ipc.rs", r"if caller != ZENOH_GRANTS_READER_INSTANCE \{", "    if caller != ZENOH_GRANTS_READER_INSTANCE {"),
+    ("root-gate", "slime-root/src/ipc.rs",
+     r"if caller != ZENOH_GRANTS_READER_INSTANCE \{|^    copy_zenoh_grants_rows\(&table, reader, cursor, out\)$",
+     "    copy_zenoh_grants_rows(&table, reader, cursor, out)"),
     ("root-routed", "slime-root/src/ipc.rs", r"^\s*\| capability_table_labels::ZENOH_GRANTS_READ$", "        | capability_table_labels::ZENOH_GRANTS_READ"),
     ("root-route-test", "slime-root/src/ipc.rs", r"capability_table_labels::ZENOH_GRANTS_READ,\s*SERVICE_CAPABILITY_TRANSFER,",
      "                capability_table_labels::ZENOH_GRANTS_READ,\n                SERVICE_CAPABILITY_TRANSFER,"),

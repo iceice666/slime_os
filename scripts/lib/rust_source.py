@@ -2,7 +2,8 @@
 
 `lex` reads Rust's comments, string literals, raw strings and character literals, so a brace or `//` inside a literal
 is text. It keeps, for each line, whether the line holds code, and it keeps the file with every comment and literal
-replaced by spaces. Text inside them then declares nothing and names nothing.
+replaced by spaces. Text inside them then declares nothing and names nothing. It also keeps the text of every string
+literal with the line that opens it, for a reader that asks what a file names.
 
 `modules` walks the module tree from a crate root. It reads every `mod name;` declaration of a file and follows it
 into the file that holds the module. A file is conditional when a `#[cfg(...)]` attribute stands on its declaration or
@@ -48,6 +49,7 @@ class Lexed:
     depth: list[int]  # delimiter depth before the line's first character
     ends: list[bool]  # the line holds a `;` or `}` that leaves the depth at 0
     text: str = ""  # the file with every comment and literal replaced by spaces
+    strings: tuple[tuple[int, str], ...] = ()  # (line, text between the quotes) of each string and raw string literal
 
 
 def lex(text: str) -> Lexed:
@@ -57,6 +59,7 @@ def lex(text: str) -> Lexed:
     line = depth = index = 0
     size = len(text)
     blanked = list(text)
+    strings: list[tuple[int, str]] = []
 
     def span(end: int, held: bool) -> int:
         """Pass a comment or a literal that ends before `end`; a literal's text is code."""
@@ -94,10 +97,12 @@ def lex(text: str) -> Lexed:
             end = index + 1
             while end < size and text[end] != '"':
                 end += 2 if text[end] == "\\" else 1
+            strings.append((line, text[index + 1 : end]))
             index = span(end + 1, True)
         elif char == "r" and raw_string(text, index) and not identifier_before(text, index):
             hashes = raw_string(text, index) - 1
             end = text.find('"' + "#" * hashes, index + hashes + 2)
+            strings.append((line, text[index + hashes + 2 : size if end < 0 else end]))
             index = span(size if end < 0 else end + hashes + 1, True)
         elif char == "'":
             index = span(character_literal(text, index), True)
@@ -111,6 +116,7 @@ def lex(text: str) -> Lexed:
                 out.ends[line] = True
             index += 1
     out.text = "".join(blanked)
+    out.strings = tuple(strings)
     return out
 
 
