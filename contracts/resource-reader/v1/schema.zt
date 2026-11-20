@@ -25,9 +25,10 @@ magicTag :: Text = "SLIMERR";
 formatVersion :: Int = 1;
 headerBytes :: Int = 32;
 entryBytes :: Int = 36;
--- The generation's own instance bound. Seven tables with one reader each use
--- seven rows; the bound leaves room for one table read by every instance.
-maxRows :: Int = 48;
+-- A generation declares at most 48 instances. The three named readers use six
+-- rows, and one table that every other instance reads uses 45 more, which is
+-- 51. The bound is the next power of two.
+maxRows :: Int = 64;
 identityDomain :: Text = "slime-resource-reader-v1";
 
 -- The tables a row can name. An id is never reused for another table.
