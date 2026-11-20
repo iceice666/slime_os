@@ -25,10 +25,10 @@ item :: s.Item = (h.milestone "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c" "root-syste
     };
     requirements = {
       h.req "no-el0-program-names-a-generic-timer-register"
-        "rpi5_system_timer_image_check passes. It builds the bcm2712-rpi5 product image with --system-timer and the composition sel4-clock-authority for aarch64-rpi5 with SLIME_SYSTEM_TIMER=1. It reads the root ELF, the root child ELF and the component image of every executable, and none holds an MRS or MSR of a generic-timer register. The same builds without the switch are its controls: the root then writes CNTP_CTL_EL0 and reads CNTPCT_EL0, and clock-authority-probe reads CNTPCT_EL0."
+        "rpi5_system_timer_image_check passes. It builds two bcm2712-rpi5 images with --system-timer: the product, --component-graph, and the clock-authority composition, --clock-authority-plane. In each it reads the root ELF, the root child ELF and the component image of every executable, and none holds an MRS or MSR of a generic-timer register. The same two images built without the flag are its controls: each root then writes CNTP_CTL_EL0 and reads CNTPCT_EL0, and clock-authority-probe reads CNTPCT_EL0."
         { "rpi5_system_timer_image_check"; };
       h.req "the-switch-has-one-source"
-        "rpi5_system_timer_image_check passes: build-sel4.py --system-timer writes an image identity that records system_timer, under a name of its own, and the identity of the build without the flag records none. The builder refuses the flag on another platform and refuses SLIME_SYSTEM_TIMER in its environment."
+        "rpi5_system_timer_image_check passes: build-sel4.py --system-timer writes an image identity that records system_timer, under a name of its own, and the identity of the build without the flag records none. The builder refuses the flag on another platform and refuses SLIME_SYSTEM_TIMER in its environment. The gate sets no variable: the flag alone separates a build from its control, so the flag reaches the root build and every component build."
         { "rpi5_system_timer_image_check"; };
       h.req "driver-decisions-have-host-tests"
         "test_sel4_root runs at least 390 host tests, and reports the count as hostTests. main runs 383. The new tests call the functions that compute the compare value of a deadline, read the counter from its two halves, program compare channel 3 and park it."
@@ -106,8 +106,8 @@ item :: s.Item = (h.milestone "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c" "root-syste
         h.agentDefault
         { "no-el0-program-names-a-generic-timer-register"; };
       h.decided "the-product-image-needs-a-second-composition"
-        "The gate also builds sel4-clock-authority for the same profile."
-        "the six executables of the product generation hold no clock read with or without the switch, so the product image alone cannot show that the component runtime follows the switch. clock-authority-probe reads the counter and its rate"
+        "The image builder takes --clock-authority-plane, which embeds the composition sel4-clock-authority, and the gate builds that image beside the product."
+        "the six executables of the product generation hold no clock read with or without the flag, so the product image alone cannot show that the flag reaches a component build. clock-authority-probe reads the counter and its rate. The builder has a flag of this kind for nine other compositions, and a gate that set the variable itself for this one would not observe the builder"
         h.agentDefault
         { "no-el0-program-names-a-generic-timer-register"; };
       h.decided "the-timer-role-grows-before-it-leaves"
@@ -117,7 +117,7 @@ item :: s.Item = (h.milestone "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c" "root-syste
         { "timer-role-within-its-ceiling"; "series-within-its-ceiling"; };
       h.decided "the-bounds-come-from-a-draft"
         "The bound on hostTests is 390, on timerCodeLines 1450 and on seriesCodeLines 33200."
-        "a draft of the implementation, on a local branch, runs 390 host tests, seven of them new, and holds 1436 code lines in the timer role and 33166 in the series. The gate passes on it: ten EL0 programs, with 35 accesses in the root and 2 in clock-authority-probe without the switch, and none with it"
+        "a draft of the implementation, on a local branch, runs 390 host tests, seven of them new, and holds 1436 code lines in the timer role and 33166 in the series. The gate passes on it: twelve EL0 programs, with 35 accesses in each of the two roots and 2 in clock-authority-probe without the flag, and none with it"
         h.agentDefault
         { "driver-decisions-have-host-tests"; "timer-role-within-its-ceiling"; "series-within-its-ceiling"; };
       h.decided "a-mandatory-target-without-a-record"

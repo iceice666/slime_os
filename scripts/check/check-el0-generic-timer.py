@@ -4,24 +4,27 @@
 
 The image builder takes `--system-timer` for `bcm2712-rpi5`. The root of that
 image counts the SoC's system timer, and its components ask the root for the
-clock. This gate builds the image and reads every EL0 program in it:
+clock. This gate builds two such images and reads every EL0 program in each:
 
 * the root ELF and the root child ELF that the image identity names, each
   held to the SHA-256 the identity records;
 * the component image of every executable of the generation the image
   embeds, found by the SHA-256 the identity records for it.
 
-The product generation holds no component that reads the clock. The gate
-therefore also builds the composition `sel4-clock-authority` for the same
-target profile, with `SLIME_SYSTEM_TIMER=1` as the builder sets it, and reads
-its executables. `clock-authority-probe` reads the clock twice.
+The first image is the product, `--component-graph`. Its generation holds no
+component that reads the clock. The second is `--clock-authority-plane`,
+whose `clock-authority-probe` reads the counter and its rate. The gate sets no
+variable itself: the flag is the only thing that differs between a build and
+its control, so a builder that does not carry the switch to its component
+builds leaves the probe's reads in place.
 
 Every program must hold no access (`scripts/lib/el0_timer_audit.py`).
 
-The controls come from the same two builds without the switch. The root must
-then write `CNTP_CTL_EL0` and read `CNTPCT_EL0`, and `clock-authority-probe`
-must read `CNTPCT_EL0`. An audit that finds nothing in those builds either
-cannot tell the two apart. The synthetic controls of the reader run first.
+The controls come from the same two images built without the flag. Each root
+must then write `CNTP_CTL_EL0` and read `CNTPCT_EL0`, and
+`clock-authority-probe` must read `CNTPCT_EL0`. An audit that finds nothing in
+those builds either cannot tell the two apart. The synthetic controls of the
+reader run first.
 
 The switch has one source. The builder must refuse `--system-timer` for
 another platform and refuse the variable in its own environment, and the two
@@ -55,11 +58,10 @@ from harness import ROOT
 
 PLATFORM = "bcm2712-rpi5"
 TARGET_PROFILE = "aarch64-rpi5"
-PREFIX = ROOT / "build" / "sel4-rpi5-prefix"
 SWITCH = "SLIME_SYSTEM_TIMER"
-CLOCK_MANIFEST = "sel4-clock-authority"
-CLOCK_READER = "clock-authority-probe"
-WORK = ROOT / "build" / "el0-generic-timer"
+# The images the gate builds, as `(label, builder flag)`.
+IMAGES = (("product", "--component-graph"), ("clock", "--clock-authority-plane"))
+CLOCK_READER = "clock component clock-authority-probe"
 WROTE = re.compile(r"^seL4 image build: wrote \S+ and (\S+\.identity\.json)$", re.MULTILINE)
 # The EL0 programs among the ELFs an image identity names.
 EL0_ELFS = ("root", "child")
@@ -107,11 +109,11 @@ def refused(command: list[str], environment: dict[str, str], what: str) -> None:
         fail(f"the builder did not refuse {what}")
 
 
-def image_programs(system_timer: bool) -> tuple[str, dict[str, list[str]]]:
-    """Build the product image; return its identity path and every EL0 program it holds."""
+def image_programs(label: str, variant: str, system_timer: bool) -> tuple[str, dict[str, list[str]]]:
+    """Build one image; return its identity path and every EL0 program it holds."""
     environment = {name: value for name, value in os.environ.items() if name != SWITCH}
-    command = [sys.executable, str(ROOT / "scripts" / "build" / "build-sel4.py"), "--platform", PLATFORM, "--component-graph", "--skip-pin-check"]
-    what = f"the {PLATFORM} image{' with --system-timer' if system_timer else ''}"
+    command = [sys.executable, str(ROOT / "scripts" / "build" / "build-sel4.py"), "--platform", PLATFORM, variant, "--skip-pin-check"]
+    what = f"the {PLATFORM} {label} image{' with --system-timer' if system_timer else ''}"
     output = run(command + (["--system-timer"] if system_timer else []), environment, f"the build of {what}")
     wrote = WROTE.findall(output)
     if len(wrote) != 1:
@@ -124,30 +126,22 @@ def image_programs(system_timer: bool) -> tuple[str, dict[str, list[str]]]:
     programs = {}
     for role in EL0_ELFS:
         record = identity["elf"][role]
-        programs[role] = read(f"{what}, {role} ELF", el0_timer_audit.elf_code, held(ROOT / record["path"], record["sha256"], f"the {role} ELF"))
+        programs[f"{label} {role}"] = read(f"{what}, {role} ELF", el0_timer_audit.elf_code, held(ROOT / record["path"], record["sha256"], f"the {role} ELF"))
     digest = identity["generation"]["sha256"]
     generations = [path for path in sorted((ROOT / "build" / PLATFORM).glob("*/generation.bin")) if hashlib.sha256(path.read_bytes()).hexdigest() == digest]
     if not generations:
         fail(f"no generation under build/{PLATFORM}/ has the SHA-256 that {wrote[0]} records")
-    programs.update(components(generations[0].read_bytes(), what))
+    programs.update({f"{label} {name}": found for name, found in components(generations[0].read_bytes(), what).items()})
     return wrote[0], programs
 
 
-def clock_programs(system_timer: bool) -> dict[str, list[str]]:
-    """Build the clock composition for the same profile and read its executables."""
-    environment = {name: value for name, value in os.environ.items() if name != SWITCH}
-    environment.update(SEL4_PREFIX=str(PREFIX), SLIME_TARGET_PROFILE=TARGET_PROFILE, SLIME_SEL4_MANIFEST=CLOCK_MANIFEST)
-    if system_timer:
-        environment[SWITCH] = "1"
-    output = WORK / f"{CLOCK_MANIFEST}-{'system-timer' if system_timer else 'generic-timer'}"
-    output.mkdir(parents=True, exist_ok=True)
-    generation = output / "generation.bin"
-    generation.unlink(missing_ok=True)
-    what = f"{CLOCK_MANIFEST} for {TARGET_PROFILE}{f' with {SWITCH}=1' if system_timer else ''}"
-    run([sys.executable, str(ROOT / "scripts" / "build" / "build-generation.py"), "--generation-only", str(output)], environment, f"the build of {what}")
-    if not generation.is_file():
-        fail(f"the build of {what} wrote no generation")
-    return {f"{CLOCK_MANIFEST} {name}": found for name, found in components(generation.read_bytes(), what).items()}
+def build_all(system_timer: bool) -> tuple[list[str], dict[str, list[str]]]:
+    identities, programs = [], {}
+    for label, variant in IMAGES:
+        identity, found = image_programs(label, variant, system_timer)
+        identities.append(identity)
+        programs |= found
+    return identities, programs
 
 
 def main() -> int:
@@ -166,18 +160,17 @@ def main() -> int:
     refused(builder + ["--system-timer"], clean, "--system-timer for the default platform")
     refused(builder + ["--platform", PLATFORM], clean | {SWITCH: "1"}, f"{SWITCH} in its environment")
 
-    generic_identity, generic = image_programs(False)
-    system_identity, system = image_programs(True)
-    if generic_identity == system_identity:
-        fail(f"both builds wrote the image identity {system_identity}")
-    generic |= clock_programs(False)
-    system |= clock_programs(True)
+    generic_identities, generic = build_all(False)
+    system_identities, system = build_all(True)
+    identities = generic_identities + system_identities
+    if len(set(identities)) != len(identities):
+        fail(f"two builds wrote one image identity: {sorted(identities)}")
 
-    # Controls on real builds: without the switch the reader finds the accesses the sources hold.
-    clock_reader = f"{CLOCK_MANIFEST} component {CLOCK_READER}"
-    for program, access in (("root", "msr CNTP_CTL_EL0"), ("root", "mrs CNTPCT_EL0"), (clock_reader, "mrs CNTPCT_EL0")):
+    # Controls on real builds: without the flag the reader finds the accesses the sources hold.
+    controls = [(f"{label} root", access) for label, _ in IMAGES for access in ("msr CNTP_CTL_EL0", "mrs CNTPCT_EL0")] + [(CLOCK_READER, "mrs CNTPCT_EL0")]
+    for program, access in controls:
         if access not in generic.get(program, []):
-            fail(f"control: {program} of the build without the switch holds no '{access}', so the audit cannot tell the two builds apart")
+            fail(f"control: {program} of the build without the flag holds no '{access}', so the audit cannot tell the two builds apart")
     if set(system) != set(generic):
         fail(f"the two builds hold different programs: {sorted(set(system) ^ set(generic))}")
 
@@ -192,7 +185,7 @@ def main() -> int:
         el0TimerAccessesWithoutSwitch=sum(len(found) for found in generic.values()),
         el0TimerSyntheticControls=synthetic,
     )
-    print(f"EL0 generic-timer check: {len(system)} EL0 programs of the {PLATFORM} system-timer build hold no generic-timer access")
+    print(f"EL0 generic-timer check: {len(system)} EL0 programs of the {PLATFORM} system-timer builds hold no generic-timer access")
     return 0
 
 

@@ -439,10 +439,11 @@ rpi5_ros2_demo_v1_retired_check: rpi5_artifact_check
 sel4_rpi5_image_check: sel4_pin_check
     python3 scripts/build/build-sel4.py --platform bcm2712-rpi5 --skip-pin-check
 
-# No EL0 program of the Raspberry Pi 5 system-timer image names a generic-timer register. Builds the
-# image and the clock composition with and without the switch, and reads the root ELF, the root child
-# ELF and every component image; the builds without the switch are its controls. Boots nothing and
-# needs no board: whether the system timer works there is an operator's observation.
+# No EL0 program of a Raspberry Pi 5 system-timer image names a generic-timer register. Builds the
+# product image and the clock-authority image, each with and without --system-timer, and reads the
+# root ELF, the root child ELF and every component image; the builds without the flag are its
+# controls. Boots nothing and needs no board: whether the system timer works there is an operator's
+# observation.
 [group('hardware')]
 rpi5_system_timer_image_check: sel4_pin_check
     python3 scripts/check/check-el0-generic-timer.py
