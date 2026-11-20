@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "sel4_lifetime_check";
+  closureDigest = "5f00fef57ac5e3ebcc8cde31bdb32ed5c4bb0dfd560513b570158ec2de9d5959";
+  passed = true;
+  exitCode = 0;
+  counts = { { key = "casesObserved"; value = 4; }; { key = "negativeControlsRefused"; value = 9; }; };
+  flags = {;};
+  observedAt = "2026-11-20T01:54:45Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
