@@ -43,7 +43,7 @@ build the library, so they cannot name those lines. The count is reported as
 `binaryOnlyCodeLines`, with the count of those files as `binaryOnlyFiles`, and
 `BINARY_ONLY_CEILING` bounds the lines. The part of it that a product root
 compiles is reported as `productBinaryCodeLines`: the same files without those
-that only the fixture root compiles.
+that only the fixture root compiles. `PRODUCT_BINARY_CEILING` bounds it.
 
 The walk from `src/lib.rs` finds what the library compiles under a condition.
 A file is conditional when a `#[cfg(...)]` attribute stands on its declaration
@@ -82,7 +82,8 @@ Known limits. The script counts `slime-root/` only. Code that moves into a
 crate the root links leaves the count. `DEPENDENCIES` pins which crates those
 are, so a new one is a grader change. The script reads which modules stand
 behind `slime_root_fixture`. It does not read which builds set that cfg:
-`scripts/build/build-sel4.py` does, for the fixture variant and two root roles.
+`scripts/build/build-sel4.py` does, for two root roles and for the fixture
+variant on every platform but `cv1800b-duo`.
 A walk reads the `cfg` on a module
 declaration and on a whole file. It does not read a `cfg` on an item inside a
 file, so an item that the host build skips still counts as compiled. A walk
@@ -131,11 +132,11 @@ class Role:
 
 
 # Each role ceiling is the role's count on the commit that landed this script,
-# rounded up to a multiple of 50. Two are newer. `boot` is 6050, which leaves
-# room for the 5984 lines it held once `src/boot.rs` carried the boot sequence
-# of `main`. `fixture` is 1050: the role held 560 lines while `main` held the
-# 440 lines that build and settle the fixture tasks. A draft that moves them
-# into `src/fixture_runtime.rs` holds 1007.
+# rounded up to a multiple of 50. Three are newer. `boot` is 5650: the role
+# holds 5600 lines since `src/boot.rs` carries the boot sequence and the 440
+# lines that build and settle the fixture tasks left `main`. `fixture` is 1050
+# with those lines. `timer` is 1450: a draft of the BCM2835 system timer
+# backend adds 91 lines to the 1345 the role held.
 ROLES: dict[str, Role] = {
     # Kernel-object allocation, address spaces, tasks, faults and the graph.
     "core": Role(
@@ -164,7 +165,7 @@ ROLES: dict[str, Role] = {
     ),
     # Runs once, before the first component: admission, launch, boot media.
     "boot": Role(
-        ceiling=6050,
+        ceiling=5650,
         files=(
             "src/main.rs",
             "src/boot.rs",
@@ -218,7 +219,7 @@ ROLES: dict[str, Role] = {
     ),
     # The platform timer, the timer queue and the clock service.
     "timer": Role(
-        ceiling=1350,
+        ceiling=1450,
         files=("src/timer.rs", "src/platform_timer.rs", "src/clock.rs"),
     ),
     # The root side of the fixture. Its child program is `components/root-child`.
@@ -248,14 +249,18 @@ ROLES: dict[str, Role] = {
 }
 
 SERIES = ("core", "boot", "ioResource", "sharedBuffer", "dispatch", "policy", "timer", "fixture", "console")
-# The series held 34294 code lines on the commit that landed this script, and
-# 33941 after the fixture's child crate left `slime-root/`.
-SERIES_CEILING = 34100
+# The series held 34294 code lines on the commit that landed this script,
+# 33941 after the fixture's child crate left `slime-root/`, and 33073 once a
+# product root compiled no fixture.
+SERIES_CEILING = 33200
 # The binary alone compiled 9301 code lines, in 13 files, on the commit that
 # landed this measure, and 1119 lines, in `src/main.rs` and
 # `src/fixture_runtime.rs`, once the library held the graph runtime and the
 # boot sequence.
 BINARY_ONLY_CEILING = 1150
+# A product root compiled 124 of those lines, all of `src/main.rs`, once the
+# fixture's module stood behind its cfg.
+PRODUCT_BINARY_CEILING = 150
 # The library compiled 2443 code lines under a `cfg`, in 6 files, on the same
 # commit: the boot selector, the boot framebuffer of x86-64 and one
 # qualification module.
@@ -269,7 +274,6 @@ FUNCTION_LIMIT = 150
 LONG_FUNCTIONS: dict[tuple[str, str], int] = {
     ("src/graph_runtime/services.rs", "serve_instance_graph"): 1500,
     ("src/graph_runtime/services/spawn.rs", "serve_spawn"): 600,
-    ("src/main.rs", "main"): 450,
     ("src/task.rs", "create"): 450,
     ("src/graph_runtime/services/spawn.rs", "construct_child"): 400,
     # The body that `main` holds until the fixture's module holds it.
@@ -464,6 +468,8 @@ def main() -> int:
     )
     if binary_lines > BINARY_ONLY_CEILING:
         problems.append(f"the binary alone compiles {binary_lines} code lines, above its ceiling of {BINARY_ONLY_CEILING}")
+    if product_binary_lines > PRODUCT_BINARY_CEILING:
+        problems.append(f"a product root compiles {product_binary_lines} code lines of the binary alone, above its ceiling of {PRODUCT_BINARY_CEILING}")
     print(f"[root-size] {'conditional':<13} {conditional_lines:>6} / {LIBRARY_CONDITIONAL_CEILING} in {len(conditional)} file(s)")
     if conditional_lines > LIBRARY_CONDITIONAL_CEILING:
         problems.append(
