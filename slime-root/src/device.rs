@@ -73,6 +73,16 @@ impl MappedGranule {
     }
 }
 
+#[cfg(test)]
+impl MappedGranule {
+    /// A view of host memory that stands in for a register page.
+    pub fn over(page: &mut [u32; GRANULE_BYTES / 4]) -> Self {
+        Self {
+            base: page.as_mut_ptr() as usize,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceError {
     /// The device untyped could not be found or retyped.

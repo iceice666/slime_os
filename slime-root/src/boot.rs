@@ -153,7 +153,7 @@ static mut ORDINARY_PROBE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 /// Standing window for the platform's memory-mapped timer registers, on the
 /// profiles whose monotonic source is a device rather than an architected
 /// register the kernel grants userspace access to.
-#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+#[cfg(slime_timer_registers)]
 static mut TIMER_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Scratch window the boot framebuffer's granules are mapped through in turn.
@@ -189,6 +189,9 @@ const TIMER_PADDR: usize = 0x0502_6000;
 /// relocates it is a different platform profile.
 #[cfg(target_arch = "x86_64")]
 const TIMER_PADDR: usize = 0xfed0_0000;
+/// `timer@7c003000` of the BCM2712, behind the `soc` range at `0x10_0000_0000`.
+#[cfg(slime_bcm2835_system_timer)]
+const TIMER_PADDR: usize = 0x10_7c00_3000;
 #[cfg(slime_cv1800b_duo)]
 const RESET_PADDR: usize = 0x0502_5000;
 
@@ -297,7 +300,7 @@ type Phase = Result<(), Stop>;
 
 /// Claim the root-image `page` and map the device granule at `paddr` through
 /// it. `what` names the registers in the two records of a failure.
-#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+#[cfg(slime_timer_registers)]
 fn map_page(
     bootinfo: &sel4::BootInfoPtr,
     allocator: &mut ObjectAllocator,
@@ -792,7 +795,7 @@ pub fn run(
         RESET_PADDR,
         "reset",
     )?;
-    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    #[cfg(slime_timer_registers)]
     let timer_registers = map_page(
         bootinfo,
         allocator,
@@ -805,7 +808,7 @@ pub fn run(
         ptr::addr_of_mut!(DUO_TIMER_REGISTERS).write(Some(timer_registers));
         ptr::addr_of_mut!(DUO_RESET_REGISTERS).write(Some(reset_registers));
     }
-    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    #[cfg(slime_timer_registers)]
     timer_adapter.attach_registers(timer_registers);
     crate::diagnostic_println!(
         "SLIME_TIMER acquired irq={TIMER_IRQ} freq_hz={}",
