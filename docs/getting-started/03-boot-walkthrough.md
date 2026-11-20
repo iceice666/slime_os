@@ -54,8 +54,10 @@ for every root image:
   machine actually declares. `just run` attaches no disk, so this reports
   absence — the storage gates attach one and assert the opposite.
 
-Everything here fails via `fatal!`, which prints `SLIME_ROOT FATAL` and
-parks the root. Nothing panics; every failure is a typed, printed refusal.
+A step that cannot go on prints `SLIME_ROOT FATAL <reason>`, and the root
+parks. `main` does both with `fatal!`. A phase of `run` prints the record with
+`stop!` and returns a `Stop`, and `main` parks the root. Nothing panics; every
+failure is a typed, printed refusal.
 
 ### 3. Generation admission — `SLIME_ROOT generation admitted`
 
