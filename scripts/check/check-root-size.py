@@ -25,6 +25,14 @@ series total covers. The `harness` role holds the build script and the two
 `slime_*` cfg compiles each qualification scenario into its own root role
 image. The role has its own ceiling and is outside the series total.
 
+The series total is what a product root compiles, so it leaves out a file that
+only the fixture root compiles. `slime-root/build.rs` sets the cfg
+`slime_root_fixture` for the fixture root alone. A module that `src/main.rs`
+declares behind exactly `#[cfg(slime_root_fixture)]`, and every module below
+it, is such a file. Its role must be `fixture`, and the ceiling of that role
+still bounds it. The script reports the lines of those files as
+`fixtureOnlyCodeLines`.
+
 The script also walks the module tree from each crate root. A walk reads every
 `mod name;` declaration of a file and follows it into the file that holds the
 module. It reads the file with comments and literals blanked, so text inside
@@ -33,7 +41,9 @@ them declares nothing.
 The walk from `src/main.rs` finds what only the binary compiles. Host tests
 build the library, so they cannot name those lines. The count is reported as
 `binaryOnlyCodeLines`, with the count of those files as `binaryOnlyFiles`, and
-`BINARY_ONLY_CEILING` bounds the lines.
+`BINARY_ONLY_CEILING` bounds the lines. The part of it that a product root
+compiles is reported as `productBinaryCodeLines`: the same files without those
+that only the fixture root compiles.
 
 The walk from `src/lib.rs` finds what the library compiles under a condition.
 A file is conditional when a `#[cfg(...)]` attribute stands on its declaration
@@ -70,7 +80,10 @@ is deleted.
 
 Known limits. The script counts `slime-root/` only. Code that moves into a
 crate the root links leaves the count. `DEPENDENCIES` pins which crates those
-are, so a new one is a grader change. A walk reads the `cfg` on a module
+are, so a new one is a grader change. The script reads which modules stand
+behind `slime_root_fixture`. It does not read which builds set that cfg:
+`scripts/build/build-sel4.py` does, for the fixture variant and two root roles.
+A walk reads the `cfg` on a module
 declaration and on a whole file. It does not read a `cfg` on an item inside a
 file, so an item that the host build skips still counts as compiled. A walk
 does not expand macros, so a module that a macro declares is not followed. A
@@ -92,7 +105,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 import devloop_observations  # noqa: E402
 from harness import ROOT  # noqa: E402
-from rust_source import SourceError, is_test_file, lex, modules, sources, test_items  # noqa: E402
+from rust_source import MODULE_DECLARATION, SourceError, is_test_file, lex, modules, sources, test_items  # noqa: E402
 
 CRATE = "slime-root"
 MANIFEST = ROOT / CRATE / "Cargo.toml"
@@ -101,6 +114,9 @@ LIBRARY_ROOT = "src/lib.rs"
 BUILD_SCRIPT = "build.rs"
 FUNCTION = re.compile(r"(?<![A-Za-z0-9_])fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 FATAL_SITE = re.compile(r"(?<![A-Za-z0-9_])fatal!\s*[(\[{]")
+# The one attribute that puts a module of the binary into the fixture root alone.
+FIXTURE_ATTRIBUTE = re.compile(r"#\[\s*cfg\s*\(\s*slime_root_fixture\s*\)\s*\]")
+FIXTURE_ROLE = "fixture"
 
 
 @dataclass(frozen=True)
@@ -115,9 +131,11 @@ class Role:
 
 
 # Each role ceiling is the role's count on the commit that landed this script,
-# rounded up to a multiple of 50. Two are newer. `fixture` is 600 since its
-# child crate left `slime-root/`. `boot` is 6050, which leaves room for the
-# 5984 lines it holds once `src/boot.rs` carries the boot sequence of `main`.
+# rounded up to a multiple of 50. Two are newer. `boot` is 6050, which leaves
+# room for the 5984 lines it held once `src/boot.rs` carried the boot sequence
+# of `main`. `fixture` is 1050: the role held 560 lines while `main` held the
+# 440 lines that build and settle the fixture tasks. A draft that moves them
+# into `src/fixture_runtime.rs` holds 1007.
 ROLES: dict[str, Role] = {
     # Kernel-object allocation, address spaces, tasks, faults and the graph.
     "core": Role(
@@ -205,7 +223,7 @@ ROLES: dict[str, Role] = {
     ),
     # The root side of the fixture. Its child program is `components/root-child`.
     "fixture": Role(
-        ceiling=600,
+        ceiling=1050,
         files=("src/fixture_runtime.rs",),
     ),
     # Root diagnostics and the console endpoint.
@@ -250,12 +268,12 @@ FUNCTION_LIMIT = 150
 # An entry covers every function of that name in that file.
 LONG_FUNCTIONS: dict[tuple[str, str], int] = {
     ("src/graph_runtime/services.rs", "serve_instance_graph"): 1500,
-    ("src/graph_runtime.rs", "launch_instance_graph"): 1100,
     ("src/graph_runtime/services/spawn.rs", "serve_spawn"): 600,
-    ("src/boot.rs", "run"): 550,
     ("src/main.rs", "main"): 450,
     ("src/task.rs", "create"): 450,
     ("src/graph_runtime/services/spawn.rs", "construct_child"): 400,
+    # The body that `main` holds until the fixture's module holds it.
+    ("src/fixture_runtime.rs", "run"): 350,
     ("src/graph_runtime/services/io_resource.rs", "serve_io_resource"): 350,
     ("src/private_memory/qualification.rs", "exercise_failure_rollback"): 350,
     ("src/private_memory/elastic.rs", "grow"): 250,
@@ -267,8 +285,8 @@ LONG_FUNCTIONS: dict[tuple[str, str], int] = {
 # The files that run once, from the console install to the first component.
 LAUNCH_PATH = ("src/boot.rs", "src/graph_runtime.rs")
 # The library's tree held 160 `fatal!` invocations on the commit that landed
-# this measure.
-LIBRARY_FATAL_CEILING = 160
+# this measure, and 5 once its boot, launch and service loop returned a result.
+LIBRARY_FATAL_CEILING = 8
 
 # Every crate `slime-root/Cargo.toml` names in a dependency table.
 DEPENDENCIES = frozenset({"boot-contracts", "sel4", "slime-proto", "sel4-root-task", "object"})
@@ -396,7 +414,21 @@ def main() -> int:
     def code_lines(tree: list[str]) -> int:
         return sum(count((ROOT / CRATE / relative).read_text(encoding="utf-8"))[0] for relative in tree)
 
+    fixture_only: set[str] = set()
+    for declared in MODULE_DECLARATION.finditer(lex(read_source(BINARY_ROOT)).text):
+        if FIXTURE_ATTRIBUTE.fullmatch(declared.group(1).strip()) is None:
+            continue
+        module = declared.group(2)
+        holder = next(path for path in (f"src/{module}.rs", f"src/{module}/mod.rs") if path in binary_tree)
+        fixture_only.update(relative for relative in modules(files, holder, read_source) if not is_test_file(relative))
+    for relative in sorted(fixture_only):
+        if roles_of(relative) != [FIXTURE_ROLE]:
+            problems.append(f"{CRATE}/{relative}: only the fixture root compiles it, and its role is not {FIXTURE_ROLE}")
+
     binary = sorted(relative for relative in binary_tree if not is_test_file(relative))
+    product_binary = [relative for relative in binary if relative not in fixture_only]
+    product_binary_lines = code_lines(product_binary)
+    fixture_only_lines = code_lines(sorted(fixture_only))
     conditional = sorted(relative for relative, gated in library_tree.items() if gated and not is_test_file(relative))
     binary_lines = code_lines(binary)
     conditional_lines = code_lines(conditional)
@@ -419,14 +451,17 @@ def main() -> int:
                 problems.append(f"{CRATE}/{relative}: function {name} holds {length} code lines, above its ceiling of {ceiling}")
     library_fatal = sum(fatal_sites(read_source(relative)) for relative in library_tree if not is_test_file(relative))
 
-    series = sum(code[name] for name in SERIES)
+    series = sum(code[name] for name in SERIES) - fixture_only_lines
     for name, role in ROLES.items():
         print(f"[root-size] {name:<13} {code[name]:>6} / {role.ceiling}")
         if code[name] > role.ceiling:
             problems.append(f"role {name} holds {code[name]} code lines, above its ceiling of {role.ceiling}")
-    print(f"[root-size] {'series':<13} {series:>6} / {SERIES_CEILING}")
+    print(f"[root-size] {'series':<13} {series:>6} / {SERIES_CEILING} without {fixture_only_lines} line(s) that only the fixture root compiles")
     print(f"[root-size] files={len(files)} testLines={test_lines}")
-    print(f"[root-size] {'binaryOnly':<13} {binary_lines:>6} / {BINARY_ONLY_CEILING} in {len(binary)} file(s)")
+    print(
+        f"[root-size] {'binaryOnly':<13} {binary_lines:>6} / {BINARY_ONLY_CEILING} in {len(binary)} file(s); "
+        f"a product root compiles {product_binary_lines} of them, in {len(product_binary)} file(s)"
+    )
     if binary_lines > BINARY_ONLY_CEILING:
         problems.append(f"the binary alone compiles {binary_lines} code lines, above its ceiling of {BINARY_ONLY_CEILING}")
     print(f"[root-size] {'conditional':<13} {conditional_lines:>6} / {LIBRARY_CONDITIONAL_CEILING} in {len(conditional)} file(s)")
@@ -455,6 +490,8 @@ def main() -> int:
         filesObserved=len(files),
         binaryOnlyCodeLines=binary_lines,
         binaryOnlyFiles=len(binary),
+        productBinaryCodeLines=product_binary_lines,
+        fixtureOnlyCodeLines=fixture_only_lines,
         libraryConditionalCodeLines=conditional_lines,
         libraryConditionalFiles=len(conditional),
         functionsOverLimit=over_limit,

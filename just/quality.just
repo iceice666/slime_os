@@ -102,11 +102,13 @@ docs_check:
     python3 scripts/check/check-docs.py
 
 # The source budget of slime-root: every Rust file under slime-root/ has exactly one role, and each role
-# and the nine series roles together hold at most their ceiling of code lines. No function holds more
-# than 150 code lines unless the script's table names it, and a named function stays under its own
-# ceiling. The library's fatal! invocations, the lines only the binary compiles and the library's lines
-# behind a cfg each have a ceiling. The tables, the ceilings and the pinned dependency names are in
-# scripts/check/check-root-size.py. Reads source text and slime-root/Cargo.toml; builds nothing.
+# and the nine series roles together hold at most their ceiling of code lines. The series leaves out a
+# file that only the fixture root compiles: a module of the binary behind cfg(slime_root_fixture), whose
+# role must be fixture. No function holds more than 150 code lines unless the script's table names it,
+# and a named function stays under its own ceiling. The library's fatal! invocations, the lines only the
+# binary compiles and the library's lines behind a cfg each have a ceiling. The tables, the ceilings and
+# the pinned dependency names are in scripts/check/check-root-size.py. Reads source text and
+# slime-root/Cargo.toml; builds nothing.
 [group('quality')]
 [metadata("inputs", "slime-root/**")]
 root_size_check:
