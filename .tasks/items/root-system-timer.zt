@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c" "root-syste
   "A Raspberry Pi 5 image can count the SoC's system timer, and then no EL0 program names a generic-timer register"
   "Every AArch64 root reads CNTPCT_EL0 and programs CNTP_CTL_EL0 and CNTP_CVAL_EL0 from EL0, and every AArch64 component reads CNTPCT_EL0 and CNTFRQ_EL0. The kernel must export those registers, and the verified kernel configuration exports none. docs/decisions/verified-kernel-profile.md makes this the second prerequisite of the verified profile: the root programs a device timer, and no EL0 code reads or writes a generic-timer register. Two source files hold every such instruction: slime-root/src/platform_timer.rs and components/runtime/src/clock.rs.")
   with {
+    intent = #active;
     depends = {
       "01a1f677-0511-752b-8231-8e9b491399de";
     };
