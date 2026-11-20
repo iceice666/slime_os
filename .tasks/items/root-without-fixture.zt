@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1f677-0511-752b-8231-8e9b491399de" "root-witho
   "A product root does not compile the fixture"
   "Every root image compiles the root side of the fixture and embeds the fixture's child image. slime-root/src/main.rs holds 561 code lines, and about 440 of them build and settle the two fixture tasks. slime-root/src/fixture_runtime.rs holds 560 more. A product root runs them when its generation holds no loadable executable, with endpoint authority borrowed from declared instances. The cfg slime_root_fixture already selects the fixture root, and today it removes only the graph launch.")
   with {
+    intent = #active;
     depends = {
       "01a1f287-45a5-7d08-9204-06ba2bad331f";
     };
