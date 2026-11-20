@@ -76,6 +76,9 @@ item :: s.Item = (h.milestone "01a1f677-0511-752b-8231-8e9b491399de" "root-witho
       h.invariant "main-keeps-the-first-two-phases"
         "main initializes the object allocator and installs the root's console before the first phase of the library, in every root. The two console audits read slime-root/src/main.rs, and this item changes neither."
         h.agentDefault;
+      h.invariant "the-fixture-root-stays-linted"
+        "just lint_all runs clippy on the fixture root, on AArch64 and on x86-64. The planning pull request of this item adds a second call with SLIME_ROOT_FIXTURE=1 to lint_sel4_root and to lint_sel4_root_x86_64, because the first call compiles nothing behind cfg(slime_root_fixture)."
+        h.agentDefault;
       h.invariant "every-configuration-still-builds"
         "The thirteen configurations that the implementation of root-library built still build. The implementation pull request reports each build as observed or not observed."
         h.agentDefault;
