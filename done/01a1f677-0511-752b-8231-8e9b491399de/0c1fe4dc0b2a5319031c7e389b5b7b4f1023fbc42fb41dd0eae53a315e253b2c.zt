@@ -1,0 +1,11 @@
+o ::= import "./schema.zt";
+r :: o.Witness = {
+  schema = o.schemaVersion;
+  item = "01a1f677-0511-752b-8231-8e9b491399de";
+  itemDigest = "0c1fe4dc0b2a5319031c7e389b5b7b4f1023fbc42fb41dd0eae53a315e253b2c";
+  mainSha = "c2a1af9c877bfc4d72718448e4bbecce3f7aa1d5";
+  targets = { { target = "private_memory_check"; closureDigest = "b619d3cee41f36fa7cb36febc88d8dd7091bf24c3bd69a8dde8e32c52571dedf"; negativeControlsRefused = -1; }; { target = "riscv64_sel4_root_boot_check"; closureDigest = "3ece81dca6b7b27bce5086dd8edb63923c1161d50e77206f8c94a04750f56a03"; negativeControlsRefused = -1; }; { target = "root_console_check"; closureDigest = "dd98dee686a51f784ca9dc350ac92bb412f56323882068d858a73b3655953c90"; negativeControlsRefused = 37; }; { target = "root_size_check"; closureDigest = "8cc4836cef3a80540a85547c07944023674ae9dc2bfab4750d4b2d418167c7c5"; negativeControlsRefused = -1; }; { target = "sel4_boot_check"; closureDigest = "0241cb49fd6d145f68ea3fc3239ef5e2963e27111ab074e0e707520a8f4f66cc"; negativeControlsRefused = -1; }; { target = "sel4_root_boot_check"; closureDigest = "40ca4c0bf5c3b339edaecac43ecc44ec9ae9c5469f4fb8d4b77ec52127dfaa62"; negativeControlsRefused = -1; }; { target = "test_sel4_root"; closureDigest = "abf1f9614f4e42c1c6f69a388ff43cd87cc93854476bca167d09058a4e20f391"; negativeControlsRefused = -1; }; { target = "x86_64_sel4_root_boot_check"; closureDigest = "272da84bbed0294c0ed8ede2f6a83a549f059f08dcad461533aab62a93acbec8"; negativeControlsRefused = -1; }; };
+  signer = "ci";
+  observedAt = "2026-11-20T11:46:39Z";
+};
+r
