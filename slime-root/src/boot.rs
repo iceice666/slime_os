@@ -27,7 +27,7 @@ use core::ptr;
 
 use boot_contracts::generation::Generation;
 use buffer_adapter::BufferAdapter;
-use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
+use child_vspace::{GRANULE_SIZE, ScratchPage};
 use generation::Admission;
 use object_allocator::ObjectAllocator;
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
@@ -211,7 +211,6 @@ const PC99_COM1_PORT: u16 = {
 pub struct Inputs {
     #[cfg(not(slime_boot_selector))]
     pub generation: &'static [u8],
-    pub child_elf: &'static [u8],
     #[cfg(slime_root_console_pl011)]
     pub console_registers: crate::device::DeviceRegion,
 }
@@ -221,7 +220,6 @@ pub struct Booted {
     pub generation: Generation<'static>,
     pub admission: Admission,
     pub scratch: ScratchPage,
-    pub image: ChildImage<'static>,
     pub service_endpoint: sel4::cap::Endpoint,
     pub console_endpoint: sel4::cap::Endpoint,
     pub timer_adapter: PhysicalTimerAdapter,
@@ -753,7 +751,7 @@ fn qualify(bootinfo: &sel4::BootInfoPtr, allocator: &mut ObjectAllocator) -> Pha
 pub fn run(
     bootinfo: &sel4::BootInfoPtr,
     allocator: &mut ObjectAllocator,
-    inputs: Inputs,
+    #[cfg_attr(slime_boot_selector, allow(unused_variables))] inputs: Inputs,
 ) -> Result<Booted, Stop> {
     qualify(bootinfo, allocator)?;
     report_inventory(allocator)?;
@@ -763,7 +761,6 @@ pub fn run(
 
     #[cfg(not(slime_boot_selector))]
     let generation_bytes = inputs.generation;
-    let child_elf = inputs.child_elf;
     #[cfg(all(
         any(slime_qemu_keyboard, slime_product_uart, slime_pc99_com1),
         not(slime_root_fixture)
@@ -890,8 +887,6 @@ pub fn run(
     report_graph(&generation, &admission);
     // ---- end device phase ----
 
-    let image =
-        ChildImage::parse(child_elf).map_err(|error| stop!("child image rejected: {error:?}"))?;
     let service_endpoint = allocator
         .allocate_fixed::<sel4::cap_type::Endpoint>()
         .map_err(|error| stop!("service endpoint unavailable: {error:?}"))?
@@ -908,7 +903,6 @@ pub fn run(
         generation,
         admission,
         scratch,
-        image,
         service_endpoint,
         console_endpoint,
         timer_adapter,

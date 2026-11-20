@@ -213,6 +213,10 @@ lint_sel4_root clippy_flags='-D warnings':
     build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
     cargo clippy -p slime-root --target "$targets/aarch64-sel4-roottask-minimal.json" \
         --target-dir build/sel4-cargo/lint-root "${build_std[@]}" -- {{ clippy_flags }}
+    # The fixture root. slime-root/build.rs sets cfg(slime_root_fixture) from this variable, and the
+    # call above compiles nothing behind that cfg.
+    SLIME_ROOT_FIXTURE=1 cargo clippy -p slime-root --target "$targets/aarch64-sel4-roottask-minimal.json" \
+        --target-dir build/sel4-cargo/lint-root "${build_std[@]}" -- {{ clippy_flags }}
     cargo clippy --manifest-path components/root-child/Cargo.toml -p slime-root-child \
         --target "$targets/aarch64-sel4-minimal.json" \
         --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- {{ clippy_flags }}
@@ -280,6 +284,9 @@ lint_sel4_root_x86_64 clippy_flags='-D warnings':
     export SLIME_TARGET_PROFILE=x86_64-sel4-qemu-pc99
     build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
     cargo clippy -p slime-root --target "$targets/x86_64-sel4-roottask-minimal.json" \
+        --target-dir build/sel4-cargo/lint-root-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
+    # The fixture root, as in lint_sel4_root.
+    SLIME_ROOT_FIXTURE=1 cargo clippy -p slime-root --target "$targets/x86_64-sel4-roottask-minimal.json" \
         --target-dir build/sel4-cargo/lint-root-x86_64 "${build_std[@]}" -- {{ clippy_flags }}
     cargo clippy --manifest-path components/root-child/Cargo.toml -p slime-root-child \
         --target "$targets/x86_64-sel4-minimal.json" \
