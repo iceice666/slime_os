@@ -45,15 +45,24 @@
 //! guarantee: this is a plain non-MCS one-shot compare timer, and a scheduling
 //! delay of arbitrary length can still separate the compare condition becoming
 //! true from this task next running.
+//!
+//! # The BCM2835 system timer
+//!
+//! A Raspberry Pi 5 root built with `SLIME_SYSTEM_TIMER=1` uses none of the
+//! registers above, so the kernel needs neither export for it. It maps the
+//! SoC's system timer, counts its 1 MHz counter, and takes compare channel 3,
+//! whose interrupt is [`TIMER_IRQ`]. The device page belongs to the root
+//! alone, which closes the integrity gap named above for this backend. No
+//! gate boots it: only the board has the device.
 
-#[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+#[cfg(any(slime_timer_registers, test))]
 use crate::device::MappedGranule;
 use crate::event::MonotonicInstant;
 use crate::object_allocator::{AllocError, ObjectAllocator};
 use crate::timer::PlatformTimer;
 
 /// Userspace timer interrupt for the selected product platform.
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 pub const TIMER_IRQ: sel4::Word = 30;
 #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
 pub const TIMER_IRQ: sel4::Word = 11;
@@ -90,6 +99,9 @@ pub const TIMER_IRQ: sel4::Word = 17;
 /// take over the RTC, claiming two devices this milestone does not own.
 #[cfg(target_arch = "x86_64")]
 pub const TIMER_IRQ: sel4::Word = 20;
+/// Compare channel 3 of the system timer: SPI 67 in `rpi5b.dts`.
+#[cfg(slime_bcm2835_system_timer)]
+pub const TIMER_IRQ: sel4::Word = 99;
 
 /// Badge minted onto the notification copy bound to the IRQ handler. The
 /// notification object's own (unbadged, full-rights) capability is used to
@@ -98,7 +110,7 @@ pub const TIMER_IRQ: sel4::Word = 20;
 /// pending yet".
 const SIGNAL_BADGE: sel4::Badge = 1;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 /// `CNTP_CTL_EL0.ENABLE`: the timer counts down to (and compares against)
 /// `CNTP_CVAL_EL0` and can assert its interrupt line.
 const CNTP_CTL_ENABLE: u64 = 1 << 0;
@@ -136,7 +148,7 @@ pub struct PhysicalTimerAdapter {
     irq_handler: sel4::cap::IrqHandler,
     /// The unbadged, full-rights notification capability.
     notification: sel4::cap::Notification,
-    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    #[cfg(slime_timer_registers)]
     registers: Option<MappedGranule>,
 }
 
@@ -189,7 +201,7 @@ impl PhysicalTimerAdapter {
         Ok(Self {
             irq_handler: irq_handler_slot.cap(),
             notification: notification_slot.cap(),
-            #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+            #[cfg(slime_timer_registers)]
             registers: None,
         })
     }
@@ -198,7 +210,7 @@ impl PhysicalTimerAdapter {
     ///
     /// Required on the profiles whose monotonic source is a device rather than
     /// an architected register the kernel grants EL0/U-mode access to.
-    #[cfg(any(target_arch = "riscv64", target_arch = "x86_64"))]
+    #[cfg(slime_timer_registers)]
     pub fn attach_registers(&mut self, registers: MappedGranule) {
         self.registers = Some(registers);
     }
@@ -228,9 +240,13 @@ impl PhysicalTimerAdapter {
 
     /// Timer ticks per second for this platform's monotonic source.
     pub fn frequency_hz(&self) -> u64 {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(slime_arm_generic_timer)]
         {
             read_cntfrq()
+        }
+        #[cfg(slime_bcm2835_system_timer)]
+        {
+            1_000_000
         }
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         {
@@ -284,9 +300,18 @@ impl PlatformTimer for PhysicalTimerAdapter {
     type Error = PlatformTimerAckError;
 
     fn monotonic_now(&mut self) -> Result<MonotonicInstant, Self::Error> {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(slime_arm_generic_timer)]
         {
             Ok(MonotonicInstant(read_cntpct()))
+        }
+        #[cfg(slime_bcm2835_system_timer)]
+        {
+            let registers = self
+                .registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
+            Ok(MonotonicInstant(
+                read_system_timer(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
+            ))
         }
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         {
@@ -318,11 +343,19 @@ impl PlatformTimer for PhysicalTimerAdapter {
     }
 
     fn program_deadline(&mut self, deadline: MonotonicInstant) -> Result<(), Self::Error> {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(slime_arm_generic_timer)]
         {
             write_cntp_cval(deadline.0);
             write_cntp_ctl(CNTP_CTL_ENABLE);
         }
+        #[cfg(slime_bcm2835_system_timer)]
+        program_system_timer(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+            deadline.0,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         program_goldfish_rtc(
             self.registers
@@ -351,8 +384,15 @@ impl PlatformTimer for PhysicalTimerAdapter {
     }
 
     fn disarm_timer(&mut self) -> Result<(), Self::Error> {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(slime_arm_generic_timer)]
         write_cntp_ctl(0);
+        #[cfg(slime_bcm2835_system_timer)]
+        disarm_system_timer(
+            self.registers
+                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
+        )
+        .then_some(())
+        .ok_or(PlatformTimerAckError::RegisterAccess)?;
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         disarm_goldfish_rtc(
             self.registers
@@ -381,7 +421,7 @@ impl PlatformTimer for PhysicalTimerAdapter {
         // `service_timer_source` installs the next deadline before this call.
         // A platform acknowledgement must therefore clear only the expired
         // condition and must not invalidate the newly installed deadline.
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(slime_arm_generic_timer)]
         isb();
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         clear_goldfish_rtc_interrupt(
@@ -412,6 +452,90 @@ impl PlatformTimer for PhysicalTimerAdapter {
             .map_err(PlatformTimerAckError::Acknowledge)
     }
 }
+// The BCM2835 system timer: a free-running 64-bit counter at 1 MHz and four
+// 32-bit compare channels that match its low word.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+const SYSTEM_TIMER_CS: usize = 0x00;
+#[cfg(any(slime_bcm2835_system_timer, test))]
+const SYSTEM_TIMER_CLO: usize = 0x04;
+#[cfg(any(slime_bcm2835_system_timer, test))]
+const SYSTEM_TIMER_CHI: usize = 0x08;
+/// Compare channel 3. The firmware keeps channels 0 and 2, and Linux's driver
+/// takes this one.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+const SYSTEM_TIMER_C3: usize = 0x18;
+/// The match bit of channel 3 in the status register; a write of 1 clears it.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+const SYSTEM_TIMER_M3: u32 = 1 << 3;
+/// The shortest distance the root programs ahead of the counter, in ticks. A
+/// compare value the counter has already passed matches one wrap later.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+const SYSTEM_TIMER_MIN_DELTA: u64 = 16;
+
+/// The compare value for `deadline`, seen at counter `now`, and its distance
+/// in ticks. The channel reaches at most one wrap of the low word ahead, so a
+/// later deadline wakes the root early and the root programs it again.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+fn system_timer_compare(now: u64, deadline: u64) -> (u32, u64) {
+    let delta = deadline
+        .saturating_sub(now)
+        .clamp(SYSTEM_TIMER_MIN_DELTA, u64::from(u32::MAX));
+    ((now as u32).wrapping_add(delta as u32), delta)
+}
+
+#[cfg(any(slime_bcm2835_system_timer, test))]
+fn read_system_timer(registers: MappedGranule) -> Option<u64> {
+    // Two 32-bit halves: read the high half again and retry when it moved.
+    (0..3).find_map(|_| {
+        let high = registers.read32(SYSTEM_TIMER_CHI)?;
+        let low = registers.read32(SYSTEM_TIMER_CLO)?;
+        (registers.read32(SYSTEM_TIMER_CHI)? == high)
+            .then(|| u64::from(low) | (u64::from(high) << 32))
+    })
+}
+
+/// Clear the expired match, then install `deadline`. The level-triggered line
+/// stays low until the new value matches, so the handler acknowledgement that
+/// follows cannot lose it.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+fn program_system_timer(registers: MappedGranule, deadline: u64) -> bool {
+    if !registers.write32(SYSTEM_TIMER_CS, SYSTEM_TIMER_M3) {
+        return false;
+    }
+    for _ in 0..3 {
+        let Some(now) = read_system_timer(registers) else {
+            return false;
+        };
+        let (compare, delta) = system_timer_compare(now, deadline);
+        if !registers.write32(SYSTEM_TIMER_C3, compare) {
+            return false;
+        }
+        // The counter may pass `compare` before the write lands. Then no match
+        // is latched, and the next one is a wrap away.
+        let (Some(after), Some(status)) = (
+            read_system_timer(registers),
+            registers.read32(SYSTEM_TIMER_CS),
+        ) else {
+            return false;
+        };
+        if after.wrapping_sub(now) < delta || status & SYSTEM_TIMER_M3 != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// The channel has no enable bit. Park the compare value one wrap ahead and
+/// clear the match; a wake 71 minutes later finds no deadline and parks again.
+#[cfg(any(slime_bcm2835_system_timer, test))]
+fn disarm_system_timer(registers: MappedGranule) -> bool {
+    let Some(now) = read_system_timer(registers) else {
+        return false;
+    };
+    registers.write32(SYSTEM_TIMER_C3, (now as u32).wrapping_sub(1))
+        && registers.write32(SYSTEM_TIMER_CS, SYSTEM_TIMER_M3)
+}
+
 #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
 const GOLDFISH_RTC_TIME_LOW: usize = 0x00;
 #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
@@ -718,7 +842,7 @@ fn clear_hpet_interrupt(registers: MappedGranule) -> bool {
 
 /// Reads the EL1 physical counter (`CNTPCT_EL0`), the free-running clock the
 /// EL1 physical timer's compare register is measured against.
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 #[inline]
 fn read_cntpct() -> u64 {
     let value: u64;
@@ -739,7 +863,7 @@ fn read_cntpct() -> u64 {
 }
 /// Reads `CNTFRQ_EL0`, the counter frequency firmware programmed for
 /// [`read_cntpct`]'s domain.
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 #[inline]
 fn read_cntfrq() -> u64 {
     let value: u64;
@@ -757,7 +881,7 @@ fn read_cntfrq() -> u64 {
     value
 }
 /// Writes the EL1 physical timer's compare value (`CNTP_CVAL_EL0`).
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 #[inline]
 fn write_cntp_cval(value: u64) {
     // SAFETY: `msr` to `cntp_cval_el0` only changes this timer's own compare
@@ -774,7 +898,7 @@ fn write_cntp_cval(value: u64) {
     }
 }
 /// Writes the EL1 physical timer's control register (`CNTP_CTL_EL0`).
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 #[inline]
 fn write_cntp_ctl(value: u64) {
     // SAFETY: `msr` to `cntp_ctl_el0` only toggles this timer's own
@@ -792,7 +916,7 @@ fn write_cntp_ctl(value: u64) {
 /// Instruction Synchronization Barrier: forces every instruction before it
 /// (in particular, the `msr` writes above) to complete and become visible to
 /// the timer hardware before anything after it executes.
-#[cfg(target_arch = "aarch64")]
+#[cfg(slime_arm_generic_timer)]
 #[inline]
 fn isb() {
     // SAFETY: `isb` reads and writes no memory; it only orders instruction
@@ -801,5 +925,66 @@ fn isb() {
     // `program_deadline`/`disarm_timer` register write.
     unsafe {
         core::arch::asm!("isb", options(nomem, nostack, preserves_flags));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WORDS: usize = 1024;
+
+    #[test]
+    fn a_deadline_ahead_is_its_low_word() {
+        assert_eq!(
+            system_timer_compare(0x1_0000_0100, 0x1_0000_0500),
+            (0x500, 0x400)
+        );
+    }
+
+    #[test]
+    fn a_deadline_behind_or_too_close_is_the_minimum_ahead() {
+        assert_eq!(system_timer_compare(1000, 0), (1016, 16));
+        assert_eq!(system_timer_compare(1000, 1005), (1016, 16));
+    }
+
+    #[test]
+    fn a_deadline_beyond_one_wrap_is_one_wrap_ahead() {
+        assert_eq!(system_timer_compare(0x10, u64::MAX), (0x0f, 0xffff_ffff));
+    }
+
+    #[test]
+    fn the_compare_value_wraps_with_the_low_word() {
+        assert_eq!(system_timer_compare(0xffff_fff0, 0x1_0000_0010).0, 0x10);
+    }
+
+    #[test]
+    fn the_counter_is_one_word_from_two_halves() {
+        let mut page = [0u32; WORDS];
+        page[SYSTEM_TIMER_CLO / 4] = 5;
+        page[SYSTEM_TIMER_CHI / 4] = 7;
+        assert_eq!(
+            read_system_timer(MappedGranule::over(&mut page)),
+            Some(0x7_0000_0005)
+        );
+    }
+
+    #[test]
+    fn programming_clears_the_match_and_writes_channel_three() {
+        let mut page = [0u32; WORDS];
+        page[SYSTEM_TIMER_CLO / 4] = 1000;
+        assert!(program_system_timer(MappedGranule::over(&mut page), 5000));
+        assert_eq!(page[SYSTEM_TIMER_CS / 4], SYSTEM_TIMER_M3);
+        assert_eq!(page[SYSTEM_TIMER_C3 / 4], 5000);
+        assert_eq!(page[0x0c / 4..0x18 / 4], [0, 0, 0]);
+    }
+
+    #[test]
+    fn disarming_parks_the_channel_one_wrap_ahead() {
+        let mut page = [0u32; WORDS];
+        page[SYSTEM_TIMER_CLO / 4] = 1000;
+        assert!(disarm_system_timer(MappedGranule::over(&mut page)));
+        assert_eq!(page[SYSTEM_TIMER_C3 / 4], 999);
+        assert_eq!(page[SYSTEM_TIMER_CS / 4], SYSTEM_TIMER_M3);
     }
 }
