@@ -77,7 +77,7 @@ The fixture role holds two parts, and they leave at different times.
 | Part | Lines | What it is | When it leaves |
 |---|---|---|---|
 | `slime-root/child/` | 390 | the program of the fixture's child task. It is a crate of its own and runs without the root's authority. | first: the crate moved to `components/root-child/` in PR 1053 |
-| `slime-root/src/fixture_runtime.rs` | 560 | the root side of the fixture. It runs with the root's authority. | second: PR 1107 put its module behind `cfg(slime_root_fixture)` |
+| `slime-root/src/fixture_runtime.rs` | 560 before PR 1107, 1007 after | the root side of the fixture. It runs with the root's authority. PR 1107 moved 440 lines of `main` into it. | second: PR 1107 put its module behind `cfg(slime_root_fixture)` |
 
 The child crate cannot move to `components/testkit/`. `just
 component_crate_split_check` holds every crate there to the shape of a

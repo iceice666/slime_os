@@ -385,6 +385,7 @@ For how the planes work and how to add one, read
 | `just rpi5_serial_monitor serial timeout` | Bring-up aid only: monitor debug UART without qualifying the board. |
 | `just sel4_duo_image_check` | One seL4 build platform: the board or machine an image targets. |
 | `just sel4_rpi5_image_check` | Uses the board-specific bcm2712 prefix, target directory, generation, image, and pinned hashes; it is not interchangeable with the qemu-arm-virt build. |
+| `just rpi5_system_timer_image_check` | No EL0 program of a Raspberry Pi 5 system-timer image names a generic-timer register. Builds the product image and the clock-authority image, each with and without `--system-timer`, and reads the root ELF, the root child ELF and every component image; the builds without the flag are its controls. Boots nothing and needs no board. |
 
 ## runtime
 
