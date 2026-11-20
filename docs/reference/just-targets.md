@@ -85,8 +85,8 @@ For how the planes work and how to add one, read
 | `just lint_components_host` | Host-target lint excludes crates that require the built seL4 prefix. |
 | `just lint_fix_components` | Clippy `--fix` for component crates. |
 | `just lint_pedantic` | Root clippy with pedantic warnings enabled. |
-| `just lint_sel4_root clippy_flags` | Product-target lint requires the installed seL4 prefix, pinned toolchain, custom targets, and embedded child ELF; missing prerequisites fail closed. |
-| `just lint_sel4_root_x86_64 clippy_flags` | P6.1's x86-64 arms. |
+| `just lint_sel4_root clippy_flags` | Product-target lint requires the installed seL4 prefix, pinned toolchain, custom targets, and embedded child ELF; missing prerequisites fail closed. It lints `slime-root` twice: as a product root and, with `SLIME_ROOT_FIXTURE=1`, as the fixture root. |
+| `just lint_sel4_root_x86_64 clippy_flags` | P6.1's x86-64 arms. It lints `slime-root` as a product root and as the fixture root, as `lint_sel4_root` does. |
 | `just machete` | Unused-dependency scan of workspace crates. |
 | `just miri` | Aggregate: `miri_boot_contracts`, `miri_proto`. |
 | `just miri_boot_contracts` | Miri over `boot-contracts`. |
@@ -97,7 +97,7 @@ For how the planes work and how to add one, read
 | `just private_memory_phase4_check` | One recipe covering the phase-4 surface: the adaptive planes on both reference architectures, their over-guaranteed negative control, and the whole fixed and demand-backed surface underneath them. |
 | `just private_memory_phase5_check` | MEM-ADAPTIVE's qualification: the inventory matrix on both reference architectures over the whole phase-4 surface. |
 | `just private_memory_policy_check` | Formatting, lint, and host tests plus the private-memory policy planes. |
-| `just root_size_check` | The source budget of `slime-root`: every Rust file under `slime-root/` has one role, and each role and the nine series roles together hold at most their ceiling of code lines. No function holds more than 150 code lines unless the script's table names it, and a named function stays under its own ceiling. The library's `fatal!` invocations, the lines only the binary compiles and the library's lines behind a `cfg` each have a ceiling. Builds nothing. |
+| `just root_size_check` | The source budget of `slime-root`: every Rust file under `slime-root/` has one role, and each role and the nine series roles together hold at most their ceiling of code lines. The series leaves out a file that only the fixture root compiles: a module of the binary behind `cfg(slime_root_fixture)`, whose role must be `fixture`. No function holds more than 150 code lines unless the script's table names it, and a named function stays under its own ceiling. The library's `fatal!` invocations, the lines only the binary compiles and the library's lines behind a `cfg` each have a ceiling. Builds nothing. |
 | `just ruff` | `ruff check scripts/` |
 | `just ruff_fix` | `ruff check scripts/ --fix` |
 | `just sel4_gate_control_check` | Prove seL4 gates fail closed when evidence or shared execution breaks. |

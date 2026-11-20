@@ -16,11 +16,12 @@ the authoritative detail.
    hands control to the kernel;
 2. the pinned **seL4 kernel** — from `just run` onward, the only privileged
    code in the system;
-3. **`slime-root`**, the initial task, with two payloads compiled in: the
-   **generation** (the deterministic manifest declaring every executable,
-   instance, grant, and budget — built by `scripts/build/build-generation.py`
-   from `contracts/generation-manifest/v1/fixtures/`) and a small native child fixture
-   used by the verification boot.
+3. **`slime-root`**, the initial task, with the **generation** compiled in
+   (the deterministic manifest declaring every executable, instance, grant,
+   and budget — built by `scripts/build/build-generation.py` from
+   `contracts/generation-manifest/v1/fixtures/`). The fixture root, which the
+   verification boot `just sel4_root_boot_check` uses, also embeds a small
+   native child; a product root does not.
 
 There is no disk and no loader search path: every byte the system will ever
 execute is in this image, named by the generation, hash-verified at admission.

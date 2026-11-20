@@ -46,7 +46,7 @@ A closure source names its inputs by path and records no digest; every build res
 
 ### Navigation traps
 
-- `slime-root/src/lib.rs` exposes the mechanism modules host tests compile, the boot sequence and the graph runtime among them; the product binary in `slime-root/src/main.rs` links those same modules. The binary alone compiles `main.rs` and `fixture_runtime.rs`.
+- `slime-root/src/lib.rs` exposes the mechanism modules host tests compile, the boot sequence and the graph runtime among them; the product binary in `slime-root/src/main.rs` links those same modules. The binary alone compiles `main.rs`. A root built with `SLIME_ROOT_FIXTURE=1` also compiles `fixture_runtime.rs`, behind `cfg(slime_root_fixture)`; a product root does not.
 - A component's capability slot layout is established by grants in the matching `contracts/system-spec/v1/systems/<plane>.zti`, the manifest derived from it under `contracts/generation-manifest/v1/compositions/`, and the generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority; edit only the system spec.
 - `scripts/check/` contains end-to-end QEMU assertions and expected serial markers; it is verification code, not the implementation of the behavior it checks.
 

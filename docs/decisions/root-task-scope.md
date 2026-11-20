@@ -77,7 +77,7 @@ The fixture role holds two parts, and they leave at different times.
 | Part | Lines | What it is | When it leaves |
 |---|---|---|---|
 | `slime-root/child/` | 390 | the program of the fixture's child task. It is a crate of its own and runs without the root's authority. | first: the crate moved to `components/root-child/` in PR 1053 |
-| `slime-root/src/fixture_runtime.rs` | 560 | the root side of the fixture. It runs with the root's authority. | after decision 4 holds |
+| `slime-root/src/fixture_runtime.rs` | 560 | the root side of the fixture. It runs with the root's authority. | second: PR 1107 put its module behind `cfg(slime_root_fixture)` |
 
 The child crate cannot move to `components/testkit/`. `just
 component_crate_split_check` holds every crate there to the shape of a
@@ -91,7 +91,15 @@ the product included, links the fixture's root side and embeds the child image.
 PR 1068 moved that sequence and the graph runtime into the library, as
 `slime_root::boot::run` and `slime_root::graph_runtime`. The binary alone now
 compiles `slime-root/src/main.rs` and `slime-root/src/fixture_runtime.rs`, 1119
-code lines. The fixture is not yet a root binary of its own.
+code lines.
+
+PR 1107 made the fixture a root build of its own. `slime-root/src/main.rs`
+declares `fixture_runtime` behind `cfg(slime_root_fixture)`, and
+`slime-root/build.rs` sets that cfg for the fixture root alone. A product root
+compiles 124 code lines of the binary and embeds no child image. The package
+keeps one binary target, because both console audits hold the one install call
+to `slime-root/src/main.rs`. `just root_size_check` leaves the 1007 lines that
+only the fixture root compiles out of the series, which holds 33073.
 
 Three recipes boot the fixture through `scripts/check/check-sel4-root-boot.py`:
 
