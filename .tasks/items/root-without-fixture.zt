@@ -10,6 +10,7 @@ item :: s.Item = (h.milestone "01a1f677-0511-752b-8231-8e9b491399de" "root-witho
     };
     owns = {
       "slime-root/src/**";
+      "just/quality.just";
     };
     nonGoals = {
       h.nonGoal "A change to what the fixture root does or prints. The body moves from main to slime-root/src/fixture_runtime.rs, and it keeps its 335 code lines in one function. docs/decisions/root-task-scope.md states that only the fixture's place in the source changes." h.agentDefault;
@@ -77,7 +78,7 @@ item :: s.Item = (h.milestone "01a1f677-0511-752b-8231-8e9b491399de" "root-witho
         "main initializes the object allocator and installs the root's console before the first phase of the library, in every root. The two console audits read slime-root/src/main.rs, and this item changes neither."
         h.agentDefault;
       h.invariant "the-fixture-root-stays-linted"
-        "just lint_all runs clippy on the fixture root, on AArch64 and on x86-64. The planning pull request of this item adds a second call with SLIME_ROOT_FIXTURE=1 to lint_sel4_root and to lint_sel4_root_x86_64, because the first call compiles nothing behind cfg(slime_root_fixture)."
+        "just lint_all runs clippy on the fixture root, on AArch64 and on x86-64. The implementation pull request adds a second call with SLIME_ROOT_FIXTURE=1 to lint_sel4_root and to lint_sel4_root_x86_64, because the first call compiles nothing behind cfg(slime_root_fixture). The judge classes a change to those two recipes as implementation, so the item owns just/quality.just and changes no other recipe in it."
         h.agentDefault;
       h.invariant "every-configuration-still-builds"
         "The thirteen configurations that the implementation of root-library built still build. The implementation pull request reports each build as observed or not observed."
