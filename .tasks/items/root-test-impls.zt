@@ -16,7 +16,7 @@ item :: s.Item = (h.task "01a203e5-075e-7e73-a228-488c770a3f32" "root-test-impls
     };
     requirements = {
       h.req "test-functions-leave-product-impls"
-        "root_size_check counts at most 32900 code lines in the series and at most 14750 in the core role. It reports the counts as seriesCodeLines and coreCodeLines. main holds 33194 and 15038. Each of the 37 functions moves into a top-level impl block of its type, in the same file, behind #[cfg(test)]. The gate reads that block as a test item."
+        "root_size_check counts at most 32893 code lines in the series and at most 14737 in the core role. It reports the counts as seriesCodeLines and coreCodeLines. main holds 33194 and 15038, and the 37 functions hold 301. Each of the 37 functions moves into a top-level impl block of its type, in the same file, behind #[cfg(test)]. The gate reads that block as a test item."
         { "root_size_check"; };
       h.req "the-host-tests-still-run"
         "test_sel4_root runs at least 398 host tests, and reports the count as hostTests. main runs 398. The moved functions serve those tests, so every test still compiles and passes."
@@ -24,8 +24,8 @@ item :: s.Item = (h.task "01a203e5-075e-7e73-a228-488c770a3f32" "root-test-impls
     };
     acceptance = {
       h.observedWhere "root_size_check" {
-        h.atMost "seriesCodeLines" 32900;
-        h.atMost "coreCodeLines" 14750;
+        h.atMost "seriesCodeLines" 32893;
+        h.atMost "coreCodeLines" 14737;
       };
       h.observedWhere "test_sel4_root" {
         h.atLeast "hostTests" 398;
@@ -46,8 +46,8 @@ item :: s.Item = (h.task "01a203e5-075e-7e73-a228-488c770a3f32" "root-test-impls
         h.agentDefault
         { "test-functions-leave-product-impls"; };
       h.decided "the-count-is-the-acceptance"
-        "The acceptance bounds seriesCodeLines by 32900 and coreCodeLines by 14750. A draft of the move leaves 32893 and 14737."
-        "every moved file belongs to the core role, and the gate already reports both counts. The gate needs no new count: a function that returns to a product impl block raises both"
+        "The acceptance bounds seriesCodeLines by 32893 and coreCodeLines by 14737. Each bound is the count of main less the 301 lines of the 37 functions, with no line to spare."
+        "every moved file belongs to the core role, and the gate already reports both counts. The shortest of the 37 functions holds 4 code lines, so one function that stays in a product impl block breaks both bounds. A bound with room to spare would pass with a short function left behind"
         h.agentDefault
         { "test-functions-leave-product-impls"; };
     };
