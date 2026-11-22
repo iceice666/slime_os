@@ -108,5 +108,7 @@ changes are in RISC-V, the `cv1800b` platform and `src/arch/x86/multiboot.S`.
 - The fork changes a file that an AArch64 build compiles. The claim lapses
   until upstream has the change.
 - The BCM2835 system timer at `timer@7c003000` does not work on the board.
-  Prerequisite 8 then needs another time source.
+  Prerequisite 8 then needs another time source. PR 1118 added the root's
+  backend for that timer behind `--system-timer`; no observation on the board
+  exists yet.
 - The AArch64 MCS proofs are complete.

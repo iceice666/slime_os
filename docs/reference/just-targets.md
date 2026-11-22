@@ -141,6 +141,7 @@ For how the planes work and how to add one, read
 | `just io_resource_model_check` | Model-check the io-resource model. |
 | `just release_trust_check` | Aggregate: `contracts_check`, `release_trust_runtime_check`. |
 | `just release_trust_runtime_check` | M5.8 signed-release authorization and replay scenarios. |
+| `just resource_reader_builder_check` | The generation builder writes the reader table of `contracts/resource-reader/v1` that its rule gives. For each of 26 manifests `build_resource_readers` must return the bytes that `scripts/check/check-resource-readers.py` writes from the schema, and it must refuse a table above the row bound. The judge first refuses ten builders with one defect each. Boots nothing. Explicit, in no aggregate. |
 | `just sample_descriptor_check` | Aggregate: `contracts_check`, `sel4_sample_check`. |
 | `just system_composition_closure_check` | Aggregate: `system_spec_check`, `composition_inventory_check`. |
 | `just system_image_builder_check` | Aggregate: `system_composition_closure_check`, `image_builder_closures_check`. |

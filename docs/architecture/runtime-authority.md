@@ -20,6 +20,10 @@ the root answers `CLOCK MONOTONIC READ` and `CLOCK RATE READ` for every task
 through the `lifecycle` service. Generation right bit 26 is retired, and the
 decoder refuses a v1 table.
 
+A Raspberry Pi 5 image built with `--system-timer` is the exception on AArch64.
+Its root counts the BCM2835 system timer, and its components ask the root
+through the same two operations. See [the system-timer image](#the-system-timer-image).
+
 `slime-root/src/clock.rs` serves the logical clock operations and
 `slime-root/src/platform_timer.rs` owns the platform timer mechanism. The service
 grants semantics, not exclusive register access. On current AArch64 profiles the
@@ -27,6 +31,36 @@ kernel enables EL0 physical counter and timer registers globally because the roo
 programs that timer from EL0; hostile native code could disrupt the timer
 registers. Closing that wall requires a kernel/platform change, not a contract
 claim.
+
+### The system-timer image
+
+`scripts/build/build-sel4.py --platform bcm2712-rpi5 --system-timer` builds an
+image in which no EL0 program names a generic-timer register. It is the second
+prerequisite of the [verified kernel profile](../decisions/verified-kernel-profile.md).
+
+| Part | What it does |
+|---|---|
+| Builder | Sets `SLIME_SYSTEM_TIMER=1` for every build of the image. Names the image and its identity with the suffix `-system-timer`. Refuses the flag for another platform, and refuses the variable from its own environment. |
+| Root | Maps the timer page at `0x10_7c00_3000`. Counts the 64-bit counter at 1 MHz. Takes compare channel 3, interrupt 99. |
+| Component | `slime_rt::monotonic_read` and `monotonic_frequency` call `CLOCK MONOTONIC READ` and `CLOCK RATE READ`. |
+
+The compare channel matches the low 32 bits of the counter, and its match bit
+is level-triggered. The root handles both facts:
+
+- A deadline more than one wrap ahead is installed one wrap ahead. One wrap is
+  71.6 minutes.
+- The channel has no enable bit. A disarmed channel is parked one wrap ahead.
+- The acknowledgement of a wake reads the match bit and the counter. A match
+  while the counter is short of the armed deadline installs that deadline
+  again, which clears the match. A match at or past the deadline stays, so the
+  root services it.
+
+No gate boots this backend: QEMU `virt` has no such device. `just
+rpi5_system_timer_image_check` reads the EL0 programs of two such images and
+finds no access. The host tests check what the backend writes to a page of host
+memory. Whether the timer works on the board is an operator's observation, and
+no record of one exists. The kernel of the image still exports the generic
+timer; only the verified profile removes it.
 
 Already-decided one-shot expiries must reach their declared badges even when a
 later platform step or IRQ acknowledgement fails; cancellation delivers nothing
@@ -191,6 +225,36 @@ A component reads its own lifetime through `LIFECYCLE LIFETIME READ`
 so a composition that shuts an instance down declares it bounded. The rationale
 is in [the decision record](../decisions/instance-lifetime.md).
 
+## Declared table readers
+
+The root serves seven generation tables to a declared reader, and it holds no
+component name for them. `contracts/resource-reader/v1/` pairs a table with an
+instance that may read it.
+
+| Table | Reader the builder declares |
+|---|---|
+| `entropy-authority/v1` | the instance named `entropy-service` |
+| `zenoh-service-grants-table/v1`, `zenoh-service-limits/v1` | the instance named `zenoh-service` |
+| `network-destination/v1`, `network-interface/v1`, `network-application/v4` | the instance named `network-service` |
+| `block-authority/v1` | every instance of the executable `virtio-blk-driver` |
+
+- **Builder.** `build_resource_readers` in `scripts/build/generation_resources.py`
+  holds the four names. It writes one row for each table the generation carries
+  and each instance that reads it. It writes no object when no row remains, and
+  no manifest lists the object.
+- **Admission.** The root refuses a second reader table, a table that does not
+  decode, and a row that names no declared instance.
+- **Read.** `ipc::is_declared_reader` answers each read from the table. A
+  generation without the table has no reader, so a generation that an older
+  builder wrote serves none of the seven tables.
+
+A row grants the read alone. The root still serves a block reader only the rows
+of the device in its `ioResourceBudget` row.
+
+`just resource_reader_builder_check` holds the builder to the table above, and
+`just root_size_check` counts the string literals that name a product component
+in the root and the crates it decodes with. The count is 0.
+
 ## Graph arrival ceiling
 
 The root's graph service loop counts component arrivals. In a finite plane it
@@ -255,6 +319,8 @@ admission, and has target-specific assurance consequences.
 ## Verification
 
 - `just clock_authority_check`
+- `just rpi5_system_timer_image_check`
+- `just resource_reader_builder_check`
 - `just wait_set_check`
 - `just scheduling_class_check`
 - `just lifecycle_restart_check`

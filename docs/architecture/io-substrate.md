@@ -150,7 +150,8 @@ and answers exactly one declared consumer, `entropy-service`, over
 `entropy-source/v1`. Without the device every fill is answered `unavailable`;
 the driver never substitutes bytes. `entropy-service` reads the generation's
 `entropy-authority/v1` rows through `CAPABILITY ENTROPY AUTHORITY READ`, which
-the root answers only for the instance named `entropy-service`, and serves each
+the root answers only for a [declared reader](runtime-authority.md#declared-table-readers).
+The builder declares the instance named `entropy-service`. The service serves each
 row's holder over its own non-transferable `<holder>-entropy` endpoint with
 `entropy-service/v1`. Every holder draws from its own HMAC-DRBG; raw device
 bytes never leave the service. The decision and its alternatives are in

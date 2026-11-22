@@ -70,6 +70,24 @@ into `#[cfg(test)]` modules, where the gate counts them as test lines.
 The target of 28850 allows about 190 lines of what stays from the leaving
 roles. The count of 426 comes from a one-off script and is approximate.
 
+### What stage one has reached
+
+The series holds 33194 code lines on `main` after PR 1118. The gate's ceiling
+is 33200.
+
+| Step | State |
+|---|---|
+| fixture | Out of the series since PR 1107. |
+| The root names no product component | Done in PR 1117. `just root_size_check` counts 0 string literals that name a product component; it counted 6. |
+| The readers in `ipc.rs` | They stay. The builder states who reads a table, and the root answers from the generation's reader table. The dispatch role holds 2510 lines. |
+| policy, timer and console | Still in the root. The timer role grew to 1435 lines in PR 1118, which added the backend for the BCM2835 system timer. The backend leaves with the role. |
+
+The row of 409 lines in the table above assumes that the readers leave the
+root. PR 1117 removed the names and kept the readers. A later design decides
+how a component reads its own rows without a reader in the root. If the
+allowance of stage one does not cover the difference, the owner restates the
+target.
+
 ### How the fixture role leaves
 
 The fixture role holds two parts, and they leave at different times.

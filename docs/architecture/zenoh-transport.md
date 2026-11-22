@@ -258,7 +258,8 @@ serves whole-frame samples only, so a session that reassembles fragments is refu
 The grants reach the service in four steps. A system spec declares them with the keys `zenohGrants` and `zenohGrantsObject`,
 at most `maxZenohGrants` of 64 rows. The generation builder encodes them as the resource object `zenoh-grants`, in the
 layout of `contracts/zenoh-service-grants-table/v1`. The root reads that object on the label `ZENOH_GRANTS_READ`, 75. The
-reader serves 168-byte rows, at most six for one call, from a row cursor, and only to the instance named `zenoh-service`.
+reader serves 168-byte rows, at most six for one call, from a row cursor, and only to a
+[declared reader](runtime-authority.md#declared-table-readers). The builder declares the instance named `zenoh-service`.
 The root decides no grant. It copies authenticated bytes. The runtime wrapper `zenoh_grants_read` makes the call.
 
 The same read serves a second record at one cursor value, 4294967295. A system spec declares the service's six limits as
