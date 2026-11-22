@@ -150,6 +150,9 @@ pub struct PhysicalTimerAdapter {
     notification: sel4::cap::Notification,
     #[cfg(slime_timer_registers)]
     registers: Option<MappedGranule>,
+    /// The deadline compare channel 3 is armed for; `u64::MAX` parks it.
+    #[cfg(slime_bcm2835_system_timer)]
+    armed: u64,
 }
 
 impl PhysicalTimerAdapter {
@@ -203,6 +206,8 @@ impl PhysicalTimerAdapter {
             notification: notification_slot.cap(),
             #[cfg(slime_timer_registers)]
             registers: None,
+            #[cfg(slime_bcm2835_system_timer)]
+            armed: u64::MAX,
         })
     }
 
@@ -213,6 +218,17 @@ impl PhysicalTimerAdapter {
     #[cfg(slime_timer_registers)]
     pub fn attach_registers(&mut self, registers: MappedGranule) {
         self.registers = Some(registers);
+    }
+
+    /// Run one step of the system timer on its page with the armed deadline.
+    #[cfg(slime_bcm2835_system_timer)]
+    fn on_page(&self, step: fn(MappedGranule, u64) -> bool) -> Result<(), PlatformTimerAckError> {
+        let registers = self
+            .registers
+            .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
+        step(registers, self.armed)
+            .then_some(())
+            .ok_or(PlatformTimerAckError::RegisterAccess)
     }
 
     /// The capability a caller waits or polls on to observe delivery. Full
@@ -310,7 +326,7 @@ impl PlatformTimer for PhysicalTimerAdapter {
                 .registers
                 .ok_or(PlatformTimerAckError::RegistersUnavailable)?;
             Ok(MonotonicInstant(
-                read_system_timer(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
+                system_timer::read(registers).ok_or(PlatformTimerAckError::RegisterAccess)?,
             ))
         }
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
@@ -349,13 +365,10 @@ impl PlatformTimer for PhysicalTimerAdapter {
             write_cntp_ctl(CNTP_CTL_ENABLE);
         }
         #[cfg(slime_bcm2835_system_timer)]
-        program_system_timer(
-            self.registers
-                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
-            deadline.0,
-        )
-        .then_some(())
-        .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        {
+            self.armed = deadline.0;
+            self.on_page(system_timer::program)?;
+        }
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         program_goldfish_rtc(
             self.registers
@@ -386,13 +399,12 @@ impl PlatformTimer for PhysicalTimerAdapter {
     fn disarm_timer(&mut self) -> Result<(), Self::Error> {
         #[cfg(slime_arm_generic_timer)]
         write_cntp_ctl(0);
+        // The channel has no enable bit, so a disarmed channel is parked.
         #[cfg(slime_bcm2835_system_timer)]
-        disarm_system_timer(
-            self.registers
-                .ok_or(PlatformTimerAckError::RegistersUnavailable)?,
-        )
-        .then_some(())
-        .ok_or(PlatformTimerAckError::RegisterAccess)?;
+        {
+            self.armed = u64::MAX;
+            self.on_page(system_timer::program)?;
+        }
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         disarm_goldfish_rtc(
             self.registers
@@ -423,6 +435,11 @@ impl PlatformTimer for PhysicalTimerAdapter {
         // condition and must not invalidate the newly installed deadline.
         #[cfg(slime_arm_generic_timer)]
         isb();
+        // The match bit is level-triggered too. `service_timer_source` clears
+        // it only when it installs a deadline, and a wake with nothing due
+        // installs none.
+        #[cfg(slime_bcm2835_system_timer)]
+        self.on_page(system_timer::settle)?;
         #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
         clear_goldfish_rtc_interrupt(
             self.registers
@@ -452,88 +469,83 @@ impl PlatformTimer for PhysicalTimerAdapter {
             .map_err(PlatformTimerAckError::Acknowledge)
     }
 }
-// The BCM2835 system timer: a free-running 64-bit counter at 1 MHz and four
-// 32-bit compare channels that match its low word.
+/// The BCM2835 system timer: a free-running 64-bit counter at 1 MHz and four
+/// 32-bit compare channels that match its low word.
 #[cfg(any(slime_bcm2835_system_timer, test))]
-const SYSTEM_TIMER_CS: usize = 0x00;
-#[cfg(any(slime_bcm2835_system_timer, test))]
-const SYSTEM_TIMER_CLO: usize = 0x04;
-#[cfg(any(slime_bcm2835_system_timer, test))]
-const SYSTEM_TIMER_CHI: usize = 0x08;
-/// Compare channel 3. The firmware keeps channels 0 and 2, and Linux's driver
-/// takes this one.
-#[cfg(any(slime_bcm2835_system_timer, test))]
-const SYSTEM_TIMER_C3: usize = 0x18;
-/// The match bit of channel 3 in the status register; a write of 1 clears it.
-#[cfg(any(slime_bcm2835_system_timer, test))]
-const SYSTEM_TIMER_M3: u32 = 1 << 3;
-/// The shortest distance the root programs ahead of the counter, in ticks. A
-/// compare value the counter has already passed matches one wrap later.
-#[cfg(any(slime_bcm2835_system_timer, test))]
-const SYSTEM_TIMER_MIN_DELTA: u64 = 16;
+mod system_timer {
+    use super::MappedGranule;
 
-/// The compare value for `deadline`, seen at counter `now`, and its distance
-/// in ticks. The channel reaches at most one wrap of the low word ahead, so a
-/// later deadline wakes the root early and the root programs it again.
-#[cfg(any(slime_bcm2835_system_timer, test))]
-fn system_timer_compare(now: u64, deadline: u64) -> (u32, u64) {
-    let delta = deadline
-        .saturating_sub(now)
-        .clamp(SYSTEM_TIMER_MIN_DELTA, u64::from(u32::MAX));
-    ((now as u32).wrapping_add(delta as u32), delta)
-}
+    pub(super) const CS: usize = 0x00;
+    pub(super) const CLO: usize = 0x04;
+    pub(super) const CHI: usize = 0x08;
+    /// Compare channel 3. The firmware keeps channels 0 and 2, and Linux's
+    /// driver takes this one.
+    pub(super) const C3: usize = 0x18;
+    /// The match bit of channel 3 in the status register; a write of 1 clears
+    /// it.
+    pub(super) const M3: u32 = 1 << 3;
+    /// The shortest distance the root programs ahead of the counter, in ticks.
+    /// A compare value the counter has already passed matches one wrap later.
+    const MIN_DELTA: u64 = 16;
 
-#[cfg(any(slime_bcm2835_system_timer, test))]
-fn read_system_timer(registers: MappedGranule) -> Option<u64> {
-    // Two 32-bit halves: read the high half again and retry when it moved.
-    (0..3).find_map(|_| {
-        let high = registers.read32(SYSTEM_TIMER_CHI)?;
-        let low = registers.read32(SYSTEM_TIMER_CLO)?;
-        (registers.read32(SYSTEM_TIMER_CHI)? == high)
-            .then(|| u64::from(low) | (u64::from(high) << 32))
-    })
-}
-
-/// Clear the expired match, then install `deadline`. The level-triggered line
-/// stays low until the new value matches, so the handler acknowledgement that
-/// follows cannot lose it.
-#[cfg(any(slime_bcm2835_system_timer, test))]
-fn program_system_timer(registers: MappedGranule, deadline: u64) -> bool {
-    if !registers.write32(SYSTEM_TIMER_CS, SYSTEM_TIMER_M3) {
-        return false;
+    /// The compare value for `deadline`, seen at counter `now`, and its
+    /// distance in ticks. The channel reaches at most one wrap of the low word
+    /// ahead, so a later deadline wakes the root early and `settle` installs it
+    /// again. A deadline of `u64::MAX` parks the channel one wrap ahead.
+    pub(super) fn compare(now: u64, deadline: u64) -> (u32, u64) {
+        let delta = deadline
+            .saturating_sub(now)
+            .clamp(MIN_DELTA, u64::from(u32::MAX));
+        ((now as u32).wrapping_add(delta as u32), delta)
     }
-    for _ in 0..3 {
-        let Some(now) = read_system_timer(registers) else {
-            return false;
-        };
-        let (compare, delta) = system_timer_compare(now, deadline);
-        if !registers.write32(SYSTEM_TIMER_C3, compare) {
+
+    pub(super) fn read(registers: MappedGranule) -> Option<u64> {
+        // Two 32-bit halves: read the high half again and retry when it moved.
+        (0..3).find_map(|_| {
+            let high = registers.read32(CHI)?;
+            let low = registers.read32(CLO)?;
+            (registers.read32(CHI)? == high).then(|| u64::from(low) | (u64::from(high) << 32))
+        })
+    }
+
+    /// Clear the expired match, then install `deadline`. The level-triggered
+    /// line stays low until the new value matches, so the handler
+    /// acknowledgement that follows cannot lose it.
+    pub(super) fn program(registers: MappedGranule, deadline: u64) -> bool {
+        if !registers.write32(CS, M3) {
             return false;
         }
-        // The counter may pass `compare` before the write lands. Then no match
-        // is latched, and the next one is a wrap away.
-        let (Some(after), Some(status)) = (
-            read_system_timer(registers),
-            registers.read32(SYSTEM_TIMER_CS),
-        ) else {
+        for _ in 0..3 {
+            let Some(now) = read(registers) else {
+                return false;
+            };
+            let (value, delta) = compare(now, deadline);
+            if !registers.write32(C3, value) {
+                return false;
+            }
+            // The counter may pass `value` before the write lands. Then no
+            // match is latched, and the next one is a wrap away.
+            let (Some(after), Some(status)) = (read(registers), registers.read32(CS)) else {
+                return false;
+            };
+            if after.wrapping_sub(now) < delta || status & M3 != 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Acknowledge a wake of the channel armed for `armed`. A match while the
+    /// counter is short of `armed` is the wrap of the low word: the channel
+    /// woke the root early, or while parked. Install `armed` again, which
+    /// clears that match. A match at or past `armed` stays, so the line rises
+    /// again and the root services the deadline.
+    pub(super) fn settle(registers: MappedGranule, armed: u64) -> bool {
+        let (Some(status), Some(now)) = (registers.read32(CS), read(registers)) else {
             return false;
         };
-        if after.wrapping_sub(now) < delta || status & SYSTEM_TIMER_M3 != 0 {
-            return true;
-        }
+        status & M3 == 0 || now >= armed || program(registers, armed)
     }
-    false
-}
-
-/// The channel has no enable bit. Park the compare value one wrap ahead and
-/// clear the match; a wake 71 minutes later finds no deadline and parks again.
-#[cfg(any(slime_bcm2835_system_timer, test))]
-fn disarm_system_timer(registers: MappedGranule) -> bool {
-    let Some(now) = read_system_timer(registers) else {
-        return false;
-    };
-    registers.write32(SYSTEM_TIMER_C3, (now as u32).wrapping_sub(1))
-        && registers.write32(SYSTEM_TIMER_CS, SYSTEM_TIMER_M3)
 }
 
 #[cfg(all(target_arch = "riscv64", not(slime_cv1800b_duo)))]
@@ -930,61 +942,96 @@ fn isb() {
 
 #[cfg(test)]
 mod tests {
+    use super::system_timer::{C3, CHI, CLO, CS, M3, compare, program, read, settle};
     use super::*;
 
     const WORDS: usize = 1024;
 
     #[test]
     fn a_deadline_ahead_is_its_low_word() {
-        assert_eq!(
-            system_timer_compare(0x1_0000_0100, 0x1_0000_0500),
-            (0x500, 0x400)
-        );
+        assert_eq!(compare(0x1_0000_0100, 0x1_0000_0500), (0x500, 0x400));
     }
 
     #[test]
     fn a_deadline_behind_or_too_close_is_the_minimum_ahead() {
-        assert_eq!(system_timer_compare(1000, 0), (1016, 16));
-        assert_eq!(system_timer_compare(1000, 1005), (1016, 16));
+        assert_eq!(compare(1000, 0), (1016, 16));
+        assert_eq!(compare(1000, 1005), (1016, 16));
     }
 
     #[test]
     fn a_deadline_beyond_one_wrap_is_one_wrap_ahead() {
-        assert_eq!(system_timer_compare(0x10, u64::MAX), (0x0f, 0xffff_ffff));
+        assert_eq!(compare(0x10, u64::MAX), (0x0f, 0xffff_ffff));
     }
 
     #[test]
     fn the_compare_value_wraps_with_the_low_word() {
-        assert_eq!(system_timer_compare(0xffff_fff0, 0x1_0000_0010).0, 0x10);
+        assert_eq!(compare(0xffff_fff0, 0x1_0000_0010).0, 0x10);
     }
 
     #[test]
     fn the_counter_is_one_word_from_two_halves() {
         let mut page = [0u32; WORDS];
-        page[SYSTEM_TIMER_CLO / 4] = 5;
-        page[SYSTEM_TIMER_CHI / 4] = 7;
-        assert_eq!(
-            read_system_timer(MappedGranule::over(&mut page)),
-            Some(0x7_0000_0005)
-        );
+        page[CLO / 4] = 5;
+        page[CHI / 4] = 7;
+        assert_eq!(read(MappedGranule::over(&mut page)), Some(0x7_0000_0005));
     }
 
     #[test]
     fn programming_clears_the_match_and_writes_channel_three() {
         let mut page = [0u32; WORDS];
-        page[SYSTEM_TIMER_CLO / 4] = 1000;
-        assert!(program_system_timer(MappedGranule::over(&mut page), 5000));
-        assert_eq!(page[SYSTEM_TIMER_CS / 4], SYSTEM_TIMER_M3);
-        assert_eq!(page[SYSTEM_TIMER_C3 / 4], 5000);
+        page[CLO / 4] = 1000;
+        assert!(program(MappedGranule::over(&mut page), 5000));
+        assert_eq!(page[CS / 4], M3);
+        assert_eq!(page[C3 / 4], 5000);
         assert_eq!(page[0x0c / 4..0x18 / 4], [0, 0, 0]);
     }
 
     #[test]
     fn disarming_parks_the_channel_one_wrap_ahead() {
         let mut page = [0u32; WORDS];
-        page[SYSTEM_TIMER_CLO / 4] = 1000;
-        assert!(disarm_system_timer(MappedGranule::over(&mut page)));
-        assert_eq!(page[SYSTEM_TIMER_C3 / 4], 999);
-        assert_eq!(page[SYSTEM_TIMER_CS / 4], SYSTEM_TIMER_M3);
+        page[CLO / 4] = 1000;
+        assert!(program(MappedGranule::over(&mut page), u64::MAX));
+        assert_eq!(page[C3 / 4], 999);
+        assert_eq!(page[CS / 4], M3);
+    }
+
+    /// A page whose counter reads `now`, with the match of channel 3 as given
+    /// and a compare value no case writes.
+    fn woken(now: u32, matched: bool) -> [u32; WORDS] {
+        let mut page = [0u32; WORDS];
+        page[CLO / 4] = now;
+        page[CS / 4] = if matched { M3 } else { 0 };
+        page[C3 / 4] = 77;
+        page
+    }
+
+    #[test]
+    fn a_wake_short_of_the_deadline_installs_it_again() {
+        let mut page = woken(1000, true);
+        assert!(settle(MappedGranule::over(&mut page), 5000));
+        assert_eq!(page[C3 / 4], 5000);
+    }
+
+    #[test]
+    fn a_wake_while_parked_parks_again() {
+        let mut page = woken(1000, true);
+        assert!(settle(MappedGranule::over(&mut page), u64::MAX));
+        assert_eq!(page[C3 / 4], 999);
+    }
+
+    #[test]
+    fn a_wake_at_the_deadline_leaves_its_match() {
+        for now in [5000, 6000] {
+            let mut page = woken(now, true);
+            assert!(settle(MappedGranule::over(&mut page), 5000));
+            assert_eq!((page[C3 / 4], page[CS / 4]), (77, M3));
+        }
+    }
+
+    #[test]
+    fn a_wake_without_a_match_writes_nothing() {
+        let mut page = woken(1000, false);
+        assert!(settle(MappedGranule::over(&mut page), 5000));
+        assert_eq!((page[C3 / 4], page[CS / 4]), (77, 0));
     }
 }
