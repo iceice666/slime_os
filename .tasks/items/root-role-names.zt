@@ -5,6 +5,7 @@ item :: s.Item = (h.task "01a2040b-02ce-715e-8411-23d0b103ddcf" "root-role-names
   "A role of the size gate holds what its name states"
   "root_size_check sorts the files of slime-root into roles. The role policy holds no policy: docs/decisions/root-task-scope.md, amendment of 2026-11-22, finds that a component decides a restart and the root enforces. One file of that role, slime-root/src/graph_runtime/services/policy.rs, also holds 176 code lines of clock requests and 187 of task reclaim. The gate counts both as policy. Decision 4 of the amendment has the gate sort the files again.")
   with {
+    intent = #active;
     owns = {
       "slime-root/src/**";
     };
