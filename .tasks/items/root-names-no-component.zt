@@ -5,6 +5,7 @@ item :: s.Item = (h.milestone "01a1f8f6-a380-7910-990d-f83a461fb33e" "root-names
   "The root names no product component"
   "slime-root/src/ipc.rs decides who reads seven generation tables by a name it holds. Three gates compare the caller with the literal network-service. Two constants name the instances entropy-service and zenoh-service, and a third names the executable virtio-blk-driver. docs/decisions/root-task-scope.md decides that the root names no product component and reads composition from generation rows. Today a second block driver or a renamed reader needs an edit to the root.")
   with {
+    intent = #active;
     owns = {
       "slime-root/src/**";
       "boot-contracts/src/**";
