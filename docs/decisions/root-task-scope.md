@@ -160,13 +160,16 @@ The console role holds 443 lines:
 
 The dispatcher does not move now, for four reasons:
 
-- A line is whole on the wire because of priority, not because of a lock.
-  Both root threads run above every component, and `diagnostic.rs` states
-  that every producer must be a root thread at one priority. A component that
-  wrote the bytes could be preempted by the root in the middle of a line.
+- A record is whole on the wire because its producer holds a FIFO ticket,
+  and `diagnostic.rs` states that the ticket's waiting rule needs every
+  producer to be a root thread at one priority: a waiter yields, and a yield
+  never schedules an owner of lower priority. A component cannot be a
+  producer under that rule.
 - The root owns its console UART on one target profile,
   `aarch64-sel4-qemu-virt`. On every other profile its writer calls the
-  kernel's debug console. No component drives a UART today.
+  kernel's debug console. No component drives the console UART. A component
+  for a 16550 UART exists, `uart16550-driver`, and this tree gives it a line
+  on no platform.
 - The dispatcher maps a caller's frame into the root's VSpace to copy a
   payload, and it reads the root's authority tables for terminal input and
   for the two directory operations. No component can do either.
