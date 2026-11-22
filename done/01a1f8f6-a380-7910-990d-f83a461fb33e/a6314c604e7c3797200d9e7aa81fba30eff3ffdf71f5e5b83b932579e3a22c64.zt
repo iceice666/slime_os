@@ -1,0 +1,11 @@
+o ::= import "./schema.zt";
+r :: o.Witness = {
+  schema = o.schemaVersion;
+  item = "01a1f8f6-a380-7910-990d-f83a461fb33e";
+  itemDigest = "a6314c604e7c3797200d9e7aa81fba30eff3ffdf71f5e5b83b932579e3a22c64";
+  mainSha = "aac2efc0765078a971d37da2e51b37e9a8850633";
+  targets = { { target = "io_block_check"; closureDigest = "f02c0c4d33c887ffb46c0bdae335ec591ac1e9abbf4505648cef952c990e266b"; negativeControlsRefused = -1; }; { target = "io_tcp_listener_check"; closureDigest = "ec939940fc5f486691fa303649c6ecccd4362ddac847d30498eeffa009a5c9a8"; negativeControlsRefused = -1; }; { target = "resource_reader_builder_check"; closureDigest = "45f2602843da2144d4d343abc9118f556596d1f11c95423c399277bcb854fa62"; negativeControlsRefused = 10; }; { target = "root_size_check"; closureDigest = "aabc6f0e620162fce7765ab6dd1e27aa99dd49acbdd41bdbb150484028c78c17"; negativeControlsRefused = -1; }; { target = "sel4_boot_check"; closureDigest = "5db6461cf47297d2f3a63e6aa6ce12e8bf74f5fd8cb4697a27bfcd85b466fa3a"; negativeControlsRefused = -1; }; { target = "sel4_entropy_check"; closureDigest = "671ba78cf391b070821f4580542ee85c3acfc6bbf081b2aaba12b00c33384a89"; negativeControlsRefused = 6; }; { target = "test_sel4_root"; closureDigest = "4bf4591ebaca82a68416ff484d1aabb9cbd1827614857b0ca85e707091ca8157"; negativeControlsRefused = -1; }; { target = "zenoh_service_booted_check"; closureDigest = "239032cd9a5aba877fbedfddeec4f129d0a5333f06b2a55ff083a4d78c43fa8b"; negativeControlsRefused = 63; }; { target = "zenoh_service_grants_reader_check"; closureDigest = "187117f7421656bdf3e51ef16e049979efb0c1c6bcd059587793b16e6d912096"; negativeControlsRefused = 41; }; };
+  signer = "ci";
+  observedAt = "2026-11-22T12:06:22Z";
+};
+r

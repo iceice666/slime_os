@@ -1,0 +1,11 @@
+o ::= import "./schema.zt";
+r :: o.Witness = {
+  schema = o.schemaVersion;
+  item = "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c";
+  itemDigest = "629623b30e8441b758978711f5cf0f8c2f5100af511fe2f0eba8e2350a157852";
+  mainSha = "aac2efc0765078a971d37da2e51b37e9a8850633";
+  targets = { { target = "clock_direct_read_check"; closureDigest = "89956e08f1aff3ecbdd572de0f7826e1bbdc501ce00729dde337a72387cf3ff3"; negativeControlsRefused = -1; }; { target = "riscv64_sel4_root_boot_check"; closureDigest = "68692cfad44d927302f6628391dc0c325d5dc2dfd0b9026f15bb87d3fba7b0d0"; negativeControlsRefused = -1; }; { target = "root_size_check"; closureDigest = "aabc6f0e620162fce7765ab6dd1e27aa99dd49acbdd41bdbb150484028c78c17"; negativeControlsRefused = -1; }; { target = "rpi5_system_timer_image_check"; closureDigest = "2d1ed8160d85e34cdf20bc5bde9cc81eebd2c77009ede8b5c7bb9f934930e35e"; negativeControlsRefused = -1; }; { target = "sel4_boot_check"; closureDigest = "5db6461cf47297d2f3a63e6aa6ce12e8bf74f5fd8cb4697a27bfcd85b466fa3a"; negativeControlsRefused = -1; }; { target = "sel4_root_boot_check"; closureDigest = "ec4d0d9d04a25771ce1c370d01789106ca07a5c49d7486c22e72643117829f1c"; negativeControlsRefused = -1; }; { target = "test_sel4_root"; closureDigest = "4bf4591ebaca82a68416ff484d1aabb9cbd1827614857b0ca85e707091ca8157"; negativeControlsRefused = -1; }; { target = "x86_64_sel4_root_boot_check"; closureDigest = "c1b6b9b1e9fb1c0ff993e0a1f7717c9adf43b8d4034c1e67f4fb08bc8a5e000b"; negativeControlsRefused = -1; }; };
+  signer = "ci";
+  observedAt = "2026-11-22T12:07:59Z";
+};
+r
