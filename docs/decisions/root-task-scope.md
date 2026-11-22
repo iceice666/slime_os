@@ -88,6 +88,7 @@ is 33200.
 | The readers in `ipc.rs` | They stay. The builder states who reads a table, and the root answers from the generation's reader table. The dispatch role holds 2510 lines. |
 | policy and timer | They stay, by the amendment of 2026-11-22. The timer role grew to 1435 lines in PR 1118, which added the backend for the BCM2835 system timer. |
 | console | The dispatcher leaves. Not started. |
+| Test-only helpers inside product items | No item yet. |
 
 The row of 409 lines in the table above assumes that the readers leave the
 root. PR 1117 removed the names and kept the readers. A later design decides
@@ -105,7 +106,9 @@ component could decide in their place. The owner decides:
 2. The dispatcher of the console role leaves. The root's own diagnostic
    writer stays.
 3. The target of 28850 lines is withdrawn. The owner restates the target of
-   stage one from a measured count, after the dispatcher has left.
+   stage one from a measured count, after the dispatcher has left. The
+   amendment decides nothing about the target of stage two; the section on
+   stage two says why that number is open.
 4. The gate sorts the files of these roles again, so that the name of a role
    states what it holds. That changes no line of the root.
 
@@ -156,9 +159,12 @@ The dispatcher maps a caller's frame into the root's VSpace to copy a debug
 payload, and it shares the UART with the root's own writer. A design under
 `docs/plans/` settles both before an item plans the move.
 
-Stage one therefore removes at most 300 more lines, and the series ends near
-32900. The lines that a later decision can still move are in stage two, and in
-the 8164 lines of `object_allocator` that the alternatives below name.
+Stage one therefore moves at most 300 more lines out of the root, and the
+series ends near 32900. One step of stage one is outside this amendment: the
+test-only helpers inside product items, about 426 lines. It has no item yet,
+and it still stands. With it, the series ends near 32470. The lines that a
+later decision can still move are in stage two, and in the 8164 lines of
+`object_allocator` that the alternatives below name.
 
 One consequence below no longer holds: a timer wake keeps passing through the
 root.
@@ -214,12 +220,18 @@ two does not start before that.
 28660 minus the 6055 lines of the two roles is 22605. The target of 23000
 allows about 395 lines of what stays from every leaving role.
 
+The amendment of 2026-11-22 leaves this target open. The arithmetic above
+starts from 28660, which stage one no longer reaches. From about 32470, the two
+roles leave about 26415, which is above 23000. The owner decides whether 23000
+stands when the target of stage one is restated.
+
 ## Alternatives
 
 - **Restructure without moving anything.** The trusted source stays the same
   size.
 - **Stop after stage one.** The series ends near 28850 lines. This is the
-  outcome if the stage-two design is rejected.
+  outcome if the stage-two design is rejected. Since the amendment of
+  2026-11-22 the series ends near 32470.
 - **A target below 23000.** The `object_allocator` module and its tree hold
   8164 code lines. A lower target needs a simpler adaptive-memory model, which
   is a separate design decision.
@@ -247,5 +259,6 @@ allows about 395 lines of what stays from every leaving role.
   2026-11-22.
 - The verified kernel profile lands. The kernel then exports no generic timer
   to EL0, and the owner weighs a timer component again.
-- The stage-two design is rejected. The target then stays at 28850.
+- The stage-two design is rejected. The series then stays where stage one
+  ends.
 - A sixth crate enters the root's dependencies.
