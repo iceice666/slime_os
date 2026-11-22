@@ -258,8 +258,8 @@ with that of stage one.
   2026-11-22 the series ends near 32893.
 - **A target below 23000.** The `object_allocator` module and its tree hold
   7929 code lines after PR 1138, without `qualification.rs`, which the gate
-  counts in the harness role. They held 8164 before. A lower target needs a simpler adaptive-memory model, which
-  is a separate design decision.
+  counts in the harness role. They held 8164 before. A lower target needs a
+  simpler adaptive-memory model, which is a separate design decision.
 - **A rewrite.** It would discard the QEMU evidence of every plane.
 
 ## Consequences
