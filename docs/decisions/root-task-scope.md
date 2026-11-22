@@ -81,7 +81,7 @@ roles. The count of 426 comes from a one-off script and is approximate.
 
 ### What stage one has reached
 
-The series holds 33194 code lines on `main` after PR 1118. The gate's ceiling
+The series holds 32893 code lines on `main` after PR 1138. The gate's ceiling
 is 33200.
 
 | Step | State |
@@ -91,7 +91,7 @@ is 33200.
 | The readers in `ipc.rs` | They stay. The builder states who reads a table, and the root answers from the generation's reader table. The dispatch role holds 2510 lines. |
 | policy and timer | They stay, by the amendment of 2026-11-22. The timer role grew to 1435 lines in PR 1118, which added the backend for the BCM2835 system timer. |
 | console | It stays, by the amendment of 2026-11-22, until a design moves the dispatcher. |
-| Test-only helpers inside product items | No item yet. It is the next step. |
+| Test-only helpers inside product items | Done in PR 1138. 37 functions with 301 code lines stand in `#[cfg(test)]` blocks. 125 lines of fields and statements stay inside product items. |
 
 The row of 409 lines in the table above assumes that the readers leave the
 root. PR 1117 removed the names and kept the readers. A later design decides
@@ -181,9 +181,13 @@ The dispatcher does not move now, for four reasons:
 A move is therefore a design of its own, for about 300 lines. The owner
 weighs it when one exists.
 
-Stage one therefore has one step left: the test-only helpers inside product
-items, about 426 lines. It has no item yet. With it, the series ends near
-32770. The lines that a later decision can still move are in stage two, and in
+Stage one therefore had one step left: the test-only helpers inside product
+items. PR 1138 took it. `main` held 426 code lines behind a `#[cfg(test)]`
+inside a product item. 301 of them were whole functions, and the step moved
+those. The other 125 are fields and statements, which cannot leave their item.
+The series holds 32893 lines after the step.
+
+The lines that a later decision can still move are in stage two, and in
 the 8164 lines of `object_allocator` that the alternatives below name.
 
 One consequence below no longer holds: a timer wake keeps passing through the
@@ -241,8 +245,8 @@ two does not start before that.
 allows about 395 lines of what stays from every leaving role.
 
 The amendment of 2026-11-22 withdraws this target. The arithmetic above
-starts from 28660, which stage one no longer reaches. From about 32770, the two
-roles leave about 26715, which is above 23000. The owner restates this target
+starts from 28660, which stage one no longer reaches. From 32893, the two
+roles leave about 26838, which is above 23000. The owner restates this target
 with that of stage one.
 
 ## Alternatives
@@ -251,7 +255,7 @@ with that of stage one.
   size.
 - **Stop after stage one.** The series ends near 28850 lines. This is the
   outcome if the stage-two design is rejected. Since the amendment of
-  2026-11-22 the series ends near 32770.
+  2026-11-22 the series ends near 32893.
 - **A target below 23000.** The `object_allocator` module and its tree hold
   8164 code lines. A lower target needs a simpler adaptive-memory model, which
   is a separate design decision.
