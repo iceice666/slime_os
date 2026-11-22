@@ -146,11 +146,12 @@ class Role:
 
 
 # Each role ceiling is the role's count on the commit that landed this script,
-# rounded up to a multiple of 50. Three are newer. `boot` is 5650: the role
+# rounded up to a multiple of 50. Four are newer. `boot` is 5650: the role
 # holds 5600 lines since `src/boot.rs` carries the boot sequence and the 440
 # lines that build and settle the fixture tasks left `main`. `fixture` is 1050
-# with those lines. `timer` is 1450: a draft of the BCM2835 system timer
-# backend adds 91 lines to the 1345 the role held.
+# with those lines. `core` is 14950 and `timer` is 1650: each is the count the
+# role holds with its part of `services/policy.rs`, 14925 and 1612, rounded up
+# to a multiple of 50.
 ROLES: dict[str, Role] = {
     # Kernel-object allocation, address spaces, tasks, faults and the graph.
     "core": Role(
