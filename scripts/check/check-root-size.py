@@ -310,10 +310,9 @@ LIBRARY_FATAL_CEILING = 8
 COMPONENT_GROUPS = ("system", "services", "applications", "testkit")
 # The root, and the crates of this repository that it links.
 NAME_SCAN = (CRATE, "boot-contracts", "components/proto")
-# `slime-root/src/ipc.rs` held six such literals on the commit that landed this
-# measure: `network-service` three times, `entropy-service`, `zenoh-service`
-# and `virtio-blk-driver`.
-COMPONENT_NAME_CEILING = 6
+# The root names no product component. `slime-root/src/ipc.rs` held six such
+# literals until the root took its table readers from the generation.
+COMPONENT_NAME_CEILING = 0
 
 # Every crate `slime-root/Cargo.toml` names in a dependency table.
 DEPENDENCIES = frozenset({"boot-contracts", "sel4", "slime-proto", "sel4-root-task", "object"})

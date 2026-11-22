@@ -481,8 +481,9 @@ _INSTALL = re.compile(
 )
 _SINK = re.compile(r"static\s+UART\s*:\s*AtomicUsize\s*=\s*AtomicUsize\s*::\s*new\s*\(\s*0\s*\)\s*;")
 _UART_ACCESS = re.compile(r"\bUART\s*\.\s*(\w+)")
-# Every way a source can name the install: the path itself, or a brace list
-# of a `use` that holds it. The audit accepts one of them, a direct call.
+# Two ways a source can name the install: the path itself, or a brace list of
+# a `use` that holds it. The audit accepts one of them, a direct call. It does
+# not follow an alias of the module `diagnostic` or a glob import from it.
 _INSTALL_NAME = re.compile(r"\bdiagnostic\s*::\s*(?:install\b|\{[^}]*\binstall\b[^}]*\})")
 _INSTALL_CALL = re.compile(r"\bdiagnostic\s*::\s*install\s*\(")
 _GUARDED_CALL = re.compile(

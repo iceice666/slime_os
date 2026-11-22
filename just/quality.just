@@ -472,7 +472,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 25 modules"
+    echo "slime-root host tests: $actual/$expected"
 
 # The frame-level peer the network planes talk to, exercised without QEMU.
 [group('quality')]
