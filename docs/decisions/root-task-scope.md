@@ -188,7 +188,7 @@ those. The other 125 are fields and statements, which cannot leave their item.
 The series holds 32893 lines after the step.
 
 The lines that a later decision can still move are in stage two, and in
-the 8164 lines of `object_allocator` that the alternatives below name.
+the 7929 lines of `object_allocator` that the alternatives below name.
 
 One consequence below no longer holds: a timer wake keeps passing through the
 root.
@@ -257,7 +257,8 @@ with that of stage one.
   outcome if the stage-two design is rejected. Since the amendment of
   2026-11-22 the series ends near 32893.
 - **A target below 23000.** The `object_allocator` module and its tree hold
-  8164 code lines. A lower target needs a simpler adaptive-memory model, which
+  7929 code lines after PR 1138, without `qualification.rs`, which the gate
+  counts in the harness role. They held 8164 before. A lower target needs a simpler adaptive-memory model, which
   is a separate design decision.
 - **A rewrite.** It would discard the QEMU evidence of every plane.
 
