@@ -35,8 +35,11 @@ claim.
 ### The system-timer image
 
 `scripts/build/build-sel4.py --platform bcm2712-rpi5 --system-timer` builds an
-image in which no EL0 program names a generic-timer register. It is the second
-prerequisite of the [verified kernel profile](../decisions/verified-kernel-profile.md).
+image in which no EL0 program names a generic-timer register. That is the
+first two parts of the second prerequisite of the
+[verified kernel profile](../decisions/verified-kernel-profile.md). The third
+part is open: a component of this image asks the root for the time, and the
+prerequisite asks for a read-only mapping of the timer's counter page.
 
 | Part | What it does |
 |---|---|
