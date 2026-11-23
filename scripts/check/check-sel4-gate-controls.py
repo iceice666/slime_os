@@ -3125,10 +3125,7 @@ def check_export_share_controls() -> int:
         ),
         ("export share: release of no export", transcript.replace(release, release.replace(f"count={share}", "count=0"))),
         ("export share: release count short", transcript.replace(release, release.replace(f"count={share}", f"count={share - 1}"))),
-        (
-            "export share: an unimported export counted as an import",
-            build(order=[refusal, receiver_exit], counts=census(share + 1, share + 1)),
-        ),
+        ("export share: an unimported export counted as an import", build(counts=census(share + 1, share + 1))),
         ("export share: census imports differ from the import lines", build(counts=census(share + 1, 2))),
         ("export share: census exports differ from the export lines", build(counts=census(share + 2, 1))),
         ("export share: an export outstanding", build(counts=census(share + 1, 1, "outstanding=1 tickets=1"))),
