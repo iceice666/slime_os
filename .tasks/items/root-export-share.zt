@@ -59,7 +59,7 @@ item :: s.Item = (h.bug "01a207ed-7d10-7968-a939-be290a4ee018" "root-export-shar
     decisions = {
       h.decided "the-share-is-four-and-the-root-holds-it"
         "The share is the constant 4 in the root."
-        "sel4_demo_check holds two exports of one sender at once, and each other measured plane holds one. Four leaves a factor of two. The measurement did not cover io_network_check. A share in the generation needs a new field of the manifest, and no composition needs a share of its own today"
+        "a measurement before this item reported a peak of two exports of one sender in sel4_demo_check and of one in twelve other planes. Four leaves a factor of two. The planning of this item did not repeat that measurement, and it did not cover io_network_check. On a draft of the change sel4_demo_check passes with a share of 4, of 2 and of 1. A share in the generation needs a new field of the manifest, and no composition needs a share of its own today"
         h.agentDefault
         { "a-sender-holds-at-most-its-share"; };
       h.decided "the-table-holds-every-share"
