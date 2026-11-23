@@ -7,6 +7,11 @@ and a ceiling follows its implementation
 **Amended:** 2026-11-22, by the owner: the policy role and the timer role
 stay, the console dispatcher stays until a design moves it, and both targets
 are withdrawn until the owner restates them from a measured count
+**Amended:** 2026-11-23: the ioResource and sharedBuffer roles stay, stage two
+is withdrawn, and the gate's ceilings replace the target in lines. The owner
+accepted the ceilings in conversation. The other points are agent defaults
+under the owner's standing instruction of 2026-11-19, and the owner's merge
+accepts them
 **Related work item:** `root-size-budget`, UUID
 `01a1e925-f21f-7c7b-8c45-b6b46bcefd1e`
 
@@ -45,7 +50,8 @@ policy in components:
    `root_size_check` counts them.
 
 The amendment of 2026-11-22 withdraws the numbers of point 6. It also replaces
-three rows of the table below: policy, timer and console.
+three rows of the table below: policy, timer and console. The amendment of
+2026-11-23 replaces point 6 and the rows of ioResource and sharedBuffer.
 
 | Role | Lines | Decision | What stays in the root |
 |---|---|---|---|
@@ -258,6 +264,65 @@ starts from 28660, which stage one no longer reaches. From 32899, the two
 roles leave about 26844, which is above 23000. The owner restates this target
 with that of stage one.
 
+The amendment of 2026-11-23 withdraws stage two: both roles stay.
+
+### Amendment of 2026-11-23: the ioResource and sharedBuffer roles stay
+
+A survey read the two roles that stage two has leave the root. No part of
+them can move unless the root trusts a component with another task's VSpace.
+Condition 1 names that authority as one no component may hold. The amendment
+decides four points. The owner accepted point 3 on 2026-11-23:
+
+1. The ioResource role and the sharedBuffer role stay in the root.
+2. Stage two is withdrawn. No design under `docs/plans/` is written for it.
+3. The series has no target in lines. The ceilings of
+   `scripts/check/check-root-size.py` hold what the series has reached: 32950
+   for the series, and one ceiling for each role. A ceiling goes down when
+   lines leave. It goes up only in a planning pull request whose item states
+   why.
+4. Functions of the two roles that no product code calls leave the root, or
+   move into test items. They hold about 90 lines, and they have no item yet.
+
+The counts below are code lines, as `just root_size_check` counts them, on
+`main` at `4408d49b`.
+
+| File of the ioResource role | Lines | Finding |
+|---|---|---|
+| `io_resource.rs` | 1534 | The table of device grants, mappings, DMA accounts and requests. It calls no kernel operation and names no other root module. It decides each effect, and the trait `IoResourceAdapter` carries the effect out. |
+| `graph_runtime/services/io_resource.rs` | 808 | The adapter and the request handlers. The adapter maps a device frame and its page tables into the caller's VSpace, retypes contiguous memory for a queue, and creates an IRQ handler. Condition 1 keeps it. |
+| `device.rs` | 658 | It retypes device untyped memory, maps a frame into a child's VSpace, and binds an IRQ handler to a Notification. The boot sequence uses it for the console, the timer and the device scan, before the first component. Both conditions keep it. |
+| `irq_control.rs` | 29 | It invokes the IRQ control capability. Condition 1 keeps it. |
+
+| File of the sharedBuffer role | Lines | Finding |
+|---|---|---|
+| `shared_buffer.rs` | 1668 | The table of regions, mappings, loans and charges. It calls no kernel operation. It decides each effect, and the trait `SharedBufferAdapter` carries the effect out. |
+| `buffer_adapter.rs` | 551 | The adapter. It retypes frames, maps and unmaps them in another task's VSpace, and copies, revokes and deletes capabilities in the root CNode. Condition 1 keeps it. |
+| `graph_runtime/services/capability.rs` | 807 | The request handlers. An export mints an Endpoint capability in the root CNode and copies it into the sender's CNode. The buffer requests drive the adapter with the caller's VSpace capability. Condition 1 keeps it. |
+
+The two tables hold 3202 of the 6055 lines, and neither calls the kernel.
+They do not move for one reason. A table decides which frame enters which
+VSpace, for which holder, and within which declared bound. The adapter then
+does what the table decided. A component that held a table would direct how
+the root uses another task's VSpace. The root would have to trust that
+component, or keep a table of its own to check it. The amendment of
+2026-11-22 kept `lifecycle.rs` for the same reason.
+
+Two more facts tie the tables to the root:
+
+- A change is one transaction. The table plans it, the adapter acts, and the
+  table commits it or rolls it back. A table in a component would split that
+  transaction across two tasks.
+- The retirement of a dead task runs in the root's service loop. Its phases
+  call `reclaim_driver` and `reclaim_dead_task`, and each phase waits for the
+  one before it.
+
+One model would let these lines leave: a component holds its own VSpace and
+its frames as kernel capabilities, and maps a shared frame itself. The kernel
+then checks the rights, and the root mediates no mapping. The receiver of a
+large sample makes four root calls today, and would make none. That model
+changes condition 1, the runtime of every component and the accounting of
+every quota. It is a direction, and this decision does not take it.
+
 ## Alternatives
 
 - **Restructure without moving anything.** The trusted source stays the same
@@ -296,5 +361,8 @@ with that of stage one.
 - A design under `docs/plans/` moves the console dispatcher. The owner then
   decides whether it leaves.
 - The stage-two design is rejected. The series then stays where stage one
-  ends.
+  ends. The amendment of 2026-11-23 withdraws stage two before a design is
+  written.
+- A direction is accepted in which a component holds its own VSpace and its
+  frames. The owner then weighs the ioResource and sharedBuffer roles again.
 - A sixth crate enters the root's dependencies.
