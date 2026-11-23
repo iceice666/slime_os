@@ -1,4 +1,4 @@
-# The root task keeps mechanism only, and its source has a target
+# The root task keeps mechanism only, and a gate bounds its source
 
 **Status:** Accepted
 **Decided by:** the project's human owner, 2026-11-17
@@ -282,6 +282,11 @@ decides four points. The owner accepted point 3 on 2026-11-23:
    why.
 4. Functions of the two roles that no product code calls leave the root, or
    move into test items. They hold about 90 lines, and they have no item yet.
+
+One ceiling does not yet hold what its role has reached. The ceiling of the
+role `enforcement` is 2100, and the role holds 1706 lines since PR 1145. A
+planning pull request lowers it. Until then that role may grow by 394 lines
+within the ceiling of the series.
 
 The counts below are code lines, as `just root_size_check` counts them, on
 `main` at `4408d49b`.
