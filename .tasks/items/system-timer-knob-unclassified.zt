@@ -5,6 +5,7 @@ item :: s.Item = (h.bug "01a2084e-403e-71a9-8470-8eaf2118b811" "system-timer-kno
   "The image inventory refuses the system-timer switch of the image builder"
   "just system_image_closure_aggregate_check fails on main at 870c0ec: build knob(s) in none of the three classes, SLIME_SYSTEM_TIMER in build-sel4.py. Commit 742dab01 added that name to scripts/build/build-sel4.py for the flag --system-timer. scripts/check/check-system-image-aggregate.py reads every quoted SLIME_* name under scripts/build as a build knob, and it requires a class for each. The commit gave the name no class. just system_image_closure_gates_check depends on the target, so it cannot pass. No workflow under .github/workflows names either target.")
   with {
+    intent = #active;
     owns = {
       "scripts/check/check-system-image-aggregate.py";
     };
