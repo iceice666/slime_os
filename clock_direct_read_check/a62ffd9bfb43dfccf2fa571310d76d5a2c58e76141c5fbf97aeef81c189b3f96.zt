@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "clock_direct_read_check";
+  closureDigest = "a62ffd9bfb43dfccf2fa571310d76d5a2c58e76141c5fbf97aeef81c189b3f96";
+  passed = true;
+  exitCode = 0;
+  counts = {;};
+  flags = {;};
+  observedAt = "2026-11-23T09:03:33Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r

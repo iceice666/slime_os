@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "riscv64_sel4_root_boot_check";
+  closureDigest = "83fb5516d1707c2ef221a8217006c72e7abc0d16c461959818582b5d7a7c0847";
+  passed = true;
+  exitCode = 0;
+  counts = {;};
+  flags = {;};
+  observedAt = "2026-11-23T09:11:33Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
