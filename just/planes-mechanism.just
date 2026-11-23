@@ -167,6 +167,13 @@ sel4_channel_check: sel4_pin_check
 sel4_loan_check: sel4_pin_check
     python3 scripts/check/check-sel4-loan-plane.py
 
+# The loan plane with the export arm: the root refuses a sender that holds its
+# share of unimported exports, and a task's retirement releases every export
+# that names it. The arm's controls run in sel4_gate_control_check.
+[group('planes / mechanism')]
+sel4_export_share_check: sel4_pin_check
+    python3 scripts/check/check-sel4-loan-plane.py --export-share
+
 [group('planes / mechanism')]
 sel4_spawn_check: sel4_pin_check
     python3 scripts/check/check-sel4-spawn-plane.py

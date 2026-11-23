@@ -3060,6 +3060,96 @@ def check_private_memory_capacity_controls() -> int:
 
 
 
+def check_export_share_controls() -> int:
+    """The loan gate's export arm judges counts, so each control changes one.
+
+    The baseline is what a root with the share prints: four retained exports,
+    the refusal, the release at the receiver's retirement, and a census whose
+    imports are the one import line. A control that changes two lines keeps
+    every other count consistent, so the arm refuses it for the named reason.
+    """
+    gate = load_script("sel4_loan_plane_export_share", "check/check-sel4-loan-plane.py")
+    gate.fail = reject_control
+    share = gate.EXPORT_SHARE
+    refusal = gate.EXPORT_SHARE_REFUSED
+    retained = [
+        f"SLIME_GRAPH capability exported task=1 id={identity} kind=shared-buffer rights=0x4 retain=1"
+        for identity in range(2, 2 + share)
+    ]
+    loan_export = "SLIME_GRAPH capability exported task=1 id=1 kind=loan rights=0x200 retain=0"
+    loan_import = "SLIME_GRAPH capability imported task=2 id=1 kind=loan rights=0x200 retain=0"
+    receiver_exit = "SLIME_GRAPH component exit task=0 status=0"
+    release = f"SLIME_GRAPH exports released task=0 count={share}"
+    drain = "SLIME_GRAPH served live=0 unsupported=0 buffers=9 windows=0 tasks=0"
+
+    def census(exports: int, imports: int, tail: str = "outstanding=0 tickets=0") -> str:
+        return (
+            f"SLIME_GRAPH capabilities exports={exports} imports={imports} "
+            f"cancels=0 finalized={exports} {tail}"
+        )
+
+    def build(*, retained_lines=retained, order=None, released=release, counts=None) -> str:
+        middle = order if order is not None else [refusal, receiver_exit, released]
+        return "\n".join([
+            loan_export,
+            loan_import,
+            "SLIME_GRAPH component exit task=2 status=0",
+            *retained_lines,
+            *middle,
+            "[init] export ticket left for reclamation",
+            "SLIME_GRAPH component exit task=1 status=0",
+            drain,
+            counts if counts is not None else census(len(retained_lines) + 1, 1),
+        ]) + "\n"
+
+    transcript = build()
+    gate.check_export_share(transcript)
+    fifth = f"SLIME_GRAPH capability exported task=1 id={share + 2} kind=shared-buffer rights=0x4 retain=1"
+    mutations = [
+        ("export share: no refusal", transcript.replace(refusal + "\n", "")),
+        ("export share: two refusals", transcript.replace(refusal, refusal + "\n" + refusal)),
+        (
+            "export share: a fifth export admitted before the refusal",
+            build(retained_lines=[*retained, fifth], released=release.replace(f"count={share}", f"count={share + 1}")),
+        ),
+        (
+            "export share: refused below the share",
+            build(retained_lines=retained[:-1], released=release.replace(f"count={share}", f"count={share - 1}")),
+        ),
+        ("export share: nothing released", build(order=[refusal, receiver_exit])),
+        ("export share: released before the task exited", build(order=[refusal, release, receiver_exit])),
+        ("export share: released for a task that never exited", transcript.replace(release, release.replace("task=0", "task=7"))),
+        (
+            "export share: released only when the graph drained",
+            build(order=[refusal, receiver_exit]).replace(drain, drain + "\n" + release),
+        ),
+        ("export share: release of no export", transcript.replace(release, release.replace(f"count={share}", "count=0"))),
+        ("export share: release count short", transcript.replace(release, release.replace(f"count={share}", f"count={share - 1}"))),
+        (
+            "export share: an unimported export counted as an import",
+            build(order=[refusal, receiver_exit], counts=census(share + 1, share + 1)),
+        ),
+        ("export share: census imports differ from the import lines", build(counts=census(share + 1, 2))),
+        ("export share: census exports differ from the export lines", build(counts=census(share + 2, 1))),
+        ("export share: an export outstanding", build(counts=census(share + 1, 1, "outstanding=1 tickets=1"))),
+        ("export share: a ticket outstanding", build(counts=census(share + 1, 1, "outstanding=0 tickets=1"))),
+        ("export share: a cancel in the scenario", transcript.replace("cancels=0", "cancels=1")),
+        ("export share: no census", build(counts="")),
+        ("export share: no drained graph", transcript.replace(drain + "\n", "")),
+        ("export share: one export identity twice", transcript.replace("id=3 kind=shared-buffer", "id=2 kind=shared-buffer")),
+        ("export share: import of an unknown export", transcript.replace(loan_import, loan_import.replace("id=1", "id=99"))),
+        ("export share: import before its export", transcript.replace(loan_export + "\n" + loan_import, loan_import + "\n" + loan_export)),
+        ("export share: one export imported twice", transcript.replace(loan_import, loan_import + "\n" + loan_import)),
+    ]
+    for description, mutated in mutations:
+        if mutated == transcript:
+            fail(f"{description}: mutation did not change the transcript")
+        require_rejection(
+            description, "export share:", lambda mutated=mutated: gate.check_export_share(mutated)
+        )
+    return len(mutations)
+
+
 def check_large_image_controls() -> int:
     """Exercise grader plumbing with synthetic evidence, not a large-image boot."""
     from types import SimpleNamespace
@@ -3281,6 +3371,7 @@ def main() -> None:
     total += check_robot_withdrawn_controls()
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
+    total += check_export_share_controls()
     total += check_large_image_controls()
     total += check_root_memory_runtime_control()
     total += check_http_evidence_controls()
