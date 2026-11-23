@@ -81,15 +81,16 @@ roles. The count of 426 comes from a one-off script and is approximate.
 
 ### What stage one has reached
 
-The series holds 32893 code lines on `main` after PR 1138. The gate's ceiling
-is 33200.
+The series holds 32899 code lines on `main` after PR 1145. The gate's ceiling
+is 32950.
 
 | Step | State |
 |---|---|
 | fixture | Out of the series since PR 1107. |
 | The root names no product component | Done in PR 1117. `just root_size_check` counts 0 string literals that name a product component; it counted 6. |
-| The readers in `ipc.rs` | They stay. The builder states who reads a table, and the root answers from the generation's reader table. The dispatch role holds 2510 lines. |
+| The readers in `ipc.rs` | They stay. The builder states who reads a table, and the root answers from the generation's reader table. The dispatch role holds 2514 lines. |
 | policy and timer | They stay, by the amendment of 2026-11-22. The timer role grew to 1435 lines in PR 1118, which added the backend for the BCM2835 system timer. |
+| The sort of the policy role | Done in PR 1145. The gate names the role `enforcement`, and it holds 1706 lines. The clock requests count as timer, which holds 1612. The reclaim of a dead task counts as core, which holds 14925. The sort added 6 lines to the series. |
 | console | It stays, by the amendment of 2026-11-22, until a design moves the dispatcher. |
 | Test-only helpers inside product items | Done in PR 1138. 37 functions with 301 code lines stand in `#[cfg(test)]` blocks. 125 lines of fields and statements stay inside product items. |
 
@@ -128,7 +129,13 @@ The counts below are code lines, as `just root_size_check` counts them, on
 | Clock requests in `services/policy.rs` | 187 | They serve the timer role. |
 | Supervision and scheduling requests in `services/policy.rs` | 155 | Request decoding for the parts above. |
 
-The policy role holds 2069 lines. Decision point 2 already holds for it: a
+PR 1145 took the sort of decision 4, and the table above states the parts as
+they stood before it. The sort moved 176 lines of clock requests and 187 lines
+of reclaim: `record_termination` went with the reclaim, and
+`signal_declared_death` stayed with the wait sets. The gate now names the role
+`enforcement`.
+
+The policy role held 2069 lines. Decision point 2 already holds for it: a
 component with supervision authority decides a restart, waits and spawns.
 `robot-supervisor` and `lifecycle-restart-probe` do so today.
 
@@ -137,7 +144,8 @@ and the backoff instant of an instance in the same step that creates the task.
 The module states the rule: a supervisor that skips its wait is refused, not
 trusted. A component that held those counts would have to be trusted.
 
-The timer role holds 1435 lines, and it does not move for four reasons:
+The timer role held 1435 lines before the sort. It does not move, for four
+reasons:
 
 - The root proves its timer in the boot sequence, before a component exists.
 - The root uses the timer queue itself. One slot is reserved for its cleanup
@@ -185,7 +193,8 @@ Stage one therefore had one step left: the test-only helpers inside product
 items. PR 1138 took it. `main` held 426 code lines behind a `#[cfg(test)]`
 inside a product item. 301 of them were whole functions, and the step moved
 those. The other 125 are fields and statements, which cannot leave their item.
-The series holds 32893 lines after the step.
+The series held 32893 lines after the step, and holds 32899 after the sort of
+decision 4.
 
 The lines that a later decision can still move are in stage two, and in
 the 7929 lines of `object_allocator` that the alternatives below name.
@@ -245,8 +254,8 @@ two does not start before that.
 allows about 395 lines of what stays from every leaving role.
 
 The amendment of 2026-11-22 withdraws this target. The arithmetic above
-starts from 28660, which stage one no longer reaches. From 32893, the two
-roles leave about 26838, which is above 23000. The owner restates this target
+starts from 28660, which stage one no longer reaches. From 32899, the two
+roles leave about 26844, which is above 23000. The owner restates this target
 with that of stage one.
 
 ## Alternatives
@@ -255,7 +264,7 @@ with that of stage one.
   size.
 - **Stop after stage one.** The series ends near 28850 lines. This is the
   outcome if the stage-two design is rejected. Since the amendment of
-  2026-11-22 the series ends near 32893.
+  2026-11-22 the series ends at 32899.
 - **A target below 23000.** The `object_allocator` module and its tree hold
   7929 code lines after PR 1138, without `qualification.rs`, which the gate
   counts in the harness role. They held 8164 before. A lower target needs a
