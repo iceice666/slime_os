@@ -1,0 +1,11 @@
+o ::= import "./schema.zt";
+r :: o.Witness = {
+  schema = o.schemaVersion;
+  item = "01a2040b-02ce-715e-8411-23d0b103ddcf";
+  itemDigest = "e5e21ab0f716bdf0354a8b880de85d1fb8d6369983194cb0bb2a9b92a649fa8c";
+  mainSha = "4408d49b8b94d89ce5d3f6c5a41307866636effc";
+  targets = { { target = "clock_authority_check"; closureDigest = "eee0a03f9e6c52866f7a0599633ea58a825c7220fc2bc90a120c1011ff36775c"; negativeControlsRefused = -1; }; { target = "lifecycle_restart_check"; closureDigest = "e86a133adf57f87b8458f6f6ecc631a83d55b635e9ef1aed9b5db4fc57d7260f"; negativeControlsRefused = -1; }; { target = "root_size_check"; closureDigest = "ffbffd633e2aff3a18980ba2061f7e582473fc1f419d0c8bb1404ddb5e9df616"; negativeControlsRefused = -1; }; { target = "test_sel4_root"; closureDigest = "b30d0de014f9972f5831fc502dfddb2cce83a3423474231fd03ea94c4f77c04c"; negativeControlsRefused = -1; }; };
+  signer = "ci";
+  observedAt = "2026-11-23T03:26:27Z";
+};
+r
