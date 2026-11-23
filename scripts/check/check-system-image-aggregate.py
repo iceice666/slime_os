@@ -390,6 +390,12 @@ def check_no_undeclared_build_knobs(
     # Read only by the legacy build path CP15 deletes. Each is an ambient switch
     # whose closure equivalent either exists already or is named in CP14's
     # not-delivered set; none is reachable from `build-system-image.py`.
+    #
+    # `SLIME_SYSTEM_TIMER` is not ambient and has no closure equivalent.
+    # `build-sel4.py` refuses a value from the environment and sets the switch
+    # from `--system-timer` alone, and it gives the image and its identity the
+    # suffix `-system-timer`. No closure names that image, so the switch stays
+    # in this class until one does.
     LEGACY_PENDING_DELETION = {
         "SLIME_ACCEPTED_RELEASE_SEQUENCE",
         "SLIME_BOOT_BUNDLE_IDENTITY",
@@ -408,6 +414,7 @@ def check_no_undeclared_build_knobs(
         "SLIME_PRODUCT_UART_PADDR",
         "SLIME_QEMU_KEYBOARD",
         "SLIME_ROOT_FIXTURE",
+        "SLIME_SYSTEM_TIMER",
         "SLIME_TRANSFER_ACTIVATE",
         "SLIME_TRANSFER_RECEIVER",
         "SLIME_WRONG_TARGET_EXECUTABLE",
