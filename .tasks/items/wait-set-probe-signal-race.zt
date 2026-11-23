@@ -20,10 +20,15 @@ item :: s.Item = (h.bug "01a20820-646c-7e29-b769-5015679f9da6" "wait-set-probe-s
       h.req "arm-wait-set-plane-passes"
         "wait_set_check passes: on qemu-arm-virt the waiter reports one wake of two ready sources, and the gate accepts the transcript."
         { "wait_set_check"; };
+      h.req "no-signal-order-fails-the-waiter"
+        "No order of the two signals and the polls of the waiter makes the waiter print its failure marker for a wake that did not coalesce."
+        { "poll-order-read"; };
     };
     acceptance = {
       h.observed "riscv64_qemu_check";
       h.observed "wait_set_check";
+      h.human "poll-order-read"
+        "Read the change that a commit on main made to components/testkit/wait-set-probe for this item. Does the waiter make the poll that must return both sources only after both signals are raised? Does the control flow of the probe establish that order, with no count of yields or spins? Answer yes only if both hold. Note the commit.";
     };
     invariants = {
       h.invariant "both-signals-precede-the-required-poll"
@@ -41,9 +46,14 @@ item :: s.Item = (h.bug "01a20820-646c-7e29-b769-5015679f9da6" "wait-set-probe-s
         { "riscv-wait-set-step-passes"; "arm-wait-set-plane-passes"; };
       h.decided "one-boot-per-target-is-the-exam"
         "The item binds two existing targets, and each boots the plane once. No target repeats the boot."
-        "with the defect, 53 of 55 boots on qemu-riscv-virt passed. One passing record therefore does not show that the race is gone. A repeat exam needs 81 boots to fail with 95 % probability at that rate, and nobody chose that cost. The invariant both-signals-precede-the-required-poll states the rule, and the review of the implementation reads the probe against it"
+        "with the defect, 53 of 55 boots on qemu-riscv-virt passed. One passing record therefore does not show that the race is gone. A repeat exam needs 81 boots to fail with 95 % probability at that rate, and nobody chose that cost. The acceptance poll-order-read covers what one boot does not show"
         h.agentDefault
         { "riscv-wait-set-step-passes"; };
+      h.decided "a-person-reads-the-changed-probe"
+        "The human acceptance poll-order-read asks a person to read the changed probe against the invariant both-signals-precede-the-required-poll. The done witness waits for a signed yes."
+        "wait_set_check and riscv64_qemu_check pass with the race in the probe. With those two acceptances alone, the Evidence workflow signs the done witness on the push that sets this item active, with no change to the probe. The other choice was a predicate on a marker that only the fixed probe prints"
+        (h.fromHuman "加 h.human acceptance" "Claude Code session 5f81f1ad-ee63-4df8-b08a-1cf001c0e9c5, 2026-11-23, choosing a human acceptance over a marker predicate")
+        { "no-signal-order-fails-the-waiter"; };
     };
   };
 
