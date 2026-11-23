@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "rpi5_system_timer_image_check";
+  closureDigest = "ace618ba11b63b908fb92e847825ca041200e8227607bfdfe03e9a47336d96df";
+  passed = true;
+  exitCode = 0;
+  counts = { { key = "el0ProgramsAudited"; value = 12; }; { key = "el0TimerAccesses"; value = 0; }; { key = "el0TimerAccessesWithoutSwitch"; value = 72; }; { key = "el0TimerSyntheticControls"; value = 63; }; };
+  flags = {;};
+  observedAt = "2026-11-23T16:38:09Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
