@@ -1,0 +1,60 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.task "01a20cfb-a941-7973-b0ac-73ed3d441495" "nix-cache-keeps-zutai-toolchain" "quality"
+  "The Nix cache entry keeps the zutai-toolchain output, so no CI job builds it again"
+  "Every job that runs slime-env builds zutai-toolchain from source, because the restored Nix store does not hold it. In main run 1626 the step `Enter the dev shell` took 109 to 121 s, and that build took 95 to 103 s of it. Before cache-nix-action saves the Nix store, it collects garbage down to 5 GB. `nix develop` registers no garbage collector root, so the collection deletes the dev shell and zutai-toolchain. The entry saved on 2026-11-23 at 15:11:35 UTC came from an 8.1 GB store that this collection cut to 5.3 GB. A primary-key hit saves nothing, so every job restores that entry until the key changes.")
+  with {
+    intent = #planned;
+    owns = {
+      ".github/actions/slime-env/**";
+      ".github/workflows/**";
+    };
+    nonGoals = {
+      h.nonGoal "Changing the build-output caches, the Zutai evaluation stores, or the Kani, MyQue, projection or rust-cache caches." h.agentDefault;
+      h.nonGoal "Changing what any check asserts, or removing a job's restore of the Nix store." h.agentDefault;
+      h.nonGoal "The tool environment of the work-item, spec-judge and evidence jobs, which do not use the default dev shell." h.agentDefault;
+      h.nonGoal "Changing the bounds of ci-cache-budget. That item judges the total cache size and the slime-env time." h.agentDefault;
+    };
+    requirements = {
+      h.req "checks-unchanged"
+        "Every target that ci_critical_path_check depends on passes with the changed slime-env action."
+        { "ci_critical_path_check"; };
+      h.req "toolchain-survives-save"
+        "A job that restores the saved Nix cache entry enters the dev shell without building a zutai-toolchain derivation."
+        { "nix-cache-observed"; };
+      h.req "dev-shell-time"
+        "In every seL4 job that restores the saved Nix cache entry, the step `Enter the dev shell` takes at most 40 s."
+        { "nix-cache-observed"; };
+      h.req "entry-size"
+        "The saved Nix cache entry is at most 2700 MB."
+        { "nix-cache-observed"; };
+      h.req "old-entry-unused"
+        "After the first main run that saves a new Nix cache entry, no main job restores the entry created on 2026-11-23 at 15:11:35 UTC."
+        { "nix-cache-observed"; };
+    };
+    acceptance = {
+      h.observed "ci_critical_path_check";
+      h.human "nix-cache-observed"
+        "Reading the main-branch CI runs after the implementation merged: take 3 consecutive runs after the first one that saved a new Nix cache entry, each with the seL4 jobs succeeded, not cancelled, and no change to a Nix cache key input since the preceding counted run. In each of them, did no job log a line that builds a zutai-toolchain derivation, did every seL4 job's `Enter the dev shell` step take at most 40 s, and did no job restore the entry created on 2026-11-23 at 15:11:35 UTC? After the last of them, was the Nix cache entry at most 2700 MB? Note the last counted run's URL.";
+    };
+    decisions = {
+      h.decided "replace-by-key"
+        "The implementation replaces the current Nix cache entry by changing its key, and no person deletes a cache entry by hand"
+        "a primary-key hit saves nothing, so a fixed save step never runs while the current key exists; a key change needs no destructive action, and GitHub removes the unused entry after 7 days without access"
+        h.agentDefault
+        { "old-entry-unused"; };
+      h.decided "size-bound"
+        "The saved Nix cache entry is bounded at 2700 MB"
+        "the entry is 2398 MB today and the repository's caches total 8659 MB, so ci-cache-budget's 9000 MB bound leaves about 340 MB for the toolchain's closure"
+        h.agentDefault
+        { "entry-size"; };
+      h.decided "time-bound"
+        "The step `Enter the dev shell` is bounded at 40 s"
+        "without the zutai-toolchain build the step spent 13 to 18 s in run 1626 fetching paths from cache.nixos.org and evaluating the shell; 40 s leaves room for runner variance"
+        h.agentDefault
+        { "dev-shell-time"; };
+    };
+  };
+
+item
