@@ -7,6 +7,10 @@ io_driver_authority_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-driver-authority-plane.py
 
 [group('planes / mechanism')]
+io_pci_binding_check: sel4_pin_check
+    python3 scripts/check/check-io-pci-binding.py
+
+[group('planes / mechanism')]
 io_network_check: sel4_pin_check
     python3 scripts/check/check-sel4-io-network-plane.py
 

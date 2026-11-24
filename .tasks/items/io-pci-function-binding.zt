@@ -1,0 +1,148 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function-binding" "planes-mechanism"
+  "The root binds one declared PCI function on qemu-arm-virt to a userspace driver"
+  "QEMU attaches xHCI only as a PCI function, and Slime OS binds no PCI function on any target. `slime-root` scans virtio-mmio windows only, and the plan gives PCI binding to H2, which waits on the Framework inventory. No USB work can start under QEMU until one PCI function reaches a userspace driver through IO1 resources.")
+  with {
+    intent = #planned;
+    owns = {
+      "slime-root/src/pci.rs";
+      "slime-root/src/pci/**";
+      "slime-root/src/lib.rs";
+      "slime-root/src/device.rs";
+      "slime-root/src/io_resource.rs";
+      "slime-root/src/generation.rs";
+      "slime-root/src/graph_runtime.rs";
+      "slime-root/src/graph_runtime/**";
+      "boot-contracts/src/io_resource.rs";
+      "boot-contracts/src/generated/**";
+      "contracts/io-resource/v1/**";
+      "contracts/component-spec/v1/components/pci-*.zti";
+      "contracts/composition-inventory/v1/inventory.zti";
+      "contracts/system-spec/v1/systems/sel4-io-pci.zti";
+      "contracts/generation-manifest/v1/compositions/sel4-io-pci.zti";
+      "contracts/system-image-closure/v3/closures/sel4-io-pci.zti";
+      "components/testkit/pci-binding-probe/**";
+      "components/testkit/pci-intruder/**";
+      "components/runtime/src/**";
+      "Cargo.toml";
+      "Cargo.lock";
+      "docs/architecture/io-substrate.md";
+    };
+    nonGoals = {
+      h.nonGoal "An xHCI driver: command, event and transfer rings, port reset, device enumeration, USB descriptors and HID. The probe reads two capability words and nothing else." h.agentDefault;
+      h.nonGoal "DMA, bus mastering, MSI and MSI-X. The function's command register keeps bus mastering off, and the composition declares no DMA account." h.agentDefault;
+      h.nonGoal "PCI on x86 q35, riscv-virt or the Framework. H2 later states the Framework profile of the same binding." h.agentDefault;
+      h.nonGoal "Bridges, buses other than 0, multi-function devices, I/O BARs and the 64-bit memory window." h.agentDefault;
+      h.nonGoal "A DMA containment claim. QEMU arm-virt has no IOMMU in this profile." h.agentDefault;
+      h.nonGoal "A row in `docs/reference/just-targets.md`. A documentation PR adds it, as for earlier exams." h.agentDefault;
+      h.nonGoal "A change to `scripts/build/`, `scripts/generate/` or `scripts/lib/`. Each is a grader of other targets or an input the exam reads. If the generation builder must learn a new capability kind, that change lands in its own planning PR with a V4 approval." h.agentDefault;
+    };
+    invariants = {
+      h.invariant "only-the-root-writes-configuration"
+        "No component receives a capability to ECAM or to any configuration register. Only `slime-root` reads and writes PCI configuration space."
+        h.agentDefault;
+      h.invariant "driver-sees-no-platform-address"
+        "Driver code receives device, MMIO and interrupt capabilities only. It never receives a bus, device or function number, a physical address or an IRQ number."
+        h.agentDefault;
+      h.invariant "no-ambient-enumeration"
+        "The root reads the configuration space of declared functions only. It configures no function that the generation does not declare."
+        h.agentDefault;
+    };
+    requirements = {
+      h.req "binds-the-declared-function"
+        "On qemu-arm-virt the root binds the one PCI function the generation declares, 00:03.0 with identity 1b36:000d. It prints one `SLIME_PCI bind` record with the BAR 0 size, address, command value and IRQ."
+        { "io_pci_binding_check"; };
+      h.req "bar-at-the-window-base"
+        "The root places BAR 0 at the base of the 32-bit memory window that QEMU's device tree states. The QEMU monitor reads the same address from the BAR registers and from `info pci`."
+        { "io_pci_binding_check"; };
+      h.req "memory-decoding-only"
+        "The function's command register reads 0x0002 after binding: memory decoding on, I/O decoding and bus mastering off. The composition declares no DMA account, and both reclaim records show zero DMA pages held."
+        { "io_pci_binding_check"; };
+      h.req "interrupt-follows-the-device-tree"
+        "The root grants the INTx route that QEMU's interrupt-map assigns to the function's interrupt pin. The IRQ it prints equals 32 plus the SPI number in that map."
+        { "io_pci_binding_check"; };
+      h.req "probe-reads-its-bar"
+        "The probe holds exactly BAR-size MMIO bytes and one interrupt source. It reads the first two capability words of the xHCI. They equal the words the QEMU monitor reads at the BAR address."
+        { "io_pci_binding_check"; };
+      h.req "root-refuses-past-the-bar"
+        "The root refuses a probe access at the first byte past BAR 0. It prints one `SLIME_IO mmio refused` record with that offset and the task of the first incarnation."
+        { "io_pci_binding_check"; };
+      h.req "fault-reclaims-and-rebinds"
+        "A probe fault with live authority reclaims the BAR mapping and the interrupt source to zero, in a record for the faulted task. The replacement binds at epoch 2, reads the same capability words, and its exit reclaim leaves nothing held."
+        { "io_pci_binding_check"; };
+      h.req "undeclared-functions-untouched"
+        "The undeclared `pci-testdev` at 00:05.0 and QEMU's default network function at 00:01.0 keep command value 0 and unassigned BARs. `info pci` maps none of their BARs."
+        { "io_pci_binding_check"; };
+      h.req "ungranted-component-holds-nothing"
+        "The derived manifest binds no grant to the `pci-intruder` instance, and no device, MMIO, interrupt or DMA grant names it. The intruder reports all three requests denied without a fault."
+        { "io_pci_binding_check"; };
+      h.req "wrong-identity-fails-closed"
+        "When 00:03.0 holds another identity, the root prints one fatal record that names the declared and the found identity. It launches no component. No function at 00:01.0, 00:03.0 or 00:04.0 decodes memory or holds a BAR."
+        { "io_pci_binding_check"; };
+      h.req "controls-are-refused"
+        "The judge refuses 33 inputs: 3 corrupted manifests, 29 corrupted transcripts and 1 corrupted machine model, across both boots."
+        { "io_pci_binding_check"; };
+    };
+    acceptance = {
+      h.observedWhere "io_pci_binding_check" {
+        h.count "casesObserved" 83;
+        h.count "negativeControlsRefused" 33;
+      };
+    };
+    decisions = {
+      h.decided "portable-binding-on-arm-virt"
+        "The first PCI binding is portable mechanism on qemu-arm-virt, with machine facts pinned in the root as for virtio-mmio. It is not the Framework binding of H2."
+        "every plane gate runs on qemu-arm-virt, and q35 would need ACPI MCFG parsing and IOAPIC routing in the root first"
+        (h.fromHuman "arm-virt 通用綁定 (Recommended)" "Claude Code session 0946c66e-e6cf-4ff4-b073-74e1a653fb07, 2026-11-24, choosing a portable PCI binding on qemu-arm-virt over x86 q35")
+        { "binds-the-declared-function"; "bar-at-the-window-base"; "interrupt-follows-the-device-tree"; };
+      h.decided "binding-before-xhci"
+        "This item stops at the binding. xHCI rings and enumeration are the next item, and HID and the seat service follow it."
+        "the H3 exit condition needs keyboard and pointer input into Slisp, which is too large for one item"
+        (h.fromHuman "只做 PCI 綁定 (Recommended)" "Claude Code session 0946c66e-e6cf-4ff4-b073-74e1a653fb07, 2026-11-24, choosing a binding-only first item over binding plus xHCI enumeration")
+        { "probe-reads-its-bar"; };
+      h.decided "the-root-places-bars"
+        "The root assigns BAR addresses. It places BAR 0 at the base of the 32-bit window."
+        "no firmware assigns BARs when QEMU loads the image with -kernel. A driver that chose its own address could overlap another window. A fixed rule keeps the boot deterministic"
+        h.agentDefault
+        { "bar-at-the-window-base"; };
+      h.decided "the-monitor-is-the-judge"
+        "The exam reads configuration and xHCI registers through the QEMU monitor after the guest finishes. It reads the machine facts from the device tree QEMU dumps for the pinned machine."
+        "a guest that reports its own configuration can report a value it never wrote. QEMU's view of the device does not depend on the guest"
+        h.agentDefault
+        { "bar-at-the-window-base"; "memory-decoding-only"; "interrupt-follows-the-device-tree"; "probe-reads-its-bar"; "undeclared-functions-untouched"; "wrong-identity-fails-closed"; };
+      h.decided "the-enforcer-reports-the-refusal"
+        "The root prints the MMIO refusal it enforces. The intruder's denial rests on the derived manifest, because the kernel enforces an empty slot and prints nothing."
+        "a component that only reports its own refusal can print the line without making the request"
+        h.agentDefault
+        { "root-refuses-past-the-bar"; "ungranted-component-holds-nothing"; };
+      h.decided "configuration-lives-with-the-generation"
+        "A component's death revokes its capabilities only. The function stays configured until the generation ends."
+        "the configured function is a fact of the admitted generation, not of one component instance, and the monitor reads it after every component exits"
+        h.agentDefault
+        { "fault-reclaims-and-rebinds"; "memory-decoding-only"; };
+      h.decided "identity-mismatch-stops-the-root"
+        "A declared function with the wrong identity stops the root through `stop!` before it writes any configuration register."
+        "a generation that names hardware the machine does not hold cannot run as declared, and a partial graph would hide the mismatch"
+        h.agentDefault
+        { "wrong-identity-fails-closed"; };
+      h.decided "non-default-port-counts"
+        "The exam starts `qemu-xhci` with `p2=3,p3=2`, so HCSPARAMS1 differs from the model's default."
+        "a probe that prints the default register values without a read then disagrees with the monitor"
+        h.agentDefault
+        { "probe-reads-its-bar"; };
+      h.decided "exam-outside-the-plane-inventory"
+        "The checker is `scripts/check/check-io-pci-binding.py`, and it names the closure through `PCI_CLOSURE`, not a top-level `CLOSURE` constant."
+        "a `check-sel4-*` file joins the test-run inventory, and a `CLOSURE` constant joins the devloop closure digest. Both resolve the closure, which this planning PR cannot add, so either name would fail a bound target on main"
+        h.agentDefault
+        { "controls-are-refused"; };
+    };
+    knownLimits = {
+      h.knownLimit "io_pci_binding_check"
+        "The digest of this target is coarse: it covers the whole product tree, so any product change re-runs it. Its QEMU arguments sit in the checker, not in a `system-test-run` record. The guest and the monitor share one serial stream, and the judge cannot tell a monitor line from an identical guest line. A follow-up planning PR, with a V4 approval, can move the checker into the plane inventory once the closure exists."
+        h.agentDefault;
+    };
+  };
+
+item
