@@ -302,7 +302,8 @@ def function_reads(facts: MachineFacts, label: str, slot: int) -> tuple[MonitorR
     return (
         MonitorRead(f"{label} id", facts.config(slot, 0x00), 1),
         MonitorRead(f"{label} command", facts.config(slot, 0x04), 1),
-        MonitorRead(f"{label} bars", facts.config(slot, 0x10), 2),
+        # All six BAR registers: a 64-bit BAR at index 4 is outside the first two.
+        MonitorRead(f"{label} bars", facts.config(slot, 0x10), 6),
     )
 
 
@@ -364,16 +365,20 @@ def parse_monitor(transcript: str, after: int, reads: tuple[MonitorRead, ...], v
         indices = [index for index, echo in enumerate(echoes) if echo == expected]
         if len(indices) != 1:
             refuse(f"monitor command {read.command()!r} echoed {len(indices)} times")
-        index = indices[0]
-        if index + 1 >= len(lines):
-            refuse(f"no reply to {read.command()!r}")
-        reply = XP_REPLY.match(lines[index + 1].strip())
-        if reply is None or int(reply.group("address"), 16) != read.address:
-            refuse(f"malformed reply to {read.command()!r}: {lines[index + 1]!r}")
-        values = tuple(int(word, 16) for word in reply.group("words").split())
+        # `xp` prints at most four words per line; each further line starts at the next address.
+        values: list[int] = []
+        line = indices[0] + 1
+        while len(values) < read.words:
+            if line >= len(lines):
+                refuse(f"no complete reply to {read.command()!r}")
+            reply = XP_REPLY.match(lines[line].strip())
+            if reply is None or int(reply.group("address"), 16) != read.address + 4 * len(values):
+                refuse(f"malformed reply to {read.command()!r}: {lines[line]!r}")
+            values.extend(int(word, 16) for word in reply.group("words").split())
+            line += 1
         if len(values) != read.words:
             refuse(f"{read.label}: expected {read.words} words, read {len(values)}")
-        words[read.label] = values
+        words[read.label] = tuple(values)
     info_start = [index for index, echo in enumerate(echoes) if echo == "(qemu) info pci"]
     if len(info_start) != 1:
         refuse("the monitor did not answer `info pci` exactly once")
@@ -434,9 +439,32 @@ def require_untouched(tally: Tally, view: MonitorView, label: str, slot: int, id
     words = view.words
     tally.require(words[f"{label} id"] == (identity,), f"QEMU does not place {identity:08x} at 00:0{slot}.0")
     tally.require(words[f"{label} command"][0] & 0xFFFF == 0, f"the root changed the command register of 00:0{slot}.0")
-    bar0, bar1 = words[f"{label} bars"]
-    tally.require(bar0 & ~0xF == 0 and bar1 & ~0x3 == 0, f"the root assigned a BAR of 00:0{slot}.0")
+    assigned = assigned_bars(words[f"{label} bars"])
+    tally.require(not assigned, f"the root assigned BAR(s) {assigned} of 00:0{slot}.0")
     tally.require(not view.bars.get(slot), f"`info pci` maps a BAR of 00:0{slot}.0")
+
+
+def assigned_bars(registers: tuple[int, ...]) -> list[int]:
+    """Indices of the six BAR registers that hold an address.
+
+    An I/O BAR keeps its two low bits, a memory BAR its four. A 64-bit memory
+    BAR takes the next register as its upper half, which holds no flag bits.
+    """
+    assigned: list[int] = []
+    index = 0
+    while index < len(registers):
+        value = registers[index]
+        if value & 0x1:
+            if value & ~0x3:
+                assigned.append(index)
+            index += 1
+            continue
+        wide = (value >> 1) & 0x3 == 0x2
+        upper = registers[index + 1] if wide and index + 1 < len(registers) else 0
+        if value & ~0xF or upper:
+            assigned.append(index)
+        index += 2 if wide else 1
+    return assigned
 
 
 def require_fields(tally: Tally, line: re.Match[str], expected: tuple[tuple[str, int], ...], label: str) -> None:
@@ -490,7 +518,7 @@ def judge_bind(transcript: str, facts: MachineFacts, version: str) -> int:
         f"command register {words['declared command'][0] & 0xFFFF:#06x}: expected memory decoding only",
     )
     tally.require(
-        words["declared bars"] == (address | 0x4, 0),
+        words["declared bars"] == (address | 0x4, 0, 0, 0, 0, 0),
         f"BAR registers {words['declared bars']} disagree with the root's address {address:#x}",
     )
     pin = (words["declared interrupt"][0] >> 8) & 0xFF
@@ -533,7 +561,11 @@ def judge_bind(transcript: str, facts: MachineFacts, version: str) -> int:
     tally.require(int(beyond.group("offset")) == size, "the probe reports another refused offset")
     faulting = single(FAULTING, guest, "fault with live authority", beyond.end())
     tally.require(faulting.start() < second_bound.start(), "the fault is not in the first incarnation")
-    fault = single(FAULT, guest, "root fault record", faulting.end())
+    # Exactly one component faults in the whole run: the probe, after it says so.
+    faults = list(FAULT.finditer(guest))
+    tally.require(len(faults) == 1, f"the root printed {len(faults)} fault records, expected the probe's alone")
+    fault = faults[0]
+    tally.require(fault.start() >= faulting.end(), "the fault record precedes the probe's fault")
     task = fault.group("task")
     tally.require(refused.group("task") == task, f"the refusal names task {refused.group('task')}, the fault task {task}")
 
@@ -582,7 +614,6 @@ def judge_bind(transcript: str, facts: MachineFacts, version: str) -> int:
         "exit reclaim",
     )
     single(DENIED, guest, "ungranted denial")
-    tally.require(not FAULT.search(guest, fault.end()), "a second component faulted")
     return tally.cases
 
 
@@ -629,8 +660,9 @@ def replace_group(match: re.Match[str], group: str, value: str) -> str:
     return line[:start] + value + line[end:]
 
 
-def reply_for(read: MonitorRead) -> re.Pattern[str]:
-    return re.compile(rf"^{read.address:x}: (?P<words>(?:0x[0-9a-f]{{8}} ?)+)$", re.M)
+def reply_for(read: MonitorRead, line: int = 0) -> re.Pattern[str]:
+    """One line of an `xp` reply; line `n` starts four words after line `n - 1`."""
+    return re.compile(rf"^{read.address + 16 * line:x}: (?P<words>(?:0x[0-9a-f]{{8}} ?)+)$", re.M)
 
 
 def insert_before(transcript: str, pattern: re.Pattern[str], line: str) -> str:
@@ -666,11 +698,45 @@ def run_controls(mutations: tuple[tuple[str, Callable[[], object]], ...]) -> int
     return refused
 
 
+def set_word(transcript: str, read: MonitorRead, index: int, value: int) -> str:
+    """Replace one word of one `xp` reply, keeping the reply's length."""
+
+    position = index % 4
+
+    def change(match: re.Match[str]) -> str:
+        values = match.group("words").split()
+        if position >= len(values):
+            fail(f"control needs word {index} of {read.command()!r}")
+        values[position] = f"0x{value:08x}"
+        return replace_group(match, "words", " ".join(values))
+
+    return edit(transcript, reply_for(read, index // 4), change)
+
+
+def shift_info_pci_bar(transcript: str, step: int) -> str:
+    """Move the first mapped BAR range that `info pci` prints."""
+    pattern = re.compile(r"^(?P<lead>\s+BAR\d: .+? at 0x)(?P<start>[0-9a-f]+) \[0x(?P<end>[0-9a-f]+)\]", re.M)
+    return edit(
+        transcript,
+        pattern,
+        lambda m: f"{m.group('lead')}{int(m.group('start'), 16) + step:x} [0x{int(m.group('end'), 16) + step:x}]",
+    )
+
+
+def map_info_pci_bar(transcript: str, slot: int, start: int) -> str:
+    """Add a mapped BAR 0 line under one function of `info pci`."""
+    header = re.compile(rf"^\s+Bus\s+0, device\s+{slot}, function 0:$", re.M)
+    return edit(transcript, header, lambda m: f"{m.group(0)}\n      BAR0: 32 bit memory at {start:#x} [{start + 0xFFF:#x}].")
+
+
 def bind_controls(transcript: str, facts: MachineFacts, version: str) -> int:
     reads = {read.label: read for read in bind_reads(facts)}
 
     def words(label: str, value: str) -> str:
         return edit(transcript, reply_for(reads[label]), lambda m: replace_group(m, "words", value))
+
+    def word(label: str, index: int, value: int) -> str:
+        return set_word(transcript, reads[label], index, value)
 
     def field(pattern: re.Pattern[str], index: int, old: str, new: str) -> str:
         changed = edit(transcript, pattern, lambda m: m.group(0).replace(old, new), index)
@@ -686,10 +752,13 @@ def bind_controls(transcript: str, facts: MachineFacts, version: str) -> int:
         ("binding enabled bus mastering", edit(transcript, BIND, lambda m: replace_group(m, "command", "0006"))),
         ("binding names another interrupt", edit(transcript, BIND, lambda m: replace_group(m, "irq", plus(m.group("irq"), 1)))),
         ("device has bus mastering on", words("declared command", "0x00100006")),
-        ("device BAR differs from the binding", words("declared bars", f"0x{facts.mem32_base + 0x1000 | 0x4:08x} 0x00000000")),
+        ("device BAR differs from the binding", word("declared bars", 0, facts.mem32_base + 0x1000 | 0x4)),
+        ("info pci maps BAR 0 elsewhere", shift_info_pci_bar(transcript, 0x1000)),
         ("undeclared testdev decodes memory", words("testdev command", "0x00000002")),
-        ("undeclared testdev holds a BAR", words("testdev bars", f"0x{facts.mem32_base + 0x10000:08x} 0x00000001")),
+        ("undeclared testdev holds a BAR", word("testdev bars", 0, facts.mem32_base + 0x10000)),
+        ("info pci maps a testdev BAR", map_info_pci_bar(transcript, BIND_UNDECLARED_SLOT, facts.mem32_base + 0x10000)),
         ("default NIC decodes memory", words("nic command", "0x00000002")),
+        ("default NIC BAR 4 assigned with decoding off", word("nic bars", 4, facts.mem32_base + 0x40000 | 0xC)),
         ("probe read a constant", edit(transcript, CAPABILITIES, lambda m: replace_group(m, "hcs", f"{int(m.group('hcs'), 16) ^ 0x100:08x}"))),
         ("probe MMIO bound is not the BAR size", edit(transcript, BOUND, lambda m: replace_group(m, "bytes", plus(m.group("bytes"), int(m.group("bytes")))))),
         ("root refusal missing", edit(transcript, ROOT_REFUSED, lambda _m: "")),
@@ -702,6 +771,7 @@ def bind_controls(transcript: str, facts: MachineFacts, version: str) -> int:
         ("exit reclaim missing", edit(transcript, RECLAIM, lambda _m: "", 1)),
         ("replacement reused the old epoch", edit(transcript, BOUND, lambda m: replace_group(m, "epoch", "1"), 1)),
         ("intruder not denied", edit(transcript, DENIED, lambda _m: "")),
+        ("intruder faulted before the probe", insert_before(transcript, FAULTING, "SLIME_GRAPH component fault task=12 kind=VmFault address=Some(0)")),
         ("explicit probe failure", insert_before(transcript, HEALTHY, f"[{PROBE}] fail: injected control")),
         ("guest output repeats a monitor command", spoof_reply(transcript, reads["testdev command"])),
     )
@@ -721,13 +791,17 @@ def identity_controls(transcript: str, facts: MachineFacts, version: str) -> int
     def words(label: str, value: str) -> str:
         return edit(transcript, reply_for(reads[label]), lambda m: replace_group(m, "words", value))
 
+    def word(label: str, index: int, value: int) -> str:
+        return set_word(transcript, reads[label], index, value)
+
     texts: tuple[tuple[str, str], ...] = (
         ("refused function still bound", insert_before(transcript, IDENTITY_FATAL, "SLIME_PCI bind function=00:03.0")),
         ("probe launched", insert_before(transcript, IDENTITY_FATAL, f"[{PROBE}] bound bytes=16384 irqs=1 epoch=1")),
         ("refusal names the declared identity as found", edit(transcript, IDENTITY_FATAL, lambda m: replace_group(m, "found", DECLARED_ID))),
         ("declared function decodes memory", words("declared command", "0x00000002")),
-        ("misplaced xHCI holds a BAR", words("xhci bars", f"0x{facts.mem32_base | 0x4:08x} 0x00000000")),
-        ("default NIC holds a BAR", words("nic bars", f"0x{facts.mem32_base + 0x20000:08x} 0x00000000")),
+        ("misplaced xHCI holds a BAR", word("xhci bars", 0, facts.mem32_base | 0x4)),
+        ("info pci maps a misplaced xHCI BAR", map_info_pci_bar(transcript, IDENTITY_XHCI_SLOT, facts.mem32_base)),
+        ("default NIC holds a BAR", word("nic bars", 1, facts.mem32_base + 0x20000)),
         ("second fatal record", insert_before(transcript, IDENTITY_FATAL, "SLIME_ROOT FATAL earlier")),
     )
     return run_controls(tuple((label, lambda mutated=mutated: judge_identity(mutated, facts, version)) for label, mutated in texts))

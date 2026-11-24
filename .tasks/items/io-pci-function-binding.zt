@@ -73,22 +73,22 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
         "A probe fault with live authority reclaims the BAR mapping and the interrupt source to zero, in a record for the faulted task. The replacement binds at epoch 2, reads the same capability words, and its exit reclaim leaves nothing held."
         { "io_pci_binding_check"; };
       h.req "undeclared-functions-untouched"
-        "The undeclared `pci-testdev` at 00:05.0 and QEMU's default network function at 00:01.0 keep command value 0 and unassigned BARs. `info pci` maps none of their BARs."
+        "The undeclared `pci-testdev` at 00:05.0 and QEMU's default network function at 00:01.0 keep command value 0, and none of their six BAR registers holds an address. `info pci` maps none of their BARs."
         { "io_pci_binding_check"; };
       h.req "ungranted-component-holds-nothing"
-        "The derived manifest binds no grant to the `pci-intruder` instance, and no device, MMIO, interrupt or DMA grant names it. The intruder reports all three requests denied without a fault."
+        "The derived manifest binds no grant to the `pci-intruder` instance, and no device, MMIO, interrupt or DMA grant names it. The intruder reports all three requests denied, and the run holds one fault record: the probe's."
         { "io_pci_binding_check"; };
       h.req "wrong-identity-fails-closed"
-        "When 00:03.0 holds another identity, the root prints one fatal record that names the declared and the found identity. It launches no component. No function at 00:01.0, 00:03.0 or 00:04.0 decodes memory or holds a BAR."
+        "When 00:03.0 holds another identity, the root prints one fatal record that names the declared and the found identity. It launches no component. No function at 00:01.0, 00:03.0 or 00:04.0 decodes memory, and none of their six BAR registers holds an address."
         { "io_pci_binding_check"; };
       h.req "controls-are-refused"
-        "The judge refuses 33 inputs: 3 corrupted manifests, 29 corrupted transcripts and 1 corrupted machine model, across both boots."
+        "The judge refuses 38 inputs: 3 corrupted manifests, 34 corrupted transcripts and 1 corrupted machine model, across both boots."
         { "io_pci_binding_check"; };
     };
     acceptance = {
       h.observedWhere "io_pci_binding_check" {
-        h.count "casesObserved" 83;
-        h.count "negativeControlsRefused" 33;
+        h.count "casesObserved" 84;
+        h.count "negativeControlsRefused" 38;
       };
     };
     decisions = {
