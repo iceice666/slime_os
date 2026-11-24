@@ -242,8 +242,8 @@ pub(super) fn cleanup_export_ticket(
 /// settle one of them: only its sender cancels, and only its receiver imports.
 ///
 /// A finalized endpoint export is an import, not a release. The kernel moved
-/// its capability to the receiver at the rendezvous, and the entry only keeps
-/// the ticket that revokes it.
+/// its capability to the receiver at the rendezvous. The entry only holds the
+/// root's ticket and its mirror in the sender's CNode until their slots return.
 pub(super) fn release_task_exports(
     allocator: &mut ObjectAllocator,
     tasks: &TaskTable<MAX_TASKS>,
