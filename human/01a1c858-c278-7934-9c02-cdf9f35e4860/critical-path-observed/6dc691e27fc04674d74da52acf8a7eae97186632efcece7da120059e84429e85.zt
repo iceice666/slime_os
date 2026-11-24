@@ -1,0 +1,13 @@
+o ::= import "./schema.zt";
+r :: o.HumanRecord = {
+  schema = o.schemaVersion;
+  area = "";
+  requirement = "01a1c858-c278-7934-9c02-cdf9f35e4860";
+  acceptance = "critical-path-observed";
+  requirementsDigest = "6dc691e27fc04674d74da52acf8a7eae97186632efcece7da120059e84429e85";
+  value = true;
+  note = "Main runs 1622, 1626, 1627: shards 1-3 check steps at most 896 s, the image-builder job runs image_builder_closures_check without the unsharded check, slowest critical path 1754 s. Last run: https://github.com/iceice666/slime_os/actions/runs/45363639079";
+  signer = "iceice666";
+  observedAt = "2026-11-24T09:54:07Z";
+};
+r
