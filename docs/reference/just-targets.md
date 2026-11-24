@@ -239,6 +239,7 @@ For how the planes work and how to add one, read
 | `just sel4_channel_check` | P5.3.1 gate: two components rendezvous over a generation-declared native seL4 Endpoint. |
 | `just sel4_crossing_check` | B22 gate: a graph outlives `MAX_CHANNELS` and still sends on every live one. |
 | `just sel4_loan_check` | P5.3.2 gate: a loan crosses between components on seL4, against quotas the generation declared. |
+| `just sel4_export_share_check` | The loan gate with its export arm: the root refuses a sender that holds 4 unimported exports, and releases the exports of a retired task. |
 | `just sel4_reclamation_check` | B38 gate: exceed old task CSlot/untyped lifetime watermarks with bounded live use. |
 | `just sel4_large_image_check` | Large component images on `sel4-large-image`: a probe past every former image and generation bound verifies its own pages across four launches, faults once on read-only data and is reclaimed to the same watermarks, while builder, checker and root refuse every ceiling, with the host, generation, boot-layout, C runtime and reclamation regressions; fails until the composition lands. |
 | `just sel4_sample_check` | P5.3.4 gate: the C7 sample plane, composed on seL4. |
