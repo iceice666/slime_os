@@ -10,14 +10,24 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
       "slime-root/src/pci.rs";
       "slime-root/src/pci/**";
       "slime-root/src/lib.rs";
+      "slime-root/src/boot.rs";
       "slime-root/src/device.rs";
       "slime-root/src/io_resource.rs";
+      "slime-root/src/irq_control.rs";
+      "slime-root/src/object_allocator.rs";
       "slime-root/src/generation.rs";
       "slime-root/src/graph_runtime.rs";
       "slime-root/src/graph_runtime/**";
+      "boot-contracts/src/lib.rs";
+      "boot-contracts/src/generation.rs";
       "boot-contracts/src/io_resource.rs";
       "boot-contracts/src/generated/**";
       "contracts/io-resource/v1/**";
+      "contracts/system-spec/v1/schema.zt";
+      "contracts/generation-manifest/v1/schema.zt";
+      "scripts/build/generation_resources.py";
+      "scripts/build/build-generation.py";
+      "components/proto/src/**";
       "contracts/component-spec/v1/components/pci-*.zti";
       "contracts/composition-inventory/v1/inventory.zti";
       "contracts/system-spec/v1/systems/sel4-io-pci.zti";
@@ -28,7 +38,6 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
       "components/runtime/src/**";
       "Cargo.toml";
       "Cargo.lock";
-      "docs/architecture/io-substrate.md";
     };
     nonGoals = {
       h.nonGoal "An xHCI driver: command, event and transfer rings, port reset, device enumeration, USB descriptors and HID. The probe reads two capability words and nothing else." h.agentDefault;
@@ -37,7 +46,8 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
       h.nonGoal "Bridges, buses other than 0, multi-function devices, I/O BARs and the 64-bit memory window." h.agentDefault;
       h.nonGoal "A DMA containment claim. QEMU arm-virt has no IOMMU in this profile." h.agentDefault;
       h.nonGoal "A row in `docs/reference/just-targets.md`. A documentation PR adds it, as for earlier exams." h.agentDefault;
-      h.nonGoal "A change to `scripts/build/`, `scripts/generate/` or `scripts/lib/`. Each is a grader of other targets or an input the exam reads. If the generation builder must learn a new capability kind, that change lands in its own planning PR with a V4 approval." h.agentDefault;
+      h.nonGoal "A change to `scripts/generate/` or `scripts/lib/`. `scripts/lib/` holds graders of other targets and the modules the exam imports. The two generation builders under `scripts/build/` grade no bound target, so `owns` covers them." h.agentDefault;
+      h.nonGoal "The update of `docs/architecture/io-substrate.md`. The devloop judge gives `docs/` the process class, so a documentation PR after the implementation carries it." h.agentDefault;
     };
     invariants = {
       h.invariant "only-the-root-writes-configuration"
