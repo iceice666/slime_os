@@ -149,14 +149,16 @@ pub(super) fn serve_instance_graph(
                         }
                     }
                 }
-                supervision::RetirementPhase::Buffers => {
-                    release_task_exports(allocator, tasks, id);
-                    tasks
-                        .get(id)
-                        .map(|task| VSpaceCap(task.vspace.vspace.bits() as usize))
-                        .is_some_and(|vspace| reclaim_dead_task(buffers, allocator, id, vspace))
-                }
+                supervision::RetirementPhase::Buffers => tasks
+                    .get(id)
+                    .map(|task| VSpaceCap(task.vspace.vspace.bits() as usize))
+                    .is_some_and(|vspace| reclaim_dead_task(buffers, allocator, id, vspace)),
                 supervision::RetirementPhase::Arena => {
+                    // Released on every attempt, while the task's CNode
+                    // exists. The root serves requests between two attempts,
+                    // and an export may name the task until this phase
+                    // removes it.
+                    release_task_exports(allocator, tasks, id);
                     if reclaim_task_objects(
                         generation,
                         launched,
