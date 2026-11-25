@@ -34,9 +34,10 @@ BudgetHeader :: type { magic : Int; format_version : Int; header_size : Int; req
 -- instance drives, or both are zero when it drives none. The address is
 -- `bus << 8 | device << 3 | function`. The identity is
 -- `vendor | device_id << 16`; PCI assigns no vendor 0, so a zero identity
--- cannot name a real function. The root reads the identity from the
--- function's configuration space and refuses the generation when the two
--- differ. They sit on this entry for the reason `device` does: the PCI
+-- cannot name a real function. A root that binds PCI functions reads the
+-- identity from the function's configuration space and refuses the
+-- generation when the two differ; a root that binds none refuses every
+-- declared function. They sit on this entry for the reason `device` does: the PCI
 -- function is a property of the driver instance, and one record then names
 -- it for every hardware grant the instance holds.
 BudgetEntry :: type { driver_identity : Int; mmio_bytes : Int; mmio_mappings : Int; dma_pages : Int; dma_mappings : Int; irq_sources : Int; outstanding_requests : Int; buffer_loans : Int; device : Int; pci_address : Int; pci_identity : Int; };

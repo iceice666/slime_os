@@ -1,5 +1,5 @@
 -- A bounded model of the IO1 hardware-resource authority and charge lifetime:
--- the rules `contracts/io-resource/v1/schema.zt` budgets and
+-- the rules `contracts/io-resource/v2/schema.zt` budgets and
 -- `slime-root/src/{device,io_resource}.rs` enforce when it constructs, charges,
 -- and reclaims a driver's device, MMIO, DMA, and interrupt authority.
 --
