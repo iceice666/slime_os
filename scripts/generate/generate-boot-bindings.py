@@ -97,7 +97,7 @@ GENERATORS = (
         "normalized_interface_schemas.rs",
     ),
     (
-        ROOT / "contracts" / "io-resource" / "v1" / "schema.zt",
+        ROOT / "contracts" / "io-resource" / "v2" / "schema.zt",
         "io_resource.py",
         "io_resource.rs",
     ),

@@ -716,8 +716,18 @@ fn io_resource_budget_admission(
             // it names a transport that cannot exist, so admission refuses it
             // rather than letting a driver boot and fail its first MMIO (B84).
             device: crate::device::MAX_IO_DEVICES as u32,
+            pci_function: None,
         })
         .map_err(|_| GenerationError::UnsatisfiableIoResourceBudget)?;
+    // This root binds no PCI function, so a generation that declares one
+    // cannot run as declared. Refusing it at admission keeps a driver from
+    // booting against a function nothing configured.
+    if (0..budget.driver_count())
+        .filter_map(|index| budget.driver(index))
+        .any(|quota| quota.pci_function.is_some())
+    {
+        return Err(GenerationError::UnsatisfiableIoResourceBudget);
+    }
     Ok(Some(budget.driver_count()))
 }
 

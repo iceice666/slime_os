@@ -212,6 +212,17 @@ PrivateMemoryBudgetEntry :: type {
 };
 -- IO1 per-driver hardware-resource ceilings. The holder is the authenticated
 -- instance identity; omission denies every IO-resource operation.
+-- The PCI function one driver instance drives (io-resource/v2). The root
+-- reads `vendor` and `deviceId` from the function's configuration space at
+-- `bus`, `device` and `function`, and refuses the generation when they differ.
+PciFunctionEntry :: type {
+  bus : Int;
+  device : Int;
+  function : Int;
+  vendor : Int;
+  deviceId : Int;
+};
+
 IoResourceBudgetEntry :: type {
   holder : Text;
   mmioBytes : Int;
@@ -234,6 +245,8 @@ IoResourceBudgetEntry :: type {
   -- authority at once, so the four cannot disagree about which transport they
   -- mean. Two holders naming one device is refused: a transport is exclusive.
   device? : Int;
+  -- Omitted when the driver instance drives no PCI function.
+  pciFunction? : PciFunctionEntry;
 };
 
 -- B83 exact per-ring block authority. Each entry binds one client instance,

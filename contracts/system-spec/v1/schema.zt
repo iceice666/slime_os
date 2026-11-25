@@ -223,6 +223,15 @@ SystemClockAuthority :: type {
   timerBadgeBit? : Int;
 };
 
+-- The PCI function one driver instance drives, as `PciFunctionEntry`.
+SystemPciFunction :: type {
+  bus : Int;
+  device : Int;
+  function : Int;
+  vendor : Int;
+  deviceId : Int;
+};
+
 -- IO1 per-driver hardware-resource ceilings, as `IoResourceBudgetEntry`.
 SystemIoResourceBudget :: type {
   holder : Text;
@@ -234,6 +243,7 @@ SystemIoResourceBudget :: type {
   outstandingRequests : Int;
   bufferLoans : Int;
   device? : Int;
+  pciFunction? : SystemPciFunction;
 };
 
 -- IO4 exact network-destination authority, as `NetworkDestinationEntry`.
@@ -686,6 +696,7 @@ SystemSpec :: type {
 };
 
 FromData @SystemClockAuthority :: derive
+FromData @SystemPciFunction :: derive
 FromData @SystemIoResourceBudget :: derive
 FromData @SystemNetworkDestination :: derive
 FromData @SystemNetworkInterface :: derive
@@ -794,6 +805,7 @@ decodeSystemSpec :: Data -> Validation DecodeIssue SystemSpec
   ExtraBinding =;
   SystemMintedBinding =;
   SystemClockAuthority =;
+  SystemPciFunction =;
   SystemIoResourceBudget =;
   SystemNetworkDestination =;
   SystemNetworkInterface =;

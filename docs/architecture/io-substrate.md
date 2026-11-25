@@ -14,7 +14,7 @@ completion schema.
 Current owners:
 
 - generic queue/epoch/lease format: `contracts/io-queue/v1/`;
-- hardware authority and budgets: `contracts/io-resource/v1/`,
+- hardware authority and budgets: `contracts/io-resource/v2/`,
   `contracts/block-authority/v1/`, `boot-contracts/src/io_resource.rs`, and
   `slime-root/src/{device,io_resource}.rs`;
 - shared ring adapters: `components/lib/src/`;
@@ -93,6 +93,9 @@ wildcard holders, device ranges and “all rights” are unrepresentable. The dr
 reads its table through the root's identity-gated cursor-paged path (label 69).
 The root authenticates the reader and bounds bytes; it interprets no block rights.
 IO1's budget supplies a per-instance device ordinal throughout device identity.
+Since io-resource v2, a budget entry may also declare one PCI function: its
+bus, device and function, and its vendor and device identity. No root binds a
+PCI function yet, so admission refuses a generation that declares one.
 `sel4-recovery` declares a writable recovery disk and byte-identity-checked
 read-only guard disk; `sel4-transfer` declares a source and receiver. Each has two
 driver instances; read-only refusal belongs to driver ring authority.

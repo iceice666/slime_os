@@ -13,7 +13,52 @@ pub enum DecodeError {
     BadOrder,
     /// Two driver instances named the same device ordinal (B84).
     DuplicateDevice,
+    /// A PCI address without an identity, an address wider than 16 bits, or
+    /// a vendor PCI never assigns.
+    BadPciFunction,
+    /// Two driver instances named the same PCI function.
+    DuplicatePciFunction,
     Impossible,
+}
+/// The PCI function a driver instance drives, as its budget entry declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PciFunction {
+    pub bus: u8,
+    pub device: u8,
+    pub function: u8,
+    pub vendor: u16,
+    pub device_id: u16,
+}
+impl PciFunction {
+    /// `bus << 8 | device << 3 | function`, as the wire carries it.
+    pub const fn address(&self) -> u32 {
+        (self.bus as u32) << 8 | (self.device as u32) << 3 | self.function as u32
+    }
+    /// `vendor | device_id << 16`, as the wire carries it and as the first
+    /// configuration register of the function reads.
+    pub const fn identity(&self) -> u32 {
+        self.vendor as u32 | (self.device_id as u32) << 16
+    }
+    fn from_wire(address: u32, identity: u32) -> Result<Option<Self>, DecodeError> {
+        if identity == 0 {
+            return if address == 0 {
+                Ok(None)
+            } else {
+                Err(DecodeError::BadPciFunction)
+            };
+        }
+        let vendor = (identity & 0xFFFF) as u16;
+        if address > 0xFFFF || vendor == 0 || vendor == 0xFFFF {
+            return Err(DecodeError::BadPciFunction);
+        }
+        Ok(Some(Self {
+            bus: (address >> 8) as u8,
+            device: ((address >> 3) & 0x1F) as u8,
+            function: (address & 0x7) as u8,
+            vendor,
+            device_id: (identity >> 16) as u16,
+        }))
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DriverQuota {
@@ -30,6 +75,8 @@ pub struct DriverQuota {
     /// with two disks declares one driver executable twice, and nothing in the
     /// instance's grants distinguishes the two.
     pub device: u32,
+    /// The PCI function this driver instance drives, if any.
+    pub pci_function: Option<PciFunction>,
 }
 #[derive(Debug, Clone, Copy)]
 pub struct IoResourceBudget<'a> {
@@ -76,8 +123,15 @@ impl<'a> IoResourceBudget<'a> {
             // coherent. Quadratic over at most `MAX_DRIVERS`, and only at
             // admission.
             for earlier in 0..index {
-                if decode_entry(bytes, earlier)?.device == entry.device {
+                let earlier = decode_entry(bytes, earlier)?;
+                if earlier.device == entry.device {
                     return Err(DecodeError::DuplicateDevice);
+                }
+                // A PCI function is exclusive for the same reason a transport is.
+                if let (Some(left), Some(right)) = (earlier.pci_function, entry.pci_function)
+                    && left.address() == right.address()
+                {
+                    return Err(DecodeError::DuplicatePciFunction);
                 }
             }
         }
@@ -169,6 +223,10 @@ fn decode_entry(bytes: &[u8], index: usize) -> Result<DriverQuota, DecodeError> 
         outstanding_requests: u32_at(entry, OFF_ENTRY_OUTSTANDING_REQUESTS)?,
         buffer_loans: u32_at(entry, OFF_ENTRY_BUFFER_LOANS)?,
         device: u32_at(entry, OFF_ENTRY_DEVICE)?,
+        pci_function: PciFunction::from_wire(
+            u32_at(entry, OFF_ENTRY_PCI_ADDRESS)?,
+            u32_at(entry, OFF_ENTRY_PCI_IDENTITY)?,
+        )?,
     })
 }
 fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, DecodeError> {
@@ -210,8 +268,16 @@ mod tests {
             outstanding_requests: 2,
             buffer_loans: 2,
             device,
+            pci_function: None,
         }
     }
+    const XHCI: PciFunction = PciFunction {
+        bus: 0,
+        device: 3,
+        function: 0,
+        vendor: 0x1B36,
+        device_id: 0x000D,
+    };
     fn build(entries: &[DriverQuota]) -> alloc::vec::Vec<u8> {
         let total = HEADER_BYTES + entries.len() * ENTRY_BYTES;
         let mut bytes = alloc::vec![0u8;total];
@@ -257,6 +323,16 @@ mod tests {
                     q.buffer_loans,
                 ),
                 (OFF_ENTRY_DEVICE, OFF_ENTRY_DEVICE_END, q.device),
+                (
+                    OFF_ENTRY_PCI_ADDRESS,
+                    OFF_ENTRY_PCI_ADDRESS_END,
+                    q.pci_function.map_or(0, |pci| pci.address()),
+                ),
+                (
+                    OFF_ENTRY_PCI_IDENTITY,
+                    OFF_ENTRY_PCI_IDENTITY_END,
+                    q.pci_function.map_or(0, |pci| pci.identity()),
+                ),
             ] {
                 bytes[o + start..o + end].copy_from_slice(&value.to_le_bytes());
             }
@@ -333,6 +409,73 @@ mod tests {
                 .unwrap()
                 .validate_against(two_devices)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_pci_function_round_trips() {
+        let driver = DriverQuota {
+            pci_function: Some(XHCI),
+            ..quota(1)
+        };
+        let bytes = build(&[driver]);
+        let budget = IoResourceBudget::decode(&bytes).unwrap();
+        assert_eq!(budget.driver(0).unwrap().pci_function, Some(XHCI));
+        assert_eq!(XHCI.address(), 0x18);
+        assert_eq!(XHCI.identity(), 0x000D_1B36);
+    }
+
+    /// A zero identity means no PCI function, so an address beside it is a
+    /// half-written declaration, and vendor 0xFFFF is what an absent function
+    /// reads.
+    #[test]
+    fn a_malformed_pci_function_is_refused() {
+        let mut bytes = build(&[quota(1)]);
+        let o = HEADER_BYTES;
+        bytes[o + OFF_ENTRY_PCI_ADDRESS..o + OFF_ENTRY_PCI_ADDRESS_END]
+            .copy_from_slice(&0x18u32.to_le_bytes());
+        assert_eq!(
+            IoResourceBudget::decode(&bytes).unwrap_err(),
+            DecodeError::BadPciFunction
+        );
+        bytes[o + OFF_ENTRY_PCI_IDENTITY..o + OFF_ENTRY_PCI_IDENTITY_END]
+            .copy_from_slice(&0x000D_FFFFu32.to_le_bytes());
+        assert_eq!(
+            IoResourceBudget::decode(&bytes).unwrap_err(),
+            DecodeError::BadPciFunction
+        );
+        bytes[o + OFF_ENTRY_PCI_ADDRESS..o + OFF_ENTRY_PCI_ADDRESS_END]
+            .copy_from_slice(&0x1_0000u32.to_le_bytes());
+        bytes[o + OFF_ENTRY_PCI_IDENTITY..o + OFF_ENTRY_PCI_IDENTITY_END]
+            .copy_from_slice(&XHCI.identity().to_le_bytes());
+        assert_eq!(
+            IoResourceBudget::decode(&bytes).unwrap_err(),
+            DecodeError::BadPciFunction
+        );
+    }
+
+    #[test]
+    fn two_drivers_cannot_name_one_pci_function() {
+        let with = |id, device| DriverQuota {
+            pci_function: Some(XHCI),
+            ..at(id, device)
+        };
+        assert_eq!(
+            IoResourceBudget::decode(&build(&[with(1, 0), with(2, 1)])).unwrap_err(),
+            DecodeError::DuplicatePciFunction
+        );
+    }
+
+    /// A version 1 table has 64-byte entries; reading it with the version 2
+    /// layout would misplace every field after the first entry.
+    #[test]
+    fn a_version_1_table_is_refused() {
+        let mut bytes = build(&[quota(1)]);
+        bytes[OFF_HEADER_FORMAT_VERSION..OFF_HEADER_FORMAT_VERSION_END]
+            .copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            IoResourceBudget::decode(&bytes).unwrap_err(),
+            DecodeError::UnsupportedVersion
         );
     }
 }

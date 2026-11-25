@@ -152,6 +152,28 @@ def io_resource_driver_identity(name: str) -> bytes:
     return sha256(b"slime-io-resource-driver-v1" + struct.pack("<H", len(encoded)) + encoded)
 
 
+def io_resource_pci_words(entry: dict) -> tuple[int, int]:
+    """The `pci_address` and `pci_identity` words of one budget entry (io-resource/v2).
+
+    Both are zero when the entry declares no PCI function. PCI assigns no vendor 0 and an absent function reads
+    vendor 0xFFFF, so neither can name a declared function.
+    """
+    function = entry.get("pciFunction")
+    if function is None:
+        return 0, 0
+    holder = entry["holder"]
+    bounds = (("bus", 0xFF), ("device", 0x1F), ("function", 0x7), ("vendor", 0xFFFF), ("deviceId", 0xFFFF))
+    for name, maximum in bounds:
+        value = function[name]
+        if not 0 <= value <= maximum:
+            fail(f"ioResourceBudget holder {holder}: pciFunction {name} {value} out of range")
+    if function["vendor"] in (0, 0xFFFF):
+        fail(f"ioResourceBudget holder {holder}: pciFunction vendor {function['vendor']:#x} names no function")
+    address = function["bus"] << 8 | function["device"] << 3 | function["function"]
+    identity = function["vendor"] | function["deviceId"] << 16
+    return address, identity
+
+
 def build_io_resource_budget(holders: list[dict]) -> bytes:
     if len(holders) > MAX_IO_RESOURCE_DRIVERS:
         fail("ioResourceBudget exceeds driver ceiling")
@@ -164,6 +186,10 @@ def build_io_resource_budget(holders: list[dict]) -> bytes:
     devices = [entry.get("device", 0) for entry in holders]
     if len(devices) != len(set(devices)):
         fail("ioResourceBudget device must be unique per driver")
+    # A PCI function is exclusive for the same reason; the decoder refuses this too.
+    functions = [io_resource_pci_words(entry)[0] for entry in holders if entry.get("pciFunction") is not None]
+    if len(functions) != len(set(functions)):
+        fail("ioResourceBudget pciFunction must be unique per driver")
     rows = []
     for entry in sorted(holders, key=lambda item: io_resource_driver_identity(item["holder"])):
         values = [entry[name] for name in ("mmioBytes", "mmioMappings", "dmaPages", "dmaMappings", "irqSources", "outstandingRequests", "bufferLoans")]
@@ -173,6 +199,7 @@ def build_io_resource_budget(holders: list[dict]) -> bytes:
         values.append(entry.get("device", 0))
         if any(value < 0 or value > 0xFFFFFFFF for value in values):
             fail(f"ioResourceBudget holder {entry['holder']}: quota out of range")
+        values.extend(io_resource_pci_words(entry))
         rows.append(IO_RESOURCE_ENTRY.pack(io_resource_driver_identity(entry["holder"]), *values))
     total = IO_RESOURCE_HEADER_BYTES + len(rows) * IO_RESOURCE_ENTRY.size
     return IO_RESOURCE_HEADER.pack(IO_RESOURCE_MAGIC, IO_RESOURCE_VERSION, IO_RESOURCE_HEADER_BYTES, 0, len(rows), total) + b"".join(rows)
