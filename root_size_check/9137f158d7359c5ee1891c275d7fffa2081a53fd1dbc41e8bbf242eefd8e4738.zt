@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "root_size_check";
+  closureDigest = "9137f158d7359c5ee1891c275d7fffa2081a53fd1dbc41e8bbf242eefd8e4738";
+  passed = true;
+  exitCode = 0;
+  counts = { { key = "binaryOnlyCodeLines"; value = 1131; }; { key = "binaryOnlyFiles"; value = 2; }; { key = "bootCodeLines"; value = 5793; }; { key = "consoleCodeLines"; value = 443; }; { key = "coreCodeLines"; value = 14950; }; { key = "dispatchCodeLines"; value = 2515; }; { key = "enforcementCodeLines"; value = 1706; }; { key = "filesObserved"; value = 76; }; { key = "fixtureCodeLines"; value = 1007; }; { key = "fixtureOnlyCodeLines"; value = 1007; }; { key = "functionsOverLimit"; value = 12; }; { key = "harnessCodeLines"; value = 1725; }; { key = "ioResourceCodeLines"; value = 3270; }; { key = "launchPathLongestFunctionCodeLines"; value = 133; }; { key = "libraryConditionalCodeLines"; value = 2443; }; { key = "libraryConditionalFiles"; value = 6; }; { key = "libraryFatalSites"; value = 5; }; { key = "productBinaryCodeLines"; value = 124; }; { key = "productComponentNames"; value = 0; }; { key = "seriesCodeLines"; value = 33335; }; { key = "sharedBufferCodeLines"; value = 3046; }; { key = "timerCodeLines"; value = 1612; }; };
+  flags = {;};
+  observedAt = "2026-11-25T14:47:43Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
