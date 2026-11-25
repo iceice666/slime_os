@@ -710,6 +710,16 @@ def boot_controls(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version:
                 )
             ),
         ),
+        (
+            "driver reports address 0 on both lines",
+            text(
+                edit(
+                    edit(transcript, ADDRESSED, lambda m: replace_group(m, "address", "0")),
+                    DESCRIPTOR,
+                    lambda m: replace_group(m, "address", "0"),
+                )
+            ),
+        ),
         ("driver reports the other model's descriptor", text(edit(transcript, DESCRIPTOR, other_descriptor))),
         ("driver never halted", text(edit(transcript, HALTED, lambda _m: ""))),
         ("driver received no interrupt", text(edit(transcript, HALTED, lambda m: replace_group(m, "interrupts", "0")))),

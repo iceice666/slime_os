@@ -84,13 +84,13 @@ item :: s.Item = (h.task "01a212d1-0158-764f-8841-0497ad8f73d0" "usb-xhci-device
         "The derived manifest grants one device, one MMIO region, one interrupt source and one DMA account, all to the driver instance. Its budget declares one PCI function, 00:03.0 with identity 1b36:000d, one 16 KiB BAR, one interrupt and DMA."
         { "usb_xhci_descriptor_check"; };
       h.req "controls-are-refused"
-        "The judge refuses 156 inputs: 8 corrupted manifests and, in each of the two boots, 74 corrupted inputs. These span the serial transcript, the monitor replies, the trace, the device capture and the judge's model of the interrupt routes."
+        "The judge refuses 158 inputs: 8 corrupted manifests and, in each of the two boots, 75 corrupted inputs. These span the serial transcript, the monitor replies, the trace, the device capture and the judge's model of the interrupt routes."
         { "usb_xhci_descriptor_check"; };
     };
     acceptance = {
       h.observedWhere "usb_xhci_descriptor_check" {
         h.count "casesObserved" 156;
-        h.count "negativeControlsRefused" 156;
+        h.count "negativeControlsRefused" 158;
       };
       h.observed "io_pci_binding_check";
     };
