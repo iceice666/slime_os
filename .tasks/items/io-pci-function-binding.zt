@@ -10,14 +10,24 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
       "slime-root/src/pci.rs";
       "slime-root/src/pci/**";
       "slime-root/src/lib.rs";
+      "slime-root/src/boot.rs";
       "slime-root/src/device.rs";
       "slime-root/src/io_resource.rs";
+      "slime-root/src/irq_control.rs";
+      "slime-root/src/object_allocator.rs";
       "slime-root/src/generation.rs";
       "slime-root/src/graph_runtime.rs";
       "slime-root/src/graph_runtime/**";
+      "boot-contracts/src/lib.rs";
+      "boot-contracts/src/generation.rs";
       "boot-contracts/src/io_resource.rs";
       "boot-contracts/src/generated/**";
-      "contracts/io-resource/v1/**";
+      "contracts/io-resource/v2/**";
+      "contracts/system-spec/v1/schema.zt";
+      "contracts/generation-manifest/v1/schema.zt";
+      "scripts/build/generation_resources.py";
+      "scripts/build/build-generation.py";
+      "components/proto/src/**";
       "contracts/component-spec/v1/components/pci-*.zti";
       "contracts/composition-inventory/v1/inventory.zti";
       "contracts/system-spec/v1/systems/sel4-io-pci.zti";
@@ -28,7 +38,6 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
       "components/runtime/src/**";
       "Cargo.toml";
       "Cargo.lock";
-      "docs/architecture/io-substrate.md";
     };
     nonGoals = {
       h.nonGoal "An xHCI driver: command, event and transfer rings, port reset, device enumeration, USB descriptors and HID. The probe reads two capability words and nothing else." h.agentDefault;
@@ -37,7 +46,8 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
       h.nonGoal "Bridges, buses other than 0, multi-function devices, I/O BARs and the 64-bit memory window." h.agentDefault;
       h.nonGoal "A DMA containment claim. QEMU arm-virt has no IOMMU in this profile." h.agentDefault;
       h.nonGoal "A row in `docs/reference/just-targets.md`. A documentation PR adds it, as for earlier exams." h.agentDefault;
-      h.nonGoal "A change to `scripts/build/`, `scripts/generate/` or `scripts/lib/`. Each is a grader of other targets or an input the exam reads. If the generation builder must learn a new capability kind, that change lands in its own planning PR with a V4 approval." h.agentDefault;
+      h.nonGoal "A change to `scripts/generate/` or `scripts/lib/` in an implementation PR of this item. The io-resource v2 format and its regenerated bindings, `scripts/lib/boot_contracts.py` included, land first in a separate format PR. The two generation builders under `scripts/build/` grade no bound target, so `owns` covers them." h.agentDefault;
+      h.nonGoal "The update of `docs/architecture/io-substrate.md`. The devloop judge gives `docs/` the process class, so a documentation PR after the implementation carries it." h.agentDefault;
     };
     invariants = {
       h.invariant "only-the-root-writes-configuration"
@@ -137,6 +147,11 @@ item :: s.Item = (h.task "01a20d41-db86-70d6-a414-84c962b32b14" "io-pci-function
         "a `check-sel4-*` file joins the test-run inventory, and a `CLOSURE` constant joins the devloop closure digest. Both resolve the closure, which this planning PR cannot add, so either name would fail a bound target on main"
         h.agentDefault
         { "controls-are-refused"; };
+      h.decided "declaration-rides-io-resource-v2"
+        "The generation declares the PCI function on its io-resource budget entry: an optional `pciFunction` with bus, device, function and identity. The format becomes `contracts/io-resource/v2`, and the format PR #1235 lands it before the implementation PR. The owner merges that format PR past the devloop judge."
+        "a changed contract schema is implementation-class, while its generated Python binding `scripts/lib/boot_contracts.py` grades bound targets and a promise. A probe commit showed the judge refuses that pair with V1, V3 and V4 in any single PR, so no PR sequence under the judge can land the field"
+        (h.fromHuman "我可以暫時開一個bypass合進去" "Claude Code session 0946c66e-e6cf-4ff4-b073-74e1a653fb07, 2026-11-25, the owner offering a bypass merge, then choosing a minimal format PR over a bypass of the whole implementation")
+        { "binds-the-declared-function"; "wrong-identity-fails-closed"; };
     };
     knownLimits = {
       h.knownLimit "io_pci_binding_check"
