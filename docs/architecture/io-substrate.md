@@ -122,15 +122,16 @@ qemu-arm-virt facts. The root does these steps in order:
 5. It writes command `0x0002`: memory decoding on, bus mastering off.
 6. It prints `SLIME_PCI bind` with the function, identity, BAR, command and IRQ.
 
-A refusal after BAR 0 is sized clears BAR 0, and BAR 1 for a 64-bit BAR, and leaves
-decoding off.
+A refusal by `pci::bind` (BAR, window or interrupt pin) clears BAR 0, and BAR 1
+for a 64-bit BAR, and leaves decoding off. A root stop after `pci::bind` returns
+leaves the function placed and decoding memory.
 
 Only the root reads or writes configuration space; no component receives ECAM
 authority. The bound BAR becomes one device with a bank of page regions. Unlike
 the virtio transports, no other device shares the BAR's pages, so its driver maps the whole
 bank directly. `MAP_MMIO` covers the bank, and teardown unmaps it by device.
-`IRQ_ACK` binds the routed IRQ when its sequence is zero. The root grants no DMA
-for the function.
+`IRQ_ACK` binds the routed IRQ when its sequence is zero. The binding leaves bus
+mastering off, and `sel4-io-pci` declares no DMA account.
 `just io_pci_binding_check` boots the `sel4-io-pci` composition with qemu-xhci,
 and a second boot checks that the root refuses a wrong identity.
 
