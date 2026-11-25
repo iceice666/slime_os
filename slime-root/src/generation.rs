@@ -719,12 +719,14 @@ fn io_resource_budget_admission(
             pci_function: None,
         })
         .map_err(|_| GenerationError::UnsatisfiableIoResourceBudget)?;
-    // This root binds no PCI function, so a generation that declares one
-    // cannot run as declared. Refusing it at admission keeps a driver from
-    // booting against a function nothing configured.
-    if (0..budget.driver_count())
-        .filter_map(|index| budget.driver(index))
-        .any(|quota| quota.pci_function.is_some())
+    // Only the qemu-arm-virt root binds a PCI function. On any other target a
+    // generation that declares one cannot run as declared, and refusing it at
+    // admission keeps a driver from booting against a function nothing
+    // configured.
+    if !cfg!(target_arch = "aarch64")
+        && (0..budget.driver_count())
+            .filter_map(|index| budget.driver(index))
+            .any(|quota| quota.pci_function.is_some())
     {
         return Err(GenerationError::UnsatisfiableIoResourceBudget);
     }
