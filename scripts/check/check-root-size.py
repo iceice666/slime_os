@@ -146,12 +146,13 @@ class Role:
 
 
 # Each role ceiling is the role's count on the commit that landed this script,
-# rounded up to a multiple of 50. Four are newer. `boot` is 5650: the role
-# holds 5600 lines since `src/boot.rs` carries the boot sequence and the 440
-# lines that build and settle the fixture tasks left `main`. `fixture` is 1050
-# with those lines. `core` is 14950 and `timer` is 1650: each is the count the
-# role holds with its part of `services/policy.rs`, 14925 and 1612, rounded up
-# to a multiple of 50.
+# rounded up to a multiple of 50. Five are newer. `boot` is 5800 and
+# `ioResource` is 3300: they are the counts the roles hold once the root binds
+# a declared PCI function, 5793 and 3270, rounded up to a multiple of 50; the
+# binding adds `src/pci.rs` to `ioResource`. `fixture` is 1050 with the 440
+# lines that build and settle the fixture tasks. `core` is 14950 and `timer`
+# is 1650: each is the count the role holds with its part of
+# `services/policy.rs`, 14925 and 1612, rounded up to a multiple of 50.
 ROLES: dict[str, Role] = {
     # Kernel-object allocation, address spaces, tasks, faults and the graph.
     "core": Role(
@@ -181,7 +182,7 @@ ROLES: dict[str, Role] = {
     ),
     # Runs once, before the first component: admission, launch, boot media.
     "boot": Role(
-        ceiling=5650,
+        ceiling=5800,
         files=(
             "src/main.rs",
             "src/boot.rs",
@@ -199,11 +200,12 @@ ROLES: dict[str, Role] = {
     ),
     # Device regions, IRQ control and IO resource grants.
     "ioResource": Role(
-        ceiling=3050,
+        ceiling=3300,
         files=(
             "src/io_resource.rs",
             "src/device.rs",
             "src/irq_control.rs",
+            "src/pci.rs",
             "src/graph_runtime/services/io_resource.rs",
         ),
     ),
@@ -274,8 +276,9 @@ SERIES = ("core", "boot", "ioResource", "sharedBuffer", "dispatch", "enforcement
 # The series held 34294 code lines on the commit that landed this script,
 # 33941 after the fixture's child crate left `slime-root/`, and 33073 once a
 # product root compiled no fixture. It held 32893 once the test-only functions
-# of product types stood in test items.
-SERIES_CEILING = 32950
+# of product types stood in test items, and 33335 once the root bound a
+# declared PCI function; the ceiling is that count rounded up to 50.
+SERIES_CEILING = 33350
 # The binary alone compiled 9301 code lines, in 13 files, on the commit that
 # landed this measure, and 1119 lines, in `src/main.rs` and
 # `src/fixture_runtime.rs`, once the library held the graph runtime and the

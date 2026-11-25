@@ -1,0 +1,59 @@
+s ::= import "./schema.zt";
+h ::= import "./helpers.zt";
+
+item :: s.Item = (h.task "01a2115a-e389-78ba-abf4-1f5f4cd52ed6" "root-size-pci-binding" "planes-mechanism"
+  "The root-size budget names the PCI binding module and holds the root that binds a PCI function"
+  "The implementation of io-pci-function-binding adds slime-root/src/pci.rs and the binding path in the boot and ioResource roles. root_size_check refuses it: src/pci.rs has no role, boot holds 5793 code lines against 5650, ioResource 3270 against 3050, and the series 33335 against 32950. main already holds boot at 5651, above its ceiling, since io-resource v2 added the admission refusal of a declared PCI function. The size checker grades promises, so only a new item changes it.")
+  with {
+    intent = #planned;
+    depends = {
+      "01a20d41-db86-70d6-a414-84c962b32b14";
+    };
+    owns = {
+      "slime-root/src/pci.rs";
+    };
+    supersedes = {
+      "01a1f677-0511-752b-8231-8e9b491399de/series-without-the-fixture";
+      "01a1f8f6-a380-7910-990d-f83a461fb33e/series-keeps-its-ceiling";
+      "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c/series-within-its-ceiling";
+    };
+    nonGoals = {
+      h.nonGoal "The promises root-test-impls (series at most 32893, core at most 14737) and root-role-names (series at most 32899). main holds the series at 32947 and core at 14950, so both fail before this item. Whether to supersede them is a human decision." h.agentDefault;
+      h.nonGoal "A lower count in any role. The binding's lines stay where they are; this item moves the ceilings and names the module." h.agentDefault;
+    };
+    requirements = {
+      h.req "pci-module-has-one-role"
+        "root_size_check gives slime-root/src/pci.rs the ioResource role, so the file has exactly one role. The role is the one that holds device regions, IRQ control and IO resource grants."
+        { "root_size_check"; };
+      h.req "boot-within-5800"
+        "root_size_check counts at most 5800 code lines in the boot role, and reports the count as bootCodeLines."
+        { "root_size_check"; };
+      h.req "io-resource-within-3300"
+        "root_size_check counts at most 3300 code lines in the ioResource role, and reports the count as ioResourceCodeLines."
+        { "root_size_check"; };
+      h.req "series-within-33350"
+        "root_size_check counts at most 33350 code lines in the series, and reports the count as seriesCodeLines. It replaces the three series requirements this item supersedes, at 33100 and twice 33200."
+        { "root_size_check"; };
+    };
+    acceptance = {
+      h.observedWhere "root_size_check" {
+        h.atMost "bootCodeLines" 5800;
+        h.atMost "ioResourceCodeLines" 3300;
+        h.atMost "seriesCodeLines" 33350;
+      };
+    };
+    decisions = {
+      h.decided "graders-change-in-the-planning-pull-request"
+        "The planning pull request of this item changes scripts/check/check-root-size.py: src/pci.rs joins the ioResource role, the boot ceiling rises from 5650 to 5800, the ioResource ceiling from 3050 to 3300, and the series ceiling from 32950 to 33350."
+        "the size checker grades promises, so it changes only in a pull request that adds an item, as root-system-timer did"
+        h.agentDefault
+        { "pci-module-has-one-role"; "boot-within-5800"; "io-resource-within-3300"; "series-within-33350"; };
+      h.decided "ceilings-are-measured-counts-rounded-up"
+        "Each new ceiling is the count the root holds with the PCI binding, rounded up to a multiple of 50: boot 5793, ioResource 3270, series 33335."
+        "the checker's rule for every role ceiling is the measured count rounded up to a multiple of 50, and the counts come from the head of the implementation pull request of io-pci-function-binding"
+        h.agentDefault
+        { "boot-within-5800"; "io-resource-within-3300"; "series-within-33350"; };
+    };
+  };
+
+item
