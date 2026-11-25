@@ -387,6 +387,25 @@ impl IoResourceAdapter for Sel4IoAdapter<'_> {
     }
 }
 
+/// Print the `SLIME_IO mmio refused` record of a refused MMIO map, and pass the
+/// outcome on. The root enforces the bound, so the root reports the refusal; a
+/// driver's own report of it proves nothing.
+fn reported<T>(
+    task: TaskId,
+    offset: u32,
+    length: u32,
+    outcome: Result<T, ResourceError>,
+) -> Result<T, ResourceError> {
+    if let Err(error) = &outcome {
+        crate::diagnostic_println!(
+            "SLIME_IO mmio refused task={} offset={offset} length={length} error={}",
+            task.0,
+            refusal_name(*error)
+        );
+    }
+    outcome
+}
+
 /// The refusal's variant name, for the `SLIME_IO mmio refused` record.
 fn refusal_name(error: ResourceError) -> &'static str {
     match error {
@@ -697,26 +716,19 @@ pub(super) fn serve_io_resource(
             }
             adapter.requested_base = words[2] as usize;
             let (offset, length) = (packed as u32, (packed >> 32) as u32);
-            let outcome = service.table.map_mmio(
+            let epoch = DriverEpoch(words[1]);
+            let access = MmioAccess::ReadWrite;
+            let outcome = (service.table).map_mmio(
                 &mut adapter,
                 driver,
                 device,
-                DriverEpoch(words[1]),
+                epoch,
                 region,
                 offset,
                 length,
-                MmioAccess::ReadWrite,
+                access,
             );
-            // The root enforces the bound, so the root reports the refusal; a
-            // driver's own report of it proves nothing.
-            if let Err(error) = outcome {
-                crate::diagnostic_println!(
-                    "SLIME_IO mmio refused task={} offset={offset} length={length} error={}",
-                    task.0,
-                    refusal_name(error)
-                );
-            }
-            mapped(outcome, |handle| {
+            mapped(reported(task, offset, length, outcome), |handle| {
                 Response::success(handle.id.0 as i64, words[2])
             })
         }

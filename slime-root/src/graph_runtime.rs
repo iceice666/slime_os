@@ -245,16 +245,16 @@ pub(crate) static mut AUTHORITY_MMIO_PAGES: [FreePage; VIRTIO_MMIO_GRANULES] =
 
 /// The root's window onto the configuration space of the one PCI function a
 /// generation declares. Only the root reads or writes it.
-#[cfg(all(not(slime_boot_selector), target_arch = "aarch64"))]
+#[cfg(all(not(slime_boot_selector), slime_root_console_pl011))]
 pub(crate) static mut PCI_CONFIG_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Granules of the largest BAR 0 the root binds.
-#[cfg(all(not(slime_boot_selector), target_arch = "aarch64"))]
+#[cfg(all(not(slime_boot_selector), slime_root_console_pl011))]
 pub(crate) const PCI_BAR_GRANULES: usize = 4;
 
 /// Standing windows onto the bound function's BAR 0, held until its driver
 /// maps the frames into its own VSpace, as `AUTHORITY_MMIO_PAGES` are.
-#[cfg(all(not(slime_boot_selector), target_arch = "aarch64"))]
+#[cfg(all(not(slime_boot_selector), slime_root_console_pl011))]
 pub(crate) static mut PCI_BAR_PAGES: [FreePage; PCI_BAR_GRANULES] =
     [const { FreePage([0; GRANULE_SIZE]) }; PCI_BAR_GRANULES];
 

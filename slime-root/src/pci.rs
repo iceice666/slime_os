@@ -107,12 +107,18 @@ impl core::fmt::Display for Address<'_> {
     }
 }
 
-/// Bind `declared` through `config`.
+/// Bind `declared` through `config`, refusing a BAR 0 larger than `max_size`.
 ///
 /// The identity is read before any write, so a function with another identity
 /// leaves this call exactly as it was found. BAR sizing writes all ones and
 /// reads the mask back with decoding off, as the PCI specification requires.
-pub fn bind(config: &mut impl ConfigSpace, declared: &PciFunction) -> Result<Binding, BindError> {
+/// Every other refusal clears BAR 0, and BAR 1 of a 64-bit BAR, and leaves
+/// decoding off, so a refused function decodes nothing.
+pub fn bind(
+    config: &mut impl ConfigSpace,
+    declared: &PciFunction,
+    max_size: usize,
+) -> Result<Binding, BindError> {
     let found = config.read32(ID);
     if found != declared.identity() {
         return Err(BindError::Identity { found });
@@ -134,35 +140,37 @@ pub fn bind(config: &mut impl ConfigSpace, declared: &PciFunction) -> Result<Bin
     } else {
         mask |= 0xFFFF_FFFF_0000_0000;
     }
-    if mask == 0 {
-        config.write32(BAR0, 0);
-        return Err(BindError::Bar);
-    }
-    let size = (!mask).wrapping_add(1);
-    if size < CONFIG_BYTES as u64 || size > arm_virt::MEM32_BYTES as u64 {
-        config.write32(BAR0, 0);
-        return Err(BindError::Window);
-    }
+    let size = (!mask).wrapping_add(1) as usize;
     // The window base is 256 MiB aligned, so it is aligned for every BAR that
     // fits; the rule keeps the placement deterministic.
-    let address = arm_virt::MEM32_BASE.next_multiple_of(size as usize);
-    if address + size as usize > arm_virt::MEM32_BASE + arm_virt::MEM32_BYTES {
+    let address = arm_virt::MEM32_BASE.next_multiple_of(size.max(1));
+    let refusal = if mask == 0 {
+        Some(BindError::Bar)
+    } else if size < CONFIG_BYTES
+        || size > max_size
+        || address + size > arm_virt::MEM32_BASE + arm_virt::MEM32_BYTES
+    {
+        Some(BindError::Window)
+    } else {
+        None
+    };
+    let pin = ((config.read32(INTERRUPT_LINE) >> 8) & 0xFF) as u8;
+    let refusal = refusal.or((!(1..=4).contains(&pin)).then_some(BindError::Interrupt));
+    if let Some(error) = refusal {
         config.write32(BAR0, 0);
-        return Err(BindError::Window);
+        if wide {
+            config.write32(BAR1, 0);
+        }
+        return Err(error);
     }
     config.write32(BAR0, address as u32);
     if wide {
         config.write32(BAR1, 0);
     }
-    let pin = ((config.read32(INTERRUPT_LINE) >> 8) & 0xFF) as u8;
-    if !(1..=4).contains(&pin) {
-        config.write32(BAR0, 0);
-        return Err(BindError::Interrupt);
-    }
     config.write32(COMMAND, u32::from(COMMAND_MEMORY));
     Ok(Binding {
         address,
-        size: size as usize,
+        size,
         wide,
         irq: intx_irq(declared.device, pin),
         command: config.read32(COMMAND) as u16,
@@ -225,7 +233,7 @@ mod tests {
     #[test]
     fn binds_bar_0_at_the_window_base_with_memory_decoding_only() {
         let mut config = Xhci::new(XHCI.identity());
-        let binding = bind(&mut config, &XHCI).unwrap();
+        let binding = bind(&mut config, &XHCI, 0x4000).unwrap();
         assert_eq!(binding.address, arm_virt::MEM32_BASE);
         assert_eq!(binding.size, 0x4000);
         assert!(binding.wide);
@@ -239,10 +247,20 @@ mod tests {
     fn another_identity_is_refused_before_any_write() {
         let mut config = Xhci::new(0x0005_1B36);
         assert_eq!(
-            bind(&mut config, &XHCI),
+            bind(&mut config, &XHCI, 0x4000),
             Err(BindError::Identity { found: 0x0005_1B36 })
         );
         assert_eq!(config.writes, 0);
+    }
+
+    /// A BAR above the root's window is refused before decoding is enabled,
+    /// and both halves of the 64-bit BAR are cleared.
+    #[test]
+    fn a_bar_beyond_the_ceiling_leaves_the_function_decoding_nothing() {
+        let mut config = Xhci::new(XHCI.identity());
+        assert_eq!(bind(&mut config, &XHCI, 0x2000), Err(BindError::Window));
+        assert_eq!(config.command, 0);
+        assert_eq!(config.bars, [0x4, 0]);
     }
 
     #[test]

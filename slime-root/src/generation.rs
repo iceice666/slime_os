@@ -719,11 +719,10 @@ fn io_resource_budget_admission(
             pci_function: None,
         })
         .map_err(|_| GenerationError::UnsatisfiableIoResourceBudget)?;
-    // Only the qemu-arm-virt root binds a PCI function. On any other target a
-    // generation that declares one cannot run as declared, and refusing it at
-    // admission keeps a driver from booting against a function nothing
-    // configured.
-    if !cfg!(target_arch = "aarch64")
+    // Only the qemu-arm-virt product root binds a PCI function, and
+    // `slime_root_console_pl011` marks that profile. Any other root refuses a
+    // declared function here, so admission and the binder agree.
+    if !cfg!(all(slime_root_console_pl011, not(slime_boot_selector)))
         && (0..budget.driver_count())
             .filter_map(|index| budget.driver(index))
             .any(|quota| quota.pci_function.is_some())

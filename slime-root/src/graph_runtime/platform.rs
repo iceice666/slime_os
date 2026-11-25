@@ -30,9 +30,11 @@ pub fn probe_authority_devices(
     #[cfg(not(target_arch = "x86_64"))]
     {
         let mut inventory = probe_virtio_mmio_transports(bootinfo, allocator);
-        #[cfg(target_arch = "aarch64")]
+        // `slime_root_console_pl011` marks the qemu-arm-virt profile, the one
+        // machine whose PCIe host this root pins.
+        #[cfg(slime_root_console_pl011)]
         bind_declared_pci_functions(bootinfo, allocator, generation, &mut inventory)?;
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(not(slime_root_console_pl011))]
         let _ = generation;
         Ok(inventory)
     }
@@ -45,7 +47,7 @@ pub fn probe_authority_devices(
 /// function no budget names is never configured. A declared function whose
 /// identity differs stops the root before any configuration write: the
 /// generation names hardware this machine does not hold.
-#[cfg(all(not(slime_boot_selector), target_arch = "aarch64"))]
+#[cfg(all(not(slime_boot_selector), slime_root_console_pl011))]
 fn bind_declared_pci_functions(
     bootinfo: &sel4::BootInfo,
     allocator: &mut ObjectAllocator,
@@ -97,7 +99,7 @@ fn bind_declared_pci_functions(
             )
         })?;
         let mut config = RegionConfig(&config_region);
-        let binding = match pci::bind(&mut config, &function) {
+        let binding = match pci::bind(&mut config, &function, PCI_BAR_GRANULES * GRANULE_SIZE) {
             Ok(binding) => binding,
             Err(pci::BindError::Identity { found }) => {
                 return Err(stop!(
@@ -115,13 +117,6 @@ fn bind_declared_pci_functions(
             }
         };
         let pages = binding.size / GRANULE_SIZE;
-        if pages > PCI_BAR_GRANULES {
-            return Err(stop!(
-                "pci function={} bar=0 size={:#x} exceeds {PCI_BAR_GRANULES} granules",
-                pci::Address(&function),
-                binding.size
-            ));
-        }
         let first = inventory.free_regions(pages).ok_or_else(|| {
             stop!(
                 "pci function={} has no free inventory regions",
@@ -175,10 +170,10 @@ fn bind_declared_pci_functions(
 }
 
 /// One function's configuration space through the root's ECAM mapping.
-#[cfg(all(not(slime_boot_selector), target_arch = "aarch64"))]
+#[cfg(all(not(slime_boot_selector), slime_root_console_pl011))]
 struct RegionConfig<'a>(&'a device::DeviceRegion);
 
-#[cfg(all(not(slime_boot_selector), target_arch = "aarch64"))]
+#[cfg(all(not(slime_boot_selector), slime_root_console_pl011))]
 impl crate::pci::ConfigSpace for RegionConfig<'_> {
     fn read32(&mut self, offset: usize) -> u32 {
         self.0.read32(offset).unwrap_or(u32::MAX)
