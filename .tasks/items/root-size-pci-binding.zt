@@ -16,6 +16,7 @@ item :: s.Item = (h.task "01a2115a-e389-78ba-abf4-1f5f4cd52ed6" "root-size-pci-b
       "01a1f677-0511-752b-8231-8e9b491399de/series-without-the-fixture";
       "01a1f8f6-a380-7910-990d-f83a461fb33e/series-keeps-its-ceiling";
       "01a1f82b-ddcc-7e34-a374-1c2b0d23ff6c/series-within-its-ceiling";
+      "01a1e925-f21f-7c7b-8c45-b6b46bcefd1e/roles-within-ceilings";
     };
     nonGoals = {
       h.nonGoal "The promises root-test-impls (series at most 32893, core at most 14737) and root-role-names (series at most 32899). main holds the series at 32947 and core at 14950, so both fail before this item. Whether to supersede them is a human decision." h.agentDefault;
@@ -29,7 +30,7 @@ item :: s.Item = (h.task "01a2115a-e389-78ba-abf4-1f5f4cd52ed6" "root-size-pci-b
         "root_size_check counts at most 5800 code lines in the boot role, and reports the count as bootCodeLines."
         { "root_size_check"; };
       h.req "io-resource-within-3300"
-        "root_size_check counts at most 3300 code lines in the ioResource role, and reports the count as ioResourceCodeLines."
+        "root_size_check counts at most 3300 code lines in the ioResource role, and reports the count as ioResourceCodeLines. It replaces the requirement roles-within-ceilings of root-size-budget, which states ioResource 3050."
         { "root_size_check"; };
       h.req "series-within-33350"
         "root_size_check counts at most 33350 code lines in the series, and reports the count as seriesCodeLines. It replaces the three series requirements this item supersedes, at 33100 and twice 33200."
