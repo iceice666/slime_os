@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "zenoh_rmw_graph_check";
+  closureDigest = "b05bcdaa5ad7e577d700969deeed01c07a8ac4b7cf1a9b5be4a10a6799d80f23";
+  passed = false;
+  exitCode = 1;
+  counts = {;};
+  flags = {;};
+  observedAt = "2026-11-25T04:53:28Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
