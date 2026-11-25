@@ -72,7 +72,7 @@ item :: s.Item = (h.task "01a212d1-0158-764f-8841-0497ad8f73d0" "usb-xhci-device
         "The driver issues one GET_DESCRIPTOR request for the 18-byte device descriptor on endpoint 0. The device's capture holds that request and one successful 18-byte completion. The bytes the driver reports equal the capture and the pinned descriptor of the attached QEMU model, in a keyboard boot and a tablet boot."
         { "usb_xhci_descriptor_check"; };
       h.req "events-arrive-by-interrupt"
-        "The driver enables interrupter 0 and waits for events on the declared interrupt. While the controller runs, QEMU's GIC trace shows the function's INTx line raised, acknowledged by the CPU, then lowered. The driver reports at least one interrupt. IMAN shows interrupts enabled and none pending, and ERDP shows the event handler not busy."
+        "The driver enables interrupter 0 and waits for events on the declared interrupt. The root's route equals the route QEMU's interrupt-map states for the function's INTA. While the controller runs, QEMU's GIC trace shows that line raised, acknowledged by the CPU, then lowered. The driver reports at least one interrupt. After the halt, USBCMD keeps the interrupter enable set, IMAN shows interrupts enabled and none pending, and ERDP shows the event handler not busy."
         { "usb_xhci_descriptor_check"; };
       h.req "halts-before-exit"
         "The driver stops the controller before it exits. QEMU's trace records one stop after the transfer. USBCMD reads run/stop clear, and USBSTS reads halted with no host system or controller error."
@@ -84,13 +84,13 @@ item :: s.Item = (h.task "01a212d1-0158-764f-8841-0497ad8f73d0" "usb-xhci-device
         "The derived manifest grants one device, one MMIO region, one interrupt source and one DMA account, all to the driver instance. Its budget declares one PCI function, 00:03.0 with identity 1b36:000d, one 16 KiB BAR, one interrupt and DMA."
         { "usb_xhci_descriptor_check"; };
       h.req "controls-are-refused"
-        "The judge refuses 99 inputs: 5 corrupted manifests and 47 corrupted boot records in each of the two boots, across the serial transcript, the monitor replies, the trace and the device capture."
+        "The judge refuses 156 inputs: 8 corrupted manifests and, in each of the two boots, 74 corrupted inputs. These span the serial transcript, the monitor replies, the trace, the device capture and the judge's model of the interrupt routes."
         { "usb_xhci_descriptor_check"; };
     };
     acceptance = {
       h.observedWhere "usb_xhci_descriptor_check" {
-        h.count "casesObserved" 154;
-        h.count "negativeControlsRefused" 99;
+        h.count "casesObserved" 156;
+        h.count "negativeControlsRefused" 156;
       };
       h.observed "io_pci_binding_check";
     };

@@ -9,7 +9,7 @@ refused.
 
 The module also dumps the pinned machine's device tree and reads the
 qemu-arm-virt PCIe host from it, so an exam takes ECAM and window addresses
-from QEMU rather than from the root's pinned constants.
+and INTx routes from QEMU rather than from the root's pinned constants.
 """
 
 from __future__ import annotations
@@ -97,6 +97,11 @@ class PcieHost:
     ecam_size: int
     mem32_base: int
     mem32_size: int
+    # (device bits & mask, pin & mask, SPI number) of every interrupt-map entry
+    interrupt_map: tuple[tuple[int, int, int], ...]
+    device_mask: int
+    pin_mask: int
+    gic_spi_base: int = 32
 
     def config(self, slot: int, offset: int, fail: Reject) -> int:
         """ECAM address of one register of function 00:<slot>.0."""
@@ -104,6 +109,14 @@ class PcieHost:
         if not self.ecam_base <= address < self.ecam_base + self.ecam_size:
             fail(f"slot {slot} offset {offset:#x} lies outside ECAM")
         return address
+
+    def irq(self, slot: int, pin: int, refuse: Reject) -> int:
+        """seL4 IRQ number of the INTx route of function 00:<slot>.0 on `pin` (1 = INTA)."""
+        key = ((slot << 11) & self.device_mask, pin & self.pin_mask)
+        for device, mapped_pin, spi in self.interrupt_map:
+            if (device, mapped_pin) == key:
+                return self.gic_spi_base + spi
+        refuse(f"the device tree maps no INTx route for slot {slot} pin {pin}")
 
 
 def _cells(text: str) -> list[int]:
@@ -178,9 +191,25 @@ def parse_pcie_host(dts: str, fail: Reject) -> PcieHost:
     cpu_address = (window[3] << 32) | window[4]
     if pci_address != cpu_address:
         fail("the 32-bit memory window translates addresses; the judge assumes identity")
+    mask = _node_property(node, "interrupt-map-mask", fail)
+    if len(mask) != 4:
+        fail(f"unexpected interrupt-map-mask cells: {mask}")
+    raw_map = _node_property(node, "interrupt-map", fail)
+    if len(raw_map) % 10:
+        fail("interrupt-map is not a list of 10-cell entries")
+    entries = []
+    for index in range(0, len(raw_map), 10):
+        entry = raw_map[index : index + 10]
+        # child address (3) + pin (1) + GIC phandle + parent address (2) + type, number, flags
+        if entry[7] != 0:
+            fail("interrupt-map routes INTx to a non-SPI interrupt")
+        entries.append((entry[0] & mask[0], entry[3] & mask[3], entry[8]))
     return PcieHost(
         ecam_base=(reg[0] << 32) | reg[1],
         ecam_size=(reg[2] << 32) | reg[3],
         mem32_base=cpu_address,
         mem32_size=(window[5] << 32) | window[6],
+        interrupt_map=tuple(entries),
+        device_mask=mask[0],
+        pin_mask=mask[3],
     )

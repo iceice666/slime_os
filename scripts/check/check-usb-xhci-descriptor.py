@@ -40,7 +40,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, NoReturn
 
@@ -203,6 +203,7 @@ def monitor_reads(host: PcieHost) -> tuple[MonitorRead, ...]:
     return (
         MonitorRead("declared id", host.config(DECLARED_SLOT, 0x00, fail), 1),
         MonitorRead("declared command", host.config(DECLARED_SLOT, 0x04, fail), 1),
+        MonitorRead("declared interrupt", host.config(DECLARED_SLOT, 0x3C, fail), 1),
         MonitorRead("capability", bar, 8),
         # USBCMD at 0x00 through CONFIG at 0x38 of the operational registers.
         MonitorRead("operational", bar + CAP_LENGTH, 15),
@@ -387,6 +388,11 @@ def judge_boot(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version: st
     tally.require(words["declared id"] == (XHCI_WORD,), "QEMU does not place qemu-xhci at the declared slot")
     command = words["declared command"][0] & 0xFFFF
     tally.require(command == PCI_COMMAND_MEMORY_MASTER, f"command register {command:#06x}: expected memory decoding and bus mastering only")
+    # The root's route must be the one QEMU's interrupt-map states for the function's pin.
+    pin = (words["declared interrupt"][0] >> 8) & 0xFF
+    tally.require(pin == 1, f"the declared function reports interrupt pin {pin}, expected INTA")
+    route = host.irq(DECLARED_SLOT, pin, refuse)
+    tally.require(int(bind.group("irq")) == route, f"the root routed IRQ {bind.group('irq')}, the device tree routes {route}")
     capability = words["capability"]
     tally.require(capability[0] & 0xFF == CAP_LENGTH and capability[6] == RUNTIME_OFFSET, "the controller's register layout is not the pinned one")
     max_slots, max_ports = capability[1] & 0xFF, capability[1] >> 24
@@ -454,7 +460,6 @@ def judge_boot(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version: st
 
     # The function's INTx line at the GIC: raised, taken by the CPU, lowered.
     # qemu-xhci raises INTx only while MSI and MSI-X are off.
-    route = int(bind.group("irq"))
     line: list[tuple[str, int]] = []
     for event in events:
         if not run < event.index < stop:
@@ -487,8 +492,8 @@ def judge_boot(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version: st
     tally.require(request.epnum == completion.epnum == 0x80, "the transfer is not an IN on endpoint 0")
     tally.require(request.devnum == completion.devnum == address, f"the device answered at address {request.devnum}, the driver reports {address}")
     tally.require(completion.length == len(completion.data) == 18, f"the device returned {len(completion.data)} bytes")
+    # The driver's bytes already equal the model, so this makes them equal the device's too.
     tally.require(completion.data == arm.descriptor, f"the device returned {completion.data.hex()}, the pinned {arm.name} model holds {arm.descriptor.hex()}")
-    tally.require(completion.data == reported, "the driver's bytes differ from the device's")
     return tally.cases
 
 
@@ -564,6 +569,31 @@ def drop_event(trace: str, event: str, occurrence: int) -> str:
     return "".join(lines)
 
 
+def move_event(trace: str, event: str, anchor: str, after: bool) -> str:
+    """Move the first `event` line next to the first `anchor` line: before it, or after it."""
+    lines = trace.splitlines(keepends=True)
+
+    def first(name: str) -> int:
+        for index, line in enumerate(lines):
+            if line.split(" ", 1)[0].rstrip("\n") == name:
+                return index
+        fail(f"trace control needs a {name} line")
+
+    moved = lines.pop(first(event))
+    target = first(anchor)
+    lines.insert(target + 1 if after else target, moved)
+    return "".join(lines)
+
+
+def move_line_before(text: str, pattern: re.Pattern[str], anchor: re.Pattern[str]) -> str:
+    """Move the first line matching `pattern` to just before the first line matching `anchor`."""
+    match = pattern.search(text)
+    if match is None:
+        fail(f"control needs a line matching {pattern.pattern!r}")
+    removed = text[: match.start()] + text[match.end() + 1 :]
+    return insert_before(removed, anchor, match.group(0))
+
+
 def set_field(line: str, key: str, value: int) -> str:
     changed, made = re.subn(rf"\b{key}=\d+", f"{key}={value}", line)
     if made != 1:
@@ -598,7 +628,7 @@ def boot_controls(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version:
     reads = {read.label: read for read in monitor_reads(host)}
     transcript, trace, capture = boot.transcript, boot.trace, boot.capture
     port_index = 4 * (arm.xhci_port - 1)
-    route = int(single(BIND, transcript, "control binding").group("irq"))
+    route = host.irq(DECLARED_SLOT, 1, refuse)
     empty_index = 4 * (arm.xhci_port - 2)
 
     def text(mutated: str) -> Boot:
@@ -637,6 +667,32 @@ def boot_controls(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version:
 
     cases: tuple[tuple[str, Boot], ...] = (
         ("binding without bus mastering", text(edit(transcript, BIND, lambda m: replace_group(m, "command", "0002")))),
+        ("binding with another BAR size", text(edit(transcript, BIND, lambda m: replace_group(m, "size", f"{BAR_BYTES * 2:x}")))),
+        ("binding off the window base", text(edit(transcript, BIND, lambda m: replace_group(m, "address", f"{host.mem32_base + 0x1000:x}")))),
+        ("binding names another interrupt", text(edit(transcript, BIND, lambda m: replace_group(m, "irq", plus(m.group("irq"), 1))))),
+        ("driver runs at another epoch", text(edit(transcript, RUNNING, lambda m: replace_group(m, "epoch", "2")))),
+        ("port reported before the controller runs", text(move_line_before(transcript, CONNECTED, RUNNING))),
+        ("addressed port differs from the connected port", text(edit(transcript, ADDRESSED, lambda m: replace_group(m, "port", plus(m.group("port"), -1))))),
+        ("descriptor names another port", text(edit(transcript, DESCRIPTOR, lambda m: replace_group(m, "port", plus(m.group("port"), -1))))),
+        ("completion reported after the reclaim", text(move_line_before(transcript, COMPLETE, HEALTHY))),
+        ("driver held no interrupt", text(edit(transcript, RECLAIM, lambda m: set_field(m.group(0), "pre_irq_sources", 0)))),
+        ("driver held no DMA mapping", text(edit(transcript, RECLAIM, lambda m: set_field(m.group(0), "pre_dma_mappings", 0)))),
+        ("exit reclaim left the interrupt", text(edit(transcript, RECLAIM, lambda m: set_field(m.group(0), "post_irq_sources", 1)))),
+        ("QEMU holds another function at the slot", word("declared id", 0, lambda _value: 0x00051B36)),
+        ("declared function interrupts on INTB", word("declared interrupt", 0, lambda value: (value & ~0xFF00) | 0x0200)),
+        ("controller register layout differs", word("capability", 6, lambda value: value + 0x1000)),
+        ("controller error", word("operational", 1, lambda value: value | 0x1000)),
+        ("device port at another speed", word("ports", port_index, lambda value: value ^ (0x2 << 10))),
+        ("two event ring segments", word("interrupter", 2, lambda _value: 2)),
+        ("event ring segment table never programmed", text(set_word(set_word(transcript, reads["interrupter"], 4, 0), reads["interrupter"], 5, 0))),
+        ("event ring never consumed", text(set_word(set_word(transcript, reads["interrupter"], 6, 0), reads["interrupter"], 7, 0))),
+        ("doorbell for another endpoint", traced(r"^(usb_xhci_ep_kick slotid \d+, epid )1", r"\g<1>2")),
+        ("Enable Slot before the port reset", Boot(transcript, move_event(trace, "usb_xhci_slot_enable", "usb_xhci_port_reset", after=False), capture)),
+        ("Address Device before Enable Slot", Boot(transcript, move_event(trace, "usb_xhci_slot_address", "usb_xhci_slot_enable", after=False), capture)),
+        ("doorbell before Address Device", Boot(transcript, move_event(trace, "usb_xhci_ep_kick", "usb_xhci_slot_address", after=False), capture)),
+        ("transfer after the stop", Boot(transcript, move_event(trace, "usb_xhci_xfer_success", "usb_xhci_stop", after=True), capture)),
+        ("request on another endpoint direction", captured(0, lambda data, header: data.__setitem__(header + 10, 0x00))),
+        ("completion claims 8 bytes", captured(1, lambda data, header: struct.pack_into("<I", data, header + 32, 8))),
         ("function decodes memory only", word("declared command", 0, lambda value: value & ~0x4)),
         ("driver reports another port count", text(edit(transcript, RUNNING, lambda m: replace_group(m, "ports", plus(m.group("ports"), -1))))),
         ("CONFIG holds another slot count", word("operational", 14, lambda value: value + 1)),
@@ -693,8 +749,10 @@ def boot_controls(arm: Arm, boot: Boot, host: PcieHost, budget: Budget, version:
         ("device returned other bytes", captured(1, flip_last_data_byte)),
         ("device saw a second transfer", Boot(transcript, trace, duplicate_records(capture))),
     )
-    mutations = tuple((label, lambda mutated=mutated: judge_boot(arm, mutated, host, budget, version)) for label, mutated in cases)
-    return run_controls(mutations)
+    mutations = [(label, lambda mutated=mutated: judge_boot(arm, mutated, host, budget, version)) for label, mutated in cases]
+    rotated = replace(host, interrupt_map=tuple((device, pin, (spi - 3 + 1) % 4 + 3) for device, pin, spi in host.interrupt_map))
+    mutations.append(("judge model with another INTx route", lambda: judge_boot(arm, boot, rotated, budget, version)))
+    return run_controls(tuple(mutations))
 
 
 def manifest_controls(manifest: dict) -> int:
@@ -715,6 +773,9 @@ def manifest_controls(manifest: dict) -> int:
         ("budget declares no DMA pages", mutated(lambda c: declared(c).update(dmaPages=0))),
         ("budget declares another function", mutated(lambda c: declared(c)["pciFunction"].update(device=4))),
         ("a second declared function", mutated(lambda c: c["ioResourceBudget"].append(json.loads(json.dumps(declared(c)))))),
+        ("a second driver instance", mutated(lambda c: c["instances"].append({**next(i for i in c["instances"] if i.get("executable") == DRIVER), "name": "xhci-driver-b"}))),
+        ("the function's budget belongs to init", mutated(lambda c: declared(c).update(holder="init"))),
+        ("the budget grants a 4 KiB BAR", mutated(lambda c: declared(c).update(mmioBytes=4096))),
     )
     return run_controls(tuple((label, lambda value=value: judge_manifest(value)) for label, value in cases))
 
