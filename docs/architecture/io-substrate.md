@@ -122,9 +122,11 @@ qemu-arm-virt facts. The root does these steps in order:
 5. It writes command `0x0002`: memory decoding on, bus mastering off.
 6. It prints `SLIME_PCI bind` with the function, identity, BAR, command and IRQ.
 
-A refusal by `pci::bind` (BAR, window or interrupt pin) clears BAR 0, and BAR 1
-for a 64-bit BAR, and leaves decoding off. A root stop after `pci::bind` returns
-leaves the function placed and decoding memory.
+Every refusal by `pci::bind` after the identity and bus checks leaves decoding
+off. An I/O-space BAR 0 is refused before sizing and keeps its value. A refusal
+after sizing (BAR, window or interrupt pin) clears BAR 0, and BAR 1 for a 64-bit
+BAR. A root stop after `pci::bind` returns leaves the function placed and
+decoding memory.
 
 Only the root reads or writes configuration space; no component receives ECAM
 authority. The bound BAR becomes one device with a bank of page regions. Unlike
