@@ -87,13 +87,13 @@ item :: s.Item = (h.task "01a21579-f36d-77fa-a944-c3dadcce58f4" "io-interrupt-wa
         "Every existing wait set decodes under v3 with its v2 meaning. The wait-set plane and the link wake gate still pass."
         { "wait_set_check"; "link_wake_check"; };
       h.req "controls-are-refused"
-        "The judge refuses 75 inputs: 14 corrupted manifests, 8 encoders that accept or encode what the builder must not, and 53 corrupted boot records. The boot records span the serial transcript, the monitor replies, the trace and the judge's model of the routes."
+        "The judge refuses 80 inputs: 15 corrupted manifests, 8 encoders that accept or encode what the builder must not, and 57 corrupted boot records. The boot records span the serial transcript, the monitor replies, the trace and the judge's model of the routes."
         { "io_interrupt_wait_check"; };
     };
     acceptance = {
       h.observedWhere "io_interrupt_wait_check" {
         h.count "casesObserved" 56;
-        h.count "negativeControlsRefused" 75;
+        h.count "negativeControlsRefused" 80;
       };
       h.observed "contracts_check";
       h.observed "sel4_entropy_check";
@@ -151,7 +151,7 @@ item :: s.Item = (h.task "01a21579-f36d-77fa-a944-c3dadcce58f4" "io-interrupt-wa
     };
     knownLimits = {
       h.knownLimit "io_interrupt_wait_check"
-        "The exam cannot tell a probe that blocks on its notification from one that polls it. The root's counts show only that no acknowledgement was refused beyond the probe's two."
+        "The exam does not observe the root's signal to the waiter. It judges the declared route, the dispatch record and the root's counts. A probe that polls the device, or its notification, passes the same records. The counts show only that no acknowledgement was refused beyond the probe's two."
         h.agentDefault;
       h.knownLimit "io_interrupt_wait_check"
         "QEMU's virtio-mmio trace events do not name their transport. The judge relies on one attached virtio device, and the monitor shows which transport holds it."
