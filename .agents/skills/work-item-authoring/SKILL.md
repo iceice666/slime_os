@@ -68,7 +68,7 @@ can no longer change.
 - The exam must refuse no transcript that the requirements accept. An exam
   stricter than its item cannot pass as landed.
 - Use the item's operation names as the judge's labels.
-- A decision that a requirement binds follows the same rule as a statement.
+- A decision that binds a requirement follows the same rule as a statement.
 
 ## 3. Each acceptance fails today and can pass
 
@@ -136,9 +136,11 @@ negative control, by
 - Search `specs/` and `.tasks/terminal/` for every requirement bound to a
   target the item changes, and for every count or behavior the item makes
   false.
-- Add each one to `supersedes` as `<item id>/<requirement id>`, and restate
-  in a requirement what the item retires. The other legal answer is to keep
-  a gate on the old promise.
+- Add each one to `supersedes`, and restate in a requirement what the item
+  retires. The `supersedes` row of the
+  [lifecycle page](../../../docs/getting-started/06-work-item-lifecycle.md#anatomy-of-an-item)
+  lists the three forms an entry takes. The other legal answer is to keep a
+  gate on the old promise.
 - A terminal item is immutable. Correct it with a new superseding item.
 - A grader that grades a promise changes only from a new item. The judge
   refuses the change in a PR that adds no item.
@@ -210,8 +212,8 @@ run and observed.
 1. `just spec_tasks_check` passes.
 2. `just spec_check --base origin/main` passes, or names only the approvals
    the PR still needs.
-3. `just spec_closure --explain` shows each bound target, its checker, and
-   no file under `owns`.
+3. `just spec_closure --explain` shows each bound target and its checker,
+   and lists no file under `owns` as a grader.
 4. Each target bound for new behavior fails on `main` for the reason its
    requirement names.
 5. The draft passes each bound target.
