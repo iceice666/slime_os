@@ -1,0 +1,14 @@
+o ::= import "./schema.zt";
+r :: o.Record = {
+  schema = o.schemaVersion;
+  target = "zenoh_service_client_io_check";
+  closureDigest = "5261b26af09e8e0204dede4b0d7798b4960765546b1db4b1d95ce2c78d3234d9";
+  passed = true;
+  exitCode = 0;
+  counts = { { key = "casesObserved"; value = 73; }; { key = "negativeControlsRefused"; value = 170; }; };
+  flags = {;};
+  observedAt = "2026-11-26T06:24:36Z";
+  runner = "ci";
+  toolchain = { { name = "rustc"; version = "nightly-2026-05-26"; }; { name = "zutai"; version = "b667e3c5018e69a3f8e39948a73a6c57c514de6e"; }; };
+};
+r
