@@ -61,7 +61,17 @@ HARDWARE_KINDS = ("device", "mmioRegion", "interruptSource", "dmaAccount")
 KIND_INTERRUPT = 8
 GIC_SPI_BASE = 32
 
-RNG_DEVICE: tuple[str, ...] = ("-object", "rng-random,id=slimerng,filename=/dev/urandom", "-device", "virtio-rng-device,rng=slimerng")
+# ioeventfd stays off: with it on, QEMU consumes the guest's QueueNotify write
+# without a `virtio_mmio_write_offset` event, and its start at DRIVER_OK kicks
+# every queue itself, so the trace records a kick no guest write made.
+RNG_DEVICE: tuple[str, ...] = (
+    "-global",
+    "virtio-mmio.ioeventfd=off",
+    "-object",
+    "rng-random,id=slimerng,filename=/dev/urandom",
+    "-device",
+    "virtio-rng-device,rng=slimerng",
+)
 # virtio-mmio registers (virtio 1.2, section 4.2.2) the judge reads.
 VIRTIO_MAGIC = 0x74726976
 VIRTIO_DEVICE_RNG = 4
