@@ -138,6 +138,11 @@ item :: s.Item = (h.task "01a21579-f36d-77fa-a944-c3dadcce58f4" "io-interrupt-wa
         "the virtio-mmio line is level-triggered, so an acknowledgement before the clear re-fires the line, and the trace then records a second take"
         h.agentDefault
         { "each-request-completes-by-interrupt"; };
+      h.decided "qemu-kicks-only-on-guest-write"
+        "The exam boots QEMU with `virtio-mmio.ioeventfd=off`."
+        "with ioeventfd on, QEMU kicks every queue itself when the driver sets DRIVER_OK, so the trace records one kick more than the probe's requests"
+        (h.fromHuman "Planning PR that turns ioeventfd off" "Claude Code session a355c7a1-4ba2-4fc9-88bd-eca9c8f5e988, 2026-11-28, choosing QEMU arguments without ioeventfd over a judge that accepts one startup kick")
+        { "each-request-completes-by-interrupt"; };
       h.decided "builder-judged-directly"
         "The exam calls the builder's wait-set encoder, `validated_wait_set` in `scripts/build/generation_resources.py`, on the derived manifest and on four corrupted rows. The builder's interrupt-row refusals live in that function."
         "a row the builder accepts reaches the root, and the encoder can be judged without booting a corrupt generation"
